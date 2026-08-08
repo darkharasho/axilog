@@ -268,4 +268,39 @@ mod tests {
         let taken = accumulate_damage_taken(&evs, &squad);
         assert_eq!(taken.get(&1).copied(), Some(100));
     }
+
+    /// M4 Task 2: the CC exclusion here is buff-flag-independent (unlike
+    /// `cc::is_cc`, which era-gates CC RECOGNITION on the buff flag) --
+    /// verified against GW2EI's post-`ResultEnumRework`
+    /// `AddBuffDamageDamageEvent` branch, which routes `DamageResult.
+    /// CrowdControl` to a `CrowdControlEvent`, never a `HealthDamageEvent`,
+    /// for `buff == 1` rows exactly as `AddDirectDamageEvent` already does
+    /// for `buff == 0` rows -- so a post-era `buff == 1` CC-shaped row
+    /// (`result == CROWD_CONTROL`, `buff_dmg` populated) must not leak into
+    /// `accumulate`/`accumulate_pet_credit`/`accumulate_damage_taken`
+    /// regardless of arcdps build era. No header/era input is needed by any
+    /// of these three functions at all -- this predicate was already
+    /// correct for both eras before M4 Task 2 (see `cc::is_cc`'s doc comment
+    /// for the full citation trail); this test locks that in explicitly.
+    #[test]
+    fn excludes_buff_flagged_crowd_control_from_all_damage_paths() {
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let mut cc = strike(1, 9, 0);
+        cc.buff = 1;
+        cc.buff_dmg = 5000; // would look huge if treated as condi damage
+        cc.result = result::CROWD_CONTROL;
+
+        let evs = vec![strike(1, 9, 100), cc.clone()];
+        let dmg = accumulate(&evs, &squad, &enemies);
+        assert_eq!(dmg[&1].0, 100, "buff==1 CC row must not leak into accumulate's condi-damage sum");
+
+        let mut cc_taken = strike(9, 1, 0);
+        cc_taken.buff = 1;
+        cc_taken.buff_dmg = 5000;
+        cc_taken.result = result::CROWD_CONTROL;
+        let taken_evs = vec![strike(9, 1, 100), cc_taken];
+        let taken = accumulate_damage_taken(&taken_evs, &squad);
+        assert_eq!(taken.get(&1).copied(), Some(100), "buff==1 CC row must not leak into damage_taken");
+    }
 }

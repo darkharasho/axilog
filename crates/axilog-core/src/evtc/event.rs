@@ -131,6 +131,70 @@ pub mod sc {
     /// 5-9 `simulator::capacity_for` previously assumed -- see
     /// `analysis::buffs::events::extract_buff_capacities`.
     pub const BUFF_INFO: u8 = 30;
+    /// Cast-animation START statechange (M4 Task 2, `support::apply`'s
+    /// resurrect-cast detection). Verified against the live arcdps EVTC
+    /// reference (`curl https://www.deltaconnected.com/arcdps/evtc/README.txt`,
+    /// 2026-08-08): hand-counting `enum cbtstatechange` entries from
+    /// `CBTS_COMBAT = 0`, `CBTS_ANIMATIONSTART` is the 68th entry (index
+    /// 67), immediately followed by `CBTS_ANIMATIONSTOP` (68) then
+    /// `CBTS_BUFFAPPLY` (69, already independently hand-counted in Task 1) --
+    /// a second, independent confirmation of this ordinal's position.
+    /// Cross-checked against GW2EI's `ArcDPSEnums.StateChange.AnimationStart
+    /// = 67` (`ArcDPSEnums.cs:327`).
+    ///
+    /// **IMPORTANT version-threshold finding (M4 Task 2)**: this statechange
+    /// is gated by a DIFFERENT, EARLIER GW2EI build threshold than the
+    /// `BuffAppliesAndRemovesAsStateChanges`/`ResultEnumRework` pair this
+    /// project's `RawHeader::is_post_buff_rework` (`20260501`) already
+    /// checks -- `ArcDPSBuilds.AnimationAsStateChanges = 20260430`
+    /// (`ArcDPSEnums.cs:38`). `CombatItem.IsStartCastEvent()`
+    /// (`GW2EIEvtcParser/CombatItem.cs:404-415`) gates on THAT threshold:
+    /// `if (_version.Build >= ArcDPSBuilds.AnimationAsStateChanges) { return
+    /// IsStateChange == StateChange.AnimationStart; }` -- else falls back to
+    /// the older `IsActivation == Normal || IsActivation == Quickness` shape
+    /// on an ordinary `is_statechange == 0` combat event (the ONLY shape
+    /// this project's pre-M4 `support::ACTIVATION_START`-based resurrect
+    /// scan implements). Since `20260430 < 20260501`, every log this
+    /// project classifies `is_post_buff_rework() == true` is ALSO on/after
+    /// `AnimationAsStateChanges` -- so decoding cast-start events via
+    /// `is_activation` (the pre-era shape) on such a log would silently miss
+    /// every skill-cast-start row, INCLUDING resurrects, which now arrive as
+    /// this dedicated statechange instead. This project has no separate
+    /// `AnimationAsStateChanges` header flag (only the single
+    /// `is_post_buff_rework` threshold, `20260501`), so `support::apply`
+    /// reuses that same flag to gate resurrect-cast decoding -- safe/
+    /// conservative because it never UNDER-shoots the real, earlier
+    /// threshold (a log built in the `[20260430, 20260501)` window, which
+    /// this project would still classify pre-era, is the one known gap this
+    /// single-threshold design leaves; out of scope to fix without adding a
+    /// second header field this project doesn't otherwise need).
+    ///
+    /// Payload, per the arcdps reference (`CBTS_ANIMATIONSTART` block):
+    /// `src_agent`: agent beginning animation; `dst_agent`: target agent if
+    /// applicable; `value`: ms duration until minimum of last significant
+    /// trigger point and tooltip time; `buff_dmg`: ms duration when control
+    /// is returned to agent; `overstack_value`: reference data (CSK enum);
+    /// `skillid`: skill id. Field roles verified against GW2EI's
+    /// `AnimatedCastEvent`/`CombatData.CreateCastEvents`
+    /// (`ParsedData/CombatEvents/CastEvents/AnimatedCastEvent.cs`,
+    /// `ParsedData/CombatData.cs:538-562`): cast events are grouped by the
+    /// raw, UNRESOLVED `combatItem.SrcAgent` (`castCombatEvents.AddToList(
+    /// combatItem.SrcAgent, combatItem)`) -- the SAME field role as the
+    /// pre-era shape's `src_agent` (the caster), so `support::apply`'s
+    /// resurrect credit (by raw `src_agent`, no master/pet resolution) needs
+    /// no change beyond swapping which `is_statechange`/predicate selects
+    /// the row. `ExpectedDuration = startItem.BuffDmg > 0 ? startItem.
+    /// BuffDmg : startItem.Value` (`AnimatedCastEvent.cs:60`) is not
+    /// consumed here (this project counts start-cast rows directly, per
+    /// `SupportMetrics::resurrects`'s doc comment, not full duration
+    /// pairing) -- included for completeness only.
+    ///
+    /// Distinct from `CBTS_ANIMATIONSTOP` (ordinal 68, the paired end-cast
+    /// statechange) -- not decoded by this project, mirroring the pre-era
+    /// resurrect scan's existing simplification of counting only start-cast
+    /// rows (see `SupportMetrics::resurrects`'s doc comment for why this is
+    /// count-equivalent on this project's calibration fixture).
+    pub const ANIMATION_START: u8 = 67;
     /// Post-rework (arcdps build >= 20260501, GW2EI's
     /// `ArcDPSBuilds.BuffAppliesAndRemovesAsStateChanges`) dedicated buff
     /// STACK APPLICATION statechange -- see `BUFF_INITIAL`'s doc comment
