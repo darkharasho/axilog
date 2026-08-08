@@ -74,6 +74,7 @@ name = "axilog-core"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "serde_json",
  "thiserror",
 ]
 

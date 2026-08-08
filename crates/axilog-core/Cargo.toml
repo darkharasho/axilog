@@ -8,3 +8,6 @@ license.workspace = true
 [dependencies]
 thiserror.workspace = true
 flate2.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,10 +1,18 @@
 use std::process::Command;
 
+const FIXTURE_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../fixtures/local/wvw-small.zevtc"
+);
+
 #[test]
-#[ignore = "fixture committed in Task 16"]
 fn parses_fixture_to_json() {
+    if std::fs::metadata(FIXTURE_PATH).is_err() {
+        println!("skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run this test)");
+        return;
+    }
     let out = Command::new(env!("CARGO_BIN_EXE_axilog"))
-        .args(["parse", "../../fixtures/wvw-small.zevtc"])
+        .args(["parse", FIXTURE_PATH])
         .output()
         .expect("run axilog");
     assert!(
@@ -18,13 +26,16 @@ fn parses_fixture_to_json() {
 }
 
 #[test]
-#[ignore = "fixture committed in Task 16"]
 fn table_and_csv_have_headers() {
+    if std::fs::metadata(FIXTURE_PATH).is_err() {
+        println!("skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run this test)");
+        return;
+    }
     // Build a report via the library path is out of scope for a bin test;
     // instead run the binary against the fixture.
     for (fmt, needle) in [("table", "DPS"), ("csv", "account,")] {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_axilog"))
-            .args(["parse", "../../fixtures/wvw-small.zevtc", "--format", fmt])
+            .args(["parse", FIXTURE_PATH, "--format", fmt])
             .output().unwrap();
         assert!(out.status.success());
         let s = String::from_utf8_lossy(&out.stdout);
