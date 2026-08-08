@@ -12,6 +12,8 @@ status and is folded into a milestone task when applicable. Newest last.
 | 5 | `CBTS_MARKER` also yields the commander tag's GUID — use it to show the tag's cat/colour variant. | Planned — folded into M2 Task 7 (commander-tag GUID → colour/variant name table; native schema `commander_tag` with variant; EI JSON can't express this — native-only). |
 | 6 | Eye candy: `CBTS_TRANSFORMATION` + `CBTS_GLIDER` can be used for mounts and glider respectively. | Backlog — cosmetic; slot into the combat-replay/HTML-report milestone where mounted/gliding state actually renders. TRANSFORMATION GUIDs resolve via IDTOGUID (type 6). |
 | 7 | `CBTS_TICK` would be nice in a corner to show tick rate. | Data in M2 Task 7 (native schema `encounter.tick_rate { avg, min, per_second[] }` — tick dips = objective skill-lag signal in large WvW fights); corner-widget display deferred to the HTML-report milestone. |
+| 8 | Eye candy: `CBTS_GADGETCAPTURE*` for animating objective capping (goes with the zone/team colours already implemented). | Backlog — combat-replay/HTML milestone (animate cap progress on the map). |
+| 9 | `CBTS_MISSILELAUNCH`/`CBTS_MISSILEREMOVE` show how effectively reflects/projectile destruction are placed; likely "massive visual pasta" — should be opt-in. | Split: analytics (per-player projectiles destroyed/reflected counts — strong WvW metric) planned for the M3/M4 stats era behind an opt-in flag (data volume); visualization backlog for replay/HTML, also opt-in. |
 
 ## Notes
 
