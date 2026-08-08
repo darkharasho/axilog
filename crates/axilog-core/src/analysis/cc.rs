@@ -74,20 +74,28 @@ pub fn timeline(
 /// duration in ms (see `result::CROWD_CONTROL` docs). Replaces the earlier
 /// overstack-based heuristic (Task 11).
 ///
-/// The `buff == 0` check matters: arcdps/GW2EI only ever construct a
-/// `CrowdControlEvent` from the *direct* (non-buff) combat-result byte
-/// (GW2EI's `CombatEventFactory.AddDirectDamageEvent` routes
-/// `result::CrowdControl` there; the buff/condition-stack path
-/// (`AddBuffDamageDamageEvent`) uses a different result-byte interpretation
-/// entirely — a distinct `ConditionResult`/rework-era `DamageResult`
-/// namespace, not the same enum). Debugged against the golden WvW fixture:
-/// without `buff == 0`, byte value 12 also coincidentally turns up on
-/// ordinary boon-stack application events (Might/Stability/Fury/
-/// Vulnerability/Resolution), producing nonsensical multi-minute "CC
-/// durations" — those are a different field entirely, not CC. Calibrated
-/// against the golden fixture: this predicate (combined with pet-credit in
-/// `apply_cc`) reproduces EI's `appliedCrowdControl`/
+/// The `buff == 0` check matters: arcdps only ever synthesizes *real* CC as
+/// a non-buff event, under generic pseudo-skills (e.g. "Generic Knockback
+/// and Pull", "Generic Launch", "Generic Control Effect From Buff" — see
+/// `result::CROWD_CONTROL` docs), so genuine CC always arrives with
+/// `buff == 0`. On pre-ResultEnumRework arcdps builds (< 20260501; see
+/// GW2EI's `CombatEventFactory` and `ArcDPSEnums`, where `ConditionResult`
+/// is the buff-event result namespace and is marked retired as of that
+/// build), buff-type events are decoded through that separate, now-retired
+/// enum — so byte value 12 there means something else entirely, and
+/// spuriously collides with `CROWD_CONTROL`. Debugged against the golden WvW
+/// fixture (build 20260114, i.e. pre-rework): without `buff == 0`, this
+/// collision surfaces on ordinary boon-stack application events
+/// (Might/Stability/Fury/Vulnerability/Resolution), producing nonsensical
+/// multi-minute "CC durations" — those are a different field entirely, not
+/// CC. Calibrated against the golden fixture: this predicate (combined with
+/// pet-credit in `apply_cc`) reproduces EI's `appliedCrowdControl`/
 /// `appliedCrowdControlDuration` squad totals within tolerance.
+///
+/// TODO(post-rework): re-calibrate against an arcdps >= 20260501 capture;
+/// if post-rework buff events can carry real CC (buff==1,
+/// result==CrowdControl, routed through the shared/reworked `DamageResult`
+/// enum), extend this predicate to cover that case too.
 fn is_cc(e: &crate::evtc::RawEvent) -> bool {
     e.is_statechange == 0 && e.buff == 0 && e.result == crate::evtc::result::CROWD_CONTROL
 }
