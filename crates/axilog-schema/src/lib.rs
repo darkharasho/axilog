@@ -90,7 +90,7 @@ mod tests {
             duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"".into(),
-            team:"red".into(),subgroup:1,in_squad:true,commander:false}],
+            team:"red".into(),subgroup:1,in_squad:true,commander:false,agent_addrs:vec![1]}],
             enemies:vec![] };
         let m = Metrics { players: vec![PlayerMetrics{agent_addr:1,damage_total:500,
             dps:500.0,..Default::default()}],

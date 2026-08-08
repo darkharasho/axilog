@@ -6,7 +6,11 @@ pub enum AgentKind { Player, Npc, Gadget }
 #[derive(Debug, Clone)]
 pub struct Player { pub agent_addr: u64, pub account: String, pub character: String,
     pub profession: String, pub elite_spec: String, pub team: String,
-    pub subgroup: u8, pub in_squad: bool, pub commander: bool }
+    pub subgroup: u8, pub in_squad: bool, pub commander: bool,
+    /// Every raw agent addr observed for this account (relogs / build
+    /// swaps each get a new addr from arcdps). `agent_addr` above is the
+    /// representative; this always contains at least that value.
+    pub agent_addrs: Vec<u64> }
 #[derive(Debug, Clone)]
 pub struct Enemy { pub id: u64, pub instid: u16, pub name: String,
     pub team: String, pub is_player: bool }
@@ -47,6 +51,7 @@ pub fn resolve(raw: &RawLog) -> Encounter {
                     agent_addr: a.addr, account, character, profession, elite_spec,
                     team: String::new(), subgroup: sub.unwrap_or(0),
                     in_squad: true, commander: false,
+                    agent_addrs: vec![a.addr],
                 });
             }
             _ => {

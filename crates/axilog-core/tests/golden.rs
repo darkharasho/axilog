@@ -81,3 +81,36 @@ fn golden_ei_parity() {
          squad_damage={squad_damage} (golden {golden_squad_damage})"
     );
 }
+
+/// Finding #4: `cc::timeline`'s squad_damage buckets and `downs::apply`'s
+/// down_contribution windowed-damage loop must exclude
+/// `result::CROWD_CONTROL` rows (which carry CC duration ms, not damage) —
+/// exactly like `damage::accumulate` already does. After that fix,
+/// `sum(timeline.squad_damage)` should equal `sum(player.damage_total)`
+/// on the golden log, since both now use the same damage predicate (and
+/// the timeline also folds in the same friendly pet/minion credit that
+/// per-player totals get).
+#[test]
+fn golden_timeline_matches_player_damage_sum() {
+    let bytes = match std::fs::read(FIXTURE_PATH) {
+        Ok(b) => b,
+        Err(_) => {
+            println!(
+                "skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run golden parity)"
+            );
+            return;
+        }
+    };
+
+    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = analyze(&enc, &raw);
+
+    let timeline_sum: u64 = metrics.timeline.squad_damage.iter().sum();
+    let player_sum: u64 = metrics.players.iter().map(|p| p.damage_total).sum();
+    assert_eq!(
+        timeline_sum, player_sum,
+        "sum(timeline.squad_damage)={timeline_sum} != sum(player.damage_total)={player_sum}"
+    );
+    println!("golden timeline/player damage sum equality: {timeline_sum}");
+}

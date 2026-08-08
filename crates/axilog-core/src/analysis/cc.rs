@@ -15,6 +15,23 @@ pub fn timeline(
     let mut cc_applied = vec![0u32; buckets];
     let mut downs = vec![0u32; buckets];
     let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+
+    // WvW: fold friendly pet/minion damage into the same per-second buckets
+    // as direct squad damage, matching how `analysis::analyze` credits it
+    // to owning players — otherwise sum(squad_damage) undercounts
+    // sum(player.damage_total) by the pet-credit share (Finding #4).
+    let (agent_team, recorded_by) = crate::wvw::resolve_teams(raw);
+    let friendly_team = recorded_by.and_then(|addr| agent_team.get(&addr).copied());
+    for (time, _owner, _dst, dmg) in
+        crate::analysis::damage::pet_credit_events(raw, squad, friendly_team, &agent_team)
+    {
+        let rel = time.saturating_sub(t0);
+        let b = (rel / res) as usize;
+        if b < buckets {
+            squad_damage[b] += dmg;
+        }
+    }
+
     for e in &raw.events {
         let rel = e.time.saturating_sub(t0);
         let b = (rel / res) as usize;
@@ -24,6 +41,11 @@ pub fn timeline(
         if e.is_statechange == 0
             && e.is_activation == 0
             && e.is_buffremove == 0
+            // Crowd-control application events reuse value/buff_dmg to
+            // carry CC duration ms, not damage — exclude them so the
+            // timeline matches `damage::accumulate`'s predicate exactly
+            // (Finding #4).
+            && e.result != crate::evtc::result::CROWD_CONTROL
             && squad.contains(&e.src_agent)
             && enemies.contains(&e.dst_agent)
         {
@@ -57,13 +79,15 @@ pub fn apply_cc(
     raw: &RawLog,
     squad: &BTreeSet<u64>,
     enemies: &BTreeSet<u64>,
+    addr_to_rep: &std::collections::BTreeMap<u64, u64>,
 ) {
     use std::collections::BTreeMap;
     let idx: BTreeMap<u64, usize> =
         players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
+    let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
     for e in &raw.events {
         if is_cc(e) && squad.contains(&e.src_agent) && enemies.contains(&e.dst_agent) {
-            if let Some(&i) = idx.get(&e.src_agent) {
+            if let Some(&i) = idx.get(&rep(e.src_agent)) {
                 players[i].cc_applied += 1;
             }
         }

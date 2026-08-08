@@ -47,13 +47,34 @@ pub fn accumulate_pet_credit(
     friendly_team: Option<u16>,
     agent_team: &BTreeMap<u64, u16>,
 ) -> BTreeMap<u64, (u64, BTreeMap<u64, u64>)> {
+    let mut out: BTreeMap<u64, (u64, BTreeMap<u64, u64>)> = BTreeMap::new();
+    for (_time, owner, dst, dmg) in pet_credit_events(raw, squad, friendly_team, agent_team) {
+        let entry = out.entry(owner).or_default();
+        entry.0 += dmg;
+        *entry.1.entry(dst).or_default() += dmg;
+    }
+    out
+}
+
+/// Event-level pet/minion damage credit records: `(time, owner, dst, dmg)`.
+/// Shared by `accumulate_pet_credit` (per-owner totals) and
+/// `cc::timeline` (per-second buckets) so both stay consistent with each
+/// other — see Finding #4: `sum(timeline.squad_damage)` must equal
+/// `sum(player.damage_total)`, which requires the timeline to include the
+/// same pet/minion credit that per-player totals do.
+pub fn pet_credit_events(
+    raw: &RawLog,
+    squad: &BTreeSet<u64>,
+    friendly_team: Option<u16>,
+    agent_team: &BTreeMap<u64, u16>,
+) -> Vec<(u64, u64, u64, u64)> {
     let mut instid_to_addr: BTreeMap<u16, u64> = BTreeMap::new();
     for e in &raw.events {
         if e.src_instid != 0 { instid_to_addr.insert(e.src_instid, e.src_agent); }
         if e.dst_instid != 0 { instid_to_addr.insert(e.dst_instid, e.dst_agent); }
     }
 
-    let mut out: BTreeMap<u64, (u64, BTreeMap<u64, u64>)> = BTreeMap::new();
+    let mut out = Vec::new();
     for e in &raw.events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }
         if e.result == result::CROWD_CONTROL { continue; }
@@ -66,9 +87,29 @@ pub fn accumulate_pet_credit(
         };
         let dmg = if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
         if dmg == 0 { continue; }
-        let entry = out.entry(owner).or_default();
-        entry.0 += dmg;
-        *entry.1.entry(e.dst_agent).or_default() += dmg;
+        out.push((e.time, owner, e.dst_agent, dmg));
+    }
+    out
+}
+
+/// Sums INCOMING damage per squad member (any source — enemy players or
+/// NPCs). Keyed by the raw destination agent addr; callers fold this by
+/// account representative (see `wvw`/`analysis::mod` relog aggregation) to
+/// get a per-account total. Mirrors `accumulate`'s damage predicate exactly
+/// (non-statechange/activation/buffremove, excludes CROWD_CONTROL result
+/// rows since those carry CC duration ms, not damage).
+pub fn accumulate_damage_taken(
+    events: &[RawEvent],
+    squad: &BTreeSet<u64>,
+) -> BTreeMap<u64, u64> {
+    let mut out: BTreeMap<u64, u64> = BTreeMap::new();
+    for e in events {
+        if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }
+        if e.result == result::CROWD_CONTROL { continue; }
+        if !squad.contains(&e.dst_agent) { continue; }
+        let dmg = if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
+        if dmg == 0 { continue; }
+        *out.entry(e.dst_agent).or_default() += dmg;
     }
     out
 }
@@ -91,5 +132,26 @@ mod tests {
         let dmg = accumulate(&evs, &squad, &enemies);
         assert_eq!(dmg[&1].0, 150); // total to enemies only
         assert_eq!(dmg[&1].1.get(&9).copied(), Some(150));
+    }
+    #[test]
+    fn sums_incoming_damage_from_any_source() {
+        let squad = [1u64].into_iter().collect();
+        // enemy player (9) and an NPC (10) both hit squad member 1.
+        let evs = vec![
+            strike(9, 1, 200),
+            strike(10, 1, 75),
+            strike(9, 2, 999), // to a non-squad dst, ignored
+        ];
+        let taken = accumulate_damage_taken(&evs, &squad);
+        assert_eq!(taken.get(&1).copied(), Some(275));
+    }
+    #[test]
+    fn excludes_crowd_control_from_incoming_damage() {
+        let squad = [1u64].into_iter().collect();
+        let mut cc = strike(9, 1, 5000); // would look huge if treated as damage
+        cc.result = result::CROWD_CONTROL;
+        let evs = vec![strike(9, 1, 100), cc];
+        let taken = accumulate_damage_taken(&evs, &squad);
+        assert_eq!(taken.get(&1).copied(), Some(100));
     }
 }

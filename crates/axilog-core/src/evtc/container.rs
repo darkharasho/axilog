@@ -36,8 +36,24 @@ fn zip_read(mut cur: std::io::Cursor<&[u8]>) -> Result<Vec<u8>, EvtcError> {
     let csize = u32::from_le_bytes([b[18], b[19], b[20], b[21]]) as usize;
     let namelen = u16::from_le_bytes([b[26], b[27]]) as usize;
     let extralen = u16::from_le_bytes([b[28], b[29]]) as usize;
-    let data_start = 30 + namelen + extralen;
-    let data = &b[data_start..data_start + csize];
+    // `data_start`/`csize` are attacker/corruption-controlled fields read
+    // straight from the file; bound-check both before slicing so a
+    // truncated or malformed zevtc returns an error instead of panicking
+    // (Finding #2).
+    let data_start = 30usize
+        .checked_add(namelen)
+        .and_then(|v| v.checked_add(extralen))
+        .ok_or_else(|| EvtcError::Container("zip local header overflow".into()))?;
+    if data_start > b.len() {
+        return Err(EvtcError::Container("zip local header exceeds buffer".into()));
+    }
+    let data_end = data_start
+        .checked_add(csize)
+        .ok_or_else(|| EvtcError::Container("zip entry size overflow".into()))?;
+    if data_end > b.len() {
+        return Err(EvtcError::Container("zip entry data exceeds buffer".into()));
+    }
+    let data = &b[data_start..data_end];
     let _ = cur.seek(SeekFrom::Start(0));
     match method {
         0 => Ok(data.to_vec()), // stored
@@ -216,5 +232,55 @@ mod tests {
 
         let out = inflate_zevtc(&zip).unwrap();
         assert_eq!(out, original);
+    }
+
+    #[test]
+    fn zip_read_rejects_csize_larger_than_buffer() {
+        // A corrupted/truncated zevtc whose local file header claims a
+        // csize bigger than the actual buffer must return Err, not panic
+        // via out-of-bounds slicing (Finding #2).
+        let name = b"log.evtc";
+        let mut zip = Vec::new();
+        zip.extend_from_slice(b"PK\x03\x04");
+        zip.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        zip.extend_from_slice(&0u16.to_le_bytes()); // flags
+        zip.extend_from_slice(&8u16.to_le_bytes()); // method = deflate
+        zip.extend_from_slice(&0u32.to_le_bytes()); // mod time+date
+        zip.extend_from_slice(&0u32.to_le_bytes()); // crc32
+        zip.extend_from_slice(&1_000_000u32.to_le_bytes()); // csize: way bigger than buffer
+        zip.extend_from_slice(&0u32.to_le_bytes()); // usize
+        zip.extend_from_slice(&(name.len() as u16).to_le_bytes()); // namelen
+        zip.extend_from_slice(&0u16.to_le_bytes()); // extralen
+        zip.extend_from_slice(name);
+        // No entry data at all — buffer ends right after the header+name.
+
+        let err = inflate_zevtc(&zip).unwrap_err();
+        match err {
+            EvtcError::Container(_) => {}
+            other => panic!("expected Container error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zip_read_rejects_header_fields_exceeding_buffer() {
+        // namelen/extralen alone push data_start past the buffer end.
+        let mut zip = Vec::new();
+        zip.extend_from_slice(b"PK\x03\x04");
+        zip.extend_from_slice(&20u16.to_le_bytes());
+        zip.extend_from_slice(&0u16.to_le_bytes());
+        zip.extend_from_slice(&8u16.to_le_bytes());
+        zip.extend_from_slice(&0u32.to_le_bytes());
+        zip.extend_from_slice(&0u32.to_le_bytes());
+        zip.extend_from_slice(&0u32.to_le_bytes()); // csize
+        zip.extend_from_slice(&0u32.to_le_bytes()); // usize
+        zip.extend_from_slice(&60_000u16.to_le_bytes()); // namelen: far bigger than buffer
+        zip.extend_from_slice(&0u16.to_le_bytes()); // extralen
+        // buffer ends at exactly 30 bytes, no name bytes present
+
+        let err = inflate_zevtc(&zip).unwrap_err();
+        match err {
+            EvtcError::Container(_) => {}
+            other => panic!("expected Container error, got {other:?}"),
+        }
     }
 }

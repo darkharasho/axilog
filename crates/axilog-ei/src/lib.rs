@@ -59,7 +59,7 @@ mod tests {
             duration_ms:1000,build:"".into(),revision:1,recorded_by:Some(":A.1".into()),
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"Daredevil".into(),
-            team:"red".into(),subgroup:2,in_squad:true,commander:true}],enemies:vec![]};
+            team:"red".into(),subgroup:2,in_squad:true,commander:true,agent_addrs:vec![1]}],enemies:vec![]};
         let m = Metrics{players:vec![PlayerMetrics{agent_addr:1,damage_total:500,dps:500.0,
             downs_dealt:1,kills_dealt:1,down_contribution:400,deaths:0,..Default::default()}],
             timeline:Timeline{resolution_ms:1000,squad_damage:vec![500],cc_applied:vec![0],downs:vec![0]}};

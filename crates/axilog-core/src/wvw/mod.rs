@@ -9,7 +9,11 @@ pub fn dedupe_players(players: &mut Vec<Player>) {
     for p in players.drain(..) {
         let key = if p.account.is_empty() { p.character.clone() } else { p.account.clone() };
         match seen.get(&key) {
-            Some(&i) => { out[i].in_squad |= p.in_squad; out[i].commander |= p.commander; }
+            Some(&i) => {
+                out[i].in_squad |= p.in_squad;
+                out[i].commander |= p.commander;
+                out[i].agent_addrs.extend(p.agent_addrs);
+            }
             None => { seen.insert(key, out.len()); out.push(p); }
         }
     }
@@ -127,7 +131,7 @@ mod tests {
     fn player(addr: u64, acc: &str) -> Player {
         Player { agent_addr: addr, account: acc.into(), character: "C".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "".into(),
-            subgroup: 1, in_squad: true, commander: false }
+            subgroup: 1, in_squad: true, commander: false, agent_addrs: vec![addr] }
     }
     #[test]
     fn dedupes_players_by_account() {
@@ -137,5 +141,21 @@ mod tests {
             enemies: vec![] };
         dedupe_players(&mut enc.players);
         assert_eq!(enc.players.len(), 2);
+    }
+    #[test]
+    fn dedupe_collects_all_agent_addrs_for_relog() {
+        // Same account, two raw agent addrs (relog / build swap). The
+        // survivor must retain BOTH addrs so downstream analysis can sum
+        // damage across the full account, not just the representative.
+        let mut enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:0,
+            build:"".into(), revision:1, recorded_by:None, teams:vec![],
+            players: vec![player(1, ":A.1"), player(2, ":A.1")],
+            enemies: vec![] };
+        dedupe_players(&mut enc.players);
+        assert_eq!(enc.players.len(), 1);
+        assert_eq!(enc.players[0].agent_addr, 1);
+        let mut addrs = enc.players[0].agent_addrs.clone();
+        addrs.sort_unstable();
+        assert_eq!(addrs, vec![1, 2]);
     }
 }
