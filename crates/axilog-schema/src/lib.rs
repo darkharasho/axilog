@@ -10,6 +10,13 @@ pub struct Report {
     pub players: Vec<PlayerOut>,
     pub enemies: Vec<EnemyOut>,
     pub timeline: TimelineOut,
+    /// Structured, user-facing analysis warnings (final-review fix wave) --
+    /// see `axilog_core::analysis::Metrics::warnings`'s doc comment. Omitted
+    /// entirely from the JSON (not serialized as `[]`) when there are none,
+    /// matching this schema's existing omit-when-absent convention for
+    /// other optional/empty-by-default fields (e.g. `TickRateOut`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 #[derive(Serialize)]
 pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u64,
@@ -171,6 +178,7 @@ pub fn build_report(enc: &Encounter, metrics: &Metrics, axilog_version: &str) ->
             per_second: PerSecondOut { squad_damage: metrics.timeline.squad_damage.clone(),
                 cc_applied: metrics.timeline.cc_applied.clone(),
                 downs: metrics.timeline.downs.clone() } },
+        warnings: metrics.warnings.clone(),
     }
 }
 
@@ -192,7 +200,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![500],
             cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default() };
+            boon_generation: Default::default(), warnings: Default::default() };
         let report = build_report(&enc, &m, "0.1.0");
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.1");

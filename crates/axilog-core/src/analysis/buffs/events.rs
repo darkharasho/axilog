@@ -249,11 +249,23 @@ pub fn extract_buff_events(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEv
 /// (plain overwrite on repeated inserts), mirroring `Dictionary`-style
 /// last-write-wins semantics GW2EI's own single-event-per-id model doesn't
 /// need to disambiguate.
+/// Sane upper bound on a `BUFFINFO` row's reported stack capacity
+/// (final-review fix wave). `src_master_instid` is a raw `u16` (up to
+/// 65535), but arcdps only ever legitimately reports small per-buff
+/// capacities in practice -- the highest observed across this project's own
+/// calibration fixtures and GW2EI's hardcoded `CommonBuffs` defaults is `99`
+/// (several Queue-type boons genuinely report exactly 99, see
+/// `extract_buff_capacities`'s doc comment above), so anything higher is
+/// treated as a garbled/corrupt row rather than trusted verbatim -- clamped
+/// down to this ceiling instead of silently feeding an implausible capacity
+/// (e.g. 65535) into `simulator::run`.
+const MAX_BUFF_CAPACITY: u32 = 99;
+
 pub fn extract_buff_capacities(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> std::collections::BTreeMap<u32, u32> {
     let mut out = std::collections::BTreeMap::new();
     for e in &raw.events {
         if e.is_statechange == sc::BUFF_INFO && boon_ids.contains(&e.skillid) {
-            let max_stacks = e.src_master_instid as u32;
+            let max_stacks = (e.src_master_instid as u32).min(MAX_BUFF_CAPACITY);
             if max_stacks > 0 {
                 out.insert(e.skillid, max_stacks);
             }
@@ -478,5 +490,29 @@ mod tests {
         let events = extract_buff_events(&raw_from(vec![seed, apply]), &boon_ids());
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].agent, 1, "pet applier must master-resolve to owner");
+    }
+
+    /// Final-review fix wave: a `BUFFINFO` row reporting an implausible
+    /// capacity (`src_master_instid` up to `65535`, the raw field's full
+    /// `u16` range) must be clamped down to `MAX_BUFF_CAPACITY` (99) rather
+    /// than trusted verbatim.
+    #[test]
+    fn buff_info_capacity_clamps_to_max() {
+        let mut e = base_event();
+        e.is_statechange = sc::BUFF_INFO;
+        e.src_master_instid = 65535;
+        let caps = extract_buff_capacities(&raw_from(vec![e]), &boon_ids());
+        assert_eq!(caps.get(&MIGHT), Some(&MAX_BUFF_CAPACITY));
+        assert_eq!(caps.get(&MIGHT), Some(&99));
+    }
+
+    /// A plausible, already-in-range capacity must pass through unchanged.
+    #[test]
+    fn buff_info_capacity_within_range_unchanged() {
+        let mut e = base_event();
+        e.is_statechange = sc::BUFF_INFO;
+        e.src_master_instid = 25;
+        let caps = extract_buff_capacities(&raw_from(vec![e]), &boon_ids());
+        assert_eq!(caps.get(&MIGHT), Some(&25));
     }
 }

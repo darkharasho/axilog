@@ -39,7 +39,26 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// `buffs::generation`'s module doc for why the two simulations must
     /// stay independently verified against each other); does not alter any
     /// pre-existing metric.
-    pub boon_generation: BTreeMap<(u64, u32), buffs::GenerationStats> }
+    pub boon_generation: BTreeMap<(u64, u32), buffs::GenerationStats>,
+    /// Structured, user-facing warnings about this analysis run (final-review
+    /// fix wave). Currently populated with exactly one case: the log's
+    /// arcdps build is on/after the post-2026-05-01 buff-statechange rework
+    /// (`crate::evtc::RawHeader::is_post_buff_rework`) AND zero buff apply/
+    /// remove/initial events were extracted for the tracked boons -- see
+    /// `events::extract_buff_events`'s module doc for why this project's
+    /// current extractor only understands the OLDER (pre-rework)
+    /// `is_statechange == 0` combat-event shape, so a genuinely post-rework
+    /// log silently reads all-zero boon/support metrics without this
+    /// warning. Empty on every other log (including a post-rework build
+    /// that still happens to carry zero tracked-boon events for a
+    /// legitimate reason, e.g. no boons cast at all -- indistinguishable
+    /// from the silent-zero case from data alone, so the build-era check is
+    /// the only reliable signal; a false positive here is a harmless
+    /// heads-up, not a wrong metric). Native schema surfaces this as a
+    /// top-level `warnings: [...]` array (omitted when empty); the CLI
+    /// table view prints it to stderr; `ei-json` has no comparable field so
+    /// it's simply not carried over.
+    pub warnings: Vec<String> }
 
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // A friendly account can own several raw agent addrs (relog / build
@@ -133,7 +152,25 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // source's stack is held).
     let target_gen = buffs::generation::simulate_boon_generation_ms(raw, enc);
     let boon_generation = buffs::generation::rollup(&target_gen, enc, log_start_ms, log_end_ms);
-    Metrics { players, timeline, boons, boon_uptime, boon_generation }
+    // Final-review fix wave: on a post-2026-05-01 (buff-statechange-rework)
+    // build, this project's `events::extract_buff_events`/`support::apply`
+    // only understand the OLDER pre-rework wire shape (see `Metrics::
+    // warnings`'s doc comment) -- if that build era produced zero extracted
+    // buff events, warn rather than silently emitting all-zero boon/support
+    // metrics. Re-extracts (cheap: a single linear scan over the boon skill
+    // ids) rather than threading a count out of `boons::simulate_boons`,
+    // which already discards per-owner squad-membership before this point.
+    let mut warnings = Vec::new();
+    if raw.header.is_post_buff_rework() {
+        let boon_id_set: BTreeSet<u32> = buffs::BOON_IDS.iter().map(|&(id, _, _)| id).collect();
+        if buffs::events::extract_buff_events(raw, &boon_id_set).is_empty() {
+            warnings.push(format!(
+                "log build {} uses post-2026-05-01 buff statechange events; boon/support metrics are not yet supported for this era and will read zero",
+                raw.header.build
+            ));
+        }
+    }
+    Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings }
 }
 
 #[cfg(test)]
@@ -240,5 +277,39 @@ mod tests {
         assert_eq!(metrics.players[0].damage_total, 350, "both addrs' damage counted");
         assert_eq!(metrics.players[0].per_enemy.len(), 1, "folded into one per_enemy entry");
         assert_eq!(metrics.players[0].per_enemy[0], (9, 350), "keyed by the representative enemy id");
+    }
+
+    fn empty_enc() -> Encounter {
+        Encounter { kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
+            revision: 1, recorded_by: None, teams: vec![], players: vec![], enemies: vec![],
+            markers: vec![], tick_rate: None }
+    }
+
+    /// Final-review fix wave: a log whose arcdps build is on/after the
+    /// post-2026-05-01 buff-statechange rework, with zero extracted buff
+    /// events (this project's extractor only understands the older
+    /// pre-rework wire shape -- see `Metrics::warnings`'s doc comment), must
+    /// surface a non-empty `warnings` list naming the build.
+    #[test]
+    fn post_rework_build_with_no_buff_events_warns() {
+        let raw = RawLog {
+            header: RawHeader { build: "20260601".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![], events: vec![], guid_map: vec![],
+        };
+        let metrics = analyze(&empty_enc(), &raw);
+        assert!(!metrics.warnings.is_empty(), "post-rework build with zero buff events must warn");
+        assert!(metrics.warnings[0].contains("20260601"), "warning should name the offending build");
+    }
+
+    /// A pre-rework build produces no warnings (the ordinary case for every
+    /// log this project currently supports), even with zero buff events.
+    #[test]
+    fn pre_rework_build_no_warnings() {
+        let raw = RawLog {
+            header: RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![], events: vec![], guid_map: vec![],
+        };
+        let metrics = analyze(&empty_enc(), &raw);
+        assert!(metrics.warnings.is_empty());
     }
 }

@@ -210,7 +210,7 @@ mod tests {
             downs_dealt:0,kills_dealt:0,down_contribution:0,deaths:1,..Default::default()}],
             timeline:Timeline{resolution_ms:1000,squad_damage:vec![800],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default()};
+            boon_generation: Default::default(), warnings: Default::default()};
         axilog_schema::build_report(&enc,&m,"0.1.0")
     }
     #[test]
@@ -280,6 +280,7 @@ mod tests {
                 ..Default::default()}],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime, boon_generation,
+            warnings: Default::default(),
         };
         axilog_schema::build_report(&enc,&m,"0.1.0")
     }

@@ -59,6 +59,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let enc = axilog_core::model::resolve(&raw);
             let metrics = axilog_core::analysis::analyze(&enc, &raw);
             let report = axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"));
+            // Final-review fix wave: surface analysis warnings (e.g. a
+            // post-2026-05-01 buff-statechange-rework build producing
+            // all-zero boon/support metrics) on stderr for every output
+            // format -- `json`/`ei-json` still emit the metrics themselves
+            // unchanged (json additionally carries them in the
+            // `warnings: [...]` top-level field; ei-json has no comparable
+            // field and omits them).
+            for w in &report.warnings {
+                eprintln!("warning: {w}");
+            }
             match format {
                 Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
                 Format::EiJson => println!(
