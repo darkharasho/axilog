@@ -83,6 +83,8 @@ pub fn simulate_boons(raw: &RawLog, enc: &Encounter) -> BTreeMap<(u64, u32), Boo
         .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
         .collect();
     let boon_ids: BTreeSet<u32> = BOON_IDS.iter().map(|&(id, _, _)| id).collect();
+    let intensity_ids: BTreeSet<u32> =
+        BOON_IDS.iter().filter(|&&(_, _, is_intensity)| is_intensity).map(|&(id, _, _)| id).collect();
 
     let raw_events = events::extract_buff_events(raw, &boon_ids);
     let mut grouped: BTreeMap<(u64, u32), Vec<events::BuffEvent>> = BTreeMap::new();
@@ -99,7 +101,8 @@ pub fn simulate_boons(raw: &RawLog, enc: &Encounter) -> BTreeMap<(u64, u32), Boo
         .into_iter()
         .map(|((rep, buff_id), evs)| {
             let capacity = simulator::capacity_for(buff_id);
-            let states = simulator::run(evs, capacity, log_end_ms);
+            let is_intensity = intensity_ids.contains(&buff_id);
+            let states = simulator::run(evs, capacity, is_intensity, log_end_ms);
             ((rep, buff_id), BoonTimeline { states })
         })
         .collect()
@@ -132,7 +135,7 @@ mod tests {
             time, src_agent: src, dst_agent: dst, value: duration_ms, buff_dmg: 0, overstack: 0,
             skillid: buff_id, src_instid: 0, dst_instid: 0, src_master_instid: 0,
             dst_master_instid: 0, iff: 0, buff: 1, result: 0, is_activation: 0, is_buffremove: 0,
-            is_statechange: 0,
+            is_statechange: 0, is_shields: 0,
         }
     }
 
@@ -193,6 +196,28 @@ mod tests {
         assert_eq!(boons.len(), 2);
         assert!(!boons[&(1, MIGHT)].states.is_empty());
         assert!(!boons[&(2, MIGHT)].states.is_empty());
+    }
+
+    /// **Fix Round 1**: end-to-end check that `simulate_boons` routes
+    /// Queue-type (duration) boons through the frozen-queue model, not the
+    /// intensity concurrent-tick model -- a second Fury application while
+    /// the first is still active must be frozen, not expire at
+    /// apply_time+duration.
+    #[test]
+    fn simulate_boons_duration_boon_uses_frozen_queue_model() {
+        let e = enc(vec![player(1, vec![1])]);
+        let raw = raw_from(vec![
+            apply_ev(0, FURY, 9, 1, 1000),   // active: expires 1000
+            apply_ev(100, FURY, 9, 1, 5000), // queued frozen (is_shields not set)
+            apply_ev(20_000, 999_999, 0, 0, 0), // trailing event extending log_end_ms
+        ]);
+        let boons = simulate_boons(&raw, &e);
+        let tl = &boons[&(1, FURY)];
+        // If this were (wrongly) simulated with the intensity/concurrent
+        // model, the second stack would expire at 100+5000=5100. The real
+        // frozen-queue model instead promotes it at t=1000 and it then runs
+        // its full 5000ms, expiring at 6000.
+        assert_eq!(tl.states, vec![(0, 1), (100, 2), (1000, 1), (6000, 0)]);
     }
 
     #[test]

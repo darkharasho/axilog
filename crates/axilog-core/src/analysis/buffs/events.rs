@@ -62,7 +62,17 @@ pub enum BuffEventKind {
     /// used by GW2EI only for display/extension bookkeeping this task's
     /// simplified simulator doesn't model -- `ParsedData/CombatEvents/
     /// BuffEvents/BuffApplies/BuffApplyEvent.cs`).
-    Apply { duration_ms: u32 },
+    ///
+    /// `is_shields` is the raw event's `is_shields` byte (`!= 0`), verified
+    /// (Fix Round 1) against the arcdps reference comment on
+    /// `CBTS_BUFFAPPLY`: "is_shields: non-zero if buff is active when
+    /// applied", cross-checked against GW2EI's `BuffApplyEvent._addedActive
+    /// = evtcItem.IsShields > 0`. For duration/Queue-type boons this
+    /// decides whether the new stack becomes the immediately ACTIVE
+    /// (ticking) one or joins the back of the FROZEN queue -- see
+    /// `simulator::run_duration`. Has no effect for intensity boons
+    /// (Might/Stability), which don't have an "active slot" concept.
+    Apply { duration_ms: u32, is_shields: bool },
     /// `is_buffremove == SINGLE`: removes exactly one currently-held stack.
     /// `removed_duration_ms` is the raw event's `value` field -- GW2EI's
     /// default (non-instance) simulator matches it against each held
@@ -109,7 +119,10 @@ pub fn extract_buff_events(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEv
                 buff_id: e.skillid,
                 owner: e.dst_agent,
                 agent: resolve_agent(e.src_agent, e.src_master_instid, e.time),
-                kind: BuffEventKind::Apply { duration_ms: e.value.max(0) as u32 },
+                kind: BuffEventKind::Apply {
+                    duration_ms: e.value.max(0) as u32,
+                    is_shields: e.is_shields != 0,
+                },
             });
             continue;
         }
@@ -134,7 +147,10 @@ pub fn extract_buff_events(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEv
                 buff_id: e.skillid,
                 owner: e.dst_agent,
                 agent: resolve_agent(e.src_agent, e.src_master_instid, e.time),
-                kind: BuffEventKind::Apply { duration_ms: e.value as u32 },
+                kind: BuffEventKind::Apply {
+                    duration_ms: e.value as u32,
+                    is_shields: e.is_shields != 0,
+                },
             });
             continue;
         }
@@ -183,7 +199,7 @@ mod tests {
             time: 0, src_agent: 0, dst_agent: 0, value: 0, buff_dmg: 0, overstack: 0,
             skillid: MIGHT, src_instid: 0, dst_instid: 0, src_master_instid: 0,
             dst_master_instid: 0, iff: 0, buff: 0, result: 0, is_activation: 0,
-            is_buffremove: 0, is_statechange: 0,
+            is_buffremove: 0, is_statechange: 0, is_shields: 0,
         }
     }
 
@@ -209,7 +225,22 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].owner, 0xB, "owner must be dst_agent (recipient), not src_agent");
         assert_eq!(events[0].agent, 0xA, "agent must be src_agent (applier)");
-        assert_eq!(events[0].kind, BuffEventKind::Apply { duration_ms: 5000 });
+        assert_eq!(events[0].kind, BuffEventKind::Apply { duration_ms: 5000, is_shields: false });
+    }
+
+    /// **Fix Round 1**: `is_shields` on the raw event must round-trip into
+    /// `BuffEventKind::Apply.is_shields`.
+    #[test]
+    fn apply_event_carries_is_shields_flag() {
+        let mut e = base_event();
+        e.src_agent = 0xA;
+        e.dst_agent = 0xB;
+        e.buff = 1;
+        e.value = 5000;
+        e.is_shields = 1;
+        let events = extract_buff_events(&raw_from(vec![e]), &boon_ids());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, BuffEventKind::Apply { duration_ms: 5000, is_shields: true });
     }
 
     /// The critical field-role check the Task 1 brief calls out by name:
@@ -275,7 +306,7 @@ mod tests {
         let events = extract_buff_events(&raw_from(vec![e]), &boon_ids());
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].owner, 0xB);
-        assert_eq!(events[0].kind, BuffEventKind::Apply { duration_ms: 3000 });
+        assert_eq!(events[0].kind, BuffEventKind::Apply { duration_ms: 3000, is_shields: false });
     }
 
     /// A buff-damage-tick event (condi damage) carries `buff == 1` but

@@ -124,6 +124,7 @@ mod tests {
             is_activation: 0,
             is_buffremove: 0,
             is_statechange: sc::ID_TO_GUID,
+            is_shields: 0,
         }
     }
 

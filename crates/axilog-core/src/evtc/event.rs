@@ -169,6 +169,20 @@ pub struct RawEvent {
     pub is_activation: u8,
     pub is_buffremove: u8,
     pub is_statechange: u8,
+    /// Verified against the arcdps EVTC reference struct layout (`iff`
+    /// through `is_offcycle` are single bytes at offsets 48-59; see the
+    /// offset table in `decode_events` below): `is_shields` sits at offset
+    /// 58, between `is_flanking` (57) and `is_offcycle` (59). On a
+    /// `CBTS_BUFFAPPLY`-shaped event (`buff == 1`, apply -- see
+    /// `sc::BUFF_INITIAL` docs for this project's pre-rework event shape),
+    /// the arcdps reference documents it as "non-zero if buff is active
+    /// when applied". Cross-checked against GW2EI's `BuffApplyEvent`:
+    /// `_addedActive = evtcItem.IsShields > 0;`
+    /// (`ParsedData/CombatEvents/BuffEvents/BuffApplies/BuffApplyEvent.cs`),
+    /// which decides whether the new stack is inserted as the immediately
+    /// ACTIVE (ticking) one or appended to the back of the frozen queue --
+    /// see `analysis::buffs::simulator`'s duration-boon fix-round-1 rework.
+    pub is_shields: u8,
 }
 
 pub fn decode_events(buf: &[u8], count: usize) -> Result<Vec<RawEvent>, EvtcError> {
@@ -205,6 +219,7 @@ pub fn decode_events(buf: &[u8], count: usize) -> Result<Vec<RawEvent>, EvtcErro
             is_activation: e[51],
             is_buffremove: e[52],
             is_statechange: e[56],
+            is_shields: e[58],
         });
     }
     Ok(out)
