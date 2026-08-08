@@ -13,7 +13,14 @@ pub struct Player { pub agent_addr: u64, pub account: String, pub character: Str
     pub agent_addrs: Vec<u64> }
 #[derive(Debug, Clone)]
 pub struct Enemy { pub id: u64, pub instid: u16, pub name: String,
-    pub team: String, pub is_player: bool }
+    pub team: String, pub is_player: bool,
+    /// Every raw agent addr folded into this enemy. For NPCs/gadgets this is
+    /// always exactly `[id]` (distinct spawns are distinct, never deduped).
+    /// For enemy players relogging under the same account (Task 4, M2), this
+    /// holds every one of that account's raw addrs; `id` is the
+    /// representative. Analysis uses this so damage against any of the
+    /// account's addrs (not just the representative) is still counted.
+    pub agent_addrs: Vec<u64> }
 #[derive(Debug, Clone)]
 pub struct Team {
     pub color: String,
@@ -110,7 +117,8 @@ pub fn resolve(raw: &RawLog) -> Encounter {
             _ => {
                 let (name, _, _) = a.name_parts();
                 enemies.push(Enemy { id: a.addr, instid: 0, name,
-                    team: String::new(), is_player: false });
+                    team: String::new(), is_player: false,
+                    agent_addrs: vec![a.addr] });
             }
         }
     }

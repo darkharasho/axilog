@@ -20,6 +20,38 @@ pub fn dedupe_players(players: &mut Vec<Player>) {
     *players = out;
 }
 
+/// Collapse relog/build-swap duplicates among enemy players, mirroring
+/// `dedupe_players` for the squad side -- with one deliberate difference.
+///
+/// Squad players always reveal their own account, so `dedupe_players` can
+/// safely fall back to `character` as a key when `account` happens to be
+/// empty. Enemy players are different: arcdps only reveals an enemy's
+/// account name when it happens to be known/visible, and when it isn't,
+/// `character` is NOT a real display name -- arcdps substitutes the
+/// enemy's profession/elite-spec label instead (verified against the WvW
+/// golden fixture: every enemy player there has a blank account, and
+/// `character` is a shared spec label like "Druid" or "Harbinger" repeated
+/// across dozens of clearly-distinct agents). Falling back to `character`
+/// in that case would wrongly merge unrelated enemies who simply share a
+/// class. So: only dedupe enemy players with a known, non-empty account;
+/// everyone else is left as a distinct entry. NPCs/gadgets never go
+/// through this function at all -- distinct spawns are distinct.
+fn dedupe_enemy_players(players: &mut Vec<Player>) {
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    let mut out: Vec<Player> = Vec::new();
+    for p in players.drain(..) {
+        if p.account.is_empty() {
+            out.push(p);
+            continue;
+        }
+        match seen.get(&p.account) {
+            Some(&i) => { out[i].agent_addrs.extend(p.agent_addrs); }
+            None => { seen.insert(p.account.clone(), out.len()); out.push(p); }
+        }
+    }
+    *players = out;
+}
+
 // WvW map id (MAP_ID statechange `src_agent`) → display name.
 // Ids/names cross-checked against GW2EI's `MapIDs` (LogLogic/WvW) and the
 // golden fixture (Green Alpine Borderlands, id 95). Unknown ids fall back
@@ -182,6 +214,7 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     let friendly_team = recorded_by.and_then(|addr| agent_team.get(&addr).copied());
 
     let mut friendly_players = Vec::new();
+    let mut enemy_players: Vec<Player> = Vec::new();
     for p in enc.players.drain(..) {
         let is_friendly = match agent_team.get(&p.agent_addr) {
             Some(&t) => Some(t) == friendly_team,
@@ -193,17 +226,28 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         if is_friendly {
             friendly_players.push(p);
         } else {
-            let team = agent_team.get(&p.agent_addr).map(|&t| team_color_with(t, dynamic.as_ref())).unwrap_or_default();
-            enc.enemies.push(Enemy {
-                id: p.agent_addr,
-                instid: 0,
-                name: p.character,
-                team,
-                is_player: true,
-            });
+            enemy_players.push(p);
         }
     }
     enc.players = friendly_players;
+
+    // Enemy relog dedupe (Task 4, M2): collapse enemy players relogging
+    // under the same known account into one Enemy, aggregating their raw
+    // addrs -- see `dedupe_enemy_players` docs for why this only keys on
+    // `account` (never falls back to `character` like the squad-side
+    // dedupe does).
+    dedupe_enemy_players(&mut enemy_players);
+    for p in enemy_players {
+        let team = agent_team.get(&p.agent_addr).map(|&t| team_color_with(t, dynamic.as_ref())).unwrap_or_default();
+        enc.enemies.push(Enemy {
+            id: p.agent_addr,
+            instid: 0,
+            name: p.character,
+            team,
+            is_player: true,
+            agent_addrs: p.agent_addrs,
+        });
+    }
 
     // `enc.enemies` now holds the enemy players just moved in above, plus
     // every NPC/gadget agent (model::resolve puts them all there
@@ -365,6 +409,40 @@ mod tests {
         };
         let enc = crate::model::resolve(&raw);
         assert_eq!(enc.players[0].team, "unknown");
+    }
+
+    /// Task 4 (M2): two enemy-player entries sharing the same known account
+    /// (a relog/build-swap mid-recording) collapse into one, aggregating
+    /// both raw addrs -- mirroring `dedupes_players_by_account` for the
+    /// squad side.
+    #[test]
+    fn dedupe_enemy_players_collapses_same_account() {
+        let mut enemies = vec![player(9, ":Foe.1"), player(10, ":Foe.1"), player(11, ":Bar.2")];
+        dedupe_enemy_players(&mut enemies);
+        assert_eq!(enemies.len(), 2);
+        let foe = enemies.iter().find(|p| p.account == ":Foe.1").expect("foe present");
+        assert_eq!(foe.agent_addr, 9, "representative is first-seen addr");
+        let mut addrs = foe.agent_addrs.clone();
+        addrs.sort_unstable();
+        assert_eq!(addrs, vec![9, 10]);
+    }
+
+    /// Task 4 (M2): enemy players with an empty (unknown) account are never
+    /// merged, even if they happen to share a `character` value -- WvW
+    /// enemy players without a visible account get a generic
+    /// profession/elite-spec placeholder as `character`, which is not a
+    /// real, distinguishing name (see `dedupe_enemy_players` docs). This is
+    /// the deliberate divergence from `dedupe_players`, which falls back to
+    /// `character` for the squad side.
+    #[test]
+    fn dedupe_enemy_players_does_not_merge_blank_accounts() {
+        let mut a = player(9, "");
+        a.character = "Druid".into();
+        let mut b = player(10, "");
+        b.character = "Druid".into(); // same generic spec label, different agent
+        let mut enemies = vec![a, b];
+        dedupe_enemy_players(&mut enemies);
+        assert_eq!(enemies.len(), 2, "blank-account enemies must stay distinct");
     }
 
     /// Task 2b: a CBTS_IDTOGUID (content type TEAM) mapping attaches a

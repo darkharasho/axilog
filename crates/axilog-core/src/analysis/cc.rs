@@ -101,11 +101,11 @@ fn is_cc(e: &crate::evtc::RawEvent) -> bool {
 }
 
 /// Pet/minion-sourced CC application events credited to the owning squad
-/// player: `(owner, dst, duration_ms)`. Mirrors
-/// `damage::pet_credit_events`'s owner resolution (via `src_master_instid`
-/// looked up against a log-wide, last-write-wins instid -> agent-address
-/// table) but selects `is_cc` rows instead of excluding them, and reads
-/// the CC duration from `value` instead of damage from `value`/`buff_dmg`.
+/// player: `(owner, dst, duration_ms)`. Mirrors `damage::pet_credit_events`'s
+/// owner resolution (via `src_master_instid` looked up against the shared,
+/// time-aware `damage::InstidRegistry` -- Task 4, M2) but selects `is_cc`
+/// rows instead of excluding them, and reads the CC duration from `value`
+/// instead of damage from `value`/`buff_dmg`.
 ///
 /// Required to match EI: GW2EI's `SingleActor.InitOutgoingCrowdControlEvents`
 /// folds each player's minions' `GetOutgoingCrowdControlEvents` into the
@@ -130,12 +130,7 @@ fn pet_credit_cc_events(
     friendly_team: Option<u16>,
     agent_team: &std::collections::BTreeMap<u64, u16>,
 ) -> Vec<(u64, u64, u64)> {
-    use std::collections::BTreeMap;
-    let mut instid_to_addr: BTreeMap<u16, u64> = BTreeMap::new();
-    for e in &raw.events {
-        if e.src_instid != 0 { instid_to_addr.insert(e.src_instid, e.src_agent); }
-        if e.dst_instid != 0 { instid_to_addr.insert(e.dst_instid, e.dst_agent); }
-    }
+    let registry = crate::analysis::damage::InstidRegistry::build(raw);
     let mut out = Vec::new();
     for e in &raw.events {
         if !is_cc(e) { continue; }
@@ -143,8 +138,8 @@ fn pet_credit_cc_events(
         if e.iff == 0 { continue; } // FRIEND: not CC applied to an enemy
         if squad.contains(&e.src_agent) { continue; } // real players: handled directly below
         if agent_team.get(&e.src_agent).copied() != friendly_team { continue; } // not our pet
-        let owner = match instid_to_addr.get(&e.src_master_instid) {
-            Some(&addr) if squad.contains(&addr) => addr,
+        let owner = match registry.resolve_at(e.src_master_instid, e.time) {
+            Some(addr) if squad.contains(&addr) => addr,
             _ => continue,
         };
         out.push((owner, e.dst_agent, e.value.max(0) as u64));

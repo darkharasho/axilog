@@ -32,7 +32,17 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     let addr_to_rep: BTreeMap<u64, u64> = enc.players.iter()
         .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
         .collect();
-    let enemies: BTreeSet<u64> = enc.enemies.iter().map(|e| e.id).collect();
+    // Enemy players can also be deduped across relogs (Task 4, M2): `enemy`
+    // is the union of ALL of an enemy's raw addrs (so combat events against
+    // any of them still count), while `enemy_addr_to_rep` maps every one of
+    // those addrs back to the representative `Enemy.id` so per-enemy damage
+    // maps fold onto a single entry instead of splitting across the relog.
+    let enemies: BTreeSet<u64> = enc.enemies.iter()
+        .flat_map(|e| e.agent_addrs.iter().copied())
+        .collect();
+    let enemy_addr_to_rep: BTreeMap<u64, u64> = enc.enemies.iter()
+        .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+        .collect();
     let mut dmg = damage::accumulate(&raw.events, &squad, &enemies);
     // WvW: credit friendly pet/minion damage (arcdps attributes it to the
     // pet's own agent) to the owning squad player — see Task 16A.
@@ -46,14 +56,18 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
         }
     }
     // Fold every source addr's damage onto its account representative so a
-    // relogged/build-swapped account's damage is summed, not dropped.
+    // relogged/build-swapped account's damage is summed, not dropped. Also
+    // fold each destination addr onto its enemy representative, so a
+    // relogged enemy's damage lands on one `per_enemy` entry instead of
+    // splitting across their addrs (Task 4, M2).
     let mut dmg_by_rep: BTreeMap<u64, (u64, BTreeMap<u64, u64>)> = BTreeMap::new();
     for (addr, (total, per)) in dmg.into_iter() {
         let rep = addr_to_rep.get(&addr).copied().unwrap_or(addr);
         let entry = dmg_by_rep.entry(rep).or_default();
         entry.0 += total;
         for (dst, d) in per {
-            *entry.1.entry(dst).or_default() += d;
+            let dst_rep = enemy_addr_to_rep.get(&dst).copied().unwrap_or(dst);
+            *entry.1.entry(dst_rep).or_default() += d;
         }
     }
     let damage_taken = damage::accumulate_damage_taken(&raw.events, &squad);
@@ -110,7 +124,7 @@ mod tests {
             kind: "wvw".into(), map: "".into(), duration_ms: 2000,
             build: "".into(), revision: 1, recorded_by: None, teams: vec![],
             players: vec![player],
-            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true }],
+            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, agent_addrs: vec![9] }],
         };
         let raw = raw_from(vec![
             strike(1, 9, 100), // pre-relog damage from addr 1
@@ -136,7 +150,7 @@ mod tests {
             kind: "wvw".into(), map: "".into(), duration_ms: 2000,
             build: "".into(), revision: 1, recorded_by: None, teams: vec![],
             players: vec![player],
-            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true }],
+            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, agent_addrs: vec![9] }],
         };
         let raw = raw_from(vec![
             strike(9, 1, 80),  // enemy hits pre-relog addr
@@ -144,5 +158,38 @@ mod tests {
         ]);
         let metrics = analyze(&enc, &raw);
         assert_eq!(metrics.players[0].damage_taken, 200);
+    }
+
+    /// Task 4 (M2): a deduped enemy (e.g. a relogging enemy player, with
+    /// `agent_addrs` covering both its raw addrs) must fold damage sent to
+    /// EITHER addr into a single `per_enemy` entry keyed by the
+    /// representative id -- not split into two rows, and not dropped for
+    /// the non-representative addr.
+    #[test]
+    fn per_enemy_damage_folds_across_deduped_enemy_addrs() {
+        let player = Player {
+            agent_addr: 1, account: ":A.1".into(), character: "A".into(),
+            profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
+            subgroup: 1, in_squad: true, commander: false,
+            agent_addrs: vec![1],
+        };
+        let enc = Encounter {
+            kind: "wvw".into(), map: "".into(), duration_ms: 2000,
+            build: "".into(), revision: 1, recorded_by: None, teams: vec![],
+            players: vec![player],
+            // Enemy deduped from a relog: representative addr 9, but also
+            // covers raw addr 10 (the post-relog addr).
+            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(),
+                is_player: true, agent_addrs: vec![9, 10] }],
+        };
+        let raw = raw_from(vec![
+            strike(1, 9, 100),  // damage to the enemy's pre-relog addr
+            strike(1, 10, 250), // damage to the enemy's post-relog addr
+        ]);
+        let metrics = analyze(&enc, &raw);
+        assert_eq!(metrics.players.len(), 1);
+        assert_eq!(metrics.players[0].damage_total, 350, "both addrs' damage counted");
+        assert_eq!(metrics.players[0].per_enemy.len(), 1, "folded into one per_enemy entry");
+        assert_eq!(metrics.players[0].per_enemy[0], (9, 350), "keyed by the representative enemy id");
     }
 }
