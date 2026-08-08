@@ -10,7 +10,10 @@ pub fn to_ei_json(report: &Report) -> Value {
     let players: Vec<Value> = report.players.iter().map(|p| json!({
         "account": p.account,
         "character_name": p.character,
-        "profession": p.profession,
+        // EI convention: `profession` is the elite-spec name when the
+        // player has one active, else the base profession. `elite_spec` is
+        // kept alongside for consumers that want the native split.
+        "profession": if p.elite_spec.is_empty() { &p.profession } else { &p.elite_spec },
         "elite_spec": p.elite_spec,
         "teamID": color_to_team_id(&p.team),
         "group": p.subgroup,
@@ -59,10 +62,17 @@ mod tests {
             duration_ms:1000,build:"".into(),revision:1,recorded_by:Some(":A.1".into()),
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"Daredevil".into(),
-            team:"red".into(),subgroup:2,in_squad:true,commander:true,agent_addrs:vec![1]}],enemies:vec![]};
-        let m = Metrics{players:vec![PlayerMetrics{agent_addr:1,damage_total:500,dps:500.0,
-            downs_dealt:1,kills_dealt:1,down_contribution:400,deaths:0,..Default::default()}],
-            timeline:Timeline{resolution_ms:1000,squad_damage:vec![500],cc_applied:vec![0],downs:vec![0]}};
+            team:"red".into(),subgroup:2,in_squad:true,commander:true,agent_addrs:vec![1]},
+            Player{agent_addr:2,account:":B.2".into(),
+            character:"B".into(),profession:"Guardian".into(),elite_spec:"".into(),
+            team:"red".into(),subgroup:2,in_squad:true,commander:false,agent_addrs:vec![2]}],
+            enemies:vec![]};
+        let m = Metrics{players:vec![
+            PlayerMetrics{agent_addr:1,damage_total:500,dps:500.0,
+            downs_dealt:1,kills_dealt:1,down_contribution:400,deaths:0,..Default::default()},
+            PlayerMetrics{agent_addr:2,damage_total:300,dps:300.0,
+            downs_dealt:0,kills_dealt:0,down_contribution:0,deaths:1,..Default::default()}],
+            timeline:Timeline{resolution_ms:1000,squad_damage:vec![800],cc_applied:vec![0],downs:vec![0]}};
         axilog_schema::build_report(&enc,&m,"0.1.0")
     }
     #[test]
@@ -72,6 +82,12 @@ mod tests {
         assert_eq!(v["recordedBy"], ":A.1");
         assert_eq!(v["players"][0]["account"], ":A.1");
         assert_eq!(v["players"][0]["character_name"], "A");
+        // EI-style: elite-spec name wins over base profession when present.
+        assert_eq!(v["players"][0]["profession"], "Daredevil");
+        assert_eq!(v["players"][0]["elite_spec"], "Daredevil");
+        // ...but falls back to the base profession for a core (no elite spec) build.
+        assert_eq!(v["players"][1]["profession"], "Guardian");
+        assert_eq!(v["players"][1]["elite_spec"], "");
         assert_eq!(v["players"][0]["hasCommanderTag"], true);
         assert_eq!(v["players"][0]["dpsAll"][0]["damage"], 500);
         assert_eq!(v["players"][0]["statsTargets"][0][0]["downContribution"], 400);

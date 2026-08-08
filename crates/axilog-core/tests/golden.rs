@@ -114,3 +114,158 @@ fn golden_timeline_matches_player_damage_sum() {
     );
     println!("golden timeline/player damage sum equality: {timeline_sum}");
 }
+
+/// Task 1 (M2): profession/elite-spec name calibration against the EI
+/// golden fixture.
+///
+/// `fixtures/local/wvw-small.zevtc` is the *real*, unanonymized raw log (PII,
+/// gitignored, present only for local/dev runs). `fixtures/wvw-small.ei.json`
+/// is the *committed* golden fixture, whose `account` fields were anonymized
+/// by axibridge's `scripts/obfuscate-accounts.mjs` (deterministic
+/// sha256(account) -> "{Adjective}{Noun}.{4 digits}", from a fixed
+/// adjective/noun word list). To join a real decoded account to its golden
+/// row, this test reproduces that exact deterministic transform rather than
+/// comparing account strings directly (which never matches: one side is real
+/// names, the other is anonymized).
+mod ei_account_obfuscation {
+    use sha2::{Digest, Sha256};
+
+    const ADJECTIVES: &[&str] = &[
+        "Amber", "Arctic", "Ashen", "Bold", "Brisk", "Bright", "Calm", "Cinder", "Cloud",
+        "Crimson", "Daring", "Dusky", "Echo", "Ember", "Fable", "Feral", "Frost", "Gilded",
+        "Grand", "Harbor", "Hidden", "Iron", "Ivory", "Jade", "Keen", "Lively", "Lunar", "Merry",
+        "Misty", "Nimble", "Nova", "Oak", "Onyx", "Placid", "Prime", "Quick", "Quiet", "Raven",
+        "Royal", "Rustic", "Sable", "Scarlet", "Shaded", "Silver", "Solar", "Stone", "Storm",
+        "Swift", "Umber", "Velvet", "Verdant", "Vivid", "Wild", "Winter", "Wise", "Woven",
+        "Young", "Zephyr",
+    ];
+    const NOUNS: &[&str] = &[
+        "Arrow", "Beacon", "Bloom", "Brook", "Canyon", "Cedar", "Cipher", "Comet", "Creek",
+        "Crest", "Dawn", "Drift", "Ember", "Falcon", "Field", "Flare", "Forest", "Forge",
+        "Garden", "Glen", "Grove", "Harbor", "Haven", "Hollow", "Horizon", "Jet", "Journey",
+        "Keeper", "Lagoon", "Lane", "Laurel", "Leaf", "Light", "Meadow", "Mesa", "Morrow",
+        "North", "Oak", "Pine", "Quill", "Range", "Ridge", "River", "Rune", "Sage", "Shore",
+        "Sky", "Song", "Spark", "Spruce", "Star", "Summit", "Thorn", "Vale", "Vista", "Wave",
+        "Willow", "Wisp",
+    ];
+
+    /// Only account-shaped strings get obfuscated by the source script
+    /// (`^[A-Za-z][A-Za-z0-9 _'-]{1,31}\.\d{4}$`); anything else (e.g. the
+    /// empty/blank accounts our decoder emits for a few relog stragglers)
+    /// has no obfuscated counterpart to look up.
+    fn looks_like_account(s: &str) -> bool {
+        let bytes = s.as_bytes();
+        if bytes.is_empty() || !bytes[0].is_ascii_alphabetic() {
+            return false;
+        }
+        let Some(dot) = s.rfind('.') else { return false };
+        let (name, suffix) = (&s[..dot], &s[dot + 1..]);
+        if name.is_empty() || name.len() > 32 {
+            return false;
+        }
+        if suffix.len() != 4 || !suffix.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        name.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'_' | b'\'' | b'-'))
+    }
+
+    /// Reproduces `buildFakeAccount` from axibridge's
+    /// `scripts/obfuscate-accounts.mjs`.
+    pub fn obfuscate(real_account_with_colon: &str) -> Option<String> {
+        let real = real_account_with_colon.trim_start_matches(':');
+        if !looks_like_account(real) {
+            return None;
+        }
+        let digest = Sha256::digest(real.as_bytes());
+        let left = u16::from_be_bytes([digest[0], digest[1]]) as usize;
+        let right = u16::from_be_bytes([digest[2], digest[3]]) as usize;
+        let num = u16::from_be_bytes([digest[4], digest[5]]) as u32;
+        let adjective = ADJECTIVES[left % ADJECTIVES.len()];
+        let noun = NOUNS[right % NOUNS.len()];
+        let suffix = (num % 9000) + 1000;
+        Some(format!("{adjective}{noun}.{suffix:04}"))
+    }
+
+    #[test]
+    fn matches_known_axibridge_mapping() {
+        // Spot-checked against fixtures/wvw-small.ei.json / the axibridge
+        // golden JSON for this same encounter.
+        assert_eq!(obfuscate(":Arx.9785").as_deref(), Some("ZephyrLagoon.2752"));
+        assert_eq!(
+            obfuscate(":Astronauta.1087").as_deref(),
+            Some("AshenLaurel.2994")
+        );
+        assert_eq!(obfuscate(""), None);
+    }
+}
+
+#[test]
+fn professions_match_ei_golden() {
+    let bytes = match std::fs::read(FIXTURE_PATH) {
+        Ok(b) => b,
+        Err(_) => {
+            println!(
+                "skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run professions_match_ei_golden)"
+            );
+            return;
+        }
+    };
+
+    let golden_str = std::fs::read_to_string(GOLDEN_JSON_PATH)
+        .unwrap_or_else(|e| panic!("read golden fixture {GOLDEN_JSON_PATH}: {e}"));
+    let golden: serde_json::Value =
+        serde_json::from_str(&golden_str).expect("parse golden EI JSON");
+    let golden_players = golden["players"].as_array().expect("players array");
+
+    let mut profession_by_fake_account = std::collections::HashMap::new();
+    for p in golden_players {
+        let account = p["account"].as_str().expect("account");
+        let profession = p["profession"].as_str().expect("profession");
+        profession_by_fake_account.insert(account.to_string(), profession.to_string());
+    }
+
+    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+    let enc = resolve(&raw);
+
+    let mut matched = 0usize;
+    let mut mismatches: Vec<String> = Vec::new();
+    for p in &enc.players {
+        let Some(fake) = ei_account_obfuscation::obfuscate(&p.account) else {
+            continue;
+        };
+        let Some(golden_profession) = profession_by_fake_account.get(&fake) else {
+            continue;
+        };
+        // EI convention: `profession` is the elite-spec name when active,
+        // else the base profession.
+        let ei_style = if p.elite_spec.is_empty() {
+            &p.profession
+        } else {
+            &p.elite_spec
+        };
+        matched += 1;
+        if ei_style != golden_profession {
+            mismatches.push(format!(
+                "{} (prof={}, elite_spec={:?}): got {ei_style:?}, golden {golden_profession:?}",
+                p.account, p.profession, p.elite_spec
+            ));
+        }
+    }
+
+    assert!(
+        mismatches.is_empty(),
+        "profession mismatches vs EI golden:\n{}",
+        mismatches.join("\n")
+    );
+    // The fixture has 41 friendly players; a handful are enemy players (also
+    // real-named, so also obfuscate-able) with no golden row, plus a few
+    // relog stragglers with a blank account. Require strong, not total,
+    // coverage so this stays meaningful without being fragile to fixture
+    // churn.
+    assert!(
+        matched >= 30,
+        "expected at least 30 accounts to join to the EI golden fixture, got {matched}"
+    );
+    println!("professions_match_ei_golden: {matched} accounts joined, 0 mismatches");
+}
