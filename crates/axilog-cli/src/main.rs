@@ -50,9 +50,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 // table/csv helpers added in Task 14:
-fn axilog_cli_table(_r: &axilog_schema::Report) -> String {
-    String::new()
+fn axilog_cli_table(r: &axilog_schema::Report) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("{:<24} {:<12} {:>10} {:>8} {:>6} {:>6} {:>7}\n",
+        "account", "profession", "damage", "DPS", "downs", "kills", "deaths"));
+    let mut players: Vec<_> = r.players.iter().collect();
+    players.sort_by(|a, b| b.damage.total.cmp(&a.damage.total));
+    for p in players {
+        s.push_str(&format!("{:<24} {:<12} {:>10} {:>8.0} {:>6} {:>6} {:>7}\n",
+            trunc(&p.account, 24), trunc(&p.profession, 12), p.damage.total,
+            p.damage.dps, p.downs_dealt, p.kills_dealt, p.deaths));
+    }
+    s
 }
-fn axilog_cli_csv(_r: &axilog_schema::Report) -> String {
-    String::new()
+fn axilog_cli_csv(r: &axilog_schema::Report) -> String {
+    let mut s = String::from("account,character,profession,team,damage,dps,downs_dealt,kills_dealt,down_contribution,deaths\n");
+    for p in &r.players {
+        s.push_str(&format!("{},{},{},{},{},{:.0},{},{},{},{}\n",
+            p.account, p.character, p.profession, p.team, p.damage.total, p.damage.dps,
+            p.downs_dealt, p.kills_dealt, p.down_contribution, p.deaths));
+    }
+    s
 }
+fn trunc(s: &str, n: usize) -> String { s.chars().take(n).collect() }
