@@ -1,8 +1,10 @@
 pub mod agent;
+pub mod event;
 pub mod header;
 pub mod skill;
 
 pub use agent::{decode_agents, RawAgent};
+pub use event::{decode_events, result, sc, RawEvent};
 pub use header::{decode_header, RawHeader};
 pub use skill::{decode_skills, RawSkill};
 
