@@ -86,6 +86,17 @@ is present, team_color resolves from it; the static table from Task 2 remains th
 older logs (the calibration fixture predates the event and must keep passing via fallback).
 `wvWMapData` in ei-json uses the real ids when present. Unit test with a synthetic WVWTEAMS event.
 
+**CBTS_IDTOGUID (arcdps-dev guidance):** content-local ids are session-local; arcdps emits
+`CBTS_IDTOGUID` statechange events mapping them to stable GUIDs, with a content-type from
+`n_contentlocal` { EFFECT=0, MARKER=1, SKILL=2, SPECIES_NOT_GADGET=3, TEAM=4, EMOTE=5,
+TRANSFORMATION=6 }. Verify the statechange value + payload layout from the arcdps EVTC reference.
+Decode IDTOGUID events into a `guid_map` on the model (at minimum content-type TEAM now —
+store team-id→GUID so team identity is stable across logs; expose in native schema
+`encounter.teams[].guid` as optional). SKILL/SPECIES mappings: decode and retain in `RawLog`
+(a `Vec<GuidMapping>`) for M3 (stable buff/skill identity) even if unused now. If the fixture
+log predates these events, unit-test with synthetic events and leave fixture assertions
+conditional.
+
 ### Task 3: CC metrics from CROWD_CONTROL events + CBTS_STUNBREAK
 
 **Files:** Modify `crates/axilog-core/src/analysis/cc.rs` (and `analysis/mod.rs` if needed).
