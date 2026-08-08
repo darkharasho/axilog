@@ -10,6 +10,7 @@ status and is folded into a milestone task when applicable. Newest last.
 | 3 | Content-local ids (`n_contentlocal`: EFFECT=0, MARKER=1, SKILL=2, SPECIES_NOT_GADGET=3, TEAM=4, EMOTE=5, TRANSFORMATION=6) are session-local — map to stable GUIDs via `CBTS_IDTOGUID`. | In progress — M2 Task 2b decodes IDTOGUID into `RawLog.guid_map`; TEAM exposed now, SKILL/SPECIES retained for M3 buff/skill identity. |
 | 4 | `CBTS_MARKER` provides above-target markers; EI probably has the squad-marker GUIDs in an enum somewhere. | Planned — M2 Task 7 (decode marker statechange, resolve marker GUIDs via IDTOGUID MARKER mappings, cross-reference EI's squad-marker GUID enum, expose per-agent marker in native schema). |
 | 5 | `CBTS_MARKER` also yields the commander tag's GUID — use it to show the tag's cat/colour variant. | Planned — folded into M2 Task 7 (commander-tag GUID → colour/variant name table; native schema `commander_tag` with variant; EI JSON can't express this — native-only). |
+| 6 | Eye candy: `CBTS_TRANSFORMATION` + `CBTS_GLIDER` can be used for mounts and glider respectively. | Backlog — cosmetic; slot into the combat-replay/HTML-report milestone where mounted/gliding state actually renders. TRANSFORMATION GUIDs resolve via IDTOGUID (type 6). |
 
 ## Notes
 
