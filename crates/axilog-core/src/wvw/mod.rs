@@ -20,14 +20,51 @@ pub fn dedupe_players(players: &mut Vec<Player>) {
     *players = out;
 }
 
-// team ids verified against golden wvWMapData in Task 16
+// WvW map id (MAP_ID statechange `src_agent`) → display name.
+// Ids/names cross-checked against GW2EI's `MapIDs` (LogLogic/WvW) and the
+// golden fixture (Green Alpine Borderlands, id 95). Unknown ids fall back
+// to the generic "World vs World" label rather than guessing.
+fn map_name(map_id: u32) -> &'static str {
+    match map_id {
+        38 => "Eternal Battlegrounds",
+        95 => "Green Alpine Borderlands",
+        96 => "Blue Alpine Borderlands",
+        1099 => "Red Desert Borderlands",
+        968 => "Edge of the Mists",
+        _ => "World vs World",
+    }
+}
+
+// WvW team id → color, from a fixed id table (Task 2, M2).
+//
+// GW2EI itself derives team colors dynamically from the CBTS_WVWTEAMS
+// statechange (sc=74, `WvWTeamsEvent`), which carries the log's actual
+// red/blue/green team ids. That event is only emitted by arcdps builds from
+// ~May 2026 onward — EI has no static id→color fallback for older logs, and
+// our golden fixture (Jan 2026) predates the event (verified: no sc=74
+// events in `fixtures/local/wvw-small.zevtc`). So, like axibridge
+// (`src/shared/wvwTeams.ts`), we fall back to a fixed table for logs
+// without the event. Table reconciled by axibridge from two community
+// tools: Drevarr/EVTC_parser/gw2_data.py and
+// Drevarr/GW2_EI_log_combiner/config.py.
+//
+// Ids outside all three sets resolve to "unknown" — never silently
+// defaulted to "green" (the pre-M2 placeholder bug), since that would
+// mislabel neutral/unrecognized agents (e.g. team id 0 on non-WvW-team
+// agents) as friendly-colored.
+const RED_TEAM_IDS: &[u16] = &[697, 705, 706, 707, 882, 885, 886, 2520, 2543];
+const GREEN_TEAM_IDS: &[u16] = &[39, 2739, 2741, 2752, 2763, 2767];
+const BLUE_TEAM_IDS: &[u16] = &[432, 433, 1277, 1282, 1989];
+
 fn team_color(team_id: u16) -> String {
-    // WvW team ids → colors (verify against wvWMapData in the golden fixture).
-    match team_id {
-        883 | 39 | 2520 => "red".into(),
-        882 | 38 | 2519 => "blue".into(),
-        // remaining known green ids
-        _ => "green".into(),
+    if RED_TEAM_IDS.contains(&team_id) {
+        "red".into()
+    } else if GREEN_TEAM_IDS.contains(&team_id) {
+        "green".into()
+    } else if BLUE_TEAM_IDS.contains(&team_id) {
+        "blue".into()
+    } else {
+        "unknown".into()
     }
 }
 
@@ -53,6 +90,14 @@ pub fn resolve_teams(raw: &RawLog) -> (BTreeMap<u64, u16>, Option<u64>) {
 
 pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     let (agent_team, recorded_by) = resolve_teams(raw);
+
+    // MAP_ID statechange carries the WvW map id in `src_agent` (Task 2, M2).
+    if let Some(map_id) = raw.events.iter()
+        .find(|e| e.is_statechange == sc::MAP_ID)
+        .map(|e| e.src_agent as u32)
+    {
+        enc.map = map_name(map_id).to_string();
+    }
 
     let mut team_ids: Vec<u16> = agent_team.values().copied().collect();
     team_ids.sort_unstable(); team_ids.dedup();

@@ -1,12 +1,40 @@
+use std::collections::BTreeMap;
 use serde_json::{json, Value};
 use axilog_schema::Report;
 
-fn color_to_team_id(color: &str) -> u64 {
-    // EI numeric team ids; refine against golden wvWMapData in Task 16
-    match color { "red" => 883, "blue" => 882, "green" => 881, _ => 0 }
+// Representative real WvW team ids per color (Task 2, M2) — one id drawn
+// from each of `axilog_core::wvw`'s RED/GREEN/BLUE_TEAM_IDS fixed tables
+// (sourced from axibridge's `src/shared/wvwTeams.ts`, itself reconciled
+// from Drevarr/EVTC_parser/gw2_data.py and
+// Drevarr/GW2_EI_log_combiner/config.py). Used only as a fallback when a
+// color wasn't actually observed in the log's own TEAM_CHANGE events (see
+// `detected_team_ids` below) — e.g. a color with no roster presence in this
+// particular fight.
+fn representative_team_id(color: &str) -> u64 {
+    match color {
+        "red" => 697,
+        "blue" => 432,
+        "green" => 39,
+        _ => 0,
+    }
+}
+
+/// color -> the first real team id `wvw::apply` actually observed for it in
+/// this log (`report.encounter.teams`, built from TEAM_CHANGE events).
+fn detected_team_ids(report: &Report) -> BTreeMap<&str, u64> {
+    let mut m = BTreeMap::new();
+    for t in &report.encounter.teams {
+        m.entry(t.color.as_str()).or_insert(t.team_id as u64);
+    }
+    m
 }
 
 pub fn to_ei_json(report: &Report) -> Value {
+    let detected = detected_team_ids(report);
+    let team_id_for = |color: &str| -> u64 {
+        detected.get(color).copied().unwrap_or_else(|| representative_team_id(color))
+    };
+
     let players: Vec<Value> = report.players.iter().map(|p| json!({
         "account": p.account,
         "character_name": p.character,
@@ -15,7 +43,7 @@ pub fn to_ei_json(report: &Report) -> Value {
         // kept alongside for consumers that want the native split.
         "profession": if p.elite_spec.is_empty() { &p.profession } else { &p.elite_spec },
         "elite_spec": p.elite_spec,
-        "teamID": color_to_team_id(&p.team),
+        "teamID": team_id_for(&p.team),
         "group": p.subgroup,
         "notInSquad": !p.in_squad,
         "hasCommanderTag": p.commander,
@@ -33,7 +61,7 @@ pub fn to_ei_json(report: &Report) -> Value {
     })).collect();
     let targets: Vec<Value> = report.enemies.iter().map(|e| json!({
         "id": e.id, "name": e.name, "enemyPlayer": true,
-        "teamID": color_to_team_id(&e.team)
+        "teamID": team_id_for(&e.team)
     })).collect();
     json!({
         "fightName": format!("Detailed WvW - {}", report.encounter.map),
@@ -44,9 +72,9 @@ pub fn to_ei_json(report: &Report) -> Value {
         "players": players,
         "targets": targets,
         "wvWMapData": {
-            "redTeamID": color_to_team_id("red"),
-            "blueTeamID": color_to_team_id("blue"),
-            "greenTeamID": color_to_team_id("green")
+            "redTeamID": team_id_for("red"),
+            "blueTeamID": team_id_for("blue"),
+            "greenTeamID": team_id_for("green")
         }
     })
 }

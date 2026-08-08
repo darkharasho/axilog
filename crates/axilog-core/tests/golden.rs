@@ -269,3 +269,66 @@ fn professions_match_ei_golden() {
     );
     println!("professions_match_ei_golden: {matched} accounts joined, 0 mismatches");
 }
+
+/// Task 2 (M2): real WvW map-name and team-id→color tables, calibrated
+/// against the golden fixture (a Green Alpine Borderlands skirmish; EI's
+/// `fightName` is "World vs World - Green Alpine Borderlands").
+#[test]
+fn map_and_team_colors_match_ei_golden() {
+    let bytes = match std::fs::read(FIXTURE_PATH) {
+        Ok(b) => b,
+        Err(_) => {
+            println!(
+                "skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run map_and_team_colors_match_ei_golden)"
+            );
+            return;
+        }
+    };
+
+    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+    let enc = resolve(&raw);
+
+    assert_eq!(
+        enc.map, "Green Alpine Borderlands",
+        "MAP_ID (src_agent=95) should resolve to Green Alpine Borderlands"
+    );
+
+    // Friendly players' team must resolve to a known color, never "unknown"
+    // or the pre-M2 default-to-green placeholder masking an unrecognized id.
+    assert!(
+        !enc.players.is_empty(),
+        "expected friendly players in the fixture"
+    );
+    let friendly_colors: std::collections::BTreeSet<&str> =
+        enc.players.iter().map(|p| p.team.as_str()).collect();
+    assert_eq!(
+        friendly_colors.len(),
+        1,
+        "expected exactly one friendly team color, got {friendly_colors:?}"
+    );
+    let friendly_color = *friendly_colors.iter().next().unwrap();
+    assert!(
+        matches!(friendly_color, "red" | "green" | "blue"),
+        "friendly team color should be a known color, got {friendly_color:?}"
+    );
+
+    // At least one enemy player must resolve to a *different* known color
+    // (not "unknown", not the same color as the friendly squad).
+    let enemy_colors: std::collections::BTreeSet<&str> = enc
+        .enemies
+        .iter()
+        .filter(|e| e.is_player)
+        .map(|e| e.team.as_str())
+        .collect();
+    assert!(
+        enemy_colors
+            .iter()
+            .any(|&c| matches!(c, "red" | "green" | "blue") && c != friendly_color),
+        "expected at least one enemy player team color distinct from friendly {friendly_color:?}, got {enemy_colors:?}"
+    );
+
+    println!(
+        "map_and_team_colors_match_ei_golden: map={:?}, friendly={friendly_color:?}, enemies={enemy_colors:?}",
+        enc.map
+    );
+}
