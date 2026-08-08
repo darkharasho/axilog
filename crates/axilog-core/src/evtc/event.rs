@@ -241,9 +241,18 @@ mod tests {
         b[48] = 1; // iff = FOE
         b[49] = 3; // buff (distinguishable probe value)
         // offsets: iff@48, buff@49, result@50, is_activation@51,
-        // is_buffremove@52, is_statechange@56
+        // is_buffremove@52, is_ninety@53, is_fifty@54, is_moving@55,
+        // is_statechange@56, is_flanking@57, is_shields@58, is_offcycle@59.
         b[50] = result::CRIT; // result
         b[56] = sc::ENTER_COMBAT; // is_statechange
+        // Wire-level probe for `is_shields` (offset 58): distinct nonzero
+        // values at is_shields itself AND at both immediate neighbors
+        // (is_flanking@57, is_offcycle@59), so a ±1 decoder offset bug
+        // (reading either neighbor instead of 58) fails the assertion in
+        // `decodes_strike` below rather than silently passing.
+        b[57] = 9; // is_flanking (neighbor probe, not asserted on RawEvent -- not decoded)
+        b[58] = 7; // is_shields (the field under test)
+        b[59] = 11; // is_offcycle (neighbor probe, not asserted on RawEvent -- not decoded)
         b
     }
     #[test]
@@ -262,5 +271,6 @@ mod tests {
         assert_eq!(e.buff, 3);
         assert_eq!(e.result, result::CRIT);
         assert_eq!(e.is_statechange, sc::ENTER_COMBAT);
+        assert_eq!(e.is_shields, 7, "is_shields must decode from offset 58, not a ±1 neighbor");
     }
 }
