@@ -1,0 +1,17 @@
+[package]
+name = "axilog-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "axilog"
+path = "src/main.rs"
+
+[dependencies]
+axilog-core = { path = "../axilog-core" }
+axilog-schema = { path = "../axilog-schema" }
+axilog-ei = { path = "../axilog-ei" }
+clap.workspace = true
+serde_json.workspace = true
