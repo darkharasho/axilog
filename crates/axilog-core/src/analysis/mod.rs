@@ -1,6 +1,7 @@
 pub mod damage;
 pub mod downs;
 pub mod cc;
+pub mod buffs;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -16,7 +17,11 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
 #[derive(Debug, Clone)]
-pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline }
+pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
+    /// Per-(agent representative, boon id) stack-count timelines (M3, Task
+    /// 1) -- see `buffs::simulate_boons`. Computed after all other passes
+    /// below; does not alter any pre-existing metric.
+    pub boons: BTreeMap<(u64, u32), buffs::BoonTimeline> }
 
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // A friendly account can own several raw agent addrs (relog / build
@@ -87,7 +92,10 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     downs::apply(&mut players, enc, raw, &squad, &enemies, &addr_to_rep);
     cc::apply_cc(&mut players, raw, &squad, &enemies, &addr_to_rep);
     let timeline = cc::timeline(enc, raw, &squad, &enemies);
-    Metrics { players, timeline }
+    // Computed last, after every other pass, per the Task 1 brief -- does
+    // not read or alter `players`/`timeline` above.
+    let boons = buffs::simulate_boons(raw, enc);
+    Metrics { players, timeline, boons }
 }
 
 #[cfg(test)]

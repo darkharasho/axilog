@@ -142,7 +142,8 @@ mod tests {
         let m = Metrics { players: vec![PlayerMetrics{agent_addr:1,damage_total:500,
             dps:500.0,..Default::default()}],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![500],
-            cc_applied:vec![0],downs:vec![0]} };
+            cc_applied:vec![0],downs:vec![0]},
+            boons: Default::default() };
         let report = build_report(&enc, &m, "0.1.0");
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.1");

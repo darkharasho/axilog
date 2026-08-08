@@ -83,6 +83,57 @@ pub mod sc {
     /// comment above aren't independently corroborated anywhere we could
     /// find in GW2EI).
     pub const TICK: u8 = 84;
+    /// Pre-existing-stack buff application, for stacks that were already on
+    /// an agent at the moment the log started recording (M3, Task 1).
+    /// Verified against the arcdps EVTC reference by hand-counting `enum
+    /// cbtstatechange` from `CBTS_COMBAT = 0`: `CBTS_BUFFINITIAL` is index
+    /// 18. Cross-checked against GW2EI's `ArcDPSEnums.StateChange.BuffInitial
+    /// = 18` (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs`).
+    ///
+    /// IMPORTANT version note (verified against both sources): the arcdps
+    /// reference fetched live from deltaconnected.com today additionally
+    /// documents `CBTS_BUFFAPPLY`/`CBTS_BUFFCHANGE`/`CBTS_BUFFREMOVE_SINGLE`/
+    /// `CBTS_BUFFREMOVE_ALL` as their OWN dedicated `is_statechange` values
+    /// (69-72) -- but that is the *current* (2026-05+) arcdps wire format.
+    /// GW2EI's own `CombatItem.IsBuffApplyEvent`/`IsBuffRemoveEvent`
+    /// (`GW2EIEvtcParser/CombatItem.cs`) gate on
+    /// `ArcDPSBuilds.BuffAppliesAndRemovesAsStateChanges = 20260501` (the
+    /// SAME build as `ArcDPSBuilds.ResultEnumRework`, already documented on
+    /// `result::CROWD_CONTROL` above): only builds `>= 20260501` use that
+    /// dedicated-statechange shape. This project's golden/calibration
+    /// fixture is build 20260114 -- BEFORE that threshold -- so apply/remove
+    /// events there use the OLDER shape this module already implements:
+    /// ordinary `is_statechange == 0` combat events, apply flagged by
+    /// `buff == 1` (see `sc::COMBAT`/`decode_events` struct layout) and
+    /// removal flagged by `is_buffremove != 0` (see `buff_remove` module).
+    /// `CBTS_BUFFINITIAL` itself is NOT affected by this split -- it is
+    /// ordinal 18 in both eras (confirmed by the same hand-count against
+    /// both the live reference and `ArcDPSEnums.cs`), so `analysis::buffs`
+    /// treats `is_statechange == BUFF_INITIAL` as an apply event regardless
+    /// of build era.
+    pub const BUFF_INITIAL: u8 = 18;
+}
+
+/// `is_buffremove` enum values (arcdps `enum cbtbuffremove`). Verified
+/// against GW2EI's `ArcDPSEnums.BuffRemove`
+/// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs`): `None = 0, All = 1,
+/// Single = 2, Manual = 3`. Used on ordinary `is_statechange == 0` combat
+/// events (pre-`BuffAppliesAndRemovesAsStateChanges` era -- see
+/// `sc::BUFF_INITIAL` docs) to distinguish a buff-removal combat event from
+/// a plain strike/buff-apply/buff-damage-tick one, and to pick the removal
+/// kind.
+pub mod buff_remove {
+    pub const NONE: u8 = 0;
+    pub const ALL: u8 = 1;
+    pub const SINGLE: u8 = 2;
+    /// A manual removal (e.g. dodge-cancelling your own buff via a trait,
+    /// or certain UI-driven self-cleanses). GW2EI's `BuffRemoveManualEvent`
+    /// explicitly excludes these from the stack simulator entirely
+    /// (`IsBuffSimulatorCompliant` returns `false`, `UpdateSimulator` is a
+    /// no-op -- `GW2EIEvtcParser/ParsedData/CombatEvents/BuffEvents/
+    /// BuffRemoves/BuffRemoveManualEvent.cs`); `analysis::buffs` mirrors
+    /// this by not extracting Manual removals as simulator events at all.
+    pub const MANUAL: u8 = 3;
 }
 pub mod result {
     // combat result values (verified against arcdps cbtresult enum order)

@@ -658,3 +658,46 @@ fn tick_rate_absent_from_fixture_local_raw_when_present() {
     let Some(bytes) = read_local_fixture_or_skip("tick_rate_absent_from_fixture") else { return };
     check_tick_rate_absent_from_fixture(&bytes);
 }
+
+/// M3 Task 1 GATE: `simulate_boons` (wired into `Metrics::boons` via
+/// `analyze`) must produce non-empty stack-count timelines for a common
+/// boon on multiple squad players when run against the real, committed WvW
+/// fixture -- not just the synthetic unit tests in `analysis::buffs`. Might
+/// is close to universal in an organized WvW squad (most builds run some
+/// might-share), so it's the natural choice for this smoke check.
+fn check_boons_smoke_nonempty_might_on_multiple_players(bytes: &[u8]) {
+    use axilog_core::analysis::buffs::MIGHT;
+
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = analyze(&enc, &raw);
+
+    let players_with_might: Vec<u64> = metrics
+        .boons
+        .iter()
+        .filter(|&(&(_, buff_id), tl)| buff_id == MIGHT && !tl.states.is_empty())
+        .map(|(&(agent, _), _)| agent)
+        .collect();
+
+    assert!(
+        players_with_might.len() > 1,
+        "expected Might to have a non-empty timeline for more than one squad player, got {}: {:?}",
+        players_with_might.len(),
+        players_with_might
+    );
+    println!(
+        "boons_smoke: Might has non-empty timelines for {} players",
+        players_with_might.len()
+    );
+}
+
+#[test]
+fn boons_smoke_nonempty_might_on_multiple_players() {
+    check_boons_smoke_nonempty_might_on_multiple_players(&read_anon_fixture());
+}
+
+#[test]
+fn boons_smoke_nonempty_might_on_multiple_players_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("boons_smoke_nonempty_might_on_multiple_players") else { return };
+    check_boons_smoke_nonempty_might_on_multiple_players(&bytes);
+}
