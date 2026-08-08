@@ -113,6 +113,6 @@ mod tests {
     }
     fn raw_from(events: Vec<RawEvent>) -> crate::evtc::RawLog {
         crate::evtc::RawLog { header: crate::evtc::RawHeader { build: "".into(), revision: 1, boss_id: 1 },
-            agents: vec![], skills: vec![], events }
+            agents: vec![], skills: vec![], events, guid_map: vec![] }
     }
 }

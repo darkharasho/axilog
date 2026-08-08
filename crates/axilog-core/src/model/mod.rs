@@ -15,7 +15,15 @@ pub struct Player { pub agent_addr: u64, pub account: String, pub character: Str
 pub struct Enemy { pub id: u64, pub instid: u16, pub name: String,
     pub team: String, pub is_player: bool }
 #[derive(Debug, Clone)]
-pub struct Team { pub color: String, pub team_id: u16 }
+pub struct Team {
+    pub color: String,
+    pub team_id: u16,
+    /// Stable content GUID for this team id, when a `CBTS_IDTOGUID` (TEAM
+    /// content type) mapping was present in the log (Task 2b). Lowercase
+    /// hex, no dashes. `None` for logs without the event (arcdps builds
+    /// before it existed, or a team id with no GUID mapping emitted).
+    pub guid: Option<String>,
+}
 #[derive(Debug, Clone)]
 pub struct Encounter { pub kind: String, pub map: String, pub duration_ms: u64,
     pub build: String, pub revision: u8, pub recorded_by: Option<String>,
@@ -158,6 +166,7 @@ mod tests {
                 team_change(1, 100),
                 team_change(2, 200),
             ],
+            guid_map: vec![],
         };
         let enc = resolve(&raw);
         assert_eq!(enc.players.len(), 1);

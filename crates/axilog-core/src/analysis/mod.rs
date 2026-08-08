@@ -90,7 +90,7 @@ mod tests {
 
     fn raw_from(events: Vec<RawEvent>) -> RawLog {
         RawLog { header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
-            agents: vec![], skills: vec![], events }
+            agents: vec![], skills: vec![], events, guid_map: vec![] }
     }
 
     /// Finding #1: a relogged/build-swapped account (two raw agent addrs,

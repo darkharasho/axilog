@@ -16,7 +16,14 @@ pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u6
     pub build: String, pub revision: u8, pub recorded_by: Option<String>,
     pub teams: Vec<TeamOut> }
 #[derive(Serialize)]
-pub struct TeamOut { pub color: String, pub team_id: u16 }
+pub struct TeamOut {
+    pub color: String,
+    pub team_id: u16,
+    /// Stable content GUID for this team (Task 2b), when known. Omitted
+    /// entirely from the JSON when absent, rather than serialized as null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
+}
 #[derive(Serialize)]
 pub struct DamageOut { pub total: u64, pub dps: f64, pub per_enemy: Vec<PerEnemyOut> }
 #[derive(Serialize)]
@@ -68,7 +75,7 @@ pub fn build_report(enc: &Encounter, metrics: &Metrics, axilog_version: &str) ->
         encounter: EncounterOut { kind: enc.kind.clone(), map: enc.map.clone(),
             duration_ms: enc.duration_ms, build: enc.build.clone(), revision: enc.revision,
             recorded_by: enc.recorded_by.clone(),
-            teams: enc.teams.iter().map(|t| TeamOut{color:t.color.clone(),team_id:t.team_id}).collect() },
+            teams: enc.teams.iter().map(|t| TeamOut{color:t.color.clone(),team_id:t.team_id,guid:t.guid.clone()}).collect() },
         players,
         enemies: enc.enemies.iter().map(|e| EnemyOut{id:e.id,name:e.name.clone(),
             team:e.team.clone(),is_player:e.is_player}).collect(),

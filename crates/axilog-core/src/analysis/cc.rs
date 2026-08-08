@@ -139,6 +139,7 @@ mod tests {
             agents: vec![],
             skills: vec![],
             events: vec![dmg(100, 1, 9, 50), dmg(1200, 1, 9, 70), dmg(2400, 1, 9, 30)],
+            guid_map: vec![],
         };
         let squad: BTreeSet<u64> = [1u64].into_iter().collect();
         let enemies: BTreeSet<u64> = [9u64].into_iter().collect();

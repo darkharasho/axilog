@@ -332,3 +332,67 @@ fn map_and_team_colors_match_ei_golden() {
         enc.map
     );
 }
+
+/// Task 2b: CBTS_IDTOGUID decoding against the real fixture.
+///
+/// This fixture (Jan 2026) predates arcdps emitting CBTS_WVWTEAMS *and* TEAM
+/// (content type 4) CBTS_IDTOGUID mappings — confirmed by inspecting the raw
+/// event stream directly (zero sc=74 events; the sc=46 events present only
+/// have content types 0/1/2/3 — Effect/Marker/Skill/Species). So this test
+/// only makes conditional assertions: it requires the mapping machinery to
+/// actually decode *something* real (proving the sc=46/skillid/overstack
+/// wiring works end to end on real data, not just synthetic unit tests),
+/// but does not assert on TEAM mappings specifically, since none exist in
+/// this log — every team in `enc.teams` should have `guid: None`.
+#[test]
+fn guid_mappings_decode_from_local_fixture() {
+    use axilog_core::evtc::ContentType;
+
+    let bytes = match std::fs::read(FIXTURE_PATH) {
+        Ok(b) => b,
+        Err(_) => {
+            println!(
+                "skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run guid_mappings_decode_from_local_fixture)"
+            );
+            return;
+        }
+    };
+
+    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+
+    assert!(
+        !raw.guid_map.is_empty(),
+        "expected at least some CBTS_IDTOGUID mappings in the fixture"
+    );
+    let has_skill = raw.guid_map.iter().any(|g| g.content_type == ContentType::Skill);
+    let has_species = raw.guid_map.iter().any(|g| g.content_type == ContentType::Species);
+    assert!(has_skill, "expected at least one Skill GUID mapping");
+    assert!(has_species, "expected at least one Species GUID mapping");
+
+    // Every decoded GUID should be a well-formed 32-char lowercase hex string.
+    for g in &raw.guid_map {
+        let hex = g.guid_hex();
+        assert_eq!(hex.len(), 32, "guid_hex should be 32 hex chars, got {hex:?}");
+        assert!(
+            hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "guid_hex should be lowercase hex, got {hex:?}"
+        );
+    }
+
+    // This fixture predates TEAM-content-type CBTS_IDTOGUID mappings, so
+    // every detected team should resolve to no GUID.
+    let no_team_mappings = !raw.guid_map.iter().any(|g| g.content_type == ContentType::Team);
+    assert!(no_team_mappings, "fixture unexpectedly has a Team GUID mapping (update this test)");
+
+    let enc = resolve(&raw);
+    assert!(!enc.teams.is_empty(), "expected detected teams in the fixture");
+    for t in &enc.teams {
+        assert_eq!(t.guid, None, "team {} unexpectedly has a guid in this GUID-less fixture", t.team_id);
+    }
+
+    println!(
+        "guid_mappings_decode_from_local_fixture: {} total mappings, {} teams (all guid=None as expected)",
+        raw.guid_map.len(),
+        enc.teams.len()
+    );
+}

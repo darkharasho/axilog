@@ -13,6 +13,18 @@ pub mod sc {
     pub const POINT_OF_VIEW: u8 = 13;
     pub const TEAM_CHANGE: u8 = 22;
     pub const MAP_ID: u8 = 25;
+    /// Content-local-id -> stable-GUID association (Task 2b). Verified
+    /// against the arcdps EVTC reference
+    /// (deltaconnected.com/arcdps/evtc/README.txt): counting
+    /// `enum cbtstatechange` entries from `CBTS_COMBAT = 0`,
+    /// `CBTS_IDTOGUID` is the 47th entry (index 46). Cross-checked against
+    /// GW2EI's `ArcDPSEnums.StateChange.IDToGUID = 46`.
+    pub const ID_TO_GUID: u8 = 46;
+    /// WvW team association (red/blue/green shard+team ids). Verified
+    /// against the arcdps EVTC reference the same way: `CBTS_WVWTEAMS` is
+    /// index 74 in `enum cbtstatechange`. Cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.WvWTeams = 74`.
+    pub const WVW_TEAMS: u8 = 74;
 }
 pub mod result {
     // combat result values (verified against arcdps cbtresult enum order)

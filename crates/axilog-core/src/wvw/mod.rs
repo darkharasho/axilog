@@ -1,4 +1,4 @@
-use crate::evtc::{RawLog, sc};
+use crate::evtc::{ContentType, RawEvent, RawLog, sc};
 use crate::model::{Encounter, Team, Player, Enemy};
 use std::collections::BTreeMap;
 
@@ -68,6 +68,54 @@ fn team_color(team_id: u16) -> String {
     }
 }
 
+// --- Task 2b: CBTS_WVWTEAMS (sc=74) dynamic team ids ---
+//
+// GW2EI's real source of truth for team colors (see the Task 2 comment
+// above) is the CBTS_WVWTEAMS statechange event, which carries the log's
+// *actual* red/blue/green team ids directly — no guessing needed. When
+// present, it takes priority over the static table (which remains the
+// fallback for logs recorded before arcdps started emitting this event).
+//
+// Payload, verified against the arcdps EVTC reference
+// (deltaconnected.com/arcdps/evtc/README.txt):
+//   CBTS_WVWTEAMS
+//   // src_agent: (uint32_t*)&src_agent is uint32[6], redshard id,
+//   //   blueshard id, greenshard id, redteam id, blueteam id, greenteam id
+// `src_agent`/`dst_agent` are adjacent u64 fields in the raw cbtevent
+// struct, so those six little-endian u32s span src_agent (2), dst_agent
+// (2), value (1), buff_dmg (1), in that order — cross-checked against
+// GW2EI's `WvWTeamsEvent`, which decodes the same 6-uint32 buffer from
+// exactly `[SrcAgent, DstAgent, Value, BuffDmg]` and labels the resulting
+// slots `[RedShardID, BlueShardID, GreenShardID, RedTeamID, BlueTeamID,
+// GreenTeamID]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DynamicWvwTeamIds { red: u32, blue: u32, green: u32 }
+
+fn parse_wvw_teams_event(e: &RawEvent) -> DynamicWvwTeamIds {
+    let red_team = (e.dst_agent >> 32) as u32; // uint32[3]
+    let blue_team = e.value as u32;            // uint32[4]
+    let green_team = e.buff_dmg as u32;        // uint32[5]
+    DynamicWvwTeamIds { red: red_team, blue: blue_team, green: green_team }
+}
+
+/// Like `team_color`, but prefers the log's own dynamically-observed
+/// red/blue/green ids (from CBTS_WVWTEAMS) when available, falling back to
+/// the static table for any id the dynamic event doesn't cover (or when the
+/// event is absent entirely).
+fn team_color_with(team_id: u16, dynamic: Option<&DynamicWvwTeamIds>) -> String {
+    if let Some(d) = dynamic {
+        let id = team_id as u32;
+        if id == d.red {
+            return "red".into();
+        } else if id == d.blue {
+            return "blue".into();
+        } else if id == d.green {
+            return "green".into();
+        }
+    }
+    team_color(team_id)
+}
+
 /// Parse per-agent WvW team ids and the POINT_OF_VIEW (recording) agent from
 /// raw combat events. Shared by `apply` (friend/foe partition, below) and by
 /// the analysis layer (pet/minion damage attribution in `analysis::damage`).
@@ -99,9 +147,27 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         enc.map = map_name(map_id).to_string();
     }
 
+    // CBTS_WVWTEAMS (sc=74): the log's real red/blue/green team ids, when
+    // arcdps emitted the event (Task 2b). `find` takes the first — arcdps
+    // emits this once per log, at most.
+    let dynamic = raw.events.iter()
+        .find(|e| e.is_statechange == sc::WVW_TEAMS)
+        .map(parse_wvw_teams_event);
+
+    // CBTS_IDTOGUID (sc=46) TEAM mappings: team id -> stable content GUID
+    // (Task 2b).
+    let team_guids: BTreeMap<u16, String> = raw.guid_map.iter()
+        .filter(|g| g.content_type == ContentType::Team)
+        .map(|g| (g.local_id as u16, g.guid_hex()))
+        .collect();
+
     let mut team_ids: Vec<u16> = agent_team.values().copied().collect();
     team_ids.sort_unstable(); team_ids.dedup();
-    enc.teams = team_ids.iter().map(|&id| Team { color: team_color(id), team_id: id }).collect();
+    enc.teams = team_ids.iter().map(|&id| Team {
+        color: team_color_with(id, dynamic.as_ref()),
+        team_id: id,
+        guid: team_guids.get(&id).cloned(),
+    }).collect();
 
     // Friend/foe partition (Task 16A calibration fix).
     //
@@ -127,7 +193,7 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         if is_friendly {
             friendly_players.push(p);
         } else {
-            let team = agent_team.get(&p.agent_addr).map(|&t| team_color(t)).unwrap_or_default();
+            let team = agent_team.get(&p.agent_addr).map(|&t| team_color_with(t, dynamic.as_ref())).unwrap_or_default();
             enc.enemies.push(Enemy {
                 id: p.agent_addr,
                 instid: 0,
@@ -156,10 +222,10 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     });
 
     for p in &mut enc.players {
-        if let Some(&t) = agent_team.get(&p.agent_addr) { p.team = team_color(t); }
+        if let Some(&t) = agent_team.get(&p.agent_addr) { p.team = team_color_with(t, dynamic.as_ref()); }
     }
     for en in &mut enc.enemies {
-        if let Some(&t) = agent_team.get(&en.id) { en.team = team_color(t); }
+        if let Some(&t) = agent_team.get(&en.id) { en.team = team_color_with(t, dynamic.as_ref()); }
     }
     if let Some(addr) = recorded_by {
         if let Some(p) = enc.players.iter().find(|p| p.agent_addr == addr) {
@@ -173,10 +239,51 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
 mod tests {
     use super::*;
     use crate::model::{Encounter, Player};
+    use crate::evtc::{RawAgent, RawHeader};
     fn player(addr: u64, acc: &str) -> Player {
         Player { agent_addr: addr, account: acc.into(), character: "C".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "".into(),
             subgroup: 1, in_squad: true, commander: false, agent_addrs: vec![addr] }
+    }
+    fn agent(addr: u64, is_elite: u32, name: &[u8]) -> RawAgent {
+        RawAgent { addr, prof: 5, is_elite,
+            toughness: 0, concentration: 0, healing: 0, hitbox_width: 0,
+            condition: 0, hitbox_height: 0, name_raw: name.to_vec() }
+    }
+    fn team_change(addr: u64, team: u16) -> RawEvent {
+        RawEvent { time: 0, src_agent: addr, dst_agent: 0, value: team as i32, buff_dmg: 0,
+            overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
+            src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
+            is_activation: 0, is_buffremove: 0, is_statechange: sc::TEAM_CHANGE }
+    }
+    fn point_of_view(addr: u64) -> RawEvent {
+        RawEvent { time: 0, src_agent: addr, dst_agent: 0, value: 0, buff_dmg: 0,
+            overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
+            src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
+            is_activation: 0, is_buffremove: 0, is_statechange: sc::POINT_OF_VIEW }
+    }
+    /// Synthetic CBTS_WVWTEAMS event. Packs (red, blue, green) into the
+    /// same 6xu32 layout `parse_wvw_teams_event` reads back
+    /// (shard ids left as 0 — unused by axilog today).
+    fn wvw_teams_event(red: u32, blue: u32, green: u32) -> RawEvent {
+        let dst_agent = (red as u64) << 32; // uint32[2]=green_shard(0), uint32[3]=red_team
+        RawEvent { time: 0, src_agent: 0, dst_agent, value: blue as i32, buff_dmg: green as i32,
+            overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
+            src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
+            is_activation: 0, is_buffremove: 0, is_statechange: sc::WVW_TEAMS }
+    }
+    /// Synthetic CBTS_IDTOGUID event mapping a WvW team id to a stable GUID
+    /// (content type TEAM = 4).
+    fn team_guid_event(team_id: u32, guid: [u8; 16]) -> RawEvent {
+        RawEvent {
+            time: 0,
+            src_agent: u64::from_le_bytes(guid[0..8].try_into().unwrap()),
+            dst_agent: u64::from_le_bytes(guid[8..16].try_into().unwrap()),
+            value: 0, buff_dmg: 0, overstack: 4, skillid: team_id,
+            src_instid: 0, dst_instid: 0, src_master_instid: 0, dst_master_instid: 0,
+            iff: 0, buff: 0, result: 0, is_activation: 0, is_buffremove: 0,
+            is_statechange: sc::ID_TO_GUID,
+        }
     }
     #[test]
     fn dedupes_players_by_account() {
@@ -202,5 +309,95 @@ mod tests {
         let mut addrs = enc.players[0].agent_addrs.clone();
         addrs.sort_unstable();
         assert_eq!(addrs, vec![1, 2]);
+    }
+
+    /// Task 2b: a CBTS_WVWTEAMS event, when present, resolves team colors
+    /// directly from its red/blue/green ids -- even for ids that aren't in
+    /// the static fallback table at all. This proves the dynamic path is
+    /// actually driving the result (not just coincidentally agreeing with
+    /// the static table).
+    #[test]
+    fn dynamic_wvwteams_event_overrides_static_table() {
+        let raw = RawLog {
+            header: RawHeader { build: "20260701".into(), revision: 1, boss_id: 1 },
+            agents: vec![
+                agent(1, 27, b"Alice\0:Alice.1234\05\0"),
+                agent(2, 27, b"Bob\0:Bob.5678\05\0"),
+            ],
+            skills: vec![],
+            events: vec![
+                point_of_view(1),
+                team_change(1, 5001), // recorder -- not in any static id set
+                team_change(2, 6002), // enemy -- not in any static id set
+                wvw_teams_event(/*red*/ 6002, /*blue*/ 7003, /*green*/ 5001),
+            ],
+            guid_map: vec![],
+        };
+        let enc = crate::model::resolve(&raw);
+
+        assert_eq!(enc.players.len(), 1);
+        assert_eq!(enc.players[0].team, "green", "recorder's team (5001) is the dynamic green id");
+
+        assert_eq!(enc.enemies.len(), 1);
+        assert!(enc.enemies[0].is_player);
+        assert_eq!(enc.enemies[0].team, "red", "enemy team (6002) is the dynamic red id");
+
+        let team_5001 = enc.teams.iter().find(|t| t.team_id == 5001).expect("team 5001 present");
+        assert_eq!(team_5001.color, "green");
+        let team_6002 = enc.teams.iter().find(|t| t.team_id == 6002).expect("team 6002 present");
+        assert_eq!(team_6002.color, "red");
+    }
+
+    /// Without a CBTS_WVWTEAMS event, team ids outside the static table
+    /// resolve to "unknown" -- the fallback-of-last-resort, never silently
+    /// green (regression guard for the pre-M2 placeholder bug).
+    #[test]
+    fn no_wvwteams_event_falls_back_to_static_table() {
+        let raw = RawLog {
+            header: RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 },
+            agents: vec![agent(1, 27, b"Alice\0:Alice.1234\05\0")],
+            skills: vec![],
+            events: vec![
+                point_of_view(1),
+                team_change(1, 55555), // not in any static id set, no dynamic event either
+            ],
+            guid_map: vec![],
+        };
+        let enc = crate::model::resolve(&raw);
+        assert_eq!(enc.players[0].team, "unknown");
+    }
+
+    /// Task 2b: a CBTS_IDTOGUID (content type TEAM) mapping attaches a
+    /// stable GUID to the matching `enc.teams[]` entry; a team id with no
+    /// such mapping gets `guid: None` rather than a stand-in value.
+    #[test]
+    fn team_guid_mapping_attaches_to_matching_team() {
+        let guid_bytes: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let raw = RawLog {
+            header: RawHeader { build: "20260701".into(), revision: 1, boss_id: 1 },
+            agents: vec![
+                agent(1, 27, b"Alice\0:Alice.1234\05\0"),
+                agent(2, 27, b"Bob\0:Bob.5678\05\0"),
+            ],
+            skills: vec![],
+            events: vec![
+                point_of_view(1),
+                team_change(1, 2767),
+                team_change(2, 433),
+                team_guid_event(2767, guid_bytes),
+                // no GUID mapping for 433
+            ],
+            guid_map: vec![],
+        };
+        // guid_map is normally populated by decode_raw; wire it up here to
+        // mirror what decode_raw does, since this RawLog is built by hand.
+        let mut raw = raw;
+        raw.guid_map = crate::evtc::decode_guid_mappings(&raw.events);
+
+        let enc = crate::model::resolve(&raw);
+        let team_2767 = enc.teams.iter().find(|t| t.team_id == 2767).expect("team 2767 present");
+        assert_eq!(team_2767.guid.as_deref(), Some("0102030405060708090a0b0c0d0e0f10"));
+        let team_433 = enc.teams.iter().find(|t| t.team_id == 433).expect("team 433 present");
+        assert_eq!(team_433.guid, None);
     }
 }
