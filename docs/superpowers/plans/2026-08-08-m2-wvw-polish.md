@@ -168,6 +168,20 @@ path as an optional extra check when present. Modify `.github/workflows/ci.yml` 
   current parity status table (what matches EI, what's approximate), M2 feature list.
 - Verify `cargo test --workspace` green; golden + new calibration tests pass.
 
+### Task 7: CBTS_MARKER squad markers (arcdps-dev guidance)
+
+**Files:** Modify `crates/axilog-core/src/evtc/event.rs` (sc const), `crates/axilog-core/src/model/mod.rs` or `wvw/mod.rs`, `crates/axilog-schema/src/lib.rs`.
+
+**Requirements:** Verify `CBTS_MARKER`'s statechange enum value and payload layout from the arcdps
+EVTC reference (which agent field carries the marker id, whether remove events exist). Decode
+above-target marker assignments; resolve marker content-local ids to GUIDs via the Task 2b
+IDTOGUID infrastructure (content type MARKER=1). Research EI's squad-marker GUID enum (search the
+GW2EI GitHub source for marker GUIDs — e.g. "MarkerGUIDs", "SquadMarker") and embed the
+GUID→name table (Arrow, Circle, Heart, Square, Star, Spiral, Triangle, X). Native schema: per
+player/enemy optional `marker` (name or hex GUID when unknown) plus a `markers` timeline-lite list
+(agent, marker, time_ms) if assignment times are available. EI adapter: omit (EI JSON has no
+direct field; do not fake). Synthetic-event unit tests; fixture assertions conditional.
+
 ## Self-Review
 Covered all five spec items (names, tables, CC, dedupe/pets, fixture) + adapter/docs. Calibration
 targets embedded verbatim (34/50460, map 95, team 2767, damage 2,138,414). No placeholders; each
