@@ -107,7 +107,7 @@ pub fn to_ei_json(report: &Report) -> Value {
         })
     }).collect();
     let targets: Vec<Value> = report.enemies.iter().map(|e| json!({
-        "id": e.id, "name": e.name, "enemyPlayer": true,
+        "id": e.id, "name": e.name, "enemyPlayer": e.is_player,
         "teamID": team_id_for(&e.team)
     })).collect();
     json!({
@@ -143,7 +143,9 @@ mod tests {
             character:"B".into(),profession:"Guardian".into(),elite_spec:"".into(),
             team:"red".into(),subgroup:2,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![2]}],
             enemies:vec![Enemy{id:9,instid:9,name:"Foe".into(),team:"blue".into(),
-            is_player:true,marker:None,agent_addrs:vec![9]}],
+            is_player:true,marker:None,agent_addrs:vec![9]},
+            Enemy{id:10,instid:10,name:"Gadget".into(),team:"blue".into(),
+            is_player:false,marker:None,agent_addrs:vec![10]}],
             markers:vec![],tick_rate:None};
         let m = Metrics{players:vec![
             PlayerMetrics{agent_addr:1,damage_total:500,dps:500.0,per_enemy:vec![(9,500)],
@@ -178,12 +180,17 @@ mod tests {
         assert_eq!(v["players"][0]["statsAll"][0]["appliedCrowdControlDuration"], 1200);
         // Player 2 dealt no CC/downs — statsAll still present, all zero, not faked.
         assert_eq!(v["players"][1]["statsAll"][0]["appliedCrowdControl"], 0);
-        // statsTargets has one entry per real target (one enemy here), only
+        // statsTargets has one entry per real target (two enemies here), only
         // carrying the one per-target metric we actually compute (damage).
-        assert_eq!(v["players"][0]["statsTargets"].as_array().unwrap().len(), 1);
+        assert_eq!(v["players"][0]["statsTargets"].as_array().unwrap().len(), 2);
         assert_eq!(v["players"][0]["statsTargets"][0][0]["totalDmg"], 500);
         assert_eq!(v["players"][1]["statsTargets"][0][0]["totalDmg"], 0);
+        assert_eq!(v["players"][1]["statsTargets"][1][0]["totalDmg"], 0);
         assert_eq!(v["players"][0]["defenses"][0]["deadCount"], 0);
         assert_eq!(v["targets"][0]["id"], 9);
+        // Verify enemyPlayer flag matches the actual is_player field.
+        assert_eq!(v["targets"][0]["enemyPlayer"], true, "player enemy should have enemyPlayer: true");
+        assert_eq!(v["targets"][1]["id"], 10);
+        assert_eq!(v["targets"][1]["enemyPlayer"], false, "NPC enemy should have enemyPlayer: false");
     }
 }
