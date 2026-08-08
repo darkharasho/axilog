@@ -86,7 +86,7 @@ Calibrated against a real dps.report EI export for one WvW log (Green Alpine Bor
 | CC detection (`is_cc` predicate) | Approximate, build-dependent | tuned against a pre-"ResultEnumRework" arcdps build (< 20260501); a post-rework capture may need the predicate extended (`buff == 1` events can carry real CC post-rework) — see `TODO(post-rework)` in `crates/axilog-core/src/analysis/cc.rs` |
 | Per-second timeline (squad damage / CC applied / downs) | Native-only | EI's JSON doesn't expose a comparable per-second series; ours does (`timeline.per_second`) |
 | Down-contribution timeline (per-window breakdown) | Native-only, not yet exposed | the down-contribution algorithm already works in time windows internally; a windowed *timeline* (vs. today's single per-player total) is a planned native-only extension |
-| Squad markers, tick-rate telemetry | Planned, not yet implemented | see `docs/arcdps-dev-notes.md` |
+| Squad markers (incl. commander-tag colour/variant), tick-rate telemetry | Native-only, implemented | `CBTS_MARKER`/`CBTS_TICK` decode: per-player/enemy `marker`, commander player `commander_tag { variant, guid }`, `encounter.markers[]` assignment timeline, `encounter.tick_rate { avg, min, per_second[] }`; EI's JSON can't express any of this, so the EI adapter is unaffected — see `docs/arcdps-dev-notes.md` |
 
 The `ei-json` output only emits fields backed by a real computed metric. Where real EI has a field
 we don't compute (e.g. per-target down-contribution/CC splits, most of `statsAll`'s damage-modifier
@@ -121,14 +121,15 @@ with a static fallback table, `CBTS_IDTOGUID` content-GUID decoding (teams now, 
 retained for M3), CC/stun-break metrics from real `CROWD_CONTROL`/`CBTS_STUNBREAK` events, enemy
 relog dedupe, time-aware pet-damage/CC attribution across instid reuse, `axilog anonymize` +
 PII-safe committed golden fixture (CI now runs real parity checks, not skip-and-pass), EI adapter
-`statsAll` CC fields, this README.
+`statsAll` CC fields, squad markers (`CBTS_MARKER`) + commander-tag colour/variant + tick-rate
+telemetry (`CBTS_TICK`) — native-schema-only, this README.
 
 **M3 (next):** boons and support stats (uptimes, generation, cleanses/corrupts) — the biggest
 remaining EI-parity gap.
 
 **Later:** healing/barrier stats, rotation/skill-cast tracking, PvE encounter logic (boss health
-phases, mechanics), Python/Node SDKs over the Rust core, HTML report output, squad markers and
-tick-rate telemetry (see arcdps-dev-notes).
+phases, mechanics), Python/Node SDKs over the Rust core, HTML report output (incl. the tick-rate
+corner widget and marker-driven combat-replay eye candy — see arcdps-dev-notes).
 
 ## License
 

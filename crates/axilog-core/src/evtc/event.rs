@@ -35,6 +35,54 @@ pub mod sc {
     /// duration in ms that was cancelled by the break (0 if none is
     /// reported).
     pub const STUN_BREAK: u8 = 56;
+    /// Above-target squad marker assignment/removal on an agent (Task 7,
+    /// M2 -- arcdps-dev guidance items 4/5). Verified against the arcdps
+    /// EVTC reference by hand-counting `enum cbtstatechange` from
+    /// `CBTS_COMBAT = 0`: `CBTS_MARKER` is index 37. Cross-checked against
+    /// GW2EI's `ArcDPSEnums.StateChange.Marker = 37`.
+    ///
+    /// Payload, per the arcdps EVTC reference:
+    /// ```text
+    /// CBTS_MARKER, // one event per marker on an agent
+    /// // src_agent: relates to agent
+    /// // value: markerdef id. if value is 0, remove all markers presently on agent
+    /// // buff: marker is a commander tag
+    /// ```
+    /// `value` is a content-local id (`n_contentlocal` MARKER=1), resolved
+    /// to a stable GUID via `CBTS_IDTOGUID` -- see `crate::wvw::markers`.
+    /// `buff == 1` flags the marker as a commander tag (cross-checked
+    /// against the real WvW fixture: the two commander-tag-GUID marker
+    /// events there both carry `buff == 1`; GW2EI's `MarkerGUIDEvent`
+    /// independently corroborates this by checking GUID membership in its
+    /// own `MarkerGUIDs.CommanderTagMarkersHexGUIDs` set, which matches the
+    /// same events).
+    ///
+    /// Distinct from `CBTS_SQUADMARKER_GROUND` (index 53, "squad ground
+    /// markers" -- a different, position-based ground-placement marker
+    /// system keyed by a fixed `skillid` index, not a GUID). Out of scope
+    /// for this task, which covers only above-target/agent markers per the
+    /// arcdps-dev guidance.
+    pub const MARKER: u8 = 37;
+    /// Server tick-rate telemetry (Task 7, M2 -- arcdps-dev guidance item
+    /// 7). Verified against the arcdps EVTC reference by hand-counting
+    /// `enum cbtstatechange` from `CBTS_COMBAT = 0`: `CBTS_TICK` is index
+    /// 84. Cross-checked against GW2EI's `ArcDPSEnums.StateChange.Tick =
+    /// 84`.
+    ///
+    /// Payload, per the arcdps EVTC reference:
+    /// ```text
+    /// CBTS_TICK, // tick, every 25 ticks
+    /// // src_agent: current extrapolated tick (ticks may go backwards if real update is lower than extrapolation)
+    /// // dst_agent: ticks since last real tick update
+    /// ```
+    /// See `crate::wvw::markers::resolve_tick_rate` for how the ticks/sec
+    /// rate is derived from this payload (the extrapolated-tick-counter
+    /// delta between consecutive events, divided by real elapsed time --
+    /// deliberately not relying on the unverified "every 25 ticks" cadence
+    /// claim, or on `dst_agent`, whose exact semantics beyond the one-line
+    /// comment above aren't independently corroborated anywhere we could
+    /// find in GW2EI).
+    pub const TICK: u8 = 84;
 }
 pub mod result {
     // combat result values (verified against arcdps cbtresult enum order)

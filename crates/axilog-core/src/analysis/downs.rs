@@ -85,7 +85,7 @@ mod tests {
         // build enc with duration only
         let enc = crate::model::Encounter { kind: "wvw".into(), map: "".into(),
             duration_ms: 2000, build: "".into(), revision: 1, recorded_by: None,
-            teams: vec![], players: vec![], enemies: vec![] };
+            teams: vec![], players: vec![], enemies: vec![], markers: vec![], tick_rate: None };
         let addr_to_rep: BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
         apply(&mut pm, &enc, &raw_from(evs), &squad, &enemies, &addr_to_rep);
         assert_eq!(pm[0].downs_dealt, 1);
@@ -106,7 +106,7 @@ mod tests {
         let mut pm = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
         let enc = crate::model::Encounter { kind: "wvw".into(), map: "".into(),
             duration_ms: 1000, build: "".into(), revision: 1, recorded_by: None,
-            teams: vec![], players: vec![], enemies: vec![] };
+            teams: vec![], players: vec![], enemies: vec![], markers: vec![], tick_rate: None };
         let addr_to_rep: BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
         apply(&mut pm, &enc, &raw_from(evs), &squad, &enemies, &addr_to_rep);
         assert_eq!(pm[0].down_contribution, 300);

@@ -234,6 +234,8 @@ mod tests {
             teams: vec![],
             players: vec![],
             enemies: vec![],
+            markers: vec![],
+            tick_rate: None,
         };
         let raw = RawLog {
             header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },

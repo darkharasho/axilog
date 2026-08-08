@@ -548,3 +548,113 @@ fn stun_breaks_are_plausible_on_local_fixture_local_raw_when_present() {
     let golden = read_golden_json();
     check_stun_breaks_are_plausible(&bytes, &golden);
 }
+
+/// Task 7 (M2): `CBTS_MARKER` decode against the real fixture.
+///
+/// This fixture (Jan 2026 WvW skirmish) DOES contain `CBTS_MARKER` events
+/// (confirmed by direct inspection of the raw event stream: 181 total, 176
+/// of them `value == 0` removals -- an initial "no marker" broadcast for
+/// most tracked agents at log start -- and 5 real assignments: 2 for
+/// content-local id 3201, whose `CBTS_IDTOGUID` (content type Marker)
+/// mapping resolves to GUID `1993fadb6fb70e4383a223a54d311f7d` --
+/// `PurpleCommanderTag` in GW2EI's `MarkerGUIDs` -- both carrying
+/// `buff == 1`; and 3 for content-local id 1090, whose GUID
+/// (`3cd1c64a5000774488009d4d69455c5c`) is NOT in either of our known
+/// tables, real (not synthetic) coverage of the "unknown GUID -> hex
+/// fallback" path).
+///
+/// So unlike Task 2b's TEAM-GUID test (which only makes conditional
+/// assertions because the fixture predates that event), this one asserts
+/// exact, real values -- both the marker machinery and the specific
+/// GUID/name resolution are exercised end to end on real data, not just
+/// the synthetic unit tests in `wvw::markers`.
+fn check_markers_decode_from_fixture(bytes: &[u8]) {
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+
+    assert_eq!(
+        enc.markers.len(),
+        5,
+        "expected 5 real (non-removal) marker assignments in the fixture, got {:?}",
+        enc.markers
+    );
+
+    // The commander (account varies between the real and anonymized
+    // fixture, so find by commander_tag rather than a hardcoded account
+    // string): purple commander tag, buff-flagged, GUID-resolved.
+    let commander = enc
+        .players
+        .iter()
+        .find(|p| p.commander_tag.is_some())
+        .expect("expected exactly one commander-tagged player in the fixture");
+    assert!(commander.commander, "commander bool must be set alongside commander_tag");
+    let tag = commander.commander_tag.as_ref().unwrap();
+    assert_eq!(tag.variant, "purple-commander");
+    assert_eq!(tag.guid, "1993fadb6fb70e4383a223a54d311f7d");
+
+    // Every marker assignment in the top-level list should resolve to
+    // either the known commander-tag GUID hex (unrecognized by the
+    // squad-marker table, so it stays as hex) or the known-unknown
+    // marker's hex fallback -- never empty, never a bare decimal id
+    // (this fixture's local ids all do have IDTOGUID mappings).
+    let names: std::collections::BTreeSet<&str> =
+        enc.markers.iter().map(|m| m.marker.as_str()).collect();
+    assert_eq!(
+        names,
+        std::collections::BTreeSet::from([
+            "1993fadb6fb70e4383a223a54d311f7d",
+            "3cd1c64a5000774488009d4d69455c5c",
+        ]),
+        "unexpected marker names/hex fallbacks in the fixture"
+    );
+
+    println!(
+        "markers_decode_from_fixture: {} assignments, commander variant={:?}",
+        enc.markers.len(),
+        tag.variant
+    );
+}
+
+#[test]
+fn markers_decode_from_fixture() {
+    check_markers_decode_from_fixture(&read_anon_fixture());
+}
+
+#[test]
+fn markers_decode_from_fixture_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("markers_decode_from_fixture") else { return };
+    check_markers_decode_from_fixture(&bytes);
+}
+
+/// Task 7 (M2): `CBTS_TICK` tick-rate telemetry against the real fixture.
+///
+/// This fixture has zero `CBTS_TICK` events (confirmed by direct
+/// inspection of the raw event stream), so `encounter.tick_rate` must be
+/// `None` -- the "skip gracefully" path from the Task 7 brief, exercised
+/// here on real data. (A positive assertion on real tick-rate values isn't
+/// possible with this fixture; that's covered by the synthetic unit tests
+/// in `wvw::markers` -- `tick_rate_steady_stream_reports_constant_rate`,
+/// `tick_rate_min_catches_a_dip`, `tick_rate_skips_backwards_intervals`.)
+fn check_tick_rate_absent_from_fixture(bytes: &[u8]) {
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
+    let tick_events = raw.events.iter().filter(|e| e.is_statechange == axilog_core::evtc::sc::TICK).count();
+    assert_eq!(tick_events, 0, "fixture unexpectedly has CBTS_TICK events (update this test)");
+
+    let enc = resolve(&raw);
+    assert!(
+        enc.tick_rate.is_none(),
+        "expected no tick_rate with zero CBTS_TICK events, got {:?}",
+        enc.tick_rate
+    );
+}
+
+#[test]
+fn tick_rate_absent_from_fixture() {
+    check_tick_rate_absent_from_fixture(&read_anon_fixture());
+}
+
+#[test]
+fn tick_rate_absent_from_fixture_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("tick_rate_absent_from_fixture") else { return };
+    check_tick_rate_absent_from_fixture(&bytes);
+}

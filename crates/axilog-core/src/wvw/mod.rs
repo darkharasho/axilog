@@ -2,6 +2,8 @@ use crate::evtc::{ContentType, RawEvent, RawLog, sc};
 use crate::model::{Encounter, Team, Player, Enemy};
 use std::collections::BTreeMap;
 
+pub mod markers;
+
 /// Collapse relog/build-swap duplicates: one Player per account (fallback character).
 pub fn dedupe_players(players: &mut Vec<Player>) {
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
@@ -245,6 +247,7 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
             name: p.character,
             team,
             is_player: true,
+            marker: None,
             agent_addrs: p.agent_addrs,
         });
     }
@@ -277,6 +280,22 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         }
     }
     dedupe_players(&mut enc.players);
+
+    // CBTS_MARKER (sc=37) / CBTS_TICK (sc=84): Task 7, M2. Runs last, after
+    // dedupe, so `agent_addrs` on each final Player/Enemy already covers
+    // every raw addr an account owns (relog/build-swap) -- `final_marker`/
+    // `final_commander_tag` pick the freshest state across all of them.
+    let marker_res = markers::resolve_markers(raw);
+    for p in &mut enc.players {
+        p.marker = markers::final_marker(&marker_res.current, &p.agent_addrs);
+        p.commander_tag = markers::final_commander_tag(&marker_res.current, &p.agent_addrs);
+        p.commander = p.commander_tag.is_some();
+    }
+    for en in &mut enc.enemies {
+        en.marker = markers::final_marker(&marker_res.current, &en.agent_addrs);
+    }
+    enc.markers = marker_res.assignments;
+    enc.tick_rate = markers::resolve_tick_rate(raw, enc.duration_ms);
 }
 
 #[cfg(test)]
@@ -287,7 +306,8 @@ mod tests {
     fn player(addr: u64, acc: &str) -> Player {
         Player { agent_addr: addr, account: acc.into(), character: "C".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "".into(),
-            subgroup: 1, in_squad: true, commander: false, agent_addrs: vec![addr] }
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            agent_addrs: vec![addr] }
     }
     fn agent(addr: u64, is_elite: u32, name: &[u8]) -> RawAgent {
         RawAgent { addr, prof: 5, is_elite,
@@ -334,7 +354,7 @@ mod tests {
         let mut enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:0,
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1"), player(3, ":B.2")],
-            enemies: vec![] };
+            enemies: vec![], markers: vec![], tick_rate: None };
         dedupe_players(&mut enc.players);
         assert_eq!(enc.players.len(), 2);
     }
@@ -346,7 +366,7 @@ mod tests {
         let mut enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:0,
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1")],
-            enemies: vec![] };
+            enemies: vec![], markers: vec![], tick_rate: None };
         dedupe_players(&mut enc.players);
         assert_eq!(enc.players.len(), 1);
         assert_eq!(enc.players[0].agent_addr, 1);

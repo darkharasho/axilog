@@ -117,14 +117,15 @@ mod tests {
             agent_addr: 1, // representative (first-seen addr)
             account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
             agent_addrs: vec![1, 2], // pre-relog addr 1, post-relog addr 2
         };
         let enc = Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms: 2000,
             build: "".into(), revision: 1, recorded_by: None, teams: vec![],
             players: vec![player],
-            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, agent_addrs: vec![9] }],
+            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, agent_addrs: vec![9] }],
+            markers: vec![], tick_rate: None,
         };
         let raw = raw_from(vec![
             strike(1, 9, 100), // pre-relog damage from addr 1
@@ -143,14 +144,15 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
             agent_addrs: vec![1, 2],
         };
         let enc = Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms: 2000,
             build: "".into(), revision: 1, recorded_by: None, teams: vec![],
             players: vec![player],
-            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, agent_addrs: vec![9] }],
+            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, agent_addrs: vec![9] }],
+            markers: vec![], tick_rate: None,
         };
         let raw = raw_from(vec![
             strike(9, 1, 80),  // enemy hits pre-relog addr
@@ -170,7 +172,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
             agent_addrs: vec![1],
         };
         let enc = Encounter {
@@ -180,7 +182,8 @@ mod tests {
             // Enemy deduped from a relog: representative addr 9, but also
             // covers raw addr 10 (the post-relog addr).
             enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(),
-                is_player: true, agent_addrs: vec![9, 10] }],
+                is_player: true, marker: None, agent_addrs: vec![9, 10] }],
+            markers: vec![], tick_rate: None,
         };
         let raw = raw_from(vec![
             strike(1, 9, 100),  // damage to the enemy's pre-relog addr

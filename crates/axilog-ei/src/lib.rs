@@ -138,12 +138,13 @@ mod tests {
             duration_ms:1000,build:"".into(),revision:1,recorded_by:Some(":A.1".into()),
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"Daredevil".into(),
-            team:"red".into(),subgroup:2,in_squad:true,commander:true,agent_addrs:vec![1]},
+            team:"red".into(),subgroup:2,in_squad:true,commander:true,marker:None,commander_tag:None,agent_addrs:vec![1]},
             Player{agent_addr:2,account:":B.2".into(),
             character:"B".into(),profession:"Guardian".into(),elite_spec:"".into(),
-            team:"red".into(),subgroup:2,in_squad:true,commander:false,agent_addrs:vec![2]}],
+            team:"red".into(),subgroup:2,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![2]}],
             enemies:vec![Enemy{id:9,instid:9,name:"Foe".into(),team:"blue".into(),
-            is_player:true,agent_addrs:vec![9]}]};
+            is_player:true,marker:None,agent_addrs:vec![9]}],
+            markers:vec![],tick_rate:None};
         let m = Metrics{players:vec![
             PlayerMetrics{agent_addr:1,damage_total:500,dps:500.0,per_enemy:vec![(9,500)],
             downs_dealt:1,kills_dealt:1,down_contribution:400,deaths:0,

@@ -7,6 +7,19 @@ pub enum AgentKind { Player, Npc, Gadget }
 pub struct Player { pub agent_addr: u64, pub account: String, pub character: String,
     pub profession: String, pub elite_spec: String, pub team: String,
     pub subgroup: u8, pub in_squad: bool, pub commander: bool,
+    /// The player's current squad marker (Task 7, M2 -- `CBTS_MARKER`), by
+    /// resolved name (e.g. `"arrow"`) or, when the marker's GUID isn't one
+    /// of the known squad-marker GUIDs, its raw hex GUID. `None` when no
+    /// marker is currently assigned (or the log has no `CBTS_MARKER`
+    /// events at all). See `crate::wvw::markers`.
+    pub marker: Option<String>,
+    /// The commander tag's colour/variant (incl. cat tags), when this
+    /// player currently has one assigned -- `CBTS_MARKER` with `buff == 1`
+    /// (Task 7, M2, arcdps-dev guidance item 5). Kept alongside `commander`
+    /// above (which stays a plain presence bool for compatibility);
+    /// `commander_tag` is the native-only richer form. `None` when the
+    /// player has no commander tag.
+    pub commander_tag: Option<CommanderTag>,
     /// Every raw agent addr observed for this account (relogs / build
     /// swaps each get a new addr from arcdps). `agent_addr` above is the
     /// representative; this always contains at least that value.
@@ -14,6 +27,10 @@ pub struct Player { pub agent_addr: u64, pub account: String, pub character: Str
 #[derive(Debug, Clone)]
 pub struct Enemy { pub id: u64, pub instid: u16, pub name: String,
     pub team: String, pub is_player: bool,
+    /// The enemy's current squad marker, mirroring `Player::marker` (Task
+    /// 7, M2). Enemy commanders don't get a `commander_tag` breakdown --
+    /// only `Player` does, per the Task 7 brief.
+    pub marker: Option<String>,
     /// Every raw agent addr folded into this enemy. For NPCs/gadgets this is
     /// always exactly `[id]` (distinct spawns are distinct, never deduped).
     /// For enemy players relogging under the same account (Task 4, M2), this
@@ -21,6 +38,22 @@ pub struct Enemy { pub id: u64, pub instid: u16, pub name: String,
     /// representative. Analysis uses this so damage against any of the
     /// account's addrs (not just the representative) is still counted.
     pub agent_addrs: Vec<u64> }
+/// A player's resolved commander-tag colour/variant (Task 7, M2). See
+/// `crate::wvw::markers::COMMANDER_TAG_VARIANTS`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommanderTag { pub variant: String, pub guid: String }
+/// One `CBTS_MARKER` assignment (not removal) event, resolved to a display
+/// name (Task 7, M2). `Encounter.markers` holds every one observed in the
+/// log, across all agents (squad, enemy, and NPC/gadget alike -- arcdps
+/// doesn't restrict `CBTS_MARKER` to squad members).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkerAssignment { pub agent_addr: u64, pub marker: String, pub time_ms: u64 }
+/// Server tick-rate telemetry derived from `CBTS_TICK` (Task 7, M2,
+/// arcdps-dev guidance item 7). See
+/// `crate::wvw::markers::resolve_tick_rate` for the derivation and its
+/// caveats.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TickRate { pub avg: f64, pub min: f64, pub per_second: Vec<f64> }
 #[derive(Debug, Clone)]
 pub struct Team {
     pub color: String,
@@ -34,7 +67,13 @@ pub struct Team {
 #[derive(Debug, Clone)]
 pub struct Encounter { pub kind: String, pub map: String, pub duration_ms: u64,
     pub build: String, pub revision: u8, pub recorded_by: Option<String>,
-    pub teams: Vec<Team>, pub players: Vec<Player>, pub enemies: Vec<Enemy> }
+    pub teams: Vec<Team>, pub players: Vec<Player>, pub enemies: Vec<Enemy>,
+    /// Every `CBTS_MARKER` assignment observed in the log, in stream order
+    /// (Task 7, M2). Empty when the log has no marker events.
+    pub markers: Vec<MarkerAssignment>,
+    /// Tick-rate telemetry from `CBTS_TICK` (Task 7, M2), `None` when the
+    /// log has fewer than two such events.
+    pub tick_rate: Option<TickRate> }
 
 pub fn agent_kind(a: &RawAgent) -> AgentKind {
     if a.is_elite != 0xffff_ffff { AgentKind::Player }
@@ -110,14 +149,14 @@ pub fn resolve(raw: &RawLog) -> Encounter {
                 players.push(Player {
                     agent_addr: a.addr, account, character, profession, elite_spec,
                     team: String::new(), subgroup: sub.unwrap_or(0),
-                    in_squad: true, commander: false,
+                    in_squad: true, commander: false, marker: None, commander_tag: None,
                     agent_addrs: vec![a.addr],
                 });
             }
             _ => {
                 let (name, _, _) = a.name_parts();
                 enemies.push(Enemy { id: a.addr, instid: 0, name,
-                    team: String::new(), is_player: false,
+                    team: String::new(), is_player: false, marker: None,
                     agent_addrs: vec![a.addr] });
             }
         }
@@ -128,6 +167,7 @@ pub fn resolve(raw: &RawLog) -> Encounter {
         kind: "wvw".into(), map: "World vs World".into(), duration_ms,
         build: raw.header.build.clone(), revision: raw.header.revision,
         recorded_by: None, teams: Vec::new(), players, enemies,
+        markers: Vec::new(), tick_rate: None,
     };
     crate::wvw::apply(&mut enc, raw);
     enc
