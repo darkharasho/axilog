@@ -1,4 +1,7 @@
+pub mod agent;
 pub mod header;
+
+pub use agent::{decode_agents, RawAgent};
 pub use header::{decode_header, RawHeader};
 
 pub const HEADER_SIZE: usize = 16;
