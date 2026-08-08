@@ -1,8 +1,10 @@
 pub mod agent;
 pub mod header;
+pub mod skill;
 
 pub use agent::{decode_agents, RawAgent};
 pub use header::{decode_header, RawHeader};
+pub use skill::{decode_skills, RawSkill};
 
 pub const HEADER_SIZE: usize = 16;
 pub const AGENT_SIZE:  usize = 96;
