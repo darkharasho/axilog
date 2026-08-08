@@ -74,7 +74,19 @@ plus a new small anonymizer used to produce a committed fixture.
   the log's actual detected team ids where available, falling back to representative ids).
 - `fightName` in ei-json becomes `"Detailed WvW - <map name>"`.
 
-### Task 3: CC metrics from CROWD_CONTROL events
+### Task 2b: Dynamic team ids via CBTS_WVWTEAMS (arcdps-dev guidance)
+
+**Files:** Modify `crates/axilog-core/src/evtc/event.rs` (sc const), `crates/axilog-core/src/wvw/mod.rs`, `crates/axilog-ei/src/lib.rs`.
+
+**Requirements (from arcdps dev via user, 2026-08-08):** prefer the `CBTS_WVWTEAMS` statechange
+event to configure the log's actual red/blue/green team ids rather than hardcoding. Verify the
+enum value from the arcdps EVTC reference (https://www.deltaconnected.com/arcdps/evtc/README.txt)
+and how the three ids are packed in the event (src_agent/dst_agent/value fields). When the event
+is present, team_color resolves from it; the static table from Task 2 remains the fallback for
+older logs (the calibration fixture predates the event and must keep passing via fallback).
+`wvWMapData` in ei-json uses the real ids when present. Unit test with a synthetic WVWTEAMS event.
+
+### Task 3: CC metrics from CROWD_CONTROL events + CBTS_STUNBREAK
 
 **Files:** Modify `crates/axilog-core/src/analysis/cc.rs` (and `analysis/mod.rs` if needed).
 
@@ -89,6 +101,12 @@ plus a new small anonymizer used to produce a committed fixture.
 - **Calibration test** (skip-when-absent, `cc_matches_ei_golden`): squad totals within 2% of
   EI: sum(cc_applied)=34, sum(cc_duration_ms)=50460. If pet-credit inclusion/exclusion is what
   makes it match, document which. Extend `fixtures/wvw-small.ei.json` with the two squad totals.
+- **CBTS_STUNBREAK (arcdps-dev guidance):** verify the statechange enum value from the arcdps
+  EVTC reference; track per-player `stun_breaks` (count) and, if the event carries it, removed
+  stun duration. Native schema: add to the player cc block (`stun_breaks`,
+  `removed_stun_duration_ms`). EI adapter: `defenses[0].stunBreak` (+`removedStunDuration` if
+  computed) matching EI v3.24+ placement. Unit test with synthetic stunbreak events; if the
+  fixture log contains any, sanity-check counts are nonzero and plausible.
 
 ### Task 4: Enemy dedupe + pet-attribution hardening
 
