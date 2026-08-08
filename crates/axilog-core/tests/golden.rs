@@ -8,15 +8,20 @@
 //! damage totals) are untouched, so this test verifies axilog's analysis
 //! pipeline reproduces EI's ground truth within tolerance.
 //!
-//! Runs only when the local (PII, not committed) raw log is present at
-//! `fixtures/local/wvw-small.zevtc`. When absent (e.g. in CI), this prints
-//! a skip message and returns successfully rather than failing the build.
+//! Runs against the committed, PII-safe `fixtures/wvw-small.anon.zevtc`
+//! (always present, so these tests run in CI too — Task 5, M2): player
+//! names don't feed any metric, so the anonymized fixture reproduces
+//! exactly the same numbers as the real log. When the real local raw
+//! fixture is also present (gitignored, PII, dev-only), it is checked too
+//! as a belt-and-braces extra.
 
 use axilog_core::analysis::analyze;
 use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
 
-const FIXTURE_PATH: &str = concat!(
+const ANON_FIXTURE_PATH: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
+const LOCAL_FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/local/wvw-small.zevtc"
 );
@@ -42,28 +47,33 @@ fn rel_close_cc(a: f64, b: f64) -> bool {
     (a - b).abs() <= CC_RELATIVE_TOLERANCE * b.abs().max(1.0)
 }
 
-#[test]
-fn golden_ei_parity() {
-    let bytes = match std::fs::read(FIXTURE_PATH) {
-        Ok(b) => b,
+fn read_local_fixture_or_skip(test_name: &str) -> Option<Vec<u8>> {
+    match std::fs::read(LOCAL_FIXTURE_PATH) {
+        Ok(b) => Some(b),
         Err(_) => {
-            println!(
-                "skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run golden parity)"
-            );
-            return;
+            println!("skip: {LOCAL_FIXTURE_PATH} absent ({test_name} local-only extra check)");
+            None
         }
-    };
+    }
+}
 
+fn read_anon_fixture() -> Vec<u8> {
+    std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"))
+}
+
+fn read_golden_json() -> serde_json::Value {
     let golden_str = std::fs::read_to_string(GOLDEN_JSON_PATH)
         .unwrap_or_else(|e| panic!("read golden fixture {GOLDEN_JSON_PATH}: {e}"));
-    let golden: serde_json::Value =
-        serde_json::from_str(&golden_str).expect("parse golden EI JSON");
+    serde_json::from_str(&golden_str).expect("parse golden EI JSON")
+}
 
+fn check_golden_ei_parity(bytes: &[u8], golden: &serde_json::Value) {
     let golden_duration_ms = golden["durationMS"].as_f64().expect("durationMS");
     let golden_friendly_players = golden["friendlyPlayerCount"].as_i64().expect("friendlyPlayerCount");
     let golden_squad_damage = golden["squadTotalDamage"].as_f64().expect("squadTotalDamage");
 
-    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
     let enc = resolve(&raw);
     let metrics = analyze(&enc, &raw);
 
@@ -93,6 +103,19 @@ fn golden_ei_parity() {
     );
 }
 
+#[test]
+fn golden_ei_parity() {
+    let golden = read_golden_json();
+    check_golden_ei_parity(&read_anon_fixture(), &golden);
+}
+
+#[test]
+fn golden_ei_parity_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("golden_ei_parity") else { return };
+    let golden = read_golden_json();
+    check_golden_ei_parity(&bytes, &golden);
+}
+
 /// Finding #4: `cc::timeline`'s squad_damage buckets and `downs::apply`'s
 /// down_contribution windowed-damage loop must exclude
 /// `result::CROWD_CONTROL` rows (which carry CC duration ms, not damage) —
@@ -101,19 +124,8 @@ fn golden_ei_parity() {
 /// on the golden log, since both now use the same damage predicate (and
 /// the timeline also folds in the same friendly pet/minion credit that
 /// per-player totals get).
-#[test]
-fn golden_timeline_matches_player_damage_sum() {
-    let bytes = match std::fs::read(FIXTURE_PATH) {
-        Ok(b) => b,
-        Err(_) => {
-            println!(
-                "skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run golden parity)"
-            );
-            return;
-        }
-    };
-
-    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+fn check_golden_timeline_matches_player_damage_sum(bytes: &[u8]) {
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
     let enc = resolve(&raw);
     let metrics = analyze(&enc, &raw);
 
@@ -126,18 +138,31 @@ fn golden_timeline_matches_player_damage_sum() {
     println!("golden timeline/player damage sum equality: {timeline_sum}");
 }
 
-/// Task 1 (M2): profession/elite-spec name calibration against the EI
-/// golden fixture.
+#[test]
+fn golden_timeline_matches_player_damage_sum() {
+    check_golden_timeline_matches_player_damage_sum(&read_anon_fixture());
+}
+
+#[test]
+fn golden_timeline_matches_player_damage_sum_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("golden_timeline_matches_player_damage_sum") else { return };
+    check_golden_timeline_matches_player_damage_sum(&bytes);
+}
+
+/// Task 1 (M2): sha256-based real-account -> synthetic-EI-account
+/// obfuscation, as produced by axibridge's `scripts/obfuscate-accounts.mjs`.
 ///
-/// `fixtures/local/wvw-small.zevtc` is the *real*, unanonymized raw log (PII,
-/// gitignored, present only for local/dev runs). `fixtures/wvw-small.ei.json`
-/// is the *committed* golden fixture, whose `account` fields were anonymized
-/// by axibridge's `scripts/obfuscate-accounts.mjs` (deterministic
-/// sha256(account) -> "{Adjective}{Noun}.{4 digits}", from a fixed
-/// adjective/noun word list). To join a real decoded account to its golden
-/// row, this test reproduces that exact deterministic transform rather than
-/// comparing account strings directly (which never matches: one side is real
-/// names, the other is anonymized).
+/// Historical/reference only as of Task 5 (M2): this was originally used at
+/// test time to join a real decoded account to its golden JSON row (the
+/// golden JSON's `account` field held the sha-obfuscated form). Since Task
+/// 5, `fixtures/wvw-small.ei.json`'s `account` fields hold `Anon<N>.<4
+/// digits>` values instead (matching the committed, PII-safe
+/// `fixtures/wvw-small.anon.zevtc`), so `professions_match_ei_golden` below
+/// joins by raw agent-table index instead and no longer calls `obfuscate`.
+/// This module (and its own fixture-independent unit test) is kept because
+/// it's what was used to derive the current `wvw-small.ei.json` `account`
+/// values from the real accounts in the one-time Task 5 regeneration, and
+/// may still be useful for a future real-fixture refresh.
 mod ei_account_obfuscation {
     use sha2::{Digest, Sha256};
 
@@ -183,6 +208,7 @@ mod ei_account_obfuscation {
 
     /// Reproduces `buildFakeAccount` from axibridge's
     /// `scripts/obfuscate-accounts.mjs`.
+    #[allow(dead_code)]
     pub fn obfuscate(real_account_with_colon: &str) -> Option<String> {
         let real = real_account_with_colon.trim_start_matches(':');
         if !looks_like_account(real) {
@@ -200,8 +226,9 @@ mod ei_account_obfuscation {
 
     #[test]
     fn matches_known_axibridge_mapping() {
-        // Spot-checked against fixtures/wvw-small.ei.json / the axibridge
-        // golden JSON for this same encounter.
+        // Spot-checked against the original (pre-Task-5) golden JSON for
+        // this same encounter, before its accounts were regenerated to
+        // Anon<N> form.
         assert_eq!(obfuscate(":Arx.9785").as_deref(), Some("ZephyrLagoon.2752"));
         assert_eq!(
             obfuscate(":Astronauta.1087").as_deref(),
@@ -211,55 +238,55 @@ mod ei_account_obfuscation {
     }
 }
 
-#[test]
-fn professions_match_ei_golden() {
-    let bytes = match std::fs::read(FIXTURE_PATH) {
-        Ok(b) => b,
-        Err(_) => {
-            println!(
-                "skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run professions_match_ei_golden)"
-            );
-            return;
-        }
-    };
-
-    let golden_str = std::fs::read_to_string(GOLDEN_JSON_PATH)
-        .unwrap_or_else(|e| panic!("read golden fixture {GOLDEN_JSON_PATH}: {e}"));
-    let golden: serde_json::Value =
-        serde_json::from_str(&golden_str).expect("parse golden EI JSON");
+/// Task 1 (M2): profession/elite-spec name calibration against the EI
+/// golden fixture.
+///
+/// Task 5 (M2): joins by raw agent-table index rather than account text.
+/// `fixtures/wvw-small.ei.json`'s `players[].account` values are
+/// `Anon<N>.<4 digits>` (`N` = raw agent-table index), the exact same
+/// deterministic value `axilog_core::evtc::anon_account` computes for
+/// index `N` — this holds whether the raw bytes being decoded are the
+/// committed anonymized fixture (whose own agent table literally has
+/// `Anon<N>` names at index `N`) or the real local raw fixture (whose
+/// agent table has the *same* agent order/count, just with real names at
+/// each index) — either way, "the player at raw agent-table index N" is
+/// the same person, and `anon_account(N)` is what golden.json calls them.
+fn check_professions_match_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
     let golden_players = golden["players"].as_array().expect("players array");
-
-    let mut profession_by_fake_account = std::collections::HashMap::new();
+    let mut profession_by_account = std::collections::HashMap::new();
     for p in golden_players {
         let account = p["account"].as_str().expect("account");
         let profession = p["profession"].as_str().expect("profession");
-        profession_by_fake_account.insert(account.to_string(), profession.to_string());
+        profession_by_account.insert(account.to_string(), profession.to_string());
     }
 
-    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
     let enc = resolve(&raw);
+    let by_addr: std::collections::HashMap<u64, &axilog_core::model::Player> =
+        enc.players.iter().map(|p| (p.agent_addr, p)).collect();
 
     let mut matched = 0usize;
     let mut mismatches: Vec<String> = Vec::new();
-    for p in &enc.players {
-        let Some(fake) = ei_account_obfuscation::obfuscate(&p.account) else {
+    for (i, agent) in raw.agents.iter().enumerate() {
+        if !agent.is_player() {
+            continue;
+        }
+        let expected_account = axilog_core::evtc::anon_account(i);
+        let key = expected_account.trim_start_matches(':');
+        let Some(golden_profession) = profession_by_account.get(key) else {
             continue;
         };
-        let Some(golden_profession) = profession_by_fake_account.get(&fake) else {
-            continue;
+        let Some(p) = by_addr.get(&agent.addr) else {
+            continue; // relog-absorbed / not the account's representative addr
         };
         // EI convention: `profession` is the elite-spec name when active,
         // else the base profession.
-        let ei_style = if p.elite_spec.is_empty() {
-            &p.profession
-        } else {
-            &p.elite_spec
-        };
+        let ei_style = if p.elite_spec.is_empty() { &p.profession } else { &p.elite_spec };
         matched += 1;
         if ei_style != golden_profession {
             mismatches.push(format!(
-                "{} (prof={}, elite_spec={:?}): got {ei_style:?}, golden {golden_profession:?}",
-                p.account, p.profession, p.elite_spec
+                "agent[{i}] addr={:#x} (prof={}, elite_spec={:?}): got {ei_style:?}, golden {golden_profession:?}",
+                agent.addr, p.profession, p.elite_spec
             ));
         }
     }
@@ -269,11 +296,11 @@ fn professions_match_ei_golden() {
         "profession mismatches vs EI golden:\n{}",
         mismatches.join("\n")
     );
-    // The fixture has 41 friendly players; a handful are enemy players (also
-    // real-named, so also obfuscate-able) with no golden row, plus a few
-    // relog stragglers with a blank account. Require strong, not total,
-    // coverage so this stays meaningful without being fragile to fixture
-    // churn.
+    // The fixture has 41 friendly players; a handful of golden rows are
+    // "Non Squad Player N" placeholders with no real-account origin, plus a
+    // few relog stragglers whose representative addr differs from the raw
+    // index being probed. Require strong, not total, coverage so this stays
+    // meaningful without being fragile to fixture churn.
     assert!(
         matched >= 30,
         "expected at least 30 accounts to join to the EI golden fixture, got {matched}"
@@ -281,22 +308,24 @@ fn professions_match_ei_golden() {
     println!("professions_match_ei_golden: {matched} accounts joined, 0 mismatches");
 }
 
+#[test]
+fn professions_match_ei_golden() {
+    let golden = read_golden_json();
+    check_professions_match_ei_golden(&read_anon_fixture(), &golden);
+}
+
+#[test]
+fn professions_match_ei_golden_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("professions_match_ei_golden") else { return };
+    let golden = read_golden_json();
+    check_professions_match_ei_golden(&bytes, &golden);
+}
+
 /// Task 2 (M2): real WvW map-name and team-id→color tables, calibrated
 /// against the golden fixture (a Green Alpine Borderlands skirmish; EI's
 /// `fightName` is "World vs World - Green Alpine Borderlands").
-#[test]
-fn map_and_team_colors_match_ei_golden() {
-    let bytes = match std::fs::read(FIXTURE_PATH) {
-        Ok(b) => b,
-        Err(_) => {
-            println!(
-                "skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run map_and_team_colors_match_ei_golden)"
-            );
-            return;
-        }
-    };
-
-    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+fn check_map_and_team_colors_match_ei_golden(bytes: &[u8]) {
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
     let enc = resolve(&raw);
 
     assert_eq!(
@@ -344,6 +373,17 @@ fn map_and_team_colors_match_ei_golden() {
     );
 }
 
+#[test]
+fn map_and_team_colors_match_ei_golden() {
+    check_map_and_team_colors_match_ei_golden(&read_anon_fixture());
+}
+
+#[test]
+fn map_and_team_colors_match_ei_golden_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("map_and_team_colors_match_ei_golden") else { return };
+    check_map_and_team_colors_match_ei_golden(&bytes);
+}
+
 /// Task 2b: CBTS_IDTOGUID decoding against the real fixture.
 ///
 /// This fixture (Jan 2026) predates arcdps emitting CBTS_WVWTEAMS *and* TEAM
@@ -355,21 +395,10 @@ fn map_and_team_colors_match_ei_golden() {
 /// wiring works end to end on real data, not just synthetic unit tests),
 /// but does not assert on TEAM mappings specifically, since none exist in
 /// this log — every team in `enc.teams` should have `guid: None`.
-#[test]
-fn guid_mappings_decode_from_local_fixture() {
+fn check_guid_mappings_decode(bytes: &[u8]) {
     use axilog_core::evtc::ContentType;
 
-    let bytes = match std::fs::read(FIXTURE_PATH) {
-        Ok(b) => b,
-        Err(_) => {
-            println!(
-                "skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run guid_mappings_decode_from_local_fixture)"
-            );
-            return;
-        }
-    };
-
-    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
 
     assert!(
         !raw.guid_map.is_empty(),
@@ -408,6 +437,17 @@ fn guid_mappings_decode_from_local_fixture() {
     );
 }
 
+#[test]
+fn guid_mappings_decode_from_local_fixture() {
+    check_guid_mappings_decode(&read_anon_fixture());
+}
+
+#[test]
+fn guid_mappings_decode_from_local_fixture_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("guid_mappings_decode_from_local_fixture") else { return };
+    check_guid_mappings_decode(&bytes);
+}
+
 /// Task 3 (M2): CC metrics calibration against the EI golden fixture.
 ///
 /// `analysis::cc::apply_cc` credits both direct player-sourced CC and
@@ -419,25 +459,12 @@ fn guid_mappings_decode_from_local_fixture() {
 /// sums (34 / 50460ms) — pet-credit inclusion is required to match; without
 /// it the squad sum undercounts (real players alone don't reach 34/50460 on
 /// this log).
-#[test]
-fn cc_matches_ei_golden() {
-    let bytes = match std::fs::read(FIXTURE_PATH) {
-        Ok(b) => b,
-        Err(_) => {
-            println!("skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run cc_matches_ei_golden)");
-            return;
-        }
-    };
-
-    let golden_str = std::fs::read_to_string(GOLDEN_JSON_PATH)
-        .unwrap_or_else(|e| panic!("read golden fixture {GOLDEN_JSON_PATH}: {e}"));
-    let golden: serde_json::Value =
-        serde_json::from_str(&golden_str).expect("parse golden EI JSON");
+fn check_cc_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
     let golden_cc = golden["squadAppliedCrowdControl"].as_f64().expect("squadAppliedCrowdControl");
     let golden_cc_dur =
         golden["squadAppliedCrowdControlDuration"].as_f64().expect("squadAppliedCrowdControlDuration");
 
-    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
     let enc = resolve(&raw);
     let metrics = analyze(&enc, &raw);
 
@@ -459,6 +486,19 @@ fn cc_matches_ei_golden() {
     );
 }
 
+#[test]
+fn cc_matches_ei_golden() {
+    let golden = read_golden_json();
+    check_cc_matches_ei_golden(&read_anon_fixture(), &golden);
+}
+
+#[test]
+fn cc_matches_ei_golden_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("cc_matches_ei_golden") else { return };
+    let golden = read_golden_json();
+    check_cc_matches_ei_golden(&bytes, &golden);
+}
+
 /// Task 3 (M2): CBTS_STUNBREAK sanity check against the real fixture.
 ///
 /// The golden EI JSON reports 20 stun breaks / ~16.9s (16907ms) of removed
@@ -469,24 +509,11 @@ fn cc_matches_ei_golden() {
 /// (arcdps/EI may attribute a small number of edge-case events, e.g.
 /// ally-redirected stun breaks, differently), but "plausible" per the task
 /// brief.
-#[test]
-fn stun_breaks_are_plausible_on_local_fixture() {
-    let bytes = match std::fs::read(FIXTURE_PATH) {
-        Ok(b) => b,
-        Err(_) => {
-            println!("skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run stun_breaks_are_plausible_on_local_fixture)");
-            return;
-        }
-    };
-
-    let golden_str = std::fs::read_to_string(GOLDEN_JSON_PATH)
-        .unwrap_or_else(|e| panic!("read golden fixture {GOLDEN_JSON_PATH}: {e}"));
-    let golden: serde_json::Value =
-        serde_json::from_str(&golden_str).expect("parse golden EI JSON");
+fn check_stun_breaks_are_plausible(bytes: &[u8], golden: &serde_json::Value) {
     let golden_sb = golden["squadStunBreak"].as_f64().expect("squadStunBreak");
     let golden_rsd_ms = golden["squadRemovedStunDuration"].as_f64().expect("squadRemovedStunDuration") * 1000.0;
 
-    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
     let enc = resolve(&raw);
     let metrics = analyze(&enc, &raw);
 
@@ -507,4 +534,17 @@ fn stun_breaks_are_plausible_on_local_fixture() {
         "stun_breaks_are_plausible_on_local_fixture: stun_breaks={stun_breaks} (golden {golden_sb}), \
          removed_stun_duration_ms={removed_stun_duration_ms} (golden {golden_rsd_ms})"
     );
+}
+
+#[test]
+fn stun_breaks_are_plausible_on_local_fixture() {
+    let golden = read_golden_json();
+    check_stun_breaks_are_plausible(&read_anon_fixture(), &golden);
+}
+
+#[test]
+fn stun_breaks_are_plausible_on_local_fixture_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("stun_breaks_are_plausible_on_local_fixture") else { return };
+    let golden = read_golden_json();
+    check_stun_breaks_are_plausible(&bytes, &golden);
 }

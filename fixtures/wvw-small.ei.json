@@ -1,6 +1,6 @@
 {
   "_source": "axibridge test-fixtures/boon/20260117-181030.json (dps.report EI JSON, accounts anonymized)",
-  "_note": "Golden aggregates for axilog WvW parity. Raw .zevtc kept local (PII), not committed. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by (already-obfuscated) account.",
+  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index — the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from.",
   "fightName": "World vs World - Green Alpine Borderlands",
   "durationMS": 49285,
   "friendlyPlayerCount": 41,
@@ -11,7 +11,7 @@
   "squadRemovedStunDuration": 16.907,
   "players": [
     {
-      "account": "AshenRange.6264",
+      "account": "Anon132.5884",
       "group": 1,
       "notInSquad": false,
       "teamID": 2767,
@@ -24,7 +24,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "WiseHorizon.8292",
+      "account": "Anon133.5921",
       "group": 1,
       "notInSquad": false,
       "teamID": 2767,
@@ -37,7 +37,7 @@
       "removedStunDuration": 1.827
     },
     {
-      "account": "HarborJet.5544",
+      "account": "Anon140.6180",
       "group": 2,
       "notInSquad": false,
       "teamID": 2767,
@@ -50,7 +50,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "UmberJet.2928",
+      "account": "Anon106.4922",
       "group": 2,
       "notInSquad": false,
       "teamID": 2767,
@@ -63,7 +63,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "IronHaven.2896",
+      "account": "Anon118.5366",
       "group": 2,
       "notInSquad": false,
       "teamID": 2767,
@@ -76,7 +76,7 @@
       "removedStunDuration": 0.786
     },
     {
-      "account": "OakMeadow.2981",
+      "account": "Anon107.4959",
       "group": 2,
       "notInSquad": false,
       "teamID": 2767,
@@ -89,7 +89,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "WildBloom.7060",
+      "account": "Anon122.5514",
       "group": 2,
       "notInSquad": false,
       "teamID": 2767,
@@ -102,7 +102,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "IvoryDawn.4403",
+      "account": "Anon121.5477",
       "group": 3,
       "notInSquad": false,
       "teamID": 2767,
@@ -115,7 +115,7 @@
       "removedStunDuration": 1.719
     },
     {
-      "account": "StormMeadow.6379",
+      "account": "Anon112.5144",
       "group": 3,
       "notInSquad": false,
       "teamID": 2767,
@@ -128,7 +128,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "RusticCedar.1864",
+      "account": "Anon172.7364",
       "group": 3,
       "notInSquad": false,
       "teamID": 2767,
@@ -141,7 +141,7 @@
       "removedStunDuration": 0.959
     },
     {
-      "account": "WiseBeacon.4080",
+      "account": "Anon113.5181",
       "group": 3,
       "notInSquad": false,
       "teamID": 2767,
@@ -154,7 +154,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "AmberHollow.9854",
+      "account": "Anon119.5403",
       "group": 3,
       "notInSquad": false,
       "teamID": 2767,
@@ -167,7 +167,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "GildedJourney.8223",
+      "account": "Anon108.4996",
       "group": 4,
       "notInSquad": false,
       "teamID": 2767,
@@ -180,7 +180,7 @@
       "removedStunDuration": 0.615
     },
     {
-      "account": "AshenJet.4980",
+      "account": "Anon117.5329",
       "group": 4,
       "notInSquad": false,
       "teamID": 2767,
@@ -193,7 +193,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "OakSpark.3206",
+      "account": "Anon115.5255",
       "group": 4,
       "notInSquad": false,
       "teamID": 2767,
@@ -206,7 +206,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "WovenVale.8117",
+      "account": "Anon116.5292",
       "group": 4,
       "notInSquad": false,
       "teamID": 2767,
@@ -219,7 +219,7 @@
       "removedStunDuration": 1.738
     },
     {
-      "account": "WildDrift.3267",
+      "account": "Anon120.5440",
       "group": 4,
       "notInSquad": false,
       "teamID": 2767,
@@ -232,7 +232,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "AshenLaurel.2994",
+      "account": "Anon129.5773",
       "group": 5,
       "notInSquad": false,
       "teamID": 2767,
@@ -245,7 +245,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "BrightSummit.6125",
+      "account": "Anon124.5588",
       "group": 5,
       "notInSquad": false,
       "teamID": 2767,
@@ -258,7 +258,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "BrightRune.7739",
+      "account": "Anon110.5070",
       "group": 5,
       "notInSquad": false,
       "teamID": 2767,
@@ -271,7 +271,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "GildedBloom.1887",
+      "account": "Anon104.4848",
       "group": 5,
       "notInSquad": false,
       "teamID": 2767,
@@ -284,7 +284,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "VerdantRidge.8177",
+      "account": "Anon125.5625",
       "group": 5,
       "notInSquad": false,
       "teamID": 2767,
@@ -297,7 +297,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "ScarletSummit.2126",
+      "account": "Anon111.5107",
       "group": 6,
       "notInSquad": false,
       "teamID": 2767,
@@ -310,7 +310,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "RusticWillow.5785",
+      "account": "Anon123.5551",
       "group": 6,
       "notInSquad": false,
       "teamID": 2767,
@@ -323,7 +323,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "DuskyGlen.1577",
+      "account": "Anon114.5218",
       "group": 6,
       "notInSquad": false,
       "teamID": 2767,
@@ -336,7 +336,7 @@
       "removedStunDuration": 1.737
     },
     {
-      "account": "CloudShore.5668",
+      "account": "Anon127.5699",
       "group": 6,
       "notInSquad": false,
       "teamID": 2767,
@@ -349,7 +349,7 @@
       "removedStunDuration": 0.795
     },
     {
-      "account": "VelvetDrift.5549",
+      "account": "Anon126.5662",
       "group": 6,
       "notInSquad": false,
       "teamID": 2767,
@@ -362,7 +362,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "RoyalFalcon.5152",
+      "account": "Anon105.4885",
       "group": 7,
       "notInSquad": false,
       "teamID": 2767,
@@ -375,7 +375,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "WovenThorn.5639",
+      "account": "Anon109.5033",
       "group": 7,
       "notInSquad": false,
       "teamID": 2767,
@@ -388,7 +388,7 @@
       "removedStunDuration": 0.808
     },
     {
-      "account": "FeralSpark.2569",
+      "account": "Anon171.7327",
       "group": 7,
       "notInSquad": false,
       "teamID": 2767,
@@ -401,7 +401,7 @@
       "removedStunDuration": 0
     },
     {
-      "account": "SwiftShore.8351",
+      "account": "Anon128.5736",
       "group": 7,
       "notInSquad": false,
       "teamID": 2767,
@@ -414,7 +414,7 @@
       "removedStunDuration": 0.008
     },
     {
-      "account": "PlacidWillow.4120",
+      "account": "Anon163.7031",
       "group": 7,
       "notInSquad": false,
       "teamID": 2767,
@@ -427,7 +427,7 @@
       "removedStunDuration": 0.741
     },
     {
-      "account": "FeralHaven.4576",
+      "account": "Anon166.7142",
       "group": 8,
       "notInSquad": false,
       "teamID": 2767,
@@ -440,7 +440,7 @@
       "removedStunDuration": 0.768
     },
     {
-      "account": "ZephyrLagoon.2752",
+      "account": "Anon164.7068",
       "group": 8,
       "notInSquad": false,
       "teamID": 2767,
@@ -453,7 +453,7 @@
       "removedStunDuration": 0.741
     },
     {
-      "account": "HiddenThorn.9126",
+      "account": "Anon150.6550",
       "group": 8,
       "notInSquad": false,
       "teamID": 2767,
@@ -466,7 +466,7 @@
       "removedStunDuration": 0.752
     },
     {
-      "account": "DaringCanyon.5440",
+      "account": "Anon130.5810",
       "group": 8,
       "notInSquad": false,
       "teamID": 2767,
@@ -479,7 +479,7 @@
       "removedStunDuration": 2.59
     },
     {
-      "account": "BrightBeacon.9265",
+      "account": "Anon157.6809",
       "group": 8,
       "notInSquad": false,
       "teamID": 2767,

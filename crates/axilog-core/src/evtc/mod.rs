@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod anonymize;
 pub mod container;
 pub mod event;
 pub mod guid;
@@ -6,6 +7,7 @@ pub mod header;
 pub mod skill;
 
 pub use agent::{decode_agents, RawAgent};
+pub use anonymize::{anon_account, anon_character, anonymize_raw_evtc, zip_deflate, zip_stored};
 pub use container::{decode_raw, inflate_zevtc};
 pub use event::{decode_events, result, sc, RawEvent};
 pub use guid::{decode_guid_mappings, ContentType, GuidMapping};

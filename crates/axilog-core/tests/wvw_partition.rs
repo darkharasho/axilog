@@ -1,18 +1,22 @@
 //! Calibration test for the WvW friend/foe partition (Task 16A).
 //!
-//! Runs only when the local (PII, not committed) raw log is present at
-//! `fixtures/local/wvw-small.zevtc`. Golden aggregates to reproduce come
-//! from Elite Insights, committed at `fixtures/wvw-small.ei.json`:
+//! Golden aggregates to reproduce come from Elite Insights, committed at
+//! `fixtures/wvw-small.ei.json`:
 //!   durationMS = 49285, friendlyPlayerCount = 41, squadTotalDamage = 2138414
 //!
-//! When the fixture is absent (e.g. in CI), this prints a skip message and
-//! returns successfully rather than failing the build.
+//! Runs against the committed, PII-safe `fixtures/wvw-small.anon.zevtc`
+//! (always present, so this runs in CI too — Task 5, M2). Names don't feed
+//! any metric, so the anonymized fixture reproduces the same numbers as the
+//! real log. When the real local raw fixture is also present (gitignored,
+//! PII, dev-only), it is checked too as a belt-and-braces extra.
 
 use axilog_core::analysis::analyze;
 use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
 
-const FIXTURE_PATH: &str = "../../fixtures/local/wvw-small.zevtc";
+const ANON_FIXTURE_PATH: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
+const LOCAL_FIXTURE_PATH: &str = "../../fixtures/local/wvw-small.zevtc";
 
 const GOLDEN_DURATION_MS: f64 = 49285.0;
 const GOLDEN_FRIENDLY_PLAYERS: i64 = 41;
@@ -21,17 +25,8 @@ const GOLDEN_SQUAD_DAMAGE: f64 = 2_138_414.0;
 const RELATIVE_TOLERANCE: f64 = 0.005; // 0.5%
 const FRIENDLY_COUNT_TOLERANCE: i64 = 2; // ±2
 
-#[test]
-fn wvw_partition_matches_golden_fixture() {
-    let bytes = match std::fs::read(FIXTURE_PATH) {
-        Ok(b) => b,
-        Err(_) => {
-            println!("skip: {FIXTURE_PATH} absent");
-            return;
-        }
-    };
-
-    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+fn check_wvw_partition(bytes: &[u8]) {
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
     let enc = resolve(&raw);
 
     let friendly = enc.players.len() as i64;
@@ -61,4 +56,23 @@ fn wvw_partition_matches_golden_fixture() {
          duration_ms={duration} (golden {GOLDEN_DURATION_MS}), \
          squad_damage={squad_damage} (golden {GOLDEN_SQUAD_DAMAGE})"
     );
+}
+
+#[test]
+fn wvw_partition_matches_golden_fixture() {
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    check_wvw_partition(&bytes);
+}
+
+#[test]
+fn wvw_partition_matches_golden_fixture_local_raw_when_present() {
+    let bytes = match std::fs::read(LOCAL_FIXTURE_PATH) {
+        Ok(b) => b,
+        Err(_) => {
+            println!("skip: {LOCAL_FIXTURE_PATH} absent (local-only extra check)");
+            return;
+        }
+    };
+    check_wvw_partition(&bytes);
 }
