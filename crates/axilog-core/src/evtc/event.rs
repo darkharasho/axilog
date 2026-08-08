@@ -91,11 +91,16 @@ mod tests {
         b[8..16].copy_from_slice(&0xAAAAu64.to_le_bytes()); // src_agent
         b[16..24].copy_from_slice(&0xBBBBu64.to_le_bytes()); // dst_agent
         b[24..28].copy_from_slice(&500i32.to_le_bytes()); // value (damage)
+        b[28..32].copy_from_slice(&321i32.to_le_bytes()); // buff_dmg
+        b[32..36].copy_from_slice(&654u32.to_le_bytes()); // overstack
         b[36..40].copy_from_slice(&77u32.to_le_bytes()); // skillid
+        b[40..42].copy_from_slice(&111u16.to_le_bytes()); // src_instid
         b[48] = 1; // iff = FOE
+        b[49] = 3; // buff (distinguishable probe value)
         // offsets: iff@48, buff@49, result@50, is_activation@51,
         // is_buffremove@52, is_statechange@56
-        b[50] = 0; // result NORMAL
+        b[50] = result::CRIT; // result
+        b[56] = sc::ENTER_COMBAT; // is_statechange
         b
     }
     #[test]
@@ -106,9 +111,13 @@ mod tests {
         assert_eq!(e.src_agent, 0xAAAA);
         assert_eq!(e.dst_agent, 0xBBBB);
         assert_eq!(e.value, 500);
+        assert_eq!(e.buff_dmg, 321);
+        assert_eq!(e.overstack, 654);
         assert_eq!(e.skillid, 77);
+        assert_eq!(e.src_instid, 111);
         assert_eq!(e.iff, 1);
-        assert_eq!(e.result, result::NORMAL);
-        assert_eq!(e.is_statechange, 0);
+        assert_eq!(e.buff, 3);
+        assert_eq!(e.result, result::CRIT);
+        assert_eq!(e.is_statechange, sc::ENTER_COMBAT);
     }
 }
