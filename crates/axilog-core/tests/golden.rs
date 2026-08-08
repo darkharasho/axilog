@@ -24,11 +24,22 @@ const GOLDEN_JSON_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtu
 
 const RELATIVE_TOLERANCE: f64 = 0.005; // 0.5%
 const FRIENDLY_COUNT_TOLERANCE: i64 = 2; // ±2
+// Task 3 (M2) brief: CC totals calibrated within 2% (looser than the 0.5%
+// used for damage/duration — CC application is synthesized by arcdps under
+// generic pseudo-skills and pet-credit resolution is a heuristic, see
+// `analysis::cc::pet_credit_cc_events`).
+const CC_RELATIVE_TOLERANCE: f64 = 0.02; // 2%
 
 /// True if `a` and `b` are within `RELATIVE_TOLERANCE` of each other,
 /// relative to `b` (the golden/expected value).
 fn rel_close(a: f64, b: f64) -> bool {
     (a - b).abs() <= RELATIVE_TOLERANCE * b.abs().max(1.0)
+}
+
+/// True if `a` and `b` are within `CC_RELATIVE_TOLERANCE` of each other,
+/// relative to `b` (the golden/expected value).
+fn rel_close_cc(a: f64, b: f64) -> bool {
+    (a - b).abs() <= CC_RELATIVE_TOLERANCE * b.abs().max(1.0)
 }
 
 #[test]
@@ -394,5 +405,106 @@ fn guid_mappings_decode_from_local_fixture() {
         "guid_mappings_decode_from_local_fixture: {} total mappings, {} teams (all guid=None as expected)",
         raw.guid_map.len(),
         enc.teams.len()
+    );
+}
+
+/// Task 3 (M2): CC metrics calibration against the EI golden fixture.
+///
+/// `analysis::cc::apply_cc` credits both direct player-sourced CC and
+/// pet/minion-sourced CC (folded onto the owning squad player, matching
+/// GW2EI's `SingleActor.InitOutgoingCrowdControlEvents`, which adds each
+/// player's minions' outgoing CC into the player's own totals). This test
+/// confirms squad-wide `cc_applied`/`cc_duration_ms` sums land within 2% of
+/// EI's golden `statsAll[0].appliedCrowdControl`/`appliedCrowdControlDuration`
+/// sums (34 / 50460ms) — pet-credit inclusion is required to match; without
+/// it the squad sum undercounts (real players alone don't reach 34/50460 on
+/// this log).
+#[test]
+fn cc_matches_ei_golden() {
+    let bytes = match std::fs::read(FIXTURE_PATH) {
+        Ok(b) => b,
+        Err(_) => {
+            println!("skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run cc_matches_ei_golden)");
+            return;
+        }
+    };
+
+    let golden_str = std::fs::read_to_string(GOLDEN_JSON_PATH)
+        .unwrap_or_else(|e| panic!("read golden fixture {GOLDEN_JSON_PATH}: {e}"));
+    let golden: serde_json::Value =
+        serde_json::from_str(&golden_str).expect("parse golden EI JSON");
+    let golden_cc = golden["squadAppliedCrowdControl"].as_f64().expect("squadAppliedCrowdControl");
+    let golden_cc_dur =
+        golden["squadAppliedCrowdControlDuration"].as_f64().expect("squadAppliedCrowdControlDuration");
+
+    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = analyze(&enc, &raw);
+
+    let cc_applied: u32 = metrics.players.iter().map(|p| p.cc_applied).sum();
+    let cc_duration_ms: u64 = metrics.players.iter().map(|p| p.cc_duration_ms).sum();
+
+    assert!(
+        rel_close_cc(cc_applied as f64, golden_cc),
+        "squad cc_applied {cc_applied} not within {CC_RELATIVE_TOLERANCE} relative of golden {golden_cc}"
+    );
+    assert!(
+        rel_close_cc(cc_duration_ms as f64, golden_cc_dur),
+        "squad cc_duration_ms {cc_duration_ms} not within {CC_RELATIVE_TOLERANCE} relative of golden {golden_cc_dur}"
+    );
+
+    println!(
+        "cc_matches_ei_golden: cc_applied={cc_applied} (golden {golden_cc}), \
+         cc_duration_ms={cc_duration_ms} (golden {golden_cc_dur})"
+    );
+}
+
+/// Task 3 (M2): CBTS_STUNBREAK sanity check against the real fixture.
+///
+/// The golden EI JSON reports 20 stun breaks / ~16.9s (16907ms) of removed
+/// stun duration across the 41 friendly players in this log
+/// (`support[0].stunBreak`/`removedStunDuration`, summed). This asserts our
+/// own decode of the real `CBTS_STUNBREAK` (sc=56) event stream is nonzero
+/// and lands close to that same total — not a strict equality requirement
+/// (arcdps/EI may attribute a small number of edge-case events, e.g.
+/// ally-redirected stun breaks, differently), but "plausible" per the task
+/// brief.
+#[test]
+fn stun_breaks_are_plausible_on_local_fixture() {
+    let bytes = match std::fs::read(FIXTURE_PATH) {
+        Ok(b) => b,
+        Err(_) => {
+            println!("skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run stun_breaks_are_plausible_on_local_fixture)");
+            return;
+        }
+    };
+
+    let golden_str = std::fs::read_to_string(GOLDEN_JSON_PATH)
+        .unwrap_or_else(|e| panic!("read golden fixture {GOLDEN_JSON_PATH}: {e}"));
+    let golden: serde_json::Value =
+        serde_json::from_str(&golden_str).expect("parse golden EI JSON");
+    let golden_sb = golden["squadStunBreak"].as_f64().expect("squadStunBreak");
+    let golden_rsd_ms = golden["squadRemovedStunDuration"].as_f64().expect("squadRemovedStunDuration") * 1000.0;
+
+    let raw = decode_raw(&bytes).expect("decode local WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = analyze(&enc, &raw);
+
+    let stun_breaks: u32 = metrics.players.iter().map(|p| p.stun_breaks).sum();
+    let removed_stun_duration_ms: u64 = metrics.players.iter().map(|p| p.removed_stun_duration_ms).sum();
+
+    assert!(stun_breaks > 0, "expected at least one CBTS_STUNBREAK event in the fixture");
+    assert!(
+        rel_close_cc(stun_breaks as f64, golden_sb),
+        "squad stun_breaks {stun_breaks} not within {CC_RELATIVE_TOLERANCE} relative of golden {golden_sb}"
+    );
+    assert!(
+        rel_close_cc(removed_stun_duration_ms as f64, golden_rsd_ms),
+        "squad removed_stun_duration_ms {removed_stun_duration_ms} not within {CC_RELATIVE_TOLERANCE} relative of golden {golden_rsd_ms}"
+    );
+
+    println!(
+        "stun_breaks_are_plausible_on_local_fixture: stun_breaks={stun_breaks} (golden {golden_sb}), \
+         removed_stun_duration_ms={removed_stun_duration_ms} (golden {golden_rsd_ms})"
     );
 }

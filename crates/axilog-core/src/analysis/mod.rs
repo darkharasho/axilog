@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: f64,
     pub per_enemy: Vec<(u64,u64)>, pub downs_dealt: u32, pub kills_dealt: u32,
     pub down_contribution: u64, pub downs_taken: u32, pub deaths: u32,
-    pub damage_taken: u64, pub cc_applied: u32, pub cc_duration_ms: u64 }
+    pub damage_taken: u64, pub cc_applied: u32, pub cc_duration_ms: u64,
+    pub stun_breaks: u32, pub removed_stun_duration_ms: u64 }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }

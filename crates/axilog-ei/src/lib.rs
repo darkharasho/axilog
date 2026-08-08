@@ -57,6 +57,16 @@ pub fn to_ei_json(report: &Report) -> Value {
             "downCount": p.downs_taken,
             "deadCount": p.deaths,
             "damageTaken": p.damage_taken
+        } ],
+        // EI places stun-break stats under `support`, not `defenses` — verified
+        // against GW2EI's `SupportAllStatistics` (StunBreakCount /
+        // RemovedStunDuration) and the real dps.report EI JSON for the golden
+        // WvW fixture (`support[0].stunBreak` / `support[0].removedStunDuration`,
+        // not `defenses[0]`). `removedStunDuration` is EI's convention of
+        // seconds (our native schema tracks whole ms).
+        "support": [ {
+            "stunBreak": p.cc.stun_breaks,
+            "removedStunDuration": p.cc.removed_stun_duration_ms as f64 / 1000.0
         } ]
     })).collect();
     let targets: Vec<Value> = report.enemies.iter().map(|e| json!({

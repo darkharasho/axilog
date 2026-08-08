@@ -25,6 +25,16 @@ pub mod sc {
     /// index 74 in `enum cbtstatechange`. Cross-checked against GW2EI's
     /// `ArcDPSEnums.StateChange.WvWTeams = 74`.
     pub const WVW_TEAMS: u8 = 74;
+    /// Stun-break notification ("disable stopped early" per the arcdps
+    /// reference comment). Verified against the arcdps EVTC reference the
+    /// same way: `CBTS_STUNBREAK` is index 56 in `enum cbtstatechange`.
+    /// Cross-checked against GW2EI's `ArcDPSEnums.StateChange.StunBreak =
+    /// 56`. Payload (from the arcdps reference + GW2EI's `StunBreakEvent`,
+    /// which reads `RemainingDuration = evtcItem.Value`): `src_agent` is
+    /// the agent whose stun broke early; `value` is the remaining stun
+    /// duration in ms that was cancelled by the break (0 if none is
+    /// reported).
+    pub const STUN_BREAK: u8 = 56;
 }
 pub mod result {
     // combat result values (verified against arcdps cbtresult enum order)

@@ -29,7 +29,8 @@ pub struct DamageOut { pub total: u64, pub dps: f64, pub per_enemy: Vec<PerEnemy
 #[derive(Serialize)]
 pub struct PerEnemyOut { pub enemy_id: u64, pub total: u64 }
 #[derive(Serialize)]
-pub struct CcOut { pub applied_total: u32, pub applied_duration_ms: u64 }
+pub struct CcOut { pub applied_total: u32, pub applied_duration_ms: u64,
+    pub stun_breaks: u32, pub removed_stun_duration_ms: u64 }
 #[derive(Serialize)]
 pub struct PlayerOut { pub account: String, pub character: String, pub profession: String,
     pub elite_spec: String, pub team: String, pub subgroup: u8, pub in_squad: bool,
@@ -67,7 +68,9 @@ pub fn build_report(enc: &Encounter, metrics: &Metrics, axilog_version: &str) ->
             deaths: m.map(|m| m.deaths).unwrap_or(0),
             damage_taken: m.map(|m| m.damage_taken).unwrap_or(0),
             cc: CcOut { applied_total: m.map(|m| m.cc_applied).unwrap_or(0),
-                        applied_duration_ms: m.map(|m| m.cc_duration_ms).unwrap_or(0) },
+                        applied_duration_ms: m.map(|m| m.cc_duration_ms).unwrap_or(0),
+                        stun_breaks: m.map(|m| m.stun_breaks).unwrap_or(0),
+                        removed_stun_duration_ms: m.map(|m| m.removed_stun_duration_ms).unwrap_or(0) },
         }
     }).collect();
     Report {
