@@ -31,9 +31,11 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace --target ${{ matrix.target }}
 
-      # No local .zevtc fixture is present in CI (fixtures/local/ is
-      # gitignored, PII), so the golden parity test and the repointed
-      # fixture-based tests print a skip message and pass rather than run.
+      # Golden/calibration tests run for real in CI against the committed,
+      # PII-safe fixture (fixtures/wvw-small.anon.zevtc — see Task 5, M2's
+      # anonymize subcommand). The real raw .zevtc (fixtures/local/, PII) is
+      # gitignored and never present here; the handful of tests that also
+      # optionally re-check against it print a skip message in that case.
       - name: Test workspace
         run: cargo test --workspace
 

@@ -1,18 +1,15 @@
 use std::process::Command;
 
-const FIXTURE_PATH: &str = concat!(
+const ANON_FIXTURE_PATH: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
+const LOCAL_FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/local/wvw-small.zevtc"
 );
 
-#[test]
-fn parses_fixture_to_json() {
-    if std::fs::metadata(FIXTURE_PATH).is_err() {
-        println!("skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run this test)");
-        return;
-    }
+fn check_parses_fixture_to_json(fixture_path: &str) {
     let out = Command::new(env!("CARGO_BIN_EXE_axilog"))
-        .args(["parse", FIXTURE_PATH])
+        .args(["parse", fixture_path])
         .output()
         .expect("run axilog");
     assert!(
@@ -25,20 +22,98 @@ fn parses_fixture_to_json() {
     assert!(v["players"].as_array().unwrap().len() > 0);
 }
 
+/// Committed, PII-safe fixture — always present, so this runs in CI too
+/// (Task 5, M2).
 #[test]
-fn table_and_csv_have_headers() {
-    if std::fs::metadata(FIXTURE_PATH).is_err() {
-        println!("skip: fixtures/local/wvw-small.zevtc absent (set up local fixture to run this test)");
+fn parses_fixture_to_json() {
+    check_parses_fixture_to_json(ANON_FIXTURE_PATH);
+}
+
+/// Belt-and-braces: when the real local raw fixture is also present
+/// (gitignored, PII, dev-only), parse it too.
+#[test]
+fn parses_local_raw_fixture_to_json_when_present() {
+    if std::fs::metadata(LOCAL_FIXTURE_PATH).is_err() {
+        println!("skip: {LOCAL_FIXTURE_PATH} absent (local-only extra check)");
         return;
     }
-    // Build a report via the library path is out of scope for a bin test;
-    // instead run the binary against the fixture.
+    check_parses_fixture_to_json(LOCAL_FIXTURE_PATH);
+}
+
+fn check_table_and_csv_have_headers(fixture_path: &str) {
     for (fmt, needle) in [("table", "DPS"), ("csv", "account,")] {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_axilog"))
-            .args(["parse", FIXTURE_PATH, "--format", fmt])
+            .args(["parse", fixture_path, "--format", fmt])
             .output().unwrap();
         assert!(out.status.success());
         let s = String::from_utf8_lossy(&out.stdout);
         assert!(s.contains(needle), "format {fmt} missing {needle}");
     }
+}
+
+#[test]
+fn table_and_csv_have_headers() {
+    check_table_and_csv_have_headers(ANON_FIXTURE_PATH);
+}
+
+#[test]
+fn table_and_csv_have_headers_local_raw_when_present() {
+    if std::fs::metadata(LOCAL_FIXTURE_PATH).is_err() {
+        println!("skip: {LOCAL_FIXTURE_PATH} absent (local-only extra check)");
+        return;
+    }
+    check_table_and_csv_have_headers(LOCAL_FIXTURE_PATH);
+}
+
+/// Task 5 (M2): the `anonymize` subcommand itself, exercised against the
+/// already-anonymized committed fixture (always present, so this runs in
+/// CI — running it on an already-`Anon<N>`-named file just re-anonymizes to
+/// new `Anon<N>` values, a fine, deterministic roundtrip to exercise the
+/// subcommand end-to-end). Confirms: exit success, output is a decodable
+/// .zevtc, and every metric-bearing field is unchanged (names never feed
+/// metrics).
+#[test]
+fn anonymize_subcommand_roundtrips_metrics() {
+    let dir = std::env::temp_dir();
+    let out_path = dir.join(format!("axilog-anonymize-test-{}.zevtc", std::process::id()));
+
+    let out = Command::new(env!("CARGO_BIN_EXE_axilog"))
+        .args(["anonymize", ANON_FIXTURE_PATH, out_path.to_str().unwrap()])
+        .output()
+        .expect("run axilog anonymize");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(out_path.exists(), "anonymize subcommand did not write an output file");
+
+    let before = Command::new(env!("CARGO_BIN_EXE_axilog"))
+        .args(["parse", ANON_FIXTURE_PATH])
+        .output()
+        .expect("run axilog parse (before)");
+    let after = Command::new(env!("CARGO_BIN_EXE_axilog"))
+        .args(["parse", out_path.to_str().unwrap()])
+        .output()
+        .expect("run axilog parse (after)");
+    let _ = std::fs::remove_file(&out_path);
+
+    assert!(before.status.success());
+    assert!(after.status.success());
+    let mut v_before: serde_json::Value = serde_json::from_slice(&before.stdout).unwrap();
+    let mut v_after: serde_json::Value = serde_json::from_slice(&after.stdout).unwrap();
+
+    // Strip name fields (expected to differ — re-anonymized to fresh
+    // Anon<N> values) before comparing the rest of the report.
+    for v in [&mut v_before, &mut v_after] {
+        if let Some(players) = v["players"].as_array_mut() {
+            for p in players {
+                p.as_object_mut().unwrap().remove("account");
+                p.as_object_mut().unwrap().remove("character");
+            }
+        }
+        if let Some(enemies) = v["enemies"].as_array_mut() {
+            for e in enemies {
+                e.as_object_mut().unwrap().remove("name");
+            }
+        }
+        v["encounter"]["recorded_by"] = serde_json::Value::Null;
+    }
+    assert_eq!(v_before, v_after, "anonymize subcommand must not change any metric-bearing field");
 }

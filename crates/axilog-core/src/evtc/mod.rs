@@ -1,12 +1,16 @@
 pub mod agent;
+pub mod anonymize;
 pub mod container;
 pub mod event;
+pub mod guid;
 pub mod header;
 pub mod skill;
 
 pub use agent::{decode_agents, RawAgent};
+pub use anonymize::{anon_account, anon_character, anonymize_raw_evtc, zip_deflate, zip_stored};
 pub use container::{decode_raw, inflate_zevtc};
 pub use event::{decode_events, result, sc, RawEvent};
+pub use guid::{decode_guid_mappings, ContentType, GuidMapping};
 pub use header::{decode_header, RawHeader};
 pub use skill::{decode_skills, RawSkill};
 
@@ -27,6 +31,12 @@ pub struct RawLog {
     pub agents: Vec<RawAgent>,
     pub skills: Vec<RawSkill>,
     pub events: Vec<RawEvent>,
+    /// `CBTS_IDTOGUID` (sc=46) content-local-id -> stable-GUID associations
+    /// decoded from `events` (Task 2b). Retained for TEAM (used by
+    /// `wvw::apply` to attach a stable GUID to each detected team) as well
+    /// as SKILL/SPECIES/EFFECT/MARKER/EMOTE/TRANSFORMATION, which are
+    /// unused today but kept for M3 (stable buff/skill identity).
+    pub guid_map: Vec<GuidMapping>,
 }
 
 #[derive(Debug, thiserror::Error)]

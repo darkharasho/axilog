@@ -1,6 +1,6 @@
 use super::{
-    decode_agents, decode_events, decode_header, decode_skills, EvtcError, RawLog, AGENT_SIZE,
-    EVENT_SIZE_REV1, HEADER_SIZE, SKILL_SIZE,
+    decode_agents, decode_events, decode_guid_mappings, decode_header, decode_skills, EvtcError,
+    RawLog, AGENT_SIZE, EVENT_SIZE_REV1, HEADER_SIZE, SKILL_SIZE,
 };
 use std::io::Read;
 
@@ -91,7 +91,8 @@ pub fn decode_raw(bytes: &[u8]) -> Result<RawLog, EvtcError> {
     let remaining = data.len() - off;
     let event_count = remaining / EVENT_SIZE_REV1;
     let events = decode_events(&data[off..], event_count)?;
-    Ok(RawLog { header, agents, skills, events })
+    let guid_map = decode_guid_mappings(&events);
+    Ok(RawLog { header, agents, skills, events, guid_map })
 }
 
 #[cfg(test)]

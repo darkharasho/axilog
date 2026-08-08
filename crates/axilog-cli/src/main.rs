@@ -16,6 +16,13 @@ enum Cmd {
         #[arg(long, value_enum, default_value_t = Format::Json)]
         format: Format,
     },
+    /// Rewrite every player's character/account name in a .zevtc to a
+    /// deterministic `Anon<N>` placeholder and write the result as a new
+    /// .zevtc. All other bytes (including every combat event) are
+    /// preserved byte-for-byte, so analysis output is identical to the
+    /// original — useful for producing PII-safe fixtures for bug reports,
+    /// sharing logs, or committing test fixtures.
+    Anonymize { input: PathBuf, output: PathBuf },
 }
 
 #[derive(Copy, Clone, ValueEnum)]
@@ -44,6 +51,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Format::Table => print!("{}", axilog_cli_table(&report)),
                 Format::Csv => print!("{}", axilog_cli_csv(&report)),
             }
+        }
+        Cmd::Anonymize { input, output } => {
+            let bytes = std::fs::read(&input)?;
+            let mut data = axilog_core::evtc::inflate_zevtc(&bytes)?;
+            let n = axilog_core::evtc::anonymize_raw_evtc(&mut data)?;
+            let entry_name = output
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("log");
+            let zipped = axilog_core::evtc::zip_deflate(&format!("{entry_name}.evtc"), &data);
+            std::fs::write(&output, zipped)?;
+            eprintln!("anonymized {n} player agent(s): {} -> {}", input.display(), output.display());
         }
     }
     Ok(())
