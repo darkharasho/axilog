@@ -81,6 +81,7 @@ pub fn decode_raw(bytes: &[u8]) -> Result<RawLog, EvtcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn passthrough_raw_evtc() {
         // A raw buffer already starting with EVTC is returned unchanged.
@@ -91,5 +92,129 @@ mod tests {
         b.push(0);
         let out = inflate_zevtc(&b).unwrap();
         assert_eq!(&out[0..4], b"EVTC");
+    }
+
+    /// Builds a 16-byte header: "EVTC" + "20260114" + revision + boss_id (LE u16) + skip byte.
+    fn build_header(revision: u8) -> Vec<u8> {
+        let mut b = Vec::with_capacity(HEADER_SIZE);
+        b.extend_from_slice(b"EVTC20260114");
+        b.push(revision);
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.push(0);
+        assert_eq!(b.len(), HEADER_SIZE);
+        b
+    }
+
+    /// Builds a synthetic raw EVTC buffer with 2 agents, 1 skill, 2 events so the
+    /// offset walk in `decode_raw` can be exercised without an external fixture.
+    fn build_synthetic_log() -> Vec<u8> {
+        let mut b = build_header(1);
+
+        // agent_count = 2
+        b.extend_from_slice(&2u32.to_le_bytes());
+        // agent 0: addr = 0x1111, is_elite = 27 (player-ish)
+        let mut a0 = vec![0u8; AGENT_SIZE];
+        a0[0..8].copy_from_slice(&0x1111u64.to_le_bytes());
+        a0[12..16].copy_from_slice(&27u32.to_le_bytes());
+        b.extend_from_slice(&a0);
+        // agent 1: addr = 0x2222, is_elite = 27
+        let mut a1 = vec![0u8; AGENT_SIZE];
+        a1[0..8].copy_from_slice(&0x2222u64.to_le_bytes());
+        a1[12..16].copy_from_slice(&27u32.to_le_bytes());
+        b.extend_from_slice(&a1);
+
+        // skill_count = 1
+        b.extend_from_slice(&1u32.to_le_bytes());
+        let mut s0 = vec![0u8; SKILL_SIZE];
+        s0[0..4].copy_from_slice(&12345u32.to_le_bytes());
+        let name = b"Fireball";
+        s0[4..4 + name.len()].copy_from_slice(name);
+        b.extend_from_slice(&s0);
+
+        // 2 events, distinct `time` fields
+        let mut e0 = vec![0u8; EVENT_SIZE_REV1];
+        e0[0..8].copy_from_slice(&1000u64.to_le_bytes());
+        b.extend_from_slice(&e0);
+        let mut e1 = vec![0u8; EVENT_SIZE_REV1];
+        e1[0..8].copy_from_slice(&2000u64.to_le_bytes());
+        b.extend_from_slice(&e1);
+
+        b
+    }
+
+    #[test]
+    fn decode_raw_walks_offsets_correctly() {
+        let buf = build_synthetic_log();
+        let raw = decode_raw(&buf).unwrap();
+
+        assert_eq!(raw.header.revision, 1);
+
+        assert_eq!(raw.agents.len(), 2);
+        assert_eq!(raw.agents[0].addr, 0x1111);
+        assert_eq!(raw.agents[0].is_elite, 27);
+        assert_eq!(raw.agents[1].addr, 0x2222);
+        assert_eq!(raw.agents[1].is_elite, 27);
+
+        assert_eq!(raw.skills.len(), 1);
+        assert_eq!(raw.skills[0].id, 12345);
+        assert_eq!(raw.skills[0].name, "Fireball");
+
+        assert_eq!(raw.events.len(), 2);
+        assert_eq!(raw.events[0].time, 1000);
+        assert_eq!(raw.events[1].time, 2000);
+    }
+
+    #[test]
+    fn decode_raw_rejects_unsupported_revision() {
+        let mut buf = build_header(0);
+        // agent_count = 0, skill_count = 0, no events
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        let err = decode_raw(&buf).unwrap_err();
+        match err {
+            EvtcError::UnsupportedRevision(rev) => assert_eq!(rev, 0),
+            other => panic!("expected UnsupportedRevision, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inflate_zevtc_bare_deflate_fallback() {
+        use std::io::Write;
+        let original = b"hello arcdps combat log bytes";
+        let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(original).unwrap();
+        let compressed = enc.finish().unwrap();
+
+        // Not "EVTC" and not "PK" -> falls back to bare deflate decode.
+        assert_ne!(&compressed[0..2], b"PK");
+        let out = inflate_zevtc(&compressed).unwrap();
+        assert_eq!(out, original);
+    }
+
+    #[test]
+    fn inflate_zevtc_zip_wrapped_deflate() {
+        use std::io::Write;
+        let original = b"raw evtc payload";
+        let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(original).unwrap();
+        let compressed = enc.finish().unwrap();
+
+        let name = b"log.evtc";
+        let mut zip = Vec::new();
+        zip.extend_from_slice(b"PK\x03\x04"); // local file header signature
+        zip.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        zip.extend_from_slice(&0u16.to_le_bytes()); // flags
+        zip.extend_from_slice(&8u16.to_le_bytes()); // method = deflate
+        zip.extend_from_slice(&0u32.to_le_bytes()); // mod time+date
+        zip.extend_from_slice(&0u32.to_le_bytes()); // crc32 (unchecked by our reader)
+        zip.extend_from_slice(&(compressed.len() as u32).to_le_bytes()); // csize
+        zip.extend_from_slice(&(original.len() as u32).to_le_bytes()); // usize
+        zip.extend_from_slice(&(name.len() as u16).to_le_bytes()); // namelen
+        zip.extend_from_slice(&0u16.to_le_bytes()); // extralen
+        zip.extend_from_slice(name);
+        zip.extend_from_slice(&compressed);
+
+        let out = inflate_zevtc(&zip).unwrap();
+        assert_eq!(out, original);
     }
 }
