@@ -1,6 +1,6 @@
 {
   "_source": "axibridge test-fixtures/boon/20260117-181030.json (dps.report EI JSON, accounts anonymized)",
-  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index \u2014 the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`.",
+  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index — the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against.",
   "fightName": "World vs World - Green Alpine Borderlands",
   "durationMS": 49285,
   "friendlyPlayerCount": 41,
@@ -9,6 +9,10 @@
   "squadAppliedCrowdControlDuration": 50460,
   "squadStunBreak": 20,
   "squadRemovedStunDuration": 16.907,
+  "squadCondiCleanse": 801,
+  "squadCondiCleanseSelf": 97,
+  "squadBoonStrips": 437,
+  "squadResurrects": 6,
   "players": [
     {
       "account": "Anon132.5884",
@@ -71,6 +75,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 2,
+        "resurrects": 0
       }
     },
     {
@@ -134,6 +144,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 93,
+        "condiCleanseSelf": 10,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -197,6 +213,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 68,
+        "resurrects": 1
       }
     },
     {
@@ -260,6 +282,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 9,
+        "condiCleanseSelf": 6,
+        "boonStrips": 0,
+        "resurrects": 1
       }
     },
     {
@@ -323,6 +351,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 76,
+        "condiCleanseSelf": 3,
+        "boonStrips": 1,
+        "resurrects": 0
       }
     },
     {
@@ -386,6 +420,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 75,
+        "resurrects": 0
       }
     },
     {
@@ -449,6 +489,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 40,
+        "condiCleanseSelf": 5,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -512,6 +558,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 18,
+        "condiCleanseSelf": 1,
+        "boonStrips": 48,
+        "resurrects": 0
       }
     },
     {
@@ -575,6 +627,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 25,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 1
       }
     },
     {
@@ -638,6 +696,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 27,
+        "condiCleanseSelf": 4,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -701,6 +765,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 53,
+        "resurrects": 0
       }
     },
     {
@@ -764,6 +834,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 21,
+        "condiCleanseSelf": 9,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -827,6 +903,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 56,
+        "condiCleanseSelf": 2,
+        "boonStrips": 1,
+        "resurrects": 1
       }
     },
     {
@@ -890,6 +972,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 31,
+        "resurrects": 0
       }
     },
     {
@@ -953,6 +1041,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 1
       }
     },
     {
@@ -1016,6 +1110,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 5,
+        "condiCleanseSelf": 0,
+        "boonStrips": 26,
+        "resurrects": 0
       }
     },
     {
@@ -1079,6 +1179,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 20,
+        "condiCleanseSelf": 6,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -1142,6 +1248,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 37,
+        "condiCleanseSelf": 1,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -1205,6 +1317,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 2,
+        "condiCleanseSelf": 3,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -1268,6 +1386,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 1,
+        "boonStrips": 54,
+        "resurrects": 0
       }
     },
     {
@@ -1331,6 +1455,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 2,
+        "condiCleanseSelf": 2,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -1394,6 +1524,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 66,
+        "condiCleanseSelf": 2,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -1457,6 +1593,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 4,
+        "condiCleanseSelf": 5,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -1520,6 +1662,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 18,
+        "condiCleanseSelf": 5,
+        "boonStrips": 1,
+        "resurrects": 0
       }
     },
     {
@@ -1583,6 +1731,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 28,
+        "condiCleanseSelf": 8,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -1646,6 +1800,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 50,
+        "condiCleanseSelf": 1,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -1709,6 +1869,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 2,
+        "boonStrips": 34,
+        "resurrects": 0
       }
     },
     {
@@ -1772,6 +1938,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 40,
+        "resurrects": 0
       }
     },
     {
@@ -1835,6 +2007,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 56,
+        "condiCleanseSelf": 6,
+        "boonStrips": 0,
+        "resurrects": 1
       }
     },
     {
@@ -1898,6 +2076,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 1,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -1961,6 +2145,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 21,
+        "condiCleanseSelf": 4,
+        "boonStrips": 1,
+        "resurrects": 0
       }
     },
     {
@@ -2024,6 +2214,12 @@
           "uptime": 37.383,
           "presence": 0
         }
+      },
+      "support": {
+        "condiCleanse": 13,
+        "condiCleanseSelf": 1,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -2087,6 +2283,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 4,
+        "condiCleanseSelf": 2,
+        "boonStrips": 1,
+        "resurrects": 0
       }
     },
     {
@@ -2150,6 +2352,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 42,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -2213,6 +2421,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 20,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -2276,6 +2490,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 23,
+        "condiCleanseSelf": 7,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -2339,6 +2559,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 1,
+        "resurrects": 0
       }
     },
     {
@@ -2402,6 +2628,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 15,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -2465,6 +2697,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 10,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -2528,6 +2766,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     },
     {
@@ -2591,6 +2835,12 @@
           "uptime": 0.0,
           "presence": 0.0
         }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
       }
     }
   ]

@@ -2,6 +2,7 @@ pub mod damage;
 pub mod downs;
 pub mod cc;
 pub mod buffs;
+pub mod support;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -12,7 +13,10 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     pub per_enemy: Vec<(u64,u64)>, pub downs_dealt: u32, pub kills_dealt: u32,
     pub down_contribution: u64, pub downs_taken: u32, pub deaths: u32,
     pub damage_taken: u64, pub cc_applied: u32, pub cc_duration_ms: u64,
-    pub stun_breaks: u32, pub removed_stun_duration_ms: u64 }
+    pub stun_breaks: u32, pub removed_stun_duration_ms: u64,
+    /// Condition cleanses / boon strips / resurrects (M3, Task 3) -- see
+    /// `support::SupportMetrics`.
+    pub support: support::SupportMetrics }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
@@ -96,6 +100,7 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     }).collect();
     downs::apply(&mut players, enc, raw, &squad, &enemies, &addr_to_rep);
     cc::apply_cc(&mut players, raw, &squad, &enemies, &addr_to_rep);
+    support::apply(&mut players, raw, enc, &enemies, &addr_to_rep);
     let timeline = cc::timeline(enc, raw, &squad, &enemies);
     // Computed last, after every other pass, per the Task 1 brief -- does
     // not read or alter `players`/`timeline` above.
