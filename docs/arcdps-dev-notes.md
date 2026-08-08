@@ -11,6 +11,7 @@ status and is folded into a milestone task when applicable. Newest last.
 | 4 | `CBTS_MARKER` provides above-target markers; EI probably has the squad-marker GUIDs in an enum somewhere. | Planned — M2 Task 7 (decode marker statechange, resolve marker GUIDs via IDTOGUID MARKER mappings, cross-reference EI's squad-marker GUID enum, expose per-agent marker in native schema). |
 | 5 | `CBTS_MARKER` also yields the commander tag's GUID — use it to show the tag's cat/colour variant. | Planned — folded into M2 Task 7 (commander-tag GUID → colour/variant name table; native schema `commander_tag` with variant; EI JSON can't express this — native-only). |
 | 6 | Eye candy: `CBTS_TRANSFORMATION` + `CBTS_GLIDER` can be used for mounts and glider respectively. | Backlog — cosmetic; slot into the combat-replay/HTML-report milestone where mounted/gliding state actually renders. TRANSFORMATION GUIDs resolve via IDTOGUID (type 6). |
+| 7 | `CBTS_TICK` would be nice in a corner to show tick rate. | Data in M2 Task 7 (native schema `encounter.tick_rate { avg, min, per_second[] }` — tick dips = objective skill-lag signal in large WvW fights); corner-widget display deferred to the HTML-report milestone. |
 
 ## Notes
 

@@ -190,6 +190,12 @@ bare `commander: bool` presentation with an additional optional `commander_tag`
 `{ variant: String, guid: String }` (keep the bool for compatibility). Unknown GUIDs fall back to
 the hex string. This is native-only differentiation — EI adapter unchanged.
 
+**CBTS_TICK tick rate (arcdps-dev guidance):** verify the statechange value/payload from the
+arcdps EVTC reference (likely src_agent or value = ms-per-tick or tick counter). Compute
+`encounter.tick_rate { avg, min, per_second[] }` in the native schema — tick-rate dips are the
+objective signature of server skill-lag in large WvW fights. Skip gracefully (omit field) when
+the log has no tick events. Synthetic-event unit test; fixture assertion conditional.
+
 ## Self-Review
 Covered all five spec items (names, tables, CC, dedupe/pets, fixture) + adapter/docs. Calibration
 targets embedded verbatim (34/50460, map 95, team 2767, damage 2,138,414). No placeholders; each
