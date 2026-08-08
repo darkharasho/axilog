@@ -131,6 +131,134 @@ pub mod sc {
     /// 5-9 `simulator::capacity_for` previously assumed -- see
     /// `analysis::buffs::events::extract_buff_capacities`.
     pub const BUFF_INFO: u8 = 30;
+    /// Post-rework (arcdps build >= 20260501, GW2EI's
+    /// `ArcDPSBuilds.BuffAppliesAndRemovesAsStateChanges`) dedicated buff
+    /// STACK APPLICATION statechange -- see `BUFF_INITIAL`'s doc comment
+    /// for the full version-split background. Verified against the live
+    /// arcdps EVTC reference (`curl
+    /// https://www.deltaconnected.com/arcdps/evtc/README.txt`,
+    /// 2026-08-08): hand-counting `enum cbtstatechange` entries from
+    /// `CBTS_COMBAT = 0`, `CBTS_BUFFAPPLY` is the 70th entry (index 69).
+    /// Cross-checked against GW2EI's `ArcDPSEnums.StateChange.BuffApply =
+    /// 69` (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:329`).
+    ///
+    /// Payload, per the arcdps reference (`README.txt`, `CBTS_BUFFAPPLY`
+    /// block): `src_agent`: agent applying the stack; `dst_agent`: agent
+    /// the stack was applied to; `value`: ms duration applied; `skillid`:
+    /// buff skill id; `is_shields`: non-zero if buff is active when
+    /// applied; `pad61`: trackable id (per-stack instance id -- NOT
+    /// decoded by this project, same simplification already documented on
+    /// `RawEvent::is_offcycle`/the pre-era `Extend` doc comment for
+    /// `pad61`/instance-id fields).
+    ///
+    /// Field roles verified identical to the pre-era `buff == 1` apply
+    /// shape (owner = `dst_agent`, applier = `src_agent`): GW2EI's
+    /// `AbstractBuffApplyEvent(CombatItem evtcItem, ...)` ctor
+    /// (`ParsedData/CombatEvents/BuffEvents/BuffApplies/
+    /// AbstractBuffApplyEvent.cs`) reads `By = SrcAgent`, `To = DstAgent`
+    /// unconditionally from the raw event -- this is the SAME constructor
+    /// used for both eras (`BuffApplyEvent`/`BuffExtensionEvent` both
+    /// derive from it), so the src/dst roles do NOT flip post-rework.
+    /// `is_shields` likewise round-trips through the same shared
+    /// `BuffApplyEvent` ctor (`_addedActive = evtcItem.IsShields > 0`),
+    /// unaffected by era.
+    ///
+    /// Dispatch: GW2EI's `CombatEventFactory.AddBuffApplyEvent`'s
+    /// post-`BuffAppliesAndRemovesAsStateChanges` branch
+    /// (`CombatEventFactory.cs:645-654`) routes every apply-shaped
+    /// statechange (`BuffApply` OR `BuffInitial`) EXCEPT `BuffChange`
+    /// (see `BUFF_CHANGE` below) to a plain `BuffApplyEvent` -- i.e.
+    /// unlike the pre-era shape, `is_offcycle` is NOT consulted at all for
+    /// post-era apply routing (the dedicated `BuffChange` statechange
+    /// replaces that flag).
+    pub const BUFF_APPLY: u8 = 69;
+    /// Post-rework dedicated buff STACK EXTENSION statechange (active-stack
+    /// duration change) -- the post-era equivalent of the pre-era
+    /// `is_offcycle != 0` apply-shaped event (see
+    /// `analysis::buffs::events::BuffEventKind::Extend`'s doc comment).
+    /// Verified against the arcdps EVTC reference: `CBTS_BUFFCHANGE` is the
+    /// 71st entry (index 70) counting from `CBTS_COMBAT = 0`. Cross-checked
+    /// against GW2EI's `ArcDPSEnums.StateChange.BuffChange = 70 //
+    /// Extension` (`ArcDPSEnums.cs:330`).
+    ///
+    /// Payload, per the arcdps reference (`CBTS_BUFFCHANGE` block):
+    /// `dst_agent`: relates to agent (the buff owner); `value`: duration
+    /// difference; `overstack_value`: new ms duration; `skillid`: buff
+    /// skill id; `pad61`: trackable id. NOTE: the live reference text does
+    /// NOT list `src_agent` in this block (unlike `CBTS_BUFFAPPLY`'s
+    /// explicit listing) -- but GW2EI's `BuffExtensionEvent` uses the SAME
+    /// `AbstractBuffApplyEvent(CombatItem evtcItem, ...)` ctor as
+    /// `BuffApplyEvent` (`ParsedData/CombatEvents/BuffEvents/BuffApplies/
+    /// BuffExtensionEvent.cs`, `AbstractBuffApplyEvent.cs`), which
+    /// unconditionally reads `By = SrcAgent`. Per this module's own
+    /// verification policy (GW2EI is the arbiter where the arcdps reference
+    /// is ambiguous/incomplete), `src_agent` IS the applier here too --
+    /// treated as a doc omission in the arcdps reference, not a real
+    /// absence of the field on the wire.
+    ///
+    /// `extended_ms` = raw event's `value` field (GW2EI:
+    /// `ExtendedDuration = Math.Max(evtcItem.Value, 0)` -- same clamp as
+    /// the pre-era `Extend` decode already applies), `new_duration_ms` =
+    /// raw event's `overstack` field (GW2EI: `NewDuration =
+    /// evtcItem.OverstackValue`) -- both fields map onto the SAME
+    /// `BuffEventKind::Extend { extended_ms, new_duration_ms }` shape the
+    /// pre-era decode already produces.
+    pub const BUFF_CHANGE: u8 = 70;
+    /// Post-rework dedicated SINGLE buff-stack removal statechange.
+    /// Verified against the arcdps EVTC reference: `CBTS_BUFFREMOVE_SINGLE`
+    /// is the 72nd entry (index 71) counting from `CBTS_COMBAT = 0`.
+    /// Cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.BuffRemoveSingle = 71 // Single or Manual`
+    /// (`ArcDPSEnums.cs:331`) -- note the GW2EI comment itself flags that
+    /// this ordinal carries BOTH removal kinds, confirmed by
+    /// `CombatEventFactory.AddBuffRemoveEvent`'s post-era branch
+    /// (`CombatEventFactory.cs:675-693`): unlike `BuffRemoveAll` (its own
+    /// dedicated statechange, see below), Single vs Manual on THIS
+    /// statechange is disambiguated by the existing `is_buffremove` byte
+    /// (`buff_remove::SINGLE` / `buff_remove::MANUAL`) exactly as the
+    /// pre-era shape already does -- only `Single` is simulator-compliant
+    /// and extracted (Manual is skipped, mirroring `buff_remove::MANUAL`'s
+    /// doc comment); unlike the pre-era shape, post-era removal dispatch
+    /// does NOT additionally require `is_activation == 0` (GW2EI's
+    /// post-era `IsBuffRemoveEvent()` checks only the statechange kind).
+    ///
+    /// Payload, per the arcdps reference (`CBTS_BUFFREMOVE_SINGLE` block):
+    /// `src_agent`: agent with buff removed (owner); `dst_agent`: agent
+    /// removing the buff (remover); `value`: ms duration removed;
+    /// `skillid`: buff skill id; `is_buffremove`: of enum cbtbuffremove;
+    /// `pad61`: trackable id. Field roles verified identical to the
+    /// pre-era SINGLE removal shape (owner = `src_agent`, remover =
+    /// `dst_agent` -- the OPPOSITE of apply): GW2EI's
+    /// `AbstractBuffRemoveEvent(CombatItem evtcItem, ...)` ctor
+    /// (`ParsedData/CombatEvents/BuffEvents/BuffRemoves/
+    /// AbstractBuffRemoveEvent.cs`) reads `By = DstAgent`, `To = SrcAgent`
+    /// unconditionally -- the SAME constructor shared by
+    /// `BuffRemoveSingleEvent`/`BuffRemoveManualEvent` in both eras.
+    /// `removed_duration_ms` = raw event's `value` field (`RemovedDuration
+    /// = evtcItem.Value`), same as pre-era.
+    pub const BUFF_REMOVE_SINGLE: u8 = 71;
+    /// Post-rework dedicated ALL buff-stacks-of-skillid removal
+    /// statechange. Verified against the arcdps EVTC reference:
+    /// `CBTS_BUFFREMOVE_ALL` is the 73rd entry (index 72) counting from
+    /// `CBTS_COMBAT = 0`. Cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.BuffRemoveAll = 72` (`ArcDPSEnums.cs:332`).
+    ///
+    /// Payload, per the arcdps reference (`CBTS_BUFFREMOVE_ALL` block):
+    /// `src_agent`: agent with buffs removed (owner); `dst_agent`: agent
+    /// removing the buffs (remover); `value`: ms duration removed
+    /// (duration calc); `buff_dmg`: ms duration removed (intensity calc);
+    /// `skillid`: buff skill id; `is_buffremove`: of enum cbtbuffremove.
+    /// Dispatch verified against `CombatEventFactory.AddBuffRemoveEvent`'s
+    /// post-era branch: a `BuffRemoveAll`-statechange row unconditionally
+    /// becomes a `BuffRemoveAllEvent` -- `is_buffremove`'s value is NOT
+    /// consulted for this statechange (unlike `BUFF_REMOVE_SINGLE` above).
+    /// Field roles (owner = `src_agent`, remover = `dst_agent`) verified
+    /// identical to pre-era ALL removal via the same shared
+    /// `AbstractBuffRemoveEvent` ctor as `BUFF_REMOVE_SINGLE`. This
+    /// project's simplified `BuffEventKind::RemoveAll` carries no duration
+    /// fields (same as the pre-era decode), so `value`/`buff_dmg` are not
+    /// extracted here either.
+    pub const BUFF_REMOVE_ALL: u8 = 72;
 }
 
 /// `is_buffremove` enum values (arcdps `enum cbtbuffremove`). Verified
