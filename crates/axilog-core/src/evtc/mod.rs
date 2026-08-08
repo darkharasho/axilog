@@ -13,7 +13,13 @@ pub use skill::{decode_skills, RawSkill};
 pub const HEADER_SIZE: usize = 16;
 pub const AGENT_SIZE:  usize = 96;
 pub const SKILL_SIZE:  usize = 68;
-pub const EVENT_SIZE_REV1: usize = 96;
+// Real arcdps `cbtevent` (revision 0/1) is 64 bytes: three u64 + four i32/u32
+// + four u16 + twelve u8 + 4 pad bytes = 64, already 8-byte aligned (no extra
+// padding). This was previously 96, which silently misaligned every event
+// after the first in real captures (decode "succeeded" but every iff/skill/
+// team/etc field downstream was garbage) — found while calibrating the WvW
+// friend/foe partition against the golden fixture (Task 16A).
+pub const EVENT_SIZE_REV1: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct RawLog {

@@ -69,26 +69,52 @@ pub fn resolve(raw: &RawLog) -> Encounter {
 
 #[cfg(test)]
 mod tests {
-    use crate::evtc::{RawLog, RawHeader, RawAgent, RawSkill};
+    use crate::evtc::{RawLog, RawHeader, RawAgent, RawEvent, sc};
     use super::resolve;
     fn agent(addr: u64, is_elite: u32, name: &[u8]) -> RawAgent {
         RawAgent { addr, prof: 5, is_elite,
             toughness:0, concentration:0, healing:0, hitbox_width:0,
             condition:0, hitbox_height:0, name_raw: name.to_vec() }
     }
+    fn team_change(addr: u64, team: u16) -> RawEvent {
+        RawEvent { time:0, src_agent:addr, dst_agent:0, value: team as i32, buff_dmg:0,
+            overstack:0, skillid:0, src_instid:0, dst_instid:0,
+            src_master_instid:0, dst_master_instid:0, iff:0, buff:0, result:0,
+            is_activation:0, is_buffremove:0, is_statechange: sc::TEAM_CHANGE }
+    }
+    fn point_of_view(addr: u64) -> RawEvent {
+        RawEvent { time:0, src_agent:addr, dst_agent:0, value:0, buff_dmg:0,
+            overstack:0, skillid:0, src_instid:0, dst_instid:0,
+            src_master_instid:0, dst_master_instid:0, iff:0, buff:0, result:0,
+            is_activation:0, is_buffremove:0, is_statechange: sc::POINT_OF_VIEW }
+    }
     #[test]
     fn splits_players_from_npcs() {
+        // The friend/foe partition (Task 16A) needs WvW team ids and a
+        // recorder (POINT_OF_VIEW) to tell squad players from enemy
+        // players — is_elite alone can't do it, since enemy players also
+        // have is_elite != 0xffffffff. Alice is on the recorder's team
+        // (100); the "Enemy Zerg" NPC is on a different team (200), so it
+        // stays classified as a hostile enemy.
         let raw = RawLog {
             header: RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 },
             agents: vec![
                 agent(1, 27, b"Alice\0:Alice.1234\05\0"), // player
                 agent(2, 0xffff_ffff, b"Enemy Zerg\0"),   // npc/enemy
             ],
-            skills: vec![], events: vec![],
+            skills: vec![],
+            events: vec![
+                point_of_view(1),
+                team_change(1, 100),
+                team_change(2, 200),
+            ],
         };
         let enc = resolve(&raw);
         assert_eq!(enc.players.len(), 1);
         assert_eq!(enc.players[0].account, ":Alice.1234");
         assert_eq!(enc.players[0].subgroup, 5);
+        assert_eq!(enc.enemies.len(), 1);
+        assert_eq!(enc.enemies[0].id, 2);
+        assert!(!enc.enemies[0].is_player);
     }
 }

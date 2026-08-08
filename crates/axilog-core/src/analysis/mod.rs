@@ -20,7 +20,18 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline }
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     let squad: BTreeSet<u64> = enc.players.iter().map(|p| p.agent_addr).collect();
     let enemies: BTreeSet<u64> = enc.enemies.iter().map(|e| e.id).collect();
-    let dmg = damage::accumulate(&raw.events, &squad, &enemies);
+    let mut dmg = damage::accumulate(&raw.events, &squad, &enemies);
+    // WvW: credit friendly pet/minion damage (arcdps attributes it to the
+    // pet's own agent) to the owning squad player — see Task 16A.
+    let (agent_team, recorded_by) = crate::wvw::resolve_teams(raw);
+    let friendly_team = recorded_by.and_then(|addr| agent_team.get(&addr).copied());
+    for (owner, (total, per)) in damage::accumulate_pet_credit(raw, &squad, friendly_team, &agent_team) {
+        let entry = dmg.entry(owner).or_default();
+        entry.0 += total;
+        for (dst, d) in per {
+            *entry.1.entry(dst).or_default() += d;
+        }
+    }
     let secs = (enc.duration_ms as f64 / 1000.0).max(1.0);
     let mut players: Vec<PlayerMetrics> = enc.players.iter().map(|p| {
         let (total, per) = dmg.get(&p.agent_addr).cloned().unwrap_or_default();

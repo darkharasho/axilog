@@ -20,6 +20,13 @@ pub mod result {
     pub const CRIT: u8 = 1;
     pub const KILLING_BLOW: u8 = 8;
     pub const DOWNED: u8 = 9;
+    /// Crowd-control application marker. arcdps synthesizes these under
+    /// generic pseudo-skills (e.g. "Generic Knockback and Pull", "Generic
+    /// Launch", "Generic Control Effect From Buff"); `value`/`buff_dmg` on
+    /// these events encode CC duration in ms, not damage. Excluded from
+    /// damage accumulation — calibrated against the golden WvW fixture
+    /// (Task 16A): including them over-counted squadTotalDamage.
+    pub const CROWD_CONTROL: u8 = 12;
 }
 
 #[derive(Debug, Clone)]
