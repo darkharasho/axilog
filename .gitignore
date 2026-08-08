@@ -1,3 +1,4 @@
+/target
 node_modules
 .env
 .env.*
@@ -7,3 +8,6 @@ build
 *.log
 .superpowers
 .sai/
+
+# local raw .zevtc fixtures (contain real account names — never commit)
+/fixtures/local/

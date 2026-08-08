@@ -1,0 +1,338 @@
+{
+  "_source": "axibridge test-fixtures/boon/20260117-181030.json (dps.report EI JSON, accounts anonymized)",
+  "_note": "Golden aggregates for axilog WvW parity. Raw .zevtc kept local (PII), not committed.",
+  "fightName": "World vs World - Green Alpine Borderlands",
+  "durationMS": 49285,
+  "friendlyPlayerCount": 41,
+  "squadTotalDamage": 2138414,
+  "players": [
+    {
+      "account": "AshenRange.6264",
+      "group": 1,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 96084,
+      "downContribution": 0
+    },
+    {
+      "account": "WiseHorizon.8292",
+      "group": 1,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 3154,
+      "downContribution": 0
+    },
+    {
+      "account": "HarborJet.5544",
+      "group": 2,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 100089,
+      "downContribution": 0
+    },
+    {
+      "account": "UmberJet.2928",
+      "group": 2,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 7250,
+      "downContribution": 0
+    },
+    {
+      "account": "IronHaven.2896",
+      "group": 2,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 14011,
+      "downContribution": 0
+    },
+    {
+      "account": "OakMeadow.2981",
+      "group": 2,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 154899,
+      "downContribution": 0
+    },
+    {
+      "account": "WildBloom.7060",
+      "group": 2,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 6848,
+      "downContribution": 0
+    },
+    {
+      "account": "IvoryDawn.4403",
+      "group": 3,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 58282,
+      "downContribution": 0
+    },
+    {
+      "account": "StormMeadow.6379",
+      "group": 3,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 8665,
+      "downContribution": 0
+    },
+    {
+      "account": "RusticCedar.1864",
+      "group": 3,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 3257,
+      "downContribution": 0
+    },
+    {
+      "account": "WiseBeacon.4080",
+      "group": 3,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 113203,
+      "downContribution": 0
+    },
+    {
+      "account": "AmberHollow.9854",
+      "group": 3,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 12284,
+      "downContribution": 0
+    },
+    {
+      "account": "GildedJourney.8223",
+      "group": 4,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 2135,
+      "downContribution": 0
+    },
+    {
+      "account": "AshenJet.4980",
+      "group": 4,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 96869,
+      "downContribution": 0
+    },
+    {
+      "account": "OakSpark.3206",
+      "group": 4,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 2513,
+      "downContribution": 0
+    },
+    {
+      "account": "WovenVale.8117",
+      "group": 4,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 162652,
+      "downContribution": 0
+    },
+    {
+      "account": "WildDrift.3267",
+      "group": 4,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 8167,
+      "downContribution": 0
+    },
+    {
+      "account": "AshenLaurel.2994",
+      "group": 5,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 9342,
+      "downContribution": 0
+    },
+    {
+      "account": "BrightSummit.6125",
+      "group": 5,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 83608,
+      "downContribution": 0
+    },
+    {
+      "account": "BrightRune.7739",
+      "group": 5,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 169689,
+      "downContribution": 0
+    },
+    {
+      "account": "GildedBloom.1887",
+      "group": 5,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 205612,
+      "downContribution": 0
+    },
+    {
+      "account": "VerdantRidge.8177",
+      "group": 5,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 6508,
+      "downContribution": 0
+    },
+    {
+      "account": "ScarletSummit.2126",
+      "group": 6,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 128440,
+      "downContribution": 0
+    },
+    {
+      "account": "RusticWillow.5785",
+      "group": 6,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 6861,
+      "downContribution": 0
+    },
+    {
+      "account": "DuskyGlen.1577",
+      "group": 6,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 2674,
+      "downContribution": 0
+    },
+    {
+      "account": "CloudShore.5668",
+      "group": 6,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 954,
+      "downContribution": 0
+    },
+    {
+      "account": "VelvetDrift.5549",
+      "group": 6,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 149607,
+      "downContribution": 0
+    },
+    {
+      "account": "RoyalFalcon.5152",
+      "group": 7,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 116532,
+      "downContribution": 0
+    },
+    {
+      "account": "WovenThorn.5639",
+      "group": 7,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 3907,
+      "downContribution": 0
+    },
+    {
+      "account": "FeralSpark.2569",
+      "group": 7,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 192437,
+      "downContribution": 0
+    },
+    {
+      "account": "SwiftShore.8351",
+      "group": 7,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 7952,
+      "downContribution": 0
+    },
+    {
+      "account": "PlacidWillow.4120",
+      "group": 7,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 1503,
+      "downContribution": 0
+    },
+    {
+      "account": "FeralHaven.4576",
+      "group": 8,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 99454,
+      "downContribution": 0
+    },
+    {
+      "account": "ZephyrLagoon.2752",
+      "group": 8,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 1055,
+      "downContribution": 0
+    },
+    {
+      "account": "HiddenThorn.9126",
+      "group": 8,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 4476,
+      "downContribution": 0
+    },
+    {
+      "account": "DaringCanyon.5440",
+      "group": 8,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 13132,
+      "downContribution": 0
+    },
+    {
+      "account": "BrightBeacon.9265",
+      "group": 8,
+      "notInSquad": false,
+      "teamID": 2767,
+      "damage": 84309,
+      "downContribution": 0
+    },
+    {
+      "account": "Non Squad Player 3",
+      "group": 51,
+      "notInSquad": true,
+      "teamID": 2767,
+      "damage": 0,
+      "downContribution": 0
+    },
+    {
+      "account": "Non Squad Player 11",
+      "group": 51,
+      "notInSquad": true,
+      "teamID": 2767,
+      "damage": 0,
+      "downContribution": 0
+    },
+    {
+      "account": "Non Squad Player 2",
+      "group": 51,
+      "notInSquad": true,
+      "teamID": 2767,
+      "damage": 0,
+      "downContribution": 0
+    },
+    {
+      "account": "Non Squad Player 10",
+      "group": 51,
+      "notInSquad": true,
+      "teamID": 2767,
+      "damage": 0,
+      "downContribution": 0
+    }
+  ]
+}
