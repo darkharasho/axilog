@@ -101,53 +101,82 @@ fn marker_display_name(local_id: u32, guid_map: &[GuidMapping]) -> (String, Opti
     }
 }
 
-/// Live commander-tag state for one agent: which variant (or hex fallback,
-/// per the brief) it currently is.
+/// One currently-open marker instance on an agent. arcdps (build >=
+/// `NewMarkerEventBehavior`, 20240418 -- see `MarkerInstance` docs on
+/// `resolve_markers`) tracks *multiple concurrent* markers per agent, not
+/// one: a player can simultaneously have a commander tag AND a squad
+/// overhead marker (e.g. the squad lieutenant target-calls the commander
+/// with Arrow -- routine in WvW). `is_commander` (from `buff == 1`)
+/// distinguishes which "slot" this instance occupies for the purposes of
+/// `final_marker`/`final_commander_tag` below.
 #[derive(Debug, Clone)]
-pub(crate) struct LiveCommanderTag {
-    variant: String,
-    guid: String,
+pub(crate) struct MarkerInstance {
+    /// Content-local marker id (`value`) -- used only to detect a repeat
+    /// assignment of the *same* marker id, which replaces (does not
+    /// duplicate) the earlier open instance, mirroring GW2EI's "We can't
+    /// have the same markers active at the same time on one Src".
+    marker_id: i32,
+    name: String,
+    guid_hex: Option<String>,
+    is_commander: bool,
+    /// Resolved commander-tag variant (or hex/decimal fallback), only
+    /// meaningful when `is_commander`.
+    commander_variant: Option<String>,
+    /// Assignment time -- used to pick the freshest instance across a
+    /// deduped account's several raw addrs (relogs/build-swaps), and
+    /// (among same-slot instances on one addr) the most recently assigned.
+    start_ms: u64,
 }
 
-/// One agent's currently-assigned marker plus, if it happens to be a
-/// commander tag, the resolved variant.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct CurrentMarker {
-    name: Option<String>,
-    commander_tag: Option<LiveCommanderTag>,
-    /// `time` of the assignment that produced this state -- used to pick
-    /// the freshest state across a deduped account's several raw addrs
-    /// (relogs/build-swaps).
-    time_ms: u64,
-}
-
-/// Decoded `CBTS_MARKER` state: each agent's final (last-assigned, not yet
-/// removed) marker/commander-tag, plus the full chronological assignment
-/// list for `Encounter.markers`.
+/// Decoded `CBTS_MARKER` state: each agent's currently-open marker
+/// instances (Task 7 fix round 1: a `Vec`, not a single slot -- see
+/// `resolve_markers`), plus the full chronological assignment list for
+/// `Encounter.markers`.
 pub(crate) struct MarkerResolution {
-    pub current: BTreeMap<u64, CurrentMarker>,
+    pub(crate) open: BTreeMap<u64, Vec<MarkerInstance>>,
     pub assignments: Vec<MarkerAssignment>,
 }
 
 /// Decode every `CBTS_MARKER` (sc=37) event in `raw.events` into
 /// `MarkerResolution`. Events are processed in stream order (arcdps emits
-/// them chronologically; nothing here re-sorts), tracking each agent's
-/// currently-assigned marker: `value == 0` clears it (per the arcdps
-/// reference: "if value is 0, remove all markers presently on agent"),
-/// any other `value` sets it to the resolved name (see
-/// `marker_display_name`) and, when `buff == 1`, also records the resolved
-/// commander-tag variant (falling back to the raw hex GUID for an
-/// unrecognized tag colour, per the Task 7 brief -- `buff == 1` is the
-/// authoritative "this is a commander tag" signal per the arcdps
-/// reference, independent of whether we recognize the specific GUID).
+/// them chronologically; nothing here re-sorts).
+///
+/// **Fix round 1:** the first version of this function kept a single
+/// "current marker" slot per agent, unconditionally overwritten by every
+/// `CBTS_MARKER` event -- so a commander later getting a routine squad
+/// target-call (an overhead marker) silently wiped out their
+/// `commander_tag`, with no removal event involved at all. That doesn't
+/// match arcdps's real model: per GW2EI's `CombatEventFactory` (the
+/// `evtcVersion.Build >= ArcDPSBuilds.NewMarkerEventBehavior` branch, i.e.
+/// arcdps builds from 2024-04-18 onward -- our fixture's build `20260114`
+/// is well past this, so this is the behavior that actually applies),
+/// arcdps tracks a *list* of concurrently-open markers per agent
+/// (`MarkerEventsBySrc`), with two rules:
+///
+/// - A non-removal assignment (`value != 0`) only closes a previous *open
+///   instance of the same marker id* on that agent (`"We can't have the
+///   same markers active at the same time on one Src"`) -- it leaves any
+///   other concurrently-open marker of a *different* id (e.g. the
+///   commander tag) untouched.
+/// - A removal (`value == 0`, "if value is 0, remove all markers presently
+///   on agent" per the arcdps reference) ends **every** currently-open
+///   marker on that agent unconditionally -- GW2EI's own comment: `"An end
+///   event ends all previous markers"`. No per-type distinction: it closes
+///   the commander tag too, not just the most recent overhead marker.
+///
+/// This function mirrors both rules with `open: BTreeMap<u64,
+/// Vec<MarkerInstance>>` (only *open* instances are retained -- closed
+/// ones are simply dropped, since nothing downstream needs point-in-time
+/// history, only final state).
+///
+/// `buff == 1` marks an instance as a commander tag (the authoritative
+/// signal per the arcdps reference, independent of whether the GUID is one
+/// we recognize -- see `marker_display_name`/`commander_tag_variant`).
 ///
 /// Only real assignments (`value != 0`) are pushed into `assignments` --
-/// removals aren't "an assignment", they just clear `current` for that
-/// agent so a later `marker`/`commander_tag` lookup (Task 7's per-agent
-/// final-state fields) correctly reports "no marker" rather than a stale
-/// one.
+/// removals aren't "an assignment".
 pub(crate) fn resolve_markers(raw: &RawLog) -> MarkerResolution {
-    let mut current: BTreeMap<u64, CurrentMarker> = BTreeMap::new();
+    let mut open: BTreeMap<u64, Vec<MarkerInstance>> = BTreeMap::new();
     let mut assignments = Vec::new();
     for e in &raw.events {
         if e.is_statechange != sc::MARKER {
@@ -155,53 +184,75 @@ pub(crate) fn resolve_markers(raw: &RawLog) -> MarkerResolution {
         }
         let agent = e.src_agent;
         if e.value == 0 {
-            current.remove(&agent);
+            // "An end event ends all previous markers" (GW2EI
+            // `CombatEventFactory`) -- unconditionally clear every open
+            // instance for this agent, commander tag included.
+            open.remove(&agent);
             continue;
         }
         let local_id = e.value as u32;
         let (name, guid_hex) = marker_display_name(local_id, &raw.guid_map);
-        let commander_tag = if e.buff == 1 {
+        let is_commander = e.buff == 1;
+        let commander_variant = if is_commander {
             let guid = guid_hex.clone().unwrap_or_else(|| name.clone());
-            let variant = commander_tag_variant(&guid).map(str::to_string).unwrap_or_else(|| guid.clone());
-            Some(LiveCommanderTag { variant, guid })
+            Some(commander_tag_variant(&guid).map(str::to_string).unwrap_or(guid))
         } else {
             None
         };
-        current.insert(
-            agent,
-            CurrentMarker { name: Some(name.clone()), commander_tag, time_ms: e.time },
-        );
+        let instance = MarkerInstance {
+            marker_id: e.value,
+            name: name.clone(),
+            guid_hex,
+            is_commander,
+            commander_variant,
+            start_ms: e.time,
+        };
+        let slot = open.entry(agent).or_default();
+        // Replace (not stack) a still-open instance of the same marker id;
+        // a different id (e.g. commander tag vs. overhead marker) stays
+        // open alongside the new instance.
+        slot.retain(|m| m.marker_id != instance.marker_id);
+        slot.push(instance);
         assignments.push(MarkerAssignment { agent_addr: agent, marker: name, time_ms: e.time });
     }
-    MarkerResolution { current, assignments }
+    MarkerResolution { open, assignments }
 }
 
-/// Pick the freshest (highest `time_ms`) marker state across every raw
-/// addr an account/enemy owns (relog/build-swap dedupe folds several raw
-/// addrs into one `Player`/`Enemy` with `agent_addrs` covering all of
-/// them -- Task 4, M2). Returns `None` if none of the addrs ever got a
-/// marker, or if the freshest state was a since-cleared removal.
-fn freshest<'a>(
-    current: &'a BTreeMap<u64, CurrentMarker>,
+/// Pick the freshest (highest `start_ms`) open marker instance matching
+/// `is_commander` across every raw addr an account/enemy owns (relog/
+/// build-swap dedupe folds several raw addrs into one `Player`/`Enemy`
+/// with `agent_addrs` covering all of them -- Task 4, M2).
+fn freshest_open<'a>(
+    open: &'a BTreeMap<u64, Vec<MarkerInstance>>,
     agent_addrs: &[u64],
-) -> Option<&'a CurrentMarker> {
-    agent_addrs.iter().filter_map(|a| current.get(a)).max_by_key(|m| m.time_ms)
+    is_commander: bool,
+) -> Option<&'a MarkerInstance> {
+    agent_addrs
+        .iter()
+        .filter_map(|a| open.get(a))
+        .flatten()
+        .filter(|m| m.is_commander == is_commander)
+        .max_by_key(|m| m.start_ms)
 }
 
-/// Look up the final marker name for a deduped account's addrs, or `None`.
-pub(crate) fn final_marker(current: &BTreeMap<u64, CurrentMarker>, agent_addrs: &[u64]) -> Option<String> {
-    freshest(current, agent_addrs).and_then(|m| m.name.clone())
+/// Look up the current non-commander (overhead) marker name for a deduped
+/// account's addrs, or `None`. Independent of `final_commander_tag` --
+/// both can be `Some` at once (Task 7 fix round 1).
+pub(crate) fn final_marker(open: &BTreeMap<u64, Vec<MarkerInstance>>, agent_addrs: &[u64]) -> Option<String> {
+    freshest_open(open, agent_addrs, false).map(|m| m.name.clone())
 }
 
-/// Look up the final commander-tag state for a deduped account's addrs, or
-/// `None`.
+/// Look up the current commander-tag state for a deduped account's addrs,
+/// or `None`. Independent of `final_marker` -- both can be `Some` at once
+/// (Task 7 fix round 1).
 pub(crate) fn final_commander_tag(
-    current: &BTreeMap<u64, CurrentMarker>,
+    open: &BTreeMap<u64, Vec<MarkerInstance>>,
     agent_addrs: &[u64],
 ) -> Option<CommanderTag> {
-    freshest(current, agent_addrs)
-        .and_then(|m| m.commander_tag.as_ref())
-        .map(|t| CommanderTag { variant: t.variant.clone(), guid: t.guid.clone() })
+    freshest_open(open, agent_addrs, true).map(|m| CommanderTag {
+        variant: m.commander_variant.clone().unwrap_or_default(),
+        guid: m.guid_hex.clone().unwrap_or_else(|| m.name.clone()),
+    })
 }
 
 /// Derive `encounter.tick_rate` from `CBTS_TICK` (sc=84) events: `None`
@@ -363,7 +414,7 @@ mod tests {
             vec![marker_guid_mapping(42, "c3a56f1e045e3848b07cbac5bbdd2c32")], // Arrow
         );
         let res = resolve_markers(&raw);
-        assert_eq!(final_marker(&res.current, &[1]).as_deref(), Some("arrow"));
+        assert_eq!(final_marker(&res.open, &[1]).as_deref(), Some("arrow"));
         assert_eq!(res.assignments.len(), 1);
         assert_eq!(res.assignments[0], MarkerAssignment { agent_addr: 1, marker: "arrow".into(), time_ms: 100 });
     }
@@ -381,7 +432,7 @@ mod tests {
             vec![marker_guid_mapping(1090, "3cd1c64a5000774488009d4d69455c5c")],
         );
         let res = resolve_markers(&raw);
-        assert_eq!(final_marker(&res.current, &[1]).as_deref(), Some("3cd1c64a5000774488009d4d69455c5c"));
+        assert_eq!(final_marker(&res.open, &[1]).as_deref(), Some("3cd1c64a5000774488009d4d69455c5c"));
     }
 
     /// No `CBTS_IDTOGUID` mapping at all for the local id: last-resort
@@ -390,7 +441,7 @@ mod tests {
     fn marker_with_no_guid_mapping_falls_back_to_decimal_id() {
         let raw = raw_from(vec![marker_ev(100, 1, 999, 0)], vec![]);
         let res = resolve_markers(&raw);
-        assert_eq!(final_marker(&res.current, &[1]).as_deref(), Some("999"));
+        assert_eq!(final_marker(&res.open, &[1]).as_deref(), Some("999"));
     }
 
     /// `value == 0` clears the agent's current marker.
@@ -401,7 +452,7 @@ mod tests {
             vec![marker_guid_mapping(42, "c3a56f1e045e3848b07cbac5bbdd2c32")],
         );
         let res = resolve_markers(&raw);
-        assert_eq!(final_marker(&res.current, &[1]), None);
+        assert_eq!(final_marker(&res.open, &[1]), None);
         // The removal itself is not recorded as an "assignment".
         assert_eq!(res.assignments.len(), 1);
     }
@@ -415,7 +466,7 @@ mod tests {
             vec![marker_guid_mapping(3201, "1993fadb6fb70e4383a223a54d311f7d")], // PurpleCommanderTag
         );
         let res = resolve_markers(&raw);
-        let tag = final_commander_tag(&res.current, &[1]).expect("commander tag present");
+        let tag = final_commander_tag(&res.open, &[1]).expect("commander tag present");
         assert_eq!(tag.variant, "purple-commander");
         assert_eq!(tag.guid, "1993fadb6fb70e4383a223a54d311f7d");
     }
@@ -429,7 +480,7 @@ mod tests {
             vec![marker_guid_mapping(7, "ca76ab023593b0448f692fe29df03d17")], // RedCatmanderTag
         );
         let res = resolve_markers(&raw);
-        let tag = final_commander_tag(&res.current, &[1]).expect("commander tag present");
+        let tag = final_commander_tag(&res.open, &[1]).expect("commander tag present");
         assert_eq!(tag.variant, "red-catmander");
     }
 
@@ -444,7 +495,7 @@ mod tests {
             vec![marker_guid_mapping(55, "00112233445566778899aabbccddeeff")],
         );
         let res = resolve_markers(&raw);
-        let tag = final_commander_tag(&res.current, &[1]).expect("commander tag present");
+        let tag = final_commander_tag(&res.open, &[1]).expect("commander tag present");
         assert_eq!(tag.variant, "00112233445566778899aabbccddeeff");
     }
 
@@ -457,7 +508,86 @@ mod tests {
             vec![marker_guid_mapping(42, "c3a56f1e045e3848b07cbac5bbdd2c32")],
         );
         let res = resolve_markers(&raw);
-        assert!(final_commander_tag(&res.current, &[1]).is_none());
+        assert!(final_commander_tag(&res.open, &[1]).is_none());
+    }
+
+    /// Fix round 1 (reviewer-reported bug): a commander gets tagged, then
+    /// later gets a routine squad overhead marker assigned (e.g. the
+    /// lieutenant target-calls the commander with Arrow -- common in WvW).
+    /// Both must survive concurrently: `marker` becomes the overhead one,
+    /// `commander_tag` must NOT be silently cleared just because a
+    /// different marker id was assigned on the same agent. Then a removal
+    /// event (`value == 0`) ends BOTH -- per GW2EI's `CombatEventFactory`
+    /// ("An end event ends all previous markers", no per-type carve-out).
+    #[test]
+    fn commander_tag_survives_later_overhead_marker_assignment() {
+        let raw = raw_from(
+            vec![
+                marker_ev(100, 1, 3201, 1), // commander tag assigned first
+                marker_ev(200, 1, 42, 0),   // later: squad target-calls them with Arrow
+            ],
+            vec![
+                marker_guid_mapping(3201, "1993fadb6fb70e4383a223a54d311f7d"), // PurpleCommanderTag
+                marker_guid_mapping(42, "c3a56f1e045e3848b07cbac5bbdd2c32"),   // Arrow
+            ],
+        );
+        let res = resolve_markers(&raw);
+
+        // Both concurrently open: the overhead marker is the "current
+        // marker", but the commander tag is NOT wiped out by it.
+        assert_eq!(final_marker(&res.open, &[1]).as_deref(), Some("arrow"));
+        let tag = final_commander_tag(&res.open, &[1]).expect("commander tag must survive the overhead assignment");
+        assert_eq!(tag.variant, "purple-commander");
+
+        // A removal event ends everything on that agent, commander tag
+        // included -- not just the most recent overhead marker.
+        let mut events = raw.events.clone();
+        events.push(marker_ev(300, 1, 0, 0));
+        let raw2 = raw_from(events, raw.guid_map.clone());
+        let res2 = resolve_markers(&raw2);
+        assert_eq!(final_marker(&res2.open, &[1]), None, "removal must clear the overhead marker too");
+        assert!(final_commander_tag(&res2.open, &[1]).is_none(), "removal must clear the commander tag too");
+    }
+
+    /// The reverse order also holds: an overhead marker assigned first,
+    /// then a commander tag assigned afterward, keeps both -- proving the
+    /// concurrent tracking isn't order-dependent.
+    #[test]
+    fn overhead_marker_survives_later_commander_tag_assignment() {
+        let raw = raw_from(
+            vec![
+                marker_ev(100, 1, 42, 0),   // Arrow first
+                marker_ev(200, 1, 3201, 1), // commander tag assigned later
+            ],
+            vec![
+                marker_guid_mapping(42, "c3a56f1e045e3848b07cbac5bbdd2c32"),
+                marker_guid_mapping(3201, "1993fadb6fb70e4383a223a54d311f7d"),
+            ],
+        );
+        let res = resolve_markers(&raw);
+        assert_eq!(final_marker(&res.open, &[1]).as_deref(), Some("arrow"));
+        let tag = final_commander_tag(&res.open, &[1]).expect("commander tag present");
+        assert_eq!(tag.variant, "purple-commander");
+    }
+
+    /// A repeat assignment of the SAME marker id replaces the earlier open
+    /// instance rather than stacking a duplicate -- mirrors GW2EI's "We
+    /// can't have the same markers active at the same time on one Src".
+    /// Distinguishes this from the "different id -> concurrent" cases
+    /// above: same id must NOT coexist with itself.
+    #[test]
+    fn reassigning_the_same_marker_id_replaces_not_stacks() {
+        let raw = raw_from(
+            vec![
+                marker_ev(100, 1, 3201, 1),
+                marker_ev(200, 1, 3201, 1), // same commander tag id, reassigned
+            ],
+            vec![marker_guid_mapping(3201, "1993fadb6fb70e4383a223a54d311f7d")],
+        );
+        let res = resolve_markers(&raw);
+        assert_eq!(res.open.get(&1).map(|v| v.len()), Some(1), "must not stack two instances of the same marker id");
+        let tag = final_commander_tag(&res.open, &[1]).expect("commander tag present");
+        assert_eq!(tag.variant, "purple-commander");
     }
 
     /// Relog/build-swap dedupe (Task 4, M2): the freshest (highest
@@ -473,7 +603,7 @@ mod tests {
             vec![marker_guid_mapping(42, "c3a56f1e045e3848b07cbac5bbdd2c32")],
         );
         let res = resolve_markers(&raw);
-        assert_eq!(final_marker(&res.current, &[1, 2]).as_deref(), Some("999"));
+        assert_eq!(final_marker(&res.open, &[1, 2]).as_deref(), Some("999"));
     }
 
     /// Fewer than 2 `CBTS_TICK` events: `tick_rate` is `None` (skip

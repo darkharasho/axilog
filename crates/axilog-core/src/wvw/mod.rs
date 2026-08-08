@@ -287,12 +287,12 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     // `final_commander_tag` pick the freshest state across all of them.
     let marker_res = markers::resolve_markers(raw);
     for p in &mut enc.players {
-        p.marker = markers::final_marker(&marker_res.current, &p.agent_addrs);
-        p.commander_tag = markers::final_commander_tag(&marker_res.current, &p.agent_addrs);
+        p.marker = markers::final_marker(&marker_res.open, &p.agent_addrs);
+        p.commander_tag = markers::final_commander_tag(&marker_res.open, &p.agent_addrs);
         p.commander = p.commander_tag.is_some();
     }
     for en in &mut enc.enemies {
-        en.marker = markers::final_marker(&marker_res.current, &en.agent_addrs);
+        en.marker = markers::final_marker(&marker_res.open, &en.agent_addrs);
     }
     enc.markers = marker_res.assignments;
     enc.tick_rate = markers::resolve_tick_rate(raw, enc.duration_ms);
