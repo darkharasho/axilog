@@ -14,6 +14,9 @@
 
 pub mod events;
 pub mod simulator;
+pub mod uptime;
+
+pub use uptime::BoonUptime;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -87,6 +90,13 @@ pub fn simulate_boons(raw: &RawLog, enc: &Encounter) -> BTreeMap<(u64, u32), Boo
         BOON_IDS.iter().filter(|&&(_, _, is_intensity)| is_intensity).map(|&(id, _, _)| id).collect();
 
     let raw_events = events::extract_buff_events(raw, &boon_ids);
+    // arcdps's own reported per-buff stack capacity (M3 Task 2) --
+    // preferred over the hardcoded `simulator::capacity_for` table
+    // whenever present, mirroring GW2EI's `Buff.CreateSimulator` (see
+    // `sc::BUFF_INFO`'s doc comment for the calibration finding that
+    // motivated this: several Queue-type boons in this fixture report a
+    // real capacity of 99, far above the hardcoded 5-9 guess).
+    let arcdps_capacities = events::extract_buff_capacities(raw, &boon_ids);
     let mut grouped: BTreeMap<(u64, u32), Vec<events::BuffEvent>> = BTreeMap::new();
     for e in raw_events {
         // Squad-only scope (see module docs): an event whose owner isn't a
@@ -100,11 +110,30 @@ pub fn simulate_boons(raw: &RawLog, enc: &Encounter) -> BTreeMap<(u64, u32), Boo
     grouped
         .into_iter()
         .map(|((rep, buff_id), evs)| {
-            let capacity = simulator::capacity_for(buff_id);
+            let capacity = arcdps_capacities
+                .get(&buff_id)
+                .copied()
+                .unwrap_or_else(|| simulator::capacity_for(buff_id));
             let is_intensity = intensity_ids.contains(&buff_id);
             let states = simulator::run(evs, capacity, is_intensity, log_end_ms);
             ((rep, buff_id), BoonTimeline { states })
         })
+        .collect()
+}
+
+/// Simulates every tracked boon's timeline (`simulate_boons`) and reduces
+/// each to a `BoonUptime` (`uptime::compute`) over the SAME absolute
+/// `[log_start_ms, log_end_ms)` window `simulate_boons` itself ticks
+/// against (`raw.events.first().time`..`raw.events.last().time`) -- see
+/// `uptime`'s module docs for why this must be the absolute event window
+/// and not `Encounter::duration_ms` (which is start-relative).
+pub fn simulate_boon_uptimes(raw: &RawLog, enc: &Encounter) -> BTreeMap<(u64, u32), BoonUptime> {
+    let boons = simulate_boons(raw, enc);
+    let log_start_ms = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let log_end_ms = raw.events.last().map(|e| e.time).unwrap_or(0);
+    boons
+        .iter()
+        .map(|(&key, tl)| (key, uptime::compute(tl, log_start_ms, log_end_ms)))
         .collect()
 }
 
@@ -135,7 +164,7 @@ mod tests {
             time, src_agent: src, dst_agent: dst, value: duration_ms, buff_dmg: 0, overstack: 0,
             skillid: buff_id, src_instid: 0, dst_instid: 0, src_master_instid: 0,
             dst_master_instid: 0, iff: 0, buff: 1, result: 0, is_activation: 0, is_buffremove: 0,
-            is_statechange: 0, is_shields: 0,
+            is_statechange: 0, is_shields: 0, is_offcycle: 0,
         }
     }
 

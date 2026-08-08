@@ -82,6 +82,35 @@ pub enum BuffEventKind {
     RemoveSingle { removed_duration_ms: u32 },
     /// `is_buffremove == ALL`: clears every currently-held stack.
     RemoveAll,
+    /// An apply-shaped event (same `IsBuffApplyEvent` predicate as `Apply`)
+    /// with `is_offcycle != 0` (M3 Task 2). Verified against GW2EI's
+    /// `CombatEventFactory.AddBuffApplyEvent`, pre-
+    /// `ArcDPSBuilds.BuffAppliesAndRemovesAsStateChanges` branch: `if
+    /// (buffEvent.IsOffcycle > 0) { ... new BuffExtensionEvent(...) } else
+    /// { ... new BuffApplyEvent(...) }` -- this fixture's build (20260114)
+    /// takes this branch. EXTENDS an already-active stack's remaining
+    /// duration in place (or, if none is active/at capacity, becomes a
+    /// fresh active stack) rather than pushing a new queued stack --
+    /// `EIData/Buffs/BuffSimulators/BuffSimulatorNoID/
+    /// {BuffSimulatorDuration,BuffSimulatorIntensity}.cs`'s `Extend`
+    /// overrides.
+    ///
+    /// `extended_ms` is the raw event's `value` field
+    /// (`BuffExtensionEvent.ExtendedDuration = Math.Max(evtcItem.Value,
+    /// 0)`), `new_duration_ms` is the raw event's `overstack` field
+    /// (`BuffExtensionEvent.NewDuration = evtcItem.OverstackValue`) --
+    /// `ParsedData/CombatEvents/BuffEvents/BuffApplies/
+    /// BuffExtensionEvent.cs`. GW2EI additionally runs a per-`BuffInstance`
+    /// wall-clock correction (`CombatData.OffsetBuffExtensionEvents` /
+    /// `BuffExtensionEvent.OffsetNewDuration`) that adjusts these two
+    /// values before simulating; this project does not decode the
+    /// `BuffInstance` (`pad`) field needed to replicate that correction
+    /// (out of scope, same simplification Task 1 already documented for
+    /// the `pad61`/instance-id fields), so `simulator::run` consumes the
+    /// RAW `extended_ms`/`new_duration_ms` values directly -- see that
+    /// module's `Extend` doc comment for the resulting approximation and
+    /// its calibrated accuracy.
+    Extend { extended_ms: u32, new_duration_ms: u32 },
 }
 
 /// Extracts apply/remove/initial events for exactly the `boon_ids` skill
@@ -135,13 +164,34 @@ pub fn extract_buff_events(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEv
         // (which distinguishes it from a buff-damage-tick event, where
         // `buff_dmg` carries the tick damage and `value == 0` --
         // `IsBuffDamageEvent`), with no activation and no buffremove flag
-        // set.
+        // set. Among these, `is_offcycle != 0` further routes to `Extend`
+        // instead of `Apply` -- see `BuffEventKind::Extend`'s doc comment
+        // (`CombatEventFactory.AddBuffApplyEvent`'s pre-
+        // `BuffAppliesAndRemovesAsStateChanges` branch). BUFFINITIAL rows
+        // (handled above) never take this branch -- GW2EI's
+        // `AddBuffApplyEvent`/its `is_offcycle` routing is only reached
+        // from `combatItem.IsBuffApplyEvent()`, gated on `IsStateChange ==
+        // Combat` (i.e. `is_statechange == 0`), not from the separate
+        // `BuffInitial` statechange dispatch.
         if e.buff != 0
             && e.buff_dmg == 0
             && e.value > 0
             && e.is_activation == 0
             && e.is_buffremove == buff_remove::NONE
         {
+            if e.is_offcycle != 0 {
+                out.push(BuffEvent {
+                    time: e.time,
+                    buff_id: e.skillid,
+                    owner: e.dst_agent,
+                    agent: resolve_agent(e.src_agent, e.src_master_instid, e.time),
+                    kind: BuffEventKind::Extend {
+                        extended_ms: e.value.max(0) as u32,
+                        new_duration_ms: e.overstack,
+                    },
+                });
+                continue;
+            }
             out.push(BuffEvent {
                 time: e.time,
                 buff_id: e.skillid,
@@ -183,6 +233,35 @@ pub fn extract_buff_events(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEv
     out
 }
 
+/// Extracts arcdps's own per-buff stack-capacity report (M3 Task 2) for
+/// exactly the `boon_ids` skill ids -- `CBTS_BUFFINFO` (`sc::BUFF_INFO`)
+/// rows' `src_master_instid` field (GW2EI's `BuffInfoEvent.MaxStacks`).
+/// **Load-bearing** (see `sc::BUFF_INFO`'s doc comment): GW2EI's
+/// `Buff.CreateSimulator` uses this arcdps-reported value as the REAL
+/// simulator capacity whenever it's present and `> 0`, in preference to
+/// its own hardcoded `CommonBuffs` table default -- so `simulate_boons`
+/// must do the same rather than trusting `simulator::capacity_for`
+/// unconditionally. Returns 0 for a buff id with no `BUFFINFO` row (or
+/// whose reported `src_master_instid` is 0) -- callers should treat 0 as
+/// "no override, use the hardcoded default" per GW2EI's own `> 0` guard.
+/// If a buff id has multiple `BUFFINFO` rows (shouldn't normally happen --
+/// arcdps documents one per tracked skill id per log), the LAST one wins
+/// (plain overwrite on repeated inserts), mirroring `Dictionary`-style
+/// last-write-wins semantics GW2EI's own single-event-per-id model doesn't
+/// need to disambiguate.
+pub fn extract_buff_capacities(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> std::collections::BTreeMap<u32, u32> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in &raw.events {
+        if e.is_statechange == sc::BUFF_INFO && boon_ids.contains(&e.skillid) {
+            let max_stacks = e.src_master_instid as u32;
+            if max_stacks > 0 {
+                out.insert(e.skillid, max_stacks);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,7 +278,7 @@ mod tests {
             time: 0, src_agent: 0, dst_agent: 0, value: 0, buff_dmg: 0, overstack: 0,
             skillid: MIGHT, src_instid: 0, dst_instid: 0, src_master_instid: 0,
             dst_master_instid: 0, iff: 0, buff: 0, result: 0, is_activation: 0,
-            is_buffremove: 0, is_statechange: 0, is_shields: 0,
+            is_buffremove: 0, is_statechange: 0, is_shields: 0, is_offcycle: 0,
         }
     }
 
@@ -241,6 +320,47 @@ mod tests {
         let events = extract_buff_events(&raw_from(vec![e]), &boon_ids());
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, BuffEventKind::Apply { duration_ms: 5000, is_shields: true });
+    }
+
+    /// M3 Task 2: an apply-shaped event with `is_offcycle != 0` must route
+    /// to `Extend`, not `Apply` -- `extended_ms` from `value`,
+    /// `new_duration_ms` from `overstack` (verified: `BuffExtensionEvent`
+    /// ctor, `ExtendedDuration = Math.Max(evtcItem.Value, 0)`, `NewDuration
+    /// = evtcItem.OverstackValue`).
+    #[test]
+    fn offcycle_apply_routes_to_extend_using_value_and_overstack() {
+        let mut e = base_event();
+        e.src_agent = 0xA;
+        e.dst_agent = 0xB;
+        e.buff = 1;
+        e.value = 1500; // extended_ms
+        e.overstack = 4000; // new_duration_ms
+        e.is_offcycle = 1;
+        let events = extract_buff_events(&raw_from(vec![e]), &boon_ids());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].owner, 0xB);
+        assert_eq!(events[0].agent, 0xA);
+        assert_eq!(
+            events[0].kind,
+            BuffEventKind::Extend { extended_ms: 1500, new_duration_ms: 4000 }
+        );
+    }
+
+    /// BUFFINITIAL rows never take the `is_offcycle` extension branch --
+    /// GW2EI's `is_offcycle` routing only applies within
+    /// `AddBuffApplyEvent`, reached from ordinary `is_statechange == 0`
+    /// apply rows, not the separate `BuffInitial` statechange dispatch.
+    #[test]
+    fn buff_initial_ignores_is_offcycle_stays_apply() {
+        let mut e = base_event();
+        e.src_agent = 0xA;
+        e.dst_agent = 0xB;
+        e.is_statechange = sc::BUFF_INITIAL;
+        e.value = 3000;
+        e.is_offcycle = 1; // must be ignored for BUFFINITIAL rows
+        let events = extract_buff_events(&raw_from(vec![e]), &boon_ids());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, BuffEventKind::Apply { duration_ms: 3000, is_shields: false });
     }
 
     /// The critical field-role check the Task 1 brief calls out by name:

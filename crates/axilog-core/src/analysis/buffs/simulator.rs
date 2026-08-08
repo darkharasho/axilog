@@ -234,6 +234,42 @@ fn run_duration(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) -> V
                     push_state(&mut states, e.time, 0);
                 }
             }
+            BuffEventKind::Extend { extended_ms, new_duration_ms } => {
+                // M3 Task 2: verified `BuffSimulatorDuration.Extend`:
+                // `if ((BuffStack.Count != 0 && oldValue > 0) || IsFull) {
+                // BuffStack[0].Extend(extension, src); } else { Add(oldValue
+                // + extension, ..., addedActive: true, ...); }`. `oldValue`
+                // is GW2EI's post-`OffsetNewDuration`-corrected value; this
+                // project doesn't decode the `BuffInstance` field needed to
+                // replicate that correction (see `BuffEventKind::Extend`'s
+                // doc comment), so `old_value` here is the RAW
+                // `new_duration_ms - extended_ms` -- an approximation.
+                // `BuffStackItem.Extend` appends to a separate `Extensions`
+                // list rather than mutating `Duration` directly, but for a
+                // pure stack-COUNT timeline (this simulator's only output)
+                // adding `extended_ms` straight onto the target slot's
+                // remaining value is observably equivalent: both simply
+                // defer that slot's eventual expiry by `extended_ms`
+                // without changing the count at any point in between.
+                let extended = extended_ms as i64;
+                let old_value = new_duration_ms as i64 - extended;
+                let is_full = stack.len() as u32 >= capacity;
+                if (!stack.is_empty() && old_value > 0) || is_full {
+                    if let Some(active) = stack.first_mut() {
+                        *active = (*active as i64 + extended).max(0) as u64;
+                    }
+                } else {
+                    let duration_ms = (old_value + extended).max(0) as u64;
+                    stack.push(duration_ms);
+                    push_state(&mut states, e.time, stack.len() as u32);
+                    // `addedActive: true` -- verified `Add(..., addedActive:
+                    // true, ...)` in the `else` branch above -- same
+                    // promote-to-front-of-queue mechanics as an `is_shields`
+                    // apply (see `BuffEventKind::Apply` handling above).
+                    let val = stack.pop().unwrap();
+                    stack.insert(0, val);
+                }
+            }
         }
     }
     advance_duration(&mut stack, &mut clock, log_end_ms, &mut states);
@@ -344,6 +380,38 @@ fn run_intensity(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) -> 
                 if !stacks.is_empty() {
                     stacks.clear();
                     push_state(&mut states, e.time, 0);
+                }
+            }
+            BuffEventKind::Extend { extended_ms, new_duration_ms } => {
+                // M3 Task 2: verified `BuffSimulatorIntensity.Extend`: `if
+                // ((BuffStack.Count != 0 && oldValue > 0) || IsFull) { var
+                // minItem = BuffStack.MinBy(x => Math.Abs(x.TotalDuration -
+                // oldValue)); minItem?.Extend(extension, src); } else {
+                // Add(oldValue + extension, ..., addedActive: true); }` --
+                // same raw-value approximation for `old_value` as the
+                // duration path (see that arm's doc comment): this project
+                // doesn't decode `BuffInstance`, so GW2EI's
+                // `OffsetNewDuration` per-instance correction isn't
+                // replicated. `remaining_at(e.time)` is used as
+                // `TotalDuration` here (expiries were already flushed to
+                // `e.time` above), and `.duration` is bumped directly by
+                // `extended_ms` for the same "observably equivalent to a
+                // separate Extensions list" reasoning as the duration path.
+                let extended = extended_ms as i64;
+                let old_value = new_duration_ms as i64 - extended;
+                let is_full = (stacks.len() as u32) >= capacity;
+                if (!stacks.is_empty() && old_value > 0) || is_full {
+                    if let Some((i, _)) = stacks
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, s)| (s.remaining_at(e.time) - old_value).abs())
+                    {
+                        stacks[i].duration = (stacks[i].duration as i64 + extended).max(0) as u64;
+                    }
+                } else {
+                    let duration_ms = (old_value + extended).max(0) as u64;
+                    stacks.push(Stack { start: e.time, duration: duration_ms });
+                    push_state(&mut states, e.time, stacks.len() as u32);
                 }
             }
         }

@@ -21,7 +21,12 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// Per-(agent representative, boon id) stack-count timelines (M3, Task
     /// 1) -- see `buffs::simulate_boons`. Computed after all other passes
     /// below; does not alter any pre-existing metric.
-    pub boons: BTreeMap<(u64, u32), buffs::BoonTimeline> }
+    pub boons: BTreeMap<(u64, u32), buffs::BoonTimeline>,
+    /// Per-(agent representative, boon id) uptime summaries (M3, Task 2) --
+    /// see `buffs::simulate_boon_uptimes`/`buffs::uptime`. Reduces `boons`
+    /// above over the same absolute fight window; does not alter any
+    /// pre-existing metric.
+    pub boon_uptime: BTreeMap<(u64, u32), buffs::BoonUptime> }
 
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // A friendly account can own several raw agent addrs (relog / build
@@ -95,7 +100,19 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // Computed last, after every other pass, per the Task 1 brief -- does
     // not read or alter `players`/`timeline` above.
     let boons = buffs::simulate_boons(raw, enc);
-    Metrics { players, timeline, boons }
+    // M3 Task 2: reduce each timeline to a `BoonUptime` over the same
+    // absolute window `simulate_boons` itself ticks against (see
+    // `buffs::uptime`'s module docs) -- computed directly from `boons`
+    // rather than via `buffs::simulate_boon_uptimes` (which exists as a
+    // standalone convenience for callers that only want uptimes) to avoid
+    // re-running the simulator a second time.
+    let log_start_ms = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let log_end_ms = raw.events.last().map(|e| e.time).unwrap_or(0);
+    let boon_uptime = boons
+        .iter()
+        .map(|(&key, tl)| (key, buffs::uptime::compute(tl, log_start_ms, log_end_ms)))
+        .collect();
+    Metrics { players, timeline, boons, boon_uptime }
 }
 
 #[cfg(test)]
@@ -108,7 +125,7 @@ mod tests {
         RawEvent { time: 0, src_agent: src, dst_agent: dst, value: dmg, buff_dmg: 0,
             overstack: 0, skillid: 1, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 1, buff: 0, result: 0,
-            is_activation: 0, is_buffremove: 0, is_statechange: 0, is_shields: 0 }
+            is_activation: 0, is_buffremove: 0, is_statechange: 0, is_shields: 0, is_offcycle: 0 }
     }
 
     fn raw_from(events: Vec<RawEvent>) -> RawLog {
