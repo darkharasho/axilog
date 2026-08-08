@@ -12,6 +12,14 @@
 //! Tolerances (M3 Task 2 brief): duration-boon presence within 2
 //! percentage points; intensity-boon average stacks within 5% relative
 //! AND presence within 2 percentage points.
+//!
+//! M3 Task 4 additionally calibrates `Metrics::boon_generation`'s
+//! `squad_pct` for 4 named boons (Might, Quickness, Alacrity, Stability)
+//! against `fixtures/wvw-small.ei.json` players[].generation[<id>].squad
+//! (EI's own `squadBuffs[boon].buffData[0].generation`, verbatim) -- see
+//! `GENERATION_TOLERANCE_PP`/`check_boon_generation_matches_ei_golden`
+//! below and `analysis::buffs::generation`'s module docs for the field
+//! mapping.
 
 use axilog_core::analysis::analyze;
 use axilog_core::analysis::buffs::BOON_IDS;
@@ -235,4 +243,140 @@ fn boon_uptimes_match_ei_golden_local_raw_when_present() {
     let Some(bytes) = read_local_fixture_or_skip("boon_uptimes_match_ei_golden") else { return };
     let golden = read_golden_json();
     check_boon_uptimes_match_ei_golden(&bytes, &golden);
+}
+
+/// M3 Task 4: per-player SQUAD-generation calibration, for exactly the 4
+/// boons the brief names (Might, Quickness, Alacrity, Stability -- 2
+/// intensity, 2 duration), within 2 percentage points of EI's own
+/// `squadBuffs[boon].buffData[0].generation` (extracted verbatim into
+/// `fixtures/wvw-small.ei.json`'s `players[].generation[<id>].squad` --
+/// see that fixture's `_note` and `analysis::buffs::generation`'s module
+/// docs for the full field-meaning mapping/citations).
+const GENERATION_TOLERANCE_PP: f64 = 2.0;
+
+const GENERATION_CHECKED_BOONS: &[u32] = &[
+    axilog_core::analysis::buffs::MIGHT,
+    axilog_core::analysis::buffs::QUICKNESS,
+    axilog_core::analysis::buffs::ALACRITY,
+    axilog_core::analysis::buffs::STABILITY,
+];
+
+/// Cells that genuinely cannot meet the 2pp squad-generation tolerance.
+/// Empty for now -- see the M3 Task 4 report if this ever needs entries
+/// (the Stability `StackingConditionalLoss` gap already documented above,
+/// `INTENSITY_STACK_ALLOWLIST`, is the first suspect for any future
+/// Stability-generation failure, since generation is derived from the same
+/// underlying stack simulation).
+const GENERATION_ALLOWLIST: &[(&str, u32)] = &[];
+
+struct GenMismatch {
+    account: String,
+    boon: u32,
+    ours: f64,
+    golden: f64,
+    delta: f64,
+    allowlisted: bool,
+}
+
+fn check_boon_generation_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
+    let golden_players = golden["players"].as_array().expect("players array");
+    let mut gen_by_account: HashMap<String, &serde_json::Value> = HashMap::new();
+    for p in golden_players {
+        let account = p["account"].as_str().expect("account").to_string();
+        if let Some(gen) = p.get("generation") {
+            gen_by_account.insert(account, gen);
+        }
+    }
+
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = analyze(&enc, &raw);
+    let by_addr: HashMap<u64, &axilog_core::model::Player> =
+        enc.players.iter().map(|p| (p.agent_addr, p)).collect();
+
+    let mut mismatches: Vec<GenMismatch> = Vec::new();
+    let mut checked = 0usize;
+    let mut joined = 0usize;
+
+    for (i, agent) in raw.agents.iter().enumerate() {
+        if !agent.is_player() {
+            continue;
+        }
+        let expected_account = anon_account(i);
+        let key = expected_account.trim_start_matches(':').to_string();
+        let Some(&gen) = gen_by_account.get(&key) else { continue };
+        let Some(p) = by_addr.get(&agent.addr) else { continue };
+        joined += 1;
+
+        for &boon_id in GENERATION_CHECKED_BOONS {
+            let Some(g) = gen.get(boon_id.to_string().as_str()) else { continue };
+            let g_squad = g["squad"].as_f64().expect("generation.squad");
+
+            let ours = metrics
+                .boon_generation
+                .get(&(p.agent_addr, boon_id))
+                .copied()
+                .unwrap_or_default();
+            checked += 1;
+
+            let delta = (ours.squad_pct - g_squad).abs();
+            if delta > GENERATION_TOLERANCE_PP {
+                let allowlisted = GENERATION_ALLOWLIST.contains(&(key.as_str(), boon_id));
+                mismatches.push(GenMismatch {
+                    account: key.clone(),
+                    boon: boon_id,
+                    ours: ours.squad_pct,
+                    golden: g_squad,
+                    delta,
+                    allowlisted,
+                });
+            }
+        }
+    }
+
+    assert!(
+        joined >= 30,
+        "expected at least 30 accounts to join to the generation-augmented golden fixture, got {joined}"
+    );
+
+    let hard_failures: Vec<&GenMismatch> = mismatches.iter().filter(|m| !m.allowlisted).collect();
+    let allowlisted_count = mismatches.len() - hard_failures.len();
+
+    if !hard_failures.is_empty() {
+        let mut sorted = hard_failures.clone();
+        sorted.sort_by(|a, b| b.delta.partial_cmp(&a.delta).unwrap());
+        let report: Vec<String> = sorted
+            .iter()
+            .take(20)
+            .map(|m| {
+                format!(
+                    "{} boon={}: ours={:.3} golden={:.3} delta={:.3}pp",
+                    m.account, m.boon, m.ours, m.golden, m.delta
+                )
+            })
+            .collect();
+        panic!(
+            "{} squad-generation cell(s) out of tolerance (checked {checked}, {allowlisted_count} allowlisted) -- worst offenders:\n{}",
+            hard_failures.len(),
+            report.join("\n")
+        );
+    }
+
+    println!(
+        "boon_generation_matches_ei_golden: {checked} cells checked across {joined} joined players, \
+         0 hard failures ({allowlisted_count} allowlisted per GENERATION_ALLOWLIST)"
+    );
+}
+
+#[test]
+fn boon_generation_matches_ei_golden() {
+    let golden = read_golden_json();
+    check_boon_generation_matches_ei_golden(&read_anon_fixture(), &golden);
+}
+
+#[test]
+fn boon_generation_matches_ei_golden_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("boon_generation_matches_ei_golden") else { return };
+    let golden = read_golden_json();
+    check_boon_generation_matches_ei_golden(&bytes, &golden);
 }

@@ -154,7 +154,8 @@ mod tests {
             PlayerMetrics{agent_addr:2,damage_total:300,dps:300.0,
             downs_dealt:0,kills_dealt:0,down_contribution:0,deaths:1,..Default::default()}],
             timeline:Timeline{resolution_ms:1000,squad_damage:vec![800],cc_applied:vec![0],downs:vec![0]},
-            boons: Default::default(), boon_uptime: Default::default()};
+            boons: Default::default(), boon_uptime: Default::default(),
+            boon_generation: Default::default()};
         axilog_schema::build_report(&enc,&m,"0.1.0")
     }
     #[test]

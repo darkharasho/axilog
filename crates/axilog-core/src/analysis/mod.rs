@@ -30,7 +30,16 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// see `buffs::simulate_boon_uptimes`/`buffs::uptime`. Reduces `boons`
     /// above over the same absolute fight window; does not alter any
     /// pre-existing metric.
-    pub boon_uptime: BTreeMap<(u64, u32), buffs::BoonUptime> }
+    pub boon_uptime: BTreeMap<(u64, u32), buffs::BoonUptime>,
+    /// Per-(source representative addr, boon id) self/group/squad
+    /// generation-attribution rollups (M3, Task 4) -- see
+    /// `buffs::generation`. Reduces the same per-target event streams
+    /// `boons`/`boon_uptime` are built from (re-simulated with source
+    /// tracking, not derived from `boons` directly -- see
+    /// `buffs::generation`'s module doc for why the two simulations must
+    /// stay independently verified against each other); does not alter any
+    /// pre-existing metric.
+    pub boon_generation: BTreeMap<(u64, u32), buffs::GenerationStats> }
 
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // A friendly account can own several raw agent addrs (relog / build
@@ -117,7 +126,14 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
         .iter()
         .map(|(&key, tl)| (key, buffs::uptime::compute(tl, log_start_ms, log_end_ms)))
         .collect();
-    Metrics { players, timeline, boons, boon_uptime }
+    // M3 Task 4: self/group/squad generation attribution, over the same
+    // absolute window as `boon_uptime` above (see `buffs::generation`'s
+    // module docs) -- re-simulated with per-stack source tracking rather
+    // than derived from `boons` (which only tracks stack COUNT, not WHICH
+    // source's stack is held).
+    let target_gen = buffs::generation::simulate_boon_generation_ms(raw, enc);
+    let boon_generation = buffs::generation::rollup(&target_gen, enc, log_start_ms, log_end_ms);
+    Metrics { players, timeline, boons, boon_uptime, boon_generation }
 }
 
 #[cfg(test)]

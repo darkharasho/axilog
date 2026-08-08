@@ -1,6 +1,6 @@
 {
   "_source": "axibridge test-fixtures/boon/20260117-181030.json (dps.report EI JSON, accounts anonymized)",
-  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index — the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against.",
+  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index — the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (`rincka.1608`, would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task).",
   "fightName": "World vs World - Green Alpine Borderlands",
   "durationMS": 49285,
   "friendlyPlayerCount": 41,
@@ -81,6 +81,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 2,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.298,
+          "group": 0.246,
+          "squad": 0.027
+        },
+        "725": {
+          "self": 17.882,
+          "group": 24.297,
+          "squad": 2.142
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 20.266,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 8.116,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 6.016,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -150,6 +212,68 @@
         "condiCleanseSelf": 10,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 8.376,
+          "group": 3.863,
+          "squad": 0.592
+        },
+        "726": {
+          "self": 14.974,
+          "group": 14.82,
+          "squad": 1.647
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 56.709,
+          "group": 41.928,
+          "squad": 2.435
+        },
+        "743": {
+          "self": 1.593,
+          "group": 1.924,
+          "squad": 0.053
+        },
+        "873": {
+          "self": 11.829,
+          "group": 11.829,
+          "squad": 0.363
+        },
+        "1122": {
+          "self": 0.299,
+          "group": 0.299,
+          "squad": 0.026
+        },
+        "1187": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 14.974,
+          "group": 14.974,
+          "squad": 1.664
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -219,6 +343,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 68,
         "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 12.174,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 5.344,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 18.598,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 4.058,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 26.351,
+          "group": 10.622,
+          "squad": 1.345
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -288,6 +474,68 @@
         "condiCleanseSelf": 6,
         "boonStrips": 0,
         "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 5.844,
+          "group": 0.461,
+          "squad": 0.051
+        },
+        "725": {
+          "self": 1.982,
+          "group": 1.429,
+          "squad": 0.962
+        },
+        "718": {
+          "self": 8.242,
+          "group": 1.515,
+          "squad": 0.278
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 54.692,
+          "group": 65.335,
+          "squad": 7.259
+        },
+        "717": {
+          "self": 30.49,
+          "group": 20.686,
+          "squad": 3.098
+        },
+        "743": {
+          "self": 22.135,
+          "group": 19.581,
+          "squad": 2.227
+        },
+        "873": {
+          "self": 62.621,
+          "group": 49.068,
+          "squad": 6.128
+        },
+        "1122": {
+          "self": 2.302,
+          "group": 2.051,
+          "squad": 0.238
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -357,6 +605,68 @@
         "condiCleanseSelf": 3,
         "boonStrips": 1,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.467,
+          "group": 4.056,
+          "squad": 0.451
+        },
+        "725": {
+          "self": 24.586,
+          "group": 29.938,
+          "squad": 3.326
+        },
+        "718": {
+          "self": 9.934,
+          "group": 8.12,
+          "squad": 2.19
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 11.145,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 20.112,
+          "group": 10.169,
+          "squad": 1.13
+        },
+        "743": {
+          "self": 0,
+          "group": 13.217,
+          "squad": 2.554
+        },
+        "873": {
+          "self": 27.02,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 20.282,
+          "group": 20.274,
+          "squad": 2.253
+        },
+        "26980": {
+          "self": 0,
+          "group": 5.055,
+          "squad": 0.766
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -426,6 +736,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 75,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 1.217,
+          "group": 1.069,
+          "squad": 0.119
+        },
+        "725": {
+          "self": 19.909,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 10.098,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 12.227,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 4.058,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 31.425,
+          "group": 10.611,
+          "squad": 1.314
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -495,6 +867,68 @@
         "condiCleanseSelf": 5,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.328,
+          "group": 2.666,
+          "squad": 0.321
+        },
+        "725": {
+          "self": 29.037,
+          "group": 2.019,
+          "squad": 0.837
+        },
+        "718": {
+          "self": 0,
+          "group": 4.344,
+          "squad": 0.483
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 32.127,
+          "group": 21.586,
+          "squad": 6.396
+        },
+        "717": {
+          "self": 69.449,
+          "group": 34.571,
+          "squad": 5.763
+        },
+        "743": {
+          "self": 4.003,
+          "group": 15.353,
+          "squad": 3.437
+        },
+        "873": {
+          "self": 63.455,
+          "group": 22.96,
+          "squad": 2.771
+        },
+        "1122": {
+          "self": 3.784,
+          "group": 3.337,
+          "squad": 0.4
+        },
+        "1187": {
+          "self": 14.8,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 29.601,
+          "group": 25.876,
+          "squad": 3.289
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -564,6 +998,68 @@
         "condiCleanseSelf": 1,
         "boonStrips": 48,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.206,
+          "group": 1.47,
+          "squad": 0.174
+        },
+        "725": {
+          "self": 4.987,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 11.519,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 10.975,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 21.126,
+          "group": 8.116,
+          "squad": 0.902
+        },
+        "1122": {
+          "self": 0.917,
+          "group": 0.562,
+          "squad": 0.064
+        },
+        "1187": {
+          "self": 10.819,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 11.975,
+          "group": 7.3,
+          "squad": 1.666
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -633,6 +1129,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 0,
         "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 5.737,
+          "group": 3.567,
+          "squad": 0.42
+        },
+        "725": {
+          "self": 0,
+          "group": 12.005,
+          "squad": 1.334
+        },
+        "718": {
+          "self": 0,
+          "group": 0,
+          "squad": 0.314
+        },
+        "726": {
+          "self": 29.656,
+          "group": 29.635,
+          "squad": 3.293
+        },
+        "719": {
+          "self": 17.289,
+          "group": 9.715,
+          "squad": 3.944
+        },
+        "717": {
+          "self": 52.454,
+          "group": 39.904,
+          "squad": 4.434
+        },
+        "743": {
+          "self": 0,
+          "group": 4.096,
+          "squad": 0.455
+        },
+        "873": {
+          "self": 6.26,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 2.35,
+          "group": 1.697,
+          "squad": 0.189
+        },
+        "1187": {
+          "self": 7.599,
+          "group": 7.263,
+          "squad": 0.807
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -702,6 +1260,68 @@
         "condiCleanseSelf": 4,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 1.002,
+          "group": 1.417,
+          "squad": 0.157
+        },
+        "725": {
+          "self": 10.719,
+          "group": 27.534,
+          "squad": 3.059
+        },
+        "718": {
+          "self": 30.563,
+          "group": 21.813,
+          "squad": 5.152
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 9.163,
+          "group": 5.816,
+          "squad": 0.646
+        },
+        "717": {
+          "self": 23.009,
+          "group": 11.737,
+          "squad": 1.304
+        },
+        "743": {
+          "self": 0,
+          "group": 1.15,
+          "squad": 0.128
+        },
+        "873": {
+          "self": 26.594,
+          "group": 12.102,
+          "squad": 1.345
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 6.645,
+          "group": 6.306,
+          "squad": 0.701
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -771,6 +1391,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 53,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 5.289,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 7.816,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 32.454,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.195,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 32.454,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -840,6 +1522,68 @@
         "condiCleanseSelf": 9,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 8.381,
+          "group": 1.599,
+          "squad": 0.178
+        },
+        "725": {
+          "self": 64.928,
+          "group": 43.644,
+          "squad": 4.849
+        },
+        "718": {
+          "self": 35.033,
+          "group": 1.202,
+          "squad": 0.212
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 67.031,
+          "group": 48.421,
+          "squad": 7.53
+        },
+        "717": {
+          "self": 36.914,
+          "group": 24.125,
+          "squad": 4.371
+        },
+        "743": {
+          "self": 25.255,
+          "group": 36.56,
+          "squad": 4.727
+        },
+        "873": {
+          "self": 52.608,
+          "group": 34.18,
+          "squad": 4.317
+        },
+        "1122": {
+          "self": 3.19,
+          "group": 2.398,
+          "squad": 0.288
+        },
+        "1187": {
+          "self": 40.548,
+          "group": 11.747,
+          "squad": 1.305
+        },
+        "26980": {
+          "self": 19.659,
+          "group": 28.647,
+          "squad": 3.183
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -909,6 +1653,68 @@
         "condiCleanseSelf": 2,
         "boonStrips": 1,
         "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 3.048,
+          "group": 3.037,
+          "squad": 0.337
+        },
+        "718": {
+          "self": 39.385,
+          "group": 61.386,
+          "squad": 20.198
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 7.311,
+          "squad": 0.812
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 11.983,
+          "group": 10.883,
+          "squad": 1.209
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 6.46,
+          "group": 5.769,
+          "squad": 0.641
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -978,6 +1784,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 31,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.529,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 6.087,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 8.116,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.183,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 48.696,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1047,6 +1915,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 0,
         "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 8.315,
+          "group": 5.822,
+          "squad": 0.688
+        },
+        "725": {
+          "self": 59.103,
+          "group": 52.619,
+          "squad": 5.847
+        },
+        "718": {
+          "self": 0.702,
+          "group": 0,
+          "squad": 0
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 11.819,
+          "group": 17.729,
+          "squad": 1.97
+        },
+        "743": {
+          "self": 17.214,
+          "group": 11.4,
+          "squad": 1.267
+        },
+        "873": {
+          "self": 15.757,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 1.388,
+          "group": 1.609,
+          "squad": 0.179
+        },
+        "1187": {
+          "self": 19.696,
+          "group": 11.811,
+          "squad": 1.312
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.219
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1116,6 +2046,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 26,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.785,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 6.491,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 12.984,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.258,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 41.23,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1185,6 +2177,68 @@
         "condiCleanseSelf": 6,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.125,
+          "group": 1.744,
+          "squad": 0.207
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0,
+          "squad": 0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 62.307,
+          "group": 69.931,
+          "squad": 9.786
+        },
+        "717": {
+          "self": 39.562,
+          "group": 45.763,
+          "squad": 5.652
+        },
+        "743": {
+          "self": 32.026,
+          "group": 36.249,
+          "squad": 4.423
+        },
+        "873": {
+          "self": 54.895,
+          "group": 28.367,
+          "squad": 3.376
+        },
+        "1122": {
+          "self": 1.132,
+          "group": 1.487,
+          "squad": 0.165
+        },
+        "1187": {
+          "self": 7.95,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 15.895,
+          "group": 7.948,
+          "squad": 0.883
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1254,6 +2308,68 @@
         "condiCleanseSelf": 1,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 10.195,
+          "group": 8.547,
+          "squad": 0.95
+        },
+        "725": {
+          "self": 39.805,
+          "group": 46.146,
+          "squad": 5.127
+        },
+        "718": {
+          "self": 0,
+          "group": 0,
+          "squad": 0.432
+        },
+        "726": {
+          "self": 21.706,
+          "group": 39.994,
+          "squad": 4.444
+        },
+        "719": {
+          "self": 0,
+          "group": 7.634,
+          "squad": 1.512
+        },
+        "717": {
+          "self": 42.151,
+          "group": 30.623,
+          "squad": 3.403
+        },
+        "743": {
+          "self": 0,
+          "group": 5.164,
+          "squad": 0.602
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 2.873,
+          "group": 2.925,
+          "squad": 0.325
+        },
+        "1187": {
+          "self": 31.973,
+          "group": 28.853,
+          "squad": 3.206
+        },
+        "26980": {
+          "self": 15.382,
+          "group": 5.575,
+          "squad": 1.711
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1323,6 +2439,68 @@
         "condiCleanseSelf": 3,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.841,
+          "group": 5.175,
+          "squad": 0.575
+        },
+        "725": {
+          "self": 0,
+          "group": 17.331,
+          "squad": 3.308
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 37.186,
+          "group": 52.331,
+          "squad": 5.815
+        },
+        "717": {
+          "self": 6.722,
+          "group": 22.652,
+          "squad": 3.607
+        },
+        "743": {
+          "self": 37.214,
+          "group": 31.779,
+          "squad": 3.658
+        },
+        "873": {
+          "self": 60.574,
+          "group": 47.363,
+          "squad": 7.834
+        },
+        "1122": {
+          "self": 2.084,
+          "group": 2.035,
+          "squad": 0.226
+        },
+        "1187": {
+          "self": 51.472,
+          "group": 27.718,
+          "squad": 3.52
+        },
+        "26980": {
+          "self": 19.752,
+          "group": 19.691,
+          "squad": 2.408
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1392,6 +2570,68 @@
         "condiCleanseSelf": 1,
         "boonStrips": 54,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 2.373,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 12.982,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 25.963,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.972,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 31.513,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1461,6 +2701,68 @@
         "condiCleanseSelf": 2,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 3.002,
+          "group": 0.388,
+          "squad": 0.043
+        },
+        "725": {
+          "self": 17.312,
+          "group": 6.492,
+          "squad": 0.962
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.651,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 6.491,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1530,6 +2832,68 @@
         "condiCleanseSelf": 2,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 3.795,
+          "group": 2.924,
+          "squad": 0.325
+        },
+        "725": {
+          "self": 2.281,
+          "group": 4.125,
+          "squad": 0.458
+        },
+        "718": {
+          "self": 93.69,
+          "group": 93.208,
+          "squad": 24.841
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 36.494,
+          "group": 10.44,
+          "squad": 1.16
+        },
+        "717": {
+          "self": 21.897,
+          "group": 16.957,
+          "squad": 2.188
+        },
+        "743": {
+          "self": 0,
+          "group": 0,
+          "squad": 0
+        },
+        "873": {
+          "self": 10.949,
+          "group": 21.897,
+          "squad": 2.433
+        },
+        "1122": {
+          "self": 0.146,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 7.298,
+          "group": 3.649,
+          "squad": 0.811
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1599,6 +2963,68 @@
         "condiCleanseSelf": 5,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.944,
+          "group": 0.235,
+          "squad": 0.026
+        },
+        "725": {
+          "self": 26.016,
+          "group": 11.315,
+          "squad": 1.498
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.224,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 12.967,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1668,6 +3094,68 @@
         "condiCleanseSelf": 5,
         "boonStrips": 1,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 3.134,
+          "group": 4.159,
+          "squad": 0.467
+        },
+        "725": {
+          "self": 2.346,
+          "group": 17.216,
+          "squad": 1.913
+        },
+        "718": {
+          "self": 0.645,
+          "group": 0.033,
+          "squad": 0.004
+        },
+        "726": {
+          "self": 8.81,
+          "group": 14.731,
+          "squad": 1.637
+        },
+        "719": {
+          "self": 24.088,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 3.22,
+          "group": 54.382,
+          "squad": 7.134
+        },
+        "743": {
+          "self": 0.008,
+          "group": 4.031,
+          "squad": 0.448
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 1.798,
+          "group": 1.907,
+          "squad": 0.212
+        },
+        "1187": {
+          "self": 11.785,
+          "group": 11.785,
+          "squad": 1.309
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1737,6 +3225,68 @@
         "condiCleanseSelf": 8,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 7.87,
+          "group": 4.309,
+          "squad": 0.54
+        },
+        "725": {
+          "self": 58.486,
+          "group": 46.937,
+          "squad": 5.487
+        },
+        "718": {
+          "self": 20.542,
+          "group": 2.448,
+          "squad": 0.272
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 86.002,
+          "group": 39.146,
+          "squad": 7.967
+        },
+        "717": {
+          "self": 43.362,
+          "group": 31.717,
+          "squad": 4.543
+        },
+        "743": {
+          "self": 32.566,
+          "group": 28.981,
+          "squad": 3.489
+        },
+        "873": {
+          "self": 72.107,
+          "group": 44.162,
+          "squad": 5.47
+        },
+        "1122": {
+          "self": 2.686,
+          "group": 2.827,
+          "squad": 0.354
+        },
+        "1187": {
+          "self": 48.745,
+          "group": 17.519,
+          "squad": 1.947
+        },
+        "26980": {
+          "self": 28.869,
+          "group": 28.199,
+          "squad": 3.133
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1806,6 +3356,68 @@
         "condiCleanseSelf": 1,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 2.725,
+          "group": 2.197,
+          "squad": 0.244
+        },
+        "725": {
+          "self": 23.776,
+          "group": 5.944,
+          "squad": 0.66
+        },
+        "718": {
+          "self": 21.82,
+          "group": 29.257,
+          "squad": 10.472
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 35.307,
+          "group": 23.077,
+          "squad": 2.564
+        },
+        "717": {
+          "self": 0,
+          "group": 0,
+          "squad": 0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.362,
+          "squad": 0.04
+        },
+        "873": {
+          "self": 19.594,
+          "group": 7.971,
+          "squad": 0.886
+        },
+        "1122": {
+          "self": 0.143,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 7.158,
+          "group": 5.369,
+          "squad": 0.795
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1875,6 +3487,68 @@
         "condiCleanseSelf": 2,
         "boonStrips": 34,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 3.209,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 3.165,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.183,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 24.348,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -1944,6 +3618,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 40,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.705,
+          "group": 1.689,
+          "squad": 0.188
+        },
+        "725": {
+          "self": 12.117,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0.373,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 19.477,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 12.984,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.219,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -2013,6 +3749,68 @@
         "condiCleanseSelf": 6,
         "boonStrips": 0,
         "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 6.893,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 31.216,
+          "group": 28.055,
+          "squad": 3.65
+        },
+        "726": {
+          "self": 17.222,
+          "group": 17.222,
+          "squad": 1.914
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 10.34,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 1.752,
+          "squad": 0.195
+        },
+        "873": {
+          "self": 16.179,
+          "group": 13.785,
+          "squad": 1.532
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0.572,
+          "group": 10.477,
+          "squad": 1.164
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -2082,6 +3880,68 @@
         "condiCleanseSelf": 1,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 2.564,
+          "group": 1.08,
+          "squad": 0.12
+        },
+        "725": {
+          "self": 16.881,
+          "group": 12.274,
+          "squad": 1.364
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 5.862,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 8.116,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.555,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -2151,6 +4011,68 @@
         "condiCleanseSelf": 4,
         "boonStrips": 1,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.033,
+          "group": 2.621,
+          "squad": 0.357
+        },
+        "725": {
+          "self": 64.178,
+          "group": 24.381,
+          "squad": 4.275
+        },
+        "718": {
+          "self": 3.498,
+          "group": 0.003,
+          "squad": 0.21
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 40.493,
+          "group": 46.326,
+          "squad": 6.066
+        },
+        "717": {
+          "self": 31.235,
+          "group": 17.379,
+          "squad": 2.003
+        },
+        "743": {
+          "self": 18.985,
+          "group": 18.537,
+          "squad": 2.492
+        },
+        "873": {
+          "self": 52.57,
+          "group": 40.534,
+          "squad": 4.504
+        },
+        "1122": {
+          "self": 1.768,
+          "group": 2.665,
+          "squad": 0.296
+        },
+        "1187": {
+          "self": 42.415,
+          "group": 9.012,
+          "squad": 1.001
+        },
+        "26980": {
+          "self": 0,
+          "group": 10.794,
+          "squad": 1.199
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -2220,6 +4142,68 @@
         "condiCleanseSelf": 1,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 3.321,
+          "group": 2.934,
+          "squad": 0.568
+        },
+        "725": {
+          "self": 24.405,
+          "group": 21.102,
+          "squad": 5.854
+        },
+        "718": {
+          "self": 0.128,
+          "group": 0.101,
+          "squad": 0.214
+        },
+        "726": {
+          "self": 38.884,
+          "group": 39.149,
+          "squad": 4.35
+        },
+        "719": {
+          "self": 23.263,
+          "group": 41.21,
+          "squad": 5.916
+        },
+        "717": {
+          "self": 32.464,
+          "group": 23.044,
+          "squad": 2.56
+        },
+        "743": {
+          "self": 13.641,
+          "group": 9.28,
+          "squad": 1.399
+        },
+        "873": {
+          "self": 8.116,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 2.595,
+          "group": 2.604,
+          "squad": 0.347
+        },
+        "1187": {
+          "self": 18.214,
+          "group": 20.18,
+          "squad": 2.242
+        },
+        "26980": {
+          "self": 28.384,
+          "group": 27.074,
+          "squad": 3.008
+        },
+        "30328": {
+          "self": 37.383,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -2289,6 +4273,68 @@
         "condiCleanseSelf": 2,
         "boonStrips": 1,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 2.396,
+          "group": 0.467,
+          "squad": 0.058
+        },
+        "725": {
+          "self": 0,
+          "group": 9.251,
+          "squad": 1.253
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 20.773,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 6.087,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 0.586,
+          "group": 0.0,
+          "squad": 0.28
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -2358,6 +4404,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.995,
+          "group": 4.376,
+          "squad": 0.522
+        },
+        "725": {
+          "self": 17.665,
+          "group": 19.17,
+          "squad": 2.13
+        },
+        "718": {
+          "self": 71.356,
+          "group": 58.646,
+          "squad": 15.993
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 2.597,
+          "group": 0.142,
+          "squad": 0.016
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 14.244,
+          "group": 8.237,
+          "squad": 1.047
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 6.333,
+          "group": 6.333,
+          "squad": 0.704
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -2427,6 +4535,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.811,
+          "group": 4.388,
+          "squad": 0.507
+        },
+        "725": {
+          "self": 35.565,
+          "group": 22.046,
+          "squad": 2.943
+        },
+        "718": {
+          "self": 0,
+          "group": 0.963,
+          "squad": 0.107
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 8.37,
+          "group": 0,
+          "squad": 0
+        },
+        "717": {
+          "self": 43.93,
+          "group": 25.784,
+          "squad": 2.865
+        },
+        "743": {
+          "self": 9.764,
+          "group": 10.738,
+          "squad": 1.346
+        },
+        "873": {
+          "self": 0.428,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 2.264,
+          "group": 1.993,
+          "squad": 0.221
+        },
+        "1187": {
+          "self": 14.95,
+          "group": 14.95,
+          "squad": 1.661
+        },
+        "26980": {
+          "self": 6.059,
+          "group": 5.987,
+          "squad": 0.665
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -2496,6 +4666,68 @@
         "condiCleanseSelf": 7,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.636,
+          "group": 4.103,
+          "squad": 0.456
+        },
+        "725": {
+          "self": 0,
+          "group": 15.353,
+          "squad": 1.706
+        },
+        "718": {
+          "self": 0.213,
+          "group": 0.217,
+          "squad": 0.339
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 67.862,
+          "group": 67.031,
+          "squad": 8.971
+        },
+        "717": {
+          "self": 16.135,
+          "group": 34.96,
+          "squad": 4.686
+        },
+        "743": {
+          "self": 24.423,
+          "group": 17.672,
+          "squad": 2.259
+        },
+        "873": {
+          "self": 40.834,
+          "group": 30.465,
+          "squad": 4.061
+        },
+        "1122": {
+          "self": 1.111,
+          "group": 1.479,
+          "squad": 0.185
+        },
+        "1187": {
+          "self": 37.259,
+          "group": 8.443,
+          "squad": 0.938
+        },
+        "26980": {
+          "self": 14.905,
+          "group": 11.179,
+          "squad": 1.242
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {
@@ -2565,6 +4797,68 @@
         "condiCleanseSelf": 0,
         "boonStrips": 1,
         "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 2.778,
+          "group": 0.823,
+          "squad": 0.104
+        },
+        "725": {
+          "self": 16.232,
+          "group": 8.116,
+          "squad": 1.127
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 8.1,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.466,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 14.13,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
       }
     },
     {

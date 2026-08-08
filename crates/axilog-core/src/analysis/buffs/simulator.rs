@@ -35,7 +35,7 @@ use super::events::{BuffEvent, BuffEventKind};
 /// `BuffSimulator.Remove` is a STRICT `<` (not `<=`), and it's a
 /// first-match linear scan over `BuffStack` in LIST order (not a
 /// globally-closest search) -- see `find_single_removal_match`.
-const REMOVE_MATCH_TOLERANCE_MS: i64 = 15;
+pub(crate) const REMOVE_MATCH_TOLERANCE_MS: i64 = 15;
 
 /// Per-boon stack capacity (max concurrent stacks, active + queued
 /// combined), verified against GW2EI's `CommonBuffs.Boons` table
@@ -80,7 +80,7 @@ fn push_state(states: &mut Vec<(u64, u32)>, t: u64, count: u32) {
 /// must already be given in the same order GW2EI's `BuffStack` list would
 /// be in at this instant (see call sites for how each stack type
 /// satisfies that).
-fn find_single_removal_match(
+pub(crate) fn find_single_removal_match(
     remaining: impl Iterator<Item = i64>,
     removed_duration_ms: i64,
 ) -> Option<usize> {

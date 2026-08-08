@@ -13,9 +13,11 @@
 //! boon"), are out of scope here and left to later M3 tasks.
 
 pub mod events;
+pub mod generation;
 pub mod simulator;
 pub mod uptime;
 
+pub use generation::GenerationStats;
 pub use uptime::BoonUptime;
 
 use crate::evtc::RawLog;
