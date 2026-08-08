@@ -182,6 +182,14 @@ player/enemy optional `marker` (name or hex GUID when unknown) plus a `markers` 
 (agent, marker, time_ms) if assignment times are available. EI adapter: omit (EI JSON has no
 direct field; do not fake). Synthetic-event unit tests; fixture assertions conditional.
 
+**Commander tag variant (arcdps-dev guidance):** the commander tag is itself a marker —
+`CBTS_MARKER` yields its GUID, which identifies the tag colour/variant (including cat tags).
+Research the tag-variant GUID set (GW2EI source and/or GW2 API/wiki commander tag GUIDs); build a
+GUID→variant table (colour + standard/cat). Native schema: on the commander player, replace the
+bare `commander: bool` presentation with an additional optional `commander_tag`
+`{ variant: String, guid: String }` (keep the bool for compatibility). Unknown GUIDs fall back to
+the hex string. This is native-only differentiation — EI adapter unchanged.
+
 ## Self-Review
 Covered all five spec items (names, tables, CC, dedupe/pets, fixture) + adapter/docs. Calibration
 targets embedded verbatim (34/50460, map 95, team 2767, damage 2,138,414). No placeholders; each
