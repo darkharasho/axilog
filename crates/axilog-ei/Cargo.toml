@@ -6,8 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+axilog-core = { path = "../axilog-core" }
 axilog-schema = { path = "../axilog-schema" }
 serde_json.workspace = true
-
-[dev-dependencies]
-axilog-core = { path = "../axilog-core" }

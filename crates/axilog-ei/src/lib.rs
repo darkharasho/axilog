@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use serde_json::{json, Value};
+use axilog_core::analysis::buffs::BOON_IDS;
 use axilog_schema::Report;
 
 // Representative real WvW team ids per color (Task 2, M2) — one id drawn
@@ -99,17 +100,70 @@ pub fn to_ei_json(report: &Report) -> Value {
             // RemovedStunDuration) and the real dps.report EI JSON for the golden
             // WvW fixture (`support[0].stunBreak` / `support[0].removedStunDuration`,
             // not `defenses[0]`). `removedStunDuration` is EI's convention of
-            // seconds (our native schema tracks whole ms).
+            // seconds (our native schema tracks whole ms). M3 Task 5: extended with
+            // the condi-cleanse/boon-strip/resurrect counts (M3 Task 3) — field
+            // names verified against a real dps.report EI export
+            // (axibridge's `test-fixtures/boon/20260117-181030.json`,
+            // `players[0].support[0]`: `condiCleanse`, `condiCleanseSelf`,
+            // `boonStrips`, `resurrects`). The `*Time`/`boonStripDownContribution*`
+            // sibling fields real EI also carries aren't computed here, so they're
+            // omitted rather than faked (same convention as `statsTargets` above).
             "support": [ {
                 "stunBreak": p.cc.stun_breaks,
-                "removedStunDuration": p.cc.removed_stun_duration_ms as f64 / 1000.0
-            } ]
+                "removedStunDuration": p.cc.removed_stun_duration_ms as f64 / 1000.0,
+                "condiCleanse": p.support.cleanses,
+                "condiCleanseSelf": p.support.cleanses_self,
+                "boonStrips": p.support.strips,
+                "resurrects": p.support.resurrects
+            } ],
+            // `buffUptimes[]` (M3 Task 5): one entry per tracked boon (the 12 in
+            // `BOON_IDS`), in that table's order. Field meanings verified against
+            // GW2EI's own `uptime`/`presence` semantics (see
+            // `axilog_core::analysis::buffs::uptime`'s module doc, cross-checked
+            // against the same real dps.report export): for DURATION-type boons
+            // `uptime` is our `presence_pct` and `presence` is always 0 (EI never
+            // populates it for that branch); for INTENSITY-type boons (Might,
+            // Stability) `uptime` is our raw `avg_stacks` (no `*100`) and
+            // `presence` is our `presence_pct`. `generated` in real EI is a full
+            // per-source-character-name ms/pct map; we only compute a self/group/
+            // squad ROLLUP (M3 Task 4), not a per-character breakdown, so the only
+            // entry we can honestly attribute to a specific character name is the
+            // player's own self-generation — emitted as `{ <own character>:
+            // self_pct }` rather than fabricating group/squad members' names.
+            "buffUptimes": p.boons.iter().map(|b| {
+                let (uptime, presence) = match b.avg_stacks {
+                    Some(avg) => (avg, b.presence_pct), // intensity boon
+                    None => (b.presence_pct, 0.0),      // duration boon
+                };
+                json!({
+                    "id": b.id,
+                    "buffData": [ {
+                        "uptime": uptime,
+                        "presence": presence,
+                        "generated": { &p.character: b.generation.self_pct }
+                    } ]
+                })
+            }).collect::<Vec<_>>()
         })
     }).collect();
     let targets: Vec<Value> = report.enemies.iter().map(|e| json!({
         "id": e.id, "name": e.name, "enemyPlayer": e.is_player,
         "teamID": team_id_for(&e.team)
     })).collect();
+    // `buffMap` (M3 Task 5): a subset covering only the 12 tracked boons,
+    // keyed `"b<id>"` per real EI's convention (verified against
+    // axibridge's `test-fixtures/boon/20260117-181030.json`,
+    // `buffMap.b740` etc). Only the two fields we actually compute/know:
+    // `name` and `stacking` (`true` for the two Intensity-type boons —
+    // Might, Stability — `false` for the other 10 Queue/duration-type
+    // ones, matching real EI's own `stacking` bool exactly for every one
+    // of the 12 ids in that same fixture). Real EI's sibling fields
+    // (`classification`, `icon`, `conversionBasedHealing`, `hybridHealing`,
+    // `descriptions`) aren't computed here, so they're omitted rather than
+    // faked.
+    let buff_map: BTreeMap<String, Value> = BOON_IDS.iter().map(|&(id, name, is_intensity)| {
+        (format!("b{id}"), json!({ "name": name, "stacking": is_intensity }))
+    }).collect();
     json!({
         "fightName": format!("Detailed WvW - {}", report.encounter.map),
         "durationMS": report.encounter.duration_ms,
@@ -118,6 +172,7 @@ pub fn to_ei_json(report: &Report) -> Value {
         "eliteInsightsVersion": null,
         "players": players,
         "targets": targets,
+        "buffMap": buff_map,
         "wvWMapData": {
             "redTeamID": team_id_for("red"),
             "blueTeamID": team_id_for("blue"),
@@ -194,5 +249,83 @@ mod tests {
         assert_eq!(v["targets"][0]["enemyPlayer"], true, "player enemy should have enemyPlayer: true");
         assert_eq!(v["targets"][1]["id"], 10);
         assert_eq!(v["targets"][1]["enemyPlayer"], false, "NPC enemy should have enemyPlayer: false");
+    }
+
+    /// M3 Task 5: `buffMap`, `buffUptimes[]`, and the four new `support[0]`
+    /// fields — shape plus a known numeric value for each, built from
+    /// explicit `boon_uptime`/`boon_generation`/`support` values (not the
+    /// golden fixture, which lives in `axilog-core`'s own calibration
+    /// tests) so this crate's unit test stays self-contained.
+    fn sample_report_with_boons() -> axilog_schema::Report {
+        use axilog_core::model::{Encounter, Player};
+        use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
+        use axilog_core::analysis::buffs::{self, BoonUptime, GenerationStats};
+        use axilog_core::analysis::support::SupportMetrics;
+        let enc = Encounter{kind:"wvw".into(),map:"Eternal Battlegrounds".into(),
+            duration_ms:1000,build:"".into(),revision:1,recorded_by:None,
+            teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
+            character:"Nim Iss".into(),profession:"Thief".into(),elite_spec:"".into(),
+            team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]}],
+            enemies:vec![],markers:vec![],tick_rate:None};
+        let mut boon_uptime = std::collections::BTreeMap::new();
+        // Might (intensity): avg_stacks=3.5, presence_pct=100.0.
+        boon_uptime.insert((1u64, buffs::MIGHT), BoonUptime { presence_pct: 100.0, avg_stacks: 3.5 });
+        // Quickness (duration): presence_pct=42.0 (avg_stacks meaningless/0).
+        boon_uptime.insert((1u64, buffs::QUICKNESS), BoonUptime { presence_pct: 42.0, avg_stacks: 0.0 });
+        let mut boon_generation = std::collections::BTreeMap::new();
+        boon_generation.insert((1u64, buffs::MIGHT), GenerationStats { self_pct: 1.5, group_pct: 2.0, squad_pct: 3.0 });
+        let m = Metrics{
+            players: vec![PlayerMetrics{agent_addr:1,
+                support: SupportMetrics { cleanses: 5, cleanses_self: 2, strips: 7, resurrects: 1 },
+                ..Default::default()}],
+            timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
+            boons: Default::default(), boon_uptime, boon_generation,
+        };
+        axilog_schema::build_report(&enc,&m,"0.1.0")
+    }
+
+    #[test]
+    fn buff_map_covers_the_12_tracked_boons_with_computed_fields_only() {
+        let v = to_ei_json(&sample_report_with_boons());
+        let buff_map = v["buffMap"].as_object().expect("buffMap must be an object");
+        assert_eq!(buff_map.len(), 12, "exactly the 12 tracked boons");
+        // Known value: Might (740) is Intensity-type -> stacking: true.
+        assert_eq!(v["buffMap"]["b740"]["name"], "Might");
+        assert_eq!(v["buffMap"]["b740"]["stacking"], true);
+        // Known value: Quickness (1187) is duration-type -> stacking: false.
+        assert_eq!(v["buffMap"]["b1187"]["name"], "Quickness");
+        assert_eq!(v["buffMap"]["b1187"]["stacking"], false);
+    }
+
+    #[test]
+    fn buff_uptimes_map_intensity_and_duration_boons_to_ei_field_meanings() {
+        let v = to_ei_json(&sample_report_with_boons());
+        let entries = v["players"][0]["buffUptimes"].as_array().expect("buffUptimes must be an array");
+        assert_eq!(entries.len(), 12, "one entry per tracked boon");
+        let might = entries.iter().find(|e| e["id"] == 740).expect("Might entry present");
+        // Intensity boon: EI's `uptime` is our raw avg_stacks (no *100),
+        // `presence` is our presence_pct.
+        assert_eq!(might["buffData"][0]["uptime"], 3.5);
+        assert_eq!(might["buffData"][0]["presence"], 100.0);
+        // `generated` only carries the one character-attributable entry we
+        // actually compute: the player's own self-generation.
+        assert_eq!(might["buffData"][0]["generated"]["Nim Iss"], 1.5);
+        let quickness = entries.iter().find(|e| e["id"] == 1187).expect("Quickness entry present");
+        // Duration boon: EI's `uptime` is our presence_pct, `presence` is
+        // always 0 (EI never populates it for this branch).
+        assert_eq!(quickness["buffData"][0]["uptime"], 42.0);
+        assert_eq!(quickness["buffData"][0]["presence"], 0.0);
+    }
+
+    #[test]
+    fn support_block_carries_the_four_new_computed_fields() {
+        let v = to_ei_json(&sample_report_with_boons());
+        let support = &v["players"][0]["support"][0];
+        assert_eq!(support["condiCleanse"], 5);
+        assert_eq!(support["condiCleanseSelf"], 2);
+        assert_eq!(support["boonStrips"], 7);
+        assert_eq!(support["resurrects"], 1);
+        // stunBreak fields (already present since M1) are untouched.
+        assert_eq!(support["stunBreak"], 0);
     }
 }

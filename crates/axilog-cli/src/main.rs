@@ -15,6 +15,11 @@ enum Cmd {
         path: PathBuf,
         #[arg(long, value_enum, default_value_t = Format::Json)]
         format: Format,
+        /// Table-format column layout (M3, Task 5). Ignored for every other
+        /// `--format` (json/csv/ei-json keep their existing full-field
+        /// shape unconditionally).
+        #[arg(long, value_enum, default_value_t = View::Default)]
+        view: View,
     },
     /// Rewrite every player's character/account name in a .zevtc to a
     /// deterministic `Anon<N>` placeholder and write the result as a new
@@ -33,10 +38,22 @@ enum Format {
     EiJson,
 }
 
+/// Table-format column layout (M3, Task 5).
+#[derive(Copy, Clone, PartialEq, ValueEnum)]
+enum View {
+    /// Damage/downs/kills/deaths — unchanged from Task 14.
+    Default,
+    /// Condi cleanses / boon strips / resurrects / stun breaks.
+    Support,
+    /// Might average stacks + presence % for Quickness/Alacrity/Stability/
+    /// Protection.
+    Boons,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Parse { path, format } => {
+        Cmd::Parse { path, format, view } => {
             let bytes = std::fs::read(&path)?;
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
@@ -48,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "{}",
                     serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report))?
                 ),
-                Format::Table => print!("{}", axilog_cli_table(&report)),
+                Format::Table => print!("{}", axilog_cli_table(&report, view)),
                 Format::Csv => print!("{}", axilog_cli_csv(&report)),
             }
         }
@@ -68,8 +85,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// table/csv helpers added in Task 14:
-fn axilog_cli_table(r: &axilog_schema::Report) -> String {
+// table/csv helpers added in Task 14; `view` (M3, Task 5) selects the
+// column layout below.
+fn axilog_cli_table(r: &axilog_schema::Report, view: View) -> String {
+    match view {
+        View::Default => axilog_cli_table_default(r),
+        View::Support => axilog_cli_table_support(r),
+        View::Boons => axilog_cli_table_boons(r),
+    }
+}
+fn axilog_cli_table_default(r: &axilog_schema::Report) -> String {
     let mut s = String::new();
     s.push_str(&format!("{:<24} {:<12} {:>10} {:>8} {:>6} {:>6} {:>7}\n",
         "account", "profession", "damage", "DPS", "downs", "kills", "deaths"));
@@ -79,6 +104,46 @@ fn axilog_cli_table(r: &axilog_schema::Report) -> String {
         s.push_str(&format!("{:<24} {:<12} {:>10} {:>8.0} {:>6} {:>6} {:>7}\n",
             trunc(&p.account, 24), trunc(&p.profession, 12), p.damage.total,
             p.damage.dps, p.downs_dealt, p.kills_dealt, p.deaths));
+    }
+    s
+}
+/// `--view support`: condi cleanses / boon strips / resurrects / stun
+/// breaks (M3, Task 5 brief). `cleanses` here is `SupportOut.cleanses`
+/// (friendly-other cleanses, not `cleanses_self` — matching the brief's
+/// plain "cleanses" column name).
+fn axilog_cli_table_support(r: &axilog_schema::Report) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("{:<24} {:<12} {:>9} {:>7} {:>10} {:>10}\n",
+        "account", "profession", "cleanses", "strips", "resurrects", "stunbreaks"));
+    let mut players: Vec<_> = r.players.iter().collect();
+    players.sort_by_key(|p| std::cmp::Reverse(p.support.cleanses));
+    for p in players {
+        s.push_str(&format!("{:<24} {:<12} {:>9} {:>7} {:>10} {:>10}\n",
+            trunc(&p.account, 24), trunc(&p.profession, 12), p.support.cleanses,
+            p.support.strips, p.support.resurrects, p.cc.stun_breaks));
+    }
+    s
+}
+/// `--view boons`: Might average stacks (its Intensity-type headline
+/// number, `avg_stacks`) plus presence % for the other three "key" boons
+/// the brief names — Quickness/Alacrity/Stability/Protection (M3, Task 5
+/// brief). Stability's `presence_pct` (not its own `avg_stacks`) is shown
+/// here to keep every non-Might column on the same 0-100% scale.
+fn axilog_cli_table_boons(r: &axilog_schema::Report) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("{:<24} {:<12} {:>10} {:>7} {:>7} {:>7} {:>7}\n",
+        "account", "profession", "Might(avg)", "Quick%", "Alac%", "Stab%", "Prot%"));
+    let mut players: Vec<_> = r.players.iter().collect();
+    players.sort_by(|a, b| a.account.cmp(&b.account));
+    for p in players {
+        let find = |id: u32| p.boons.iter().find(|b| b.id == id);
+        let might_avg = find(axilog_core::analysis::buffs::MIGHT).and_then(|b| b.avg_stacks).unwrap_or(0.0);
+        let quick = find(axilog_core::analysis::buffs::QUICKNESS).map(|b| b.presence_pct).unwrap_or(0.0);
+        let alac = find(axilog_core::analysis::buffs::ALACRITY).map(|b| b.presence_pct).unwrap_or(0.0);
+        let stab = find(axilog_core::analysis::buffs::STABILITY).map(|b| b.presence_pct).unwrap_or(0.0);
+        let prot = find(axilog_core::analysis::buffs::PROTECTION).map(|b| b.presence_pct).unwrap_or(0.0);
+        s.push_str(&format!("{:<24} {:<12} {:>10.2} {:>7.1} {:>7.1} {:>7.1} {:>7.1}\n",
+            trunc(&p.account, 24), trunc(&p.profession, 12), might_avg, quick, alac, stab, prot));
     }
     s
 }

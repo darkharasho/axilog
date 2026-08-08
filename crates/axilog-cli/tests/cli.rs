@@ -65,6 +65,48 @@ fn table_and_csv_have_headers_local_raw_when_present() {
     check_table_and_csv_have_headers(LOCAL_FIXTURE_PATH);
 }
 
+/// M3, Task 5: `--view support` — header token plus a known row value from
+/// the committed anon fixture (`:Anon133.5921`, Elementalist, 93
+/// cleanses — the top cleanser in the fixture).
+#[test]
+fn table_view_support_has_header_and_known_row() {
+    let out = Command::new(env!("CARGO_BIN_EXE_axilog"))
+        .args(["parse", ANON_FIXTURE_PATH, "--format", "table", "--view", "support"])
+        .output()
+        .expect("run axilog");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("cleanses"), "support view header missing 'cleanses'");
+    assert!(s.contains("strips"), "support view header missing 'strips'");
+    assert!(s.contains("resurrects"), "support view header missing 'resurrects'");
+    assert!(s.contains("stunbreaks"), "support view header missing 'stunbreaks'");
+    assert!(
+        s.contains(":Anon133.5921") && s.contains("Elementalist") && s.contains("93"),
+        "support view missing known row (:Anon133.5921, Elementalist, 93 cleanses):\n{s}"
+    );
+}
+
+/// M3, Task 5: `--view boons` — header token plus a known row value from
+/// the committed anon fixture (`:Anon163.7031`, Mesmer, ~37.4% Alacrity
+/// presence — the only player with any Alacrity uptime in this fixture).
+#[test]
+fn table_view_boons_has_header_and_known_row() {
+    let out = Command::new(env!("CARGO_BIN_EXE_axilog"))
+        .args(["parse", ANON_FIXTURE_PATH, "--format", "table", "--view", "boons"])
+        .output()
+        .expect("run axilog");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("Might(avg)"), "boons view header missing 'Might(avg)'");
+    assert!(s.contains("Quick%"), "boons view header missing 'Quick%'");
+    assert!(s.contains("Alac%"), "boons view header missing 'Alac%'");
+    assert!(s.contains("Stab%"), "boons view header missing 'Stab%'");
+    assert!(s.contains("Prot%"), "boons view header missing 'Prot%'");
+    let row = s.lines().find(|l| l.contains(":Anon163.7031")).expect("known player row present");
+    assert!(row.contains("Mesmer"), "known row missing profession: {row}");
+    assert!(row.contains("37.4"), "known row missing Alacrity presence 37.4%: {row}");
+}
+
 /// Task 5 (M2): the `anonymize` subcommand itself, exercised against the
 /// already-anonymized committed fixture (always present, so this runs in
 /// CI — running it on an already-`Anon<N>`-named file just re-anonymizes to
