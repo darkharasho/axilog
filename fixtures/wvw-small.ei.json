@@ -1,6 +1,6 @@
 {
   "_source": "axibridge test-fixtures/boon/20260117-181030.json (dps.report EI JSON, accounts anonymized)",
-  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index — the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from.",
+  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index — the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (`rincka.1608`, would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task).",
   "fightName": "World vs World - Green Alpine Borderlands",
   "durationMS": 49285,
   "friendlyPlayerCount": 41,
@@ -9,6 +9,10 @@
   "squadAppliedCrowdControlDuration": 50460,
   "squadStunBreak": 20,
   "squadRemovedStunDuration": 16.907,
+  "squadCondiCleanse": 801,
+  "squadCondiCleanseSelf": 97,
+  "squadBoonStrips": 437,
+  "squadResurrects": 6,
   "players": [
     {
       "account": "Anon132.5884",
@@ -21,7 +25,125 @@
       "appliedCrowdControl": 4,
       "appliedCrowdControlDuration": 7960,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 7.808,
+          "presence": 88.962
+        },
+        "725": {
+          "uptime": 68.459,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 98.111,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 14.82,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 41.242,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 58.16,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 12.176,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 19.945,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 1.007,
+          "presence": 29.122
+        },
+        "1187": {
+          "uptime": 6.016,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 28.583,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 2,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.298,
+          "group": 0.246,
+          "squad": 0.027
+        },
+        "725": {
+          "self": 17.882,
+          "group": 24.297,
+          "squad": 2.142
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 20.266,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 8.116,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 6.016,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon133.5921",
@@ -34,7 +156,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 1,
-      "removedStunDuration": 1.827
+      "removedStunDuration": 1.827,
+      "boons": {
+        "740": {
+          "uptime": 0.464,
+          "presence": 19.115
+        },
+        "725": {
+          "uptime": 44.291,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 95.394,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 34.256,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 67.83,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 72.198,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 1.593,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 15.851,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 1.005,
+          "presence": 29.094
+        },
+        "1187": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "26980": {
+          "uptime": 14.974,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 93,
+        "condiCleanseSelf": 10,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 8.376,
+          "group": 3.863,
+          "squad": 0.592
+        },
+        "726": {
+          "self": 14.974,
+          "group": 14.82,
+          "squad": 1.647
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 56.709,
+          "group": 41.928,
+          "squad": 2.435
+        },
+        "743": {
+          "self": 1.593,
+          "group": 1.924,
+          "squad": 0.053
+        },
+        "873": {
+          "self": 11.829,
+          "group": 11.829,
+          "squad": 0.363
+        },
+        "1122": {
+          "self": 0.299,
+          "group": 0.299,
+          "squad": 0.026
+        },
+        "1187": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 14.974,
+          "group": 14.974,
+          "squad": 1.664
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon140.6180",
@@ -47,7 +287,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 10.835,
+          "presence": 95.682
+        },
+        "725": {
+          "uptime": 89.404,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 90.478,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 99.961,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 87.639,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 71.886,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 98.515,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 5.528,
+          "presence": 72.73
+        },
+        "1187": {
+          "uptime": 52.679,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 42.991,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 68,
+        "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 12.174,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 5.344,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 18.598,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 4.058,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 26.351,
+          "group": 10.622,
+          "squad": 1.345
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon106.4922",
@@ -60,7 +418,125 @@
       "appliedCrowdControl": 2,
       "appliedCrowdControlDuration": 3000,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 13.818,
+          "presence": 99.312
+        },
+        "725": {
+          "uptime": 43.151,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.562,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 99.996,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 98.01,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 50.397,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 88.315,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 6.691,
+          "presence": 70.086
+        },
+        "1187": {
+          "uptime": 44.5,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 44.261,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 9,
+        "condiCleanseSelf": 6,
+        "boonStrips": 0,
+        "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 5.844,
+          "group": 0.461,
+          "squad": 0.051
+        },
+        "725": {
+          "self": 1.982,
+          "group": 1.429,
+          "squad": 0.962
+        },
+        "718": {
+          "self": 8.242,
+          "group": 1.515,
+          "squad": 0.278
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 54.692,
+          "group": 65.335,
+          "squad": 7.259
+        },
+        "717": {
+          "self": 30.49,
+          "group": 20.686,
+          "squad": 3.098
+        },
+        "743": {
+          "self": 22.135,
+          "group": 19.581,
+          "squad": 2.227
+        },
+        "873": {
+          "self": 62.621,
+          "group": 49.068,
+          "squad": 6.128
+        },
+        "1122": {
+          "self": 2.302,
+          "group": 2.051,
+          "squad": 0.238
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon118.5366",
@@ -73,7 +549,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 1,
-      "removedStunDuration": 0.786
+      "removedStunDuration": 0.786,
+      "boons": {
+        "740": {
+          "uptime": 10.145,
+          "presence": 76.258
+        },
+        "725": {
+          "uptime": 68.39,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 85.813,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 99.984,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 92.712,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 25.16,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 98.537,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 4.753,
+          "presence": 61.93
+        },
+        "1187": {
+          "uptime": 40.481,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 25.904,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 76,
+        "condiCleanseSelf": 3,
+        "boonStrips": 1,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.467,
+          "group": 4.056,
+          "squad": 0.451
+        },
+        "725": {
+          "self": 24.586,
+          "group": 29.938,
+          "squad": 3.326
+        },
+        "718": {
+          "self": 9.934,
+          "group": 8.12,
+          "squad": 2.19
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 11.145,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 20.112,
+          "group": 10.169,
+          "squad": 1.13
+        },
+        "743": {
+          "self": 0,
+          "group": 13.217,
+          "squad": 2.554
+        },
+        "873": {
+          "self": 27.02,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 20.282,
+          "group": 20.274,
+          "squad": 2.253
+        },
+        "26980": {
+          "self": 0,
+          "group": 5.055,
+          "squad": 0.766
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon107.4959",
@@ -86,7 +680,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 8.648,
+          "presence": 86.836
+        },
+        "725": {
+          "uptime": 75.745,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.996,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 10.098,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.996,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 87.639,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 56.855,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 92.371,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 6.537,
+          "presence": 72.765
+        },
+        "1187": {
+          "uptime": 63.853,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 36.342,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 75,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 1.217,
+          "group": 1.069,
+          "squad": 0.119
+        },
+        "725": {
+          "self": 19.909,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 10.098,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 12.227,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 4.058,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 31.425,
+          "group": 10.611,
+          "squad": 1.314
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon122.5514",
@@ -99,7 +811,125 @@
       "appliedCrowdControl": 2,
       "appliedCrowdControlDuration": 3000,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 12.173,
+          "presence": 99.98
+        },
+        "725": {
+          "uptime": 73.266,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 98.795,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 99.98,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 98.677,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 46.093,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 99.978,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 6.021,
+          "presence": 70.468
+        },
+        "1187": {
+          "uptime": 57.374,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 44.302,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 40,
+        "condiCleanseSelf": 5,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.328,
+          "group": 2.666,
+          "squad": 0.321
+        },
+        "725": {
+          "self": 29.037,
+          "group": 2.019,
+          "squad": 0.837
+        },
+        "718": {
+          "self": 0,
+          "group": 4.344,
+          "squad": 0.483
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 32.127,
+          "group": 21.586,
+          "squad": 6.396
+        },
+        "717": {
+          "self": 69.449,
+          "group": 34.571,
+          "squad": 5.763
+        },
+        "743": {
+          "self": 4.003,
+          "group": 15.353,
+          "squad": 3.437
+        },
+        "873": {
+          "self": 63.455,
+          "group": 22.96,
+          "squad": 2.771
+        },
+        "1122": {
+          "self": 3.784,
+          "group": 3.337,
+          "squad": 0.4
+        },
+        "1187": {
+          "self": 14.8,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 29.601,
+          "group": 25.876,
+          "squad": 3.289
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon121.5477",
@@ -112,7 +942,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 2,
-      "removedStunDuration": 1.719
+      "removedStunDuration": 1.719,
+      "boons": {
+        "740": {
+          "uptime": 8.215,
+          "presence": 85.852
+        },
+        "725": {
+          "uptime": 90.985,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.434,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 29.646,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 96.758,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 95.155,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 41.201,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 68.672,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 5.719,
+          "presence": 72.667
+        },
+        "1187": {
+          "uptime": 27.544,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 55.366,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 18,
+        "condiCleanseSelf": 1,
+        "boonStrips": 48,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.206,
+          "group": 1.47,
+          "squad": 0.174
+        },
+        "725": {
+          "self": 4.987,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 11.519,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 10.975,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 21.126,
+          "group": 8.116,
+          "squad": 0.902
+        },
+        "1122": {
+          "self": 0.917,
+          "group": 0.562,
+          "squad": 0.064
+        },
+        "1187": {
+          "self": 10.819,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 11.975,
+          "group": 7.3,
+          "squad": 1.666
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon112.5144",
@@ -125,7 +1073,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 10.806,
+          "presence": 87.552
+        },
+        "725": {
+          "uptime": 92.9,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.99,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 29.656,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.99,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 99.99,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 57.105,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 79.123,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 5.585,
+          "presence": 60.256
+        },
+        "1187": {
+          "uptime": 19.773,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 52.06,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 25,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 5.737,
+          "group": 3.567,
+          "squad": 0.42
+        },
+        "725": {
+          "self": 0,
+          "group": 12.005,
+          "squad": 1.334
+        },
+        "718": {
+          "self": 0,
+          "group": 0,
+          "squad": 0.314
+        },
+        "726": {
+          "self": 29.656,
+          "group": 29.635,
+          "squad": 3.293
+        },
+        "719": {
+          "self": 17.289,
+          "group": 9.715,
+          "squad": 3.944
+        },
+        "717": {
+          "self": 52.454,
+          "group": 39.904,
+          "squad": 4.434
+        },
+        "743": {
+          "self": 0,
+          "group": 4.096,
+          "squad": 0.455
+        },
+        "873": {
+          "self": 6.26,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 2.35,
+          "group": 1.697,
+          "squad": 0.189
+        },
+        "1187": {
+          "self": 7.599,
+          "group": 7.263,
+          "squad": 0.807
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon172.7364",
@@ -138,7 +1204,125 @@
       "appliedCrowdControl": 1,
       "appliedCrowdControlDuration": 1500,
       "stunBreak": 1,
-      "removedStunDuration": 0.959
+      "removedStunDuration": 0.959,
+      "boons": {
+        "740": {
+          "uptime": 11.626,
+          "presence": 86.921
+        },
+        "725": {
+          "uptime": 81.958,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.925,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 29.591,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.925,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 99.923,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 37.202,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 73.166,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 3.973,
+          "presence": 57.283
+        },
+        "1187": {
+          "uptime": 27.518,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 30.358,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 27,
+        "condiCleanseSelf": 4,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 1.002,
+          "group": 1.417,
+          "squad": 0.157
+        },
+        "725": {
+          "self": 10.719,
+          "group": 27.534,
+          "squad": 3.059
+        },
+        "718": {
+          "self": 30.563,
+          "group": 21.813,
+          "squad": 5.152
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 9.163,
+          "group": 5.816,
+          "squad": 0.646
+        },
+        "717": {
+          "self": 23.009,
+          "group": 11.737,
+          "squad": 1.304
+        },
+        "743": {
+          "self": 0,
+          "group": 1.15,
+          "squad": 0.128
+        },
+        "873": {
+          "self": 26.594,
+          "group": 12.102,
+          "squad": 1.345
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 6.645,
+          "group": 6.306,
+          "squad": 0.701
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon113.5181",
@@ -151,7 +1335,125 @@
       "appliedCrowdControl": 1,
       "appliedCrowdControlDuration": 1500,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 17.075,
+          "presence": 99.988
+        },
+        "725": {
+          "uptime": 92.9,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.357,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 29.654,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 69.234,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 99.988,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 47.359,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 79.121,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 5.514,
+          "presence": 66.744
+        },
+        "1187": {
+          "uptime": 58.166,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 75.972,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 53,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 5.289,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 7.816,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 32.454,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.195,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 32.454,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon119.5403",
@@ -164,7 +1466,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 13.065,
+          "presence": 97.567
+        },
+        "725": {
+          "uptime": 83.75,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 79.172,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 44.47,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 95.865,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 55.017,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 31.338,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 62.583,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 6.488,
+          "presence": 64.665
+        },
+        "1187": {
+          "uptime": 48.144,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 29.522,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 21,
+        "condiCleanseSelf": 9,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 8.381,
+          "group": 1.599,
+          "squad": 0.178
+        },
+        "725": {
+          "self": 64.928,
+          "group": 43.644,
+          "squad": 4.849
+        },
+        "718": {
+          "self": 35.033,
+          "group": 1.202,
+          "squad": 0.212
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 67.031,
+          "group": 48.421,
+          "squad": 7.53
+        },
+        "717": {
+          "self": 36.914,
+          "group": 24.125,
+          "squad": 4.371
+        },
+        "743": {
+          "self": 25.255,
+          "group": 36.56,
+          "squad": 4.727
+        },
+        "873": {
+          "self": 52.608,
+          "group": 34.18,
+          "squad": 4.317
+        },
+        "1122": {
+          "self": 3.19,
+          "group": 2.398,
+          "squad": 0.288
+        },
+        "1187": {
+          "self": 40.548,
+          "group": 11.747,
+          "squad": 1.305
+        },
+        "26980": {
+          "self": 19.659,
+          "group": 28.647,
+          "squad": 3.183
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon108.4996",
@@ -177,7 +1597,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 1,
-      "removedStunDuration": 0.615
+      "removedStunDuration": 0.615,
+      "boons": {
+        "740": {
+          "uptime": 9.654,
+          "presence": 99.994
+        },
+        "725": {
+          "uptime": 81.136,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 92.602,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 89.551,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 77.825,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 69.603,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 56.53,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 2.867,
+          "presence": 50.587
+        },
+        "1187": {
+          "uptime": 13.775,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 9.705,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 56,
+        "condiCleanseSelf": 2,
+        "boonStrips": 1,
+        "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 3.048,
+          "group": 3.037,
+          "squad": 0.337
+        },
+        "718": {
+          "self": 39.385,
+          "group": 61.386,
+          "squad": 20.198
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 7.311,
+          "squad": 0.812
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 11.983,
+          "group": 10.883,
+          "squad": 1.209
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 6.46,
+          "group": 5.769,
+          "squad": 0.641
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon117.5329",
@@ -190,7 +1728,125 @@
       "appliedCrowdControl": 2,
       "appliedCrowdControlDuration": 2000,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 12.829,
+          "presence": 96.959
+        },
+        "725": {
+          "uptime": 81.126,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.365,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 14.822,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.984,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 78.196,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 49.987,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 55.759,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 5.125,
+          "presence": 59.109
+        },
+        "1187": {
+          "uptime": 64.515,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 28.972,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 31,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.529,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 6.087,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 8.116,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.183,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 48.696,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon115.5255",
@@ -203,7 +1859,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 11.863,
+          "presence": 85.06
+        },
+        "725": {
+          "uptime": 88.215,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 97.285,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 99.986,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 82.569,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 52.265,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 55.552,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 3.498,
+          "presence": 66.087
+        },
+        "1187": {
+          "uptime": 23.656,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 28.437,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 8.315,
+          "group": 5.822,
+          "squad": 0.688
+        },
+        "725": {
+          "self": 59.103,
+          "group": 52.619,
+          "squad": 5.847
+        },
+        "718": {
+          "self": 0.702,
+          "group": 0,
+          "squad": 0
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 11.819,
+          "group": 17.729,
+          "squad": 1.97
+        },
+        "743": {
+          "self": 17.214,
+          "group": 11.4,
+          "squad": 1.267
+        },
+        "873": {
+          "self": 15.757,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 1.388,
+          "group": 1.609,
+          "squad": 0.179
+        },
+        "1187": {
+          "self": 19.696,
+          "group": 11.811,
+          "squad": 1.312
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.219
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon116.5292",
@@ -216,7 +1990,125 @@
       "appliedCrowdControl": 2,
       "appliedCrowdControlDuration": 2000,
       "stunBreak": 1,
-      "removedStunDuration": 1.738
+      "removedStunDuration": 1.738,
+      "boons": {
+        "740": {
+          "uptime": 14.356,
+          "presence": 95.662
+        },
+        "725": {
+          "uptime": 57.099,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 91.592,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 99.986,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 78.19,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 52.529,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 55.145,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 2.737,
+          "presence": 50.159
+        },
+        "1187": {
+          "uptime": 53.022,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 17.299,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 5,
+        "condiCleanseSelf": 0,
+        "boonStrips": 26,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.785,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 6.491,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 12.984,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.258,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 41.23,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon120.5440",
@@ -229,7 +2121,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 11.715,
+          "presence": 97.748
+        },
+        "725": {
+          "uptime": 47.911,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 86.16,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 6.333,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 84.949,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 62.329,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 50.216,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 60.065,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 3.929,
+          "presence": 60.124
+        },
+        "1187": {
+          "uptime": 19.769,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 23.401,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 20,
+        "condiCleanseSelf": 6,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.125,
+          "group": 1.744,
+          "squad": 0.207
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0,
+          "squad": 0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 62.307,
+          "group": 69.931,
+          "squad": 9.786
+        },
+        "717": {
+          "self": 39.562,
+          "group": 45.763,
+          "squad": 5.652
+        },
+        "743": {
+          "self": 32.026,
+          "group": 36.249,
+          "squad": 4.423
+        },
+        "873": {
+          "self": 54.895,
+          "group": 28.367,
+          "squad": 3.376
+        },
+        "1122": {
+          "self": 1.132,
+          "group": 1.487,
+          "squad": 0.165
+        },
+        "1187": {
+          "self": 7.95,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 15.895,
+          "group": 7.948,
+          "squad": 0.883
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon129.5773",
@@ -242,7 +2252,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 21.559,
+          "presence": 99.972
+        },
+        "725": {
+          "uptime": 90.456,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 98.854,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 21.706,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 88.42,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 73.992,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 44.226,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 81.81,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 4.948,
+          "presence": 65.129
+        },
+        "1187": {
+          "uptime": 59.696,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 49.958,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 37,
+        "condiCleanseSelf": 1,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 10.195,
+          "group": 8.547,
+          "squad": 0.95
+        },
+        "725": {
+          "self": 39.805,
+          "group": 46.146,
+          "squad": 5.127
+        },
+        "718": {
+          "self": 0,
+          "group": 0,
+          "squad": 0.432
+        },
+        "726": {
+          "self": 21.706,
+          "group": 39.994,
+          "squad": 4.444
+        },
+        "719": {
+          "self": 0,
+          "group": 7.634,
+          "squad": 1.512
+        },
+        "717": {
+          "self": 42.151,
+          "group": 30.623,
+          "squad": 3.403
+        },
+        "743": {
+          "self": 0,
+          "group": 5.164,
+          "squad": 0.602
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 2.873,
+          "group": 2.925,
+          "squad": 0.325
+        },
+        "1187": {
+          "self": 31.973,
+          "group": 28.853,
+          "squad": 3.206
+        },
+        "26980": {
+          "self": 15.382,
+          "group": 5.575,
+          "squad": 1.711
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon124.5588",
@@ -255,7 +2383,125 @@
       "appliedCrowdControl": 3,
       "appliedCrowdControlDuration": 4500,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 18.352,
+          "presence": 99.844
+        },
+        "725": {
+          "uptime": 98.49,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.976,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 39.996,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 82.406,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 86.572,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 41.956,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 82.471,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 4.808,
+          "presence": 70.92
+        },
+        "1187": {
+          "uptime": 85.064,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 34.479,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 2,
+        "condiCleanseSelf": 3,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.841,
+          "group": 5.175,
+          "squad": 0.575
+        },
+        "725": {
+          "self": 0,
+          "group": 17.331,
+          "squad": 3.308
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 37.186,
+          "group": 52.331,
+          "squad": 5.815
+        },
+        "717": {
+          "self": 6.722,
+          "group": 22.652,
+          "squad": 3.607
+        },
+        "743": {
+          "self": 37.214,
+          "group": 31.779,
+          "squad": 3.658
+        },
+        "873": {
+          "self": 60.574,
+          "group": 47.363,
+          "squad": 7.834
+        },
+        "1122": {
+          "self": 2.084,
+          "group": 2.035,
+          "squad": 0.226
+        },
+        "1187": {
+          "self": 51.472,
+          "group": 27.718,
+          "squad": 3.52
+        },
+        "26980": {
+          "self": 19.752,
+          "group": 19.691,
+          "squad": 2.408
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon110.5070",
@@ -268,7 +2514,125 @@
       "appliedCrowdControl": 1,
       "appliedCrowdControlDuration": 1000,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 19.655,
+          "presence": 98.701
+        },
+        "725": {
+          "uptime": 79.418,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.992,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 42.116,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.992,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 81.033,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 51.271,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 81.81,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 6.581,
+          "presence": 73.114
+        },
+        "1187": {
+          "uptime": 79.136,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 27.047,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 1,
+        "boonStrips": 54,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 2.373,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 12.982,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 25.963,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.972,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 31.513,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon104.4848",
@@ -281,7 +2645,125 @@
       "appliedCrowdControl": 2,
       "appliedCrowdControlDuration": 3000,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 19.432,
+          "presence": 99.864
+        },
+        "725": {
+          "uptime": 83.969,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 100,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 39.994,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 100,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 90.91,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 38.216,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 81.81,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 7.225,
+          "presence": 72.681
+        },
+        "1187": {
+          "uptime": 66.186,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 34.246,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 2,
+        "condiCleanseSelf": 2,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 3.002,
+          "group": 0.388,
+          "squad": 0.043
+        },
+        "725": {
+          "self": 17.312,
+          "group": 6.492,
+          "squad": 0.962
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.651,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 6.491,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon125.5625",
@@ -294,7 +2776,125 @@
       "appliedCrowdControl": 1,
       "appliedCrowdControlDuration": 1500,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 21.155,
+          "presence": 99.976
+        },
+        "725": {
+          "uptime": 83.946,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.85,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 39.994,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.976,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 89.634,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 37.551,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 66.72,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 6.366,
+          "presence": 71.076
+        },
+        "1187": {
+          "uptime": 59.679,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 34.479,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 66,
+        "condiCleanseSelf": 2,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 3.795,
+          "group": 2.924,
+          "squad": 0.325
+        },
+        "725": {
+          "self": 2.281,
+          "group": 4.125,
+          "squad": 0.458
+        },
+        "718": {
+          "self": 93.69,
+          "group": 93.208,
+          "squad": 24.841
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 36.494,
+          "group": 10.44,
+          "squad": 1.16
+        },
+        "717": {
+          "self": 21.897,
+          "group": 16.957,
+          "squad": 2.188
+        },
+        "743": {
+          "self": 0,
+          "group": 0,
+          "squad": 0
+        },
+        "873": {
+          "self": 10.949,
+          "group": 21.897,
+          "squad": 2.433
+        },
+        "1122": {
+          "self": 0.146,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 7.298,
+          "group": 3.649,
+          "squad": 0.811
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon111.5107",
@@ -307,7 +2907,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 16.871,
+          "presence": 99.99
+        },
+        "725": {
+          "uptime": 93.933,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 96.476,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 33.789,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.99,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 96.212,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 40.801,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 64.898,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 5.609,
+          "presence": 77.551
+        },
+        "1187": {
+          "uptime": 44.632,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 36.593,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 4,
+        "condiCleanseSelf": 5,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.944,
+          "group": 0.235,
+          "squad": 0.026
+        },
+        "725": {
+          "self": 26.016,
+          "group": 11.315,
+          "squad": 1.498
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.224,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 12.967,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon123.5551",
@@ -320,7 +3038,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 11.185,
+          "presence": 80.82
+        },
+        "725": {
+          "uptime": 88.78,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 90.044,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 8.81,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 86.548,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 70.08,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 23.896,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 47.789,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 3.773,
+          "presence": 77.015
+        },
+        "1187": {
+          "uptime": 31.642,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 38.103,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 18,
+        "condiCleanseSelf": 5,
+        "boonStrips": 1,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 3.134,
+          "group": 4.159,
+          "squad": 0.467
+        },
+        "725": {
+          "self": 2.346,
+          "group": 17.216,
+          "squad": 1.913
+        },
+        "718": {
+          "self": 0.645,
+          "group": 0.033,
+          "squad": 0.004
+        },
+        "726": {
+          "self": 8.81,
+          "group": 14.731,
+          "squad": 1.637
+        },
+        "719": {
+          "self": 24.088,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 3.22,
+          "group": 54.382,
+          "squad": 7.134
+        },
+        "743": {
+          "self": 0.008,
+          "group": 4.031,
+          "squad": 0.448
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 1.798,
+          "group": 1.907,
+          "squad": 0.212
+        },
+        "1187": {
+          "self": 11.785,
+          "group": 11.785,
+          "squad": 1.309
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon114.5218",
@@ -333,7 +3169,125 @@
       "appliedCrowdControl": 1,
       "appliedCrowdControlDuration": 1500,
       "stunBreak": 2,
-      "removedStunDuration": 1.737
+      "removedStunDuration": 1.737,
+      "boons": {
+        "740": {
+          "uptime": 14.166,
+          "presence": 99.533
+        },
+        "725": {
+          "uptime": 75.895,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 97.072,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 19.641,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 86.002,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 94.428,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 63.496,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 93.582,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 3.928,
+          "presence": 66.002
+        },
+        "1187": {
+          "uptime": 60.53,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 36.027,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 28,
+        "condiCleanseSelf": 8,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 7.87,
+          "group": 4.309,
+          "squad": 0.54
+        },
+        "725": {
+          "self": 58.486,
+          "group": 46.937,
+          "squad": 5.487
+        },
+        "718": {
+          "self": 20.542,
+          "group": 2.448,
+          "squad": 0.272
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 86.002,
+          "group": 39.146,
+          "squad": 7.967
+        },
+        "717": {
+          "self": 43.362,
+          "group": 31.717,
+          "squad": 4.543
+        },
+        "743": {
+          "self": 32.566,
+          "group": 28.981,
+          "squad": 3.489
+        },
+        "873": {
+          "self": 72.107,
+          "group": 44.162,
+          "squad": 5.47
+        },
+        "1122": {
+          "self": 2.686,
+          "group": 2.827,
+          "squad": 0.354
+        },
+        "1187": {
+          "self": 48.745,
+          "group": 17.519,
+          "squad": 1.947
+        },
+        "26980": {
+          "self": 28.869,
+          "group": 28.199,
+          "squad": 3.133
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon127.5699",
@@ -346,7 +3300,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 1,
-      "removedStunDuration": 0.795
+      "removedStunDuration": 0.795,
+      "boons": {
+        "740": {
+          "uptime": 17.085,
+          "presence": 99.974
+        },
+        "725": {
+          "uptime": 99.974,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.817,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 1.061,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.974,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 96.212,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 46.704,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 80.465,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 4.764,
+          "presence": 66.872
+        },
+        "1187": {
+          "uptime": 45.322,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 36.027,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 50,
+        "condiCleanseSelf": 1,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 2.725,
+          "group": 2.197,
+          "squad": 0.244
+        },
+        "725": {
+          "self": 23.776,
+          "group": 5.944,
+          "squad": 0.66
+        },
+        "718": {
+          "self": 21.82,
+          "group": 29.257,
+          "squad": 10.472
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 35.307,
+          "group": 23.077,
+          "squad": 2.564
+        },
+        "717": {
+          "self": 0,
+          "group": 0,
+          "squad": 0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.362,
+          "squad": 0.04
+        },
+        "873": {
+          "self": 19.594,
+          "group": 7.971,
+          "squad": 0.886
+        },
+        "1122": {
+          "self": 0.143,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 7.158,
+          "group": 5.369,
+          "squad": 0.795
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon126.5662",
@@ -359,7 +3431,125 @@
       "appliedCrowdControl": 3,
       "appliedCrowdControlDuration": 3500,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 15.344,
+          "presence": 97.007
+        },
+        "725": {
+          "uptime": 99.974,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 98.718,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 39.004,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.976,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 96.212,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 39.986,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 56.796,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 6.624,
+          "presence": 79.073
+        },
+        "1187": {
+          "uptime": 46.615,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 36.413,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 2,
+        "boonStrips": 34,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 3.209,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 3.165,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.183,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 24.348,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon105.4885",
@@ -372,7 +3562,125 @@
       "appliedCrowdControl": 1,
       "appliedCrowdControlDuration": 1500,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 10.171,
+          "presence": 85.387
+        },
+        "725": {
+          "uptime": 69.66,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 94.824,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 57.801,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 98.988,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 67.574,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 25.527,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 82.471,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 5.937,
+          "presence": 79.481
+        },
+        "1187": {
+          "uptime": 31.277,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 37.253,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 40,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.705,
+          "group": 1.689,
+          "squad": 0.188
+        },
+        "725": {
+          "self": 12.117,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 0.373,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 19.477,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 12.984,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.219,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon109.5033",
@@ -385,7 +3693,125 @@
       "appliedCrowdControl": 1,
       "appliedCrowdControlDuration": 1500,
       "stunBreak": 1,
-      "removedStunDuration": 0.808
+      "removedStunDuration": 0.808,
+      "boons": {
+        "740": {
+          "uptime": 9.705,
+          "presence": 98.413
+        },
+        "725": {
+          "uptime": 71.811,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 95.483,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 52.083,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 87.613,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 60.331,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 42.94,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 45.509,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 6.082,
+          "presence": 81.256
+        },
+        "1187": {
+          "uptime": 33.049,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 38.087,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 56,
+        "condiCleanseSelf": 6,
+        "boonStrips": 0,
+        "resurrects": 1
+      },
+      "generation": {
+        "740": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "725": {
+          "self": 6.893,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "718": {
+          "self": 31.216,
+          "group": 28.055,
+          "squad": 3.65
+        },
+        "726": {
+          "self": 17.222,
+          "group": 17.222,
+          "squad": 1.914
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 10.34,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 1.752,
+          "squad": 0.195
+        },
+        "873": {
+          "self": 16.179,
+          "group": 13.785,
+          "squad": 1.532
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0.572,
+          "group": 10.477,
+          "squad": 1.164
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon171.7327",
@@ -398,7 +3824,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 12.202,
+          "presence": 99.925
+        },
+        "725": {
+          "uptime": 80.254,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.925,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 59.925,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.925,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 75.686,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 40.688,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 68.569,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 6.662,
+          "presence": 79.821
+        },
+        "1187": {
+          "uptime": 25.902,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 67.885,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 1,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 2.564,
+          "group": 1.08,
+          "squad": 0.12
+        },
+        "725": {
+          "self": 16.881,
+          "group": 12.274,
+          "squad": 1.364
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 5.862,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 8.116,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.555,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon128.5736",
@@ -411,7 +3955,125 @@
       "appliedCrowdControl": 3,
       "appliedCrowdControlDuration": 4500,
       "stunBreak": 1,
-      "removedStunDuration": 0.008
+      "removedStunDuration": 0.008,
+      "boons": {
+        "740": {
+          "uptime": 11.205,
+          "presence": 93.097
+        },
+        "725": {
+          "uptime": 81.814,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 89.646,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 57.801,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 88.928,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 65.937,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 49.743,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 74.471,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 3.126,
+          "presence": 54.041
+        },
+        "1187": {
+          "uptime": 60.962,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 39.75,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 21,
+        "condiCleanseSelf": 4,
+        "boonStrips": 1,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.033,
+          "group": 2.621,
+          "squad": 0.357
+        },
+        "725": {
+          "self": 64.178,
+          "group": 24.381,
+          "squad": 4.275
+        },
+        "718": {
+          "self": 3.498,
+          "group": 0.003,
+          "squad": 0.21
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 40.493,
+          "group": 46.326,
+          "squad": 6.066
+        },
+        "717": {
+          "self": 31.235,
+          "group": 17.379,
+          "squad": 2.003
+        },
+        "743": {
+          "self": 18.985,
+          "group": 18.537,
+          "squad": 2.492
+        },
+        "873": {
+          "self": 52.57,
+          "group": 40.534,
+          "squad": 4.504
+        },
+        "1122": {
+          "self": 1.768,
+          "group": 2.665,
+          "squad": 0.296
+        },
+        "1187": {
+          "self": 42.415,
+          "group": 9.012,
+          "squad": 1.001
+        },
+        "26980": {
+          "self": 0,
+          "group": 10.794,
+          "squad": 1.199
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon163.7031",
@@ -424,7 +4086,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 1,
-      "removedStunDuration": 0.741
+      "removedStunDuration": 0.741,
+      "boons": {
+        "740": {
+          "uptime": 8.605,
+          "presence": 96.114
+        },
+        "725": {
+          "uptime": 77.817,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 97.772,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 56.106,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.945,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 66.152,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 39.931,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 68.569,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 4.786,
+          "presence": 77.801
+        },
+        "1187": {
+          "uptime": 29.021,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 60.024,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 37.383,
+          "presence": 0
+        }
+      },
+      "support": {
+        "condiCleanse": 13,
+        "condiCleanseSelf": 1,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 3.321,
+          "group": 2.934,
+          "squad": 0.568
+        },
+        "725": {
+          "self": 24.405,
+          "group": 21.102,
+          "squad": 5.854
+        },
+        "718": {
+          "self": 0.128,
+          "group": 0.101,
+          "squad": 0.214
+        },
+        "726": {
+          "self": 38.884,
+          "group": 39.149,
+          "squad": 4.35
+        },
+        "719": {
+          "self": 23.263,
+          "group": 41.21,
+          "squad": 5.916
+        },
+        "717": {
+          "self": 32.464,
+          "group": 23.044,
+          "squad": 2.56
+        },
+        "743": {
+          "self": 13.641,
+          "group": 9.28,
+          "squad": 1.399
+        },
+        "873": {
+          "self": 8.116,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 2.595,
+          "group": 2.604,
+          "squad": 0.347
+        },
+        "1187": {
+          "self": 18.214,
+          "group": 20.18,
+          "squad": 2.242
+        },
+        "26980": {
+          "self": 28.384,
+          "group": 27.074,
+          "squad": 3.008
+        },
+        "30328": {
+          "self": 37.383,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon166.7142",
@@ -437,7 +4217,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 1,
-      "removedStunDuration": 0.768
+      "removedStunDuration": 0.768,
+      "boons": {
+        "740": {
+          "uptime": 14.446,
+          "presence": 90.49
+        },
+        "725": {
+          "uptime": 81.021,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 88.092,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 2.122,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 96.687,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 73.937,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 50.188,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 67.309,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 4.176,
+          "presence": 57.368
+        },
+        "1187": {
+          "uptime": 15.183,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 25.282,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 4,
+        "condiCleanseSelf": 2,
+        "boonStrips": 1,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 2.396,
+          "group": 0.467,
+          "squad": 0.058
+        },
+        "725": {
+          "self": 0,
+          "group": 9.251,
+          "squad": 1.253
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 20.773,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 6.087,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 0.586,
+          "group": 0.0,
+          "squad": 0.28
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon164.7068",
@@ -450,7 +4348,125 @@
       "appliedCrowdControl": 2,
       "appliedCrowdControlDuration": 4000,
       "stunBreak": 1,
-      "removedStunDuration": 0.741
+      "removedStunDuration": 0.741,
+      "boons": {
+        "740": {
+          "uptime": 17.963,
+          "presence": 99.943
+        },
+        "725": {
+          "uptime": 94.794,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.943,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 14.82,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.943,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 83.06,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 42.938,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 60.521,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 4.406,
+          "presence": 56.48
+        },
+        "1187": {
+          "uptime": 26.13,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 42.126,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 42,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.995,
+          "group": 4.376,
+          "squad": 0.522
+        },
+        "725": {
+          "self": 17.665,
+          "group": 19.17,
+          "squad": 2.13
+        },
+        "718": {
+          "self": 71.356,
+          "group": 58.646,
+          "squad": 15.993
+        },
+        "726": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 2.597,
+          "group": 0.142,
+          "squad": 0.016
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 14.244,
+          "group": 8.237,
+          "squad": 1.047
+        },
+        "1122": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 6.333,
+          "group": 6.333,
+          "squad": 0.704
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon150.6550",
@@ -463,7 +4479,125 @@
       "appliedCrowdControl": 1,
       "appliedCrowdControlDuration": 2000,
       "stunBreak": 1,
-      "removedStunDuration": 0.752
+      "removedStunDuration": 0.752,
+      "boons": {
+        "740": {
+          "uptime": 14.925,
+          "presence": 98.137
+        },
+        "725": {
+          "uptime": 90.841,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 98.979,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 88.794,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 80.045,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 21.361,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 61.465,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 3.935,
+          "presence": 54.372
+        },
+        "1187": {
+          "uptime": 26.13,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 46.517,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 20,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 4.811,
+          "group": 4.388,
+          "squad": 0.507
+        },
+        "725": {
+          "self": 35.565,
+          "group": 22.046,
+          "squad": 2.943
+        },
+        "718": {
+          "self": 0,
+          "group": 0.963,
+          "squad": 0.107
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 8.37,
+          "group": 0,
+          "squad": 0
+        },
+        "717": {
+          "self": 43.93,
+          "group": 25.784,
+          "squad": 2.865
+        },
+        "743": {
+          "self": 9.764,
+          "group": 10.738,
+          "squad": 1.346
+        },
+        "873": {
+          "self": 0.428,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 2.264,
+          "group": 1.993,
+          "squad": 0.221
+        },
+        "1187": {
+          "self": 14.95,
+          "group": 14.95,
+          "squad": 1.661
+        },
+        "26980": {
+          "self": 6.059,
+          "group": 5.987,
+          "squad": 0.665
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon130.5810",
@@ -476,7 +4610,125 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 2,
-      "removedStunDuration": 2.59
+      "removedStunDuration": 2.59,
+      "boons": {
+        "740": {
+          "uptime": 17.864,
+          "presence": 95.932
+        },
+        "725": {
+          "uptime": 92.101,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 88.28,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 87.108,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 89.851,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 33.414,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 44.892,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 3.547,
+          "presence": 59.063
+        },
+        "1187": {
+          "uptime": 52.209,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 46.081,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 23,
+        "condiCleanseSelf": 7,
+        "boonStrips": 0,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 6.636,
+          "group": 4.103,
+          "squad": 0.456
+        },
+        "725": {
+          "self": 0,
+          "group": 15.353,
+          "squad": 1.706
+        },
+        "718": {
+          "self": 0.213,
+          "group": 0.217,
+          "squad": 0.339
+        },
+        "726": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 67.862,
+          "group": 67.031,
+          "squad": 8.971
+        },
+        "717": {
+          "self": 16.135,
+          "group": 34.96,
+          "squad": 4.686
+        },
+        "743": {
+          "self": 24.423,
+          "group": 17.672,
+          "squad": 2.259
+        },
+        "873": {
+          "self": 40.834,
+          "group": 30.465,
+          "squad": 4.061
+        },
+        "1122": {
+          "self": 1.111,
+          "group": 1.479,
+          "squad": 0.185
+        },
+        "1187": {
+          "self": 37.259,
+          "group": 8.443,
+          "squad": 0.938
+        },
+        "26980": {
+          "self": 14.905,
+          "group": 11.179,
+          "squad": 1.242
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Anon157.6809",
@@ -489,7 +4741,125 @@
       "appliedCrowdControl": 1,
       "appliedCrowdControlDuration": 1000,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 17.455,
+          "presence": 99.953
+        },
+        "725": {
+          "uptime": 83.766,
+          "presence": 0
+        },
+        "718": {
+          "uptime": 99.953,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 28.524,
+          "presence": 0
+        },
+        "719": {
+          "uptime": 99.953,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 81.717,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 40.25,
+          "presence": 0
+        },
+        "873": {
+          "uptime": 40.564,
+          "presence": 0
+        },
+        "1122": {
+          "uptime": 3.557,
+          "presence": 63.886
+        },
+        "1187": {
+          "uptime": 40.26,
+          "presence": 0
+        },
+        "26980": {
+          "uptime": 27.152,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 1,
+        "resurrects": 0
+      },
+      "generation": {
+        "740": {
+          "self": 2.778,
+          "group": 0.823,
+          "squad": 0.104
+        },
+        "725": {
+          "self": 16.232,
+          "group": 8.116,
+          "squad": 1.127
+        },
+        "718": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "726": {
+          "self": 8.1,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "719": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "717": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "743": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "873": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1122": {
+          "self": 0.466,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "1187": {
+          "self": 14.13,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "26980": {
+          "self": 0,
+          "group": 0.0,
+          "squad": 0.0
+        },
+        "30328": {
+          "self": 0.0,
+          "group": 0.0,
+          "squad": 0.0
+        }
+      }
     },
     {
       "account": "Non Squad Player 3",
@@ -502,7 +4872,63 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "725": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "718": {
+          "uptime": 53.377,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "717": {
+          "uptime": 2.995,
+          "presence": 0
+        },
+        "743": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "873": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "1122": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "1187": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "26980": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 15,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
+      }
     },
     {
       "account": "Non Squad Player 11",
@@ -515,7 +4941,63 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "725": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "718": {
+          "uptime": 84.862,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "717": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "743": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "873": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "1122": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "1187": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "26980": {
+          "uptime": 3.244,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 10,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
+      }
     },
     {
       "account": "Non Squad Player 2",
@@ -528,7 +5010,63 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 0,
-      "removedStunDuration": 0
+      "removedStunDuration": 0,
+      "boons": {
+        "740": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "725": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "718": {
+          "uptime": 63.291,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "717": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "743": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "873": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "1122": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "1187": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "26980": {
+          "uptime": 3.244,
+          "presence": 0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
+      }
     },
     {
       "account": "Non Squad Player 10",
@@ -541,7 +5079,63 @@
       "appliedCrowdControl": 0,
       "appliedCrowdControlDuration": 0,
       "stunBreak": 2,
-      "removedStunDuration": 0.323
+      "removedStunDuration": 0.323,
+      "boons": {
+        "740": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "725": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "718": {
+          "uptime": 18.247,
+          "presence": 0
+        },
+        "726": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "719": {
+          "uptime": 0.609,
+          "presence": 0
+        },
+        "717": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "743": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "873": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "1122": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "1187": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "26980": {
+          "uptime": 0.0,
+          "presence": 0.0
+        },
+        "30328": {
+          "uptime": 0.0,
+          "presence": 0.0
+        }
+      },
+      "support": {
+        "condiCleanse": 0,
+        "condiCleanseSelf": 0,
+        "boonStrips": 0,
+        "resurrects": 0
+      }
     }
   ]
 }

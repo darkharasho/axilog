@@ -3,6 +3,37 @@ use super::{EvtcError, HEADER_SIZE};
 #[derive(Debug, Clone)]
 pub struct RawHeader { pub build: String, pub revision: u8, pub boss_id: u16 }
 
+impl RawHeader {
+    /// Whether this log's arcdps build is on/after the
+    /// `BuffAppliesAndRemovesAsStateChanges` / `ResultEnumRework` threshold
+    /// (GW2EI's `ArcDPSBuilds`, `20260501`) -- see
+    /// `analysis::buffs::events`'s module doc for the full version-split
+    /// explanation. Post-threshold builds emit buff apply/remove/initial
+    /// rows as dedicated statechange event kinds instead of the older
+    /// `is_statechange == 0` combat-event shape this project's
+    /// `events::extract_buff_events`/`support::apply` currently decode --
+    /// so this project's boon/support metrics read all-zero on such a log
+    /// (see `is_post_buff_rework` / `analysis::analyze`'s warning surface).
+    pub fn is_post_buff_rework(&self) -> bool {
+        is_post_buff_rework(&self.build)
+    }
+}
+
+/// Free-function form of `RawHeader::is_post_buff_rework`, for callers that
+/// only have the build string (e.g. tests). `build` is the raw 8-byte
+/// "yyyymmdd" arcdps build string (`RawHeader::build`) -- a plain string
+/// compare against `"20260501"` is correct for this fixed-width, zero-padded
+/// numeric format (no need to actually parse it as a date). Malformed builds
+/// (wrong length, or containing anything other than ASCII digits -- e.g. a
+/// truncated/garbled header) are treated as pre-rework (`false`) rather than
+/// guessed either way, since we have no reliable signal for them.
+pub fn is_post_buff_rework(build: &str) -> bool {
+    if build.len() != 8 || !build.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    build >= "20260501"
+}
+
 pub fn decode_header(buf: &[u8]) -> Result<RawHeader, EvtcError> {
     if buf.len() < HEADER_SIZE {
         return Err(EvtcError::Truncated { need: HEADER_SIZE, at: 0, have: buf.len() });
@@ -34,6 +65,31 @@ mod tests {
         assert_eq!(h.revision, 1);
         assert_eq!(h.boss_id, 1);
     }
+    /// Final-review fix wave: pre-threshold build is NOT post-rework.
+    #[test]
+    fn is_post_buff_rework_false_before_threshold() {
+        assert!(!is_post_buff_rework("20260114"));
+        assert!(!RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 }.is_post_buff_rework());
+    }
+
+    /// The threshold build itself, and anything after it, count as post-rework.
+    #[test]
+    fn is_post_buff_rework_true_on_and_after_threshold() {
+        assert!(is_post_buff_rework("20260501"));
+        assert!(is_post_buff_rework("20260601"));
+        assert!(is_post_buff_rework("20990101"));
+    }
+
+    /// Malformed build strings (wrong length, non-digit bytes) must not
+    /// panic or be guessed either way -- treated as pre-rework.
+    #[test]
+    fn is_post_buff_rework_false_for_malformed_build() {
+        assert!(!is_post_buff_rework(""));
+        assert!(!is_post_buff_rework("2026051")); // 7 chars
+        assert!(!is_post_buff_rework("202605011")); // 9 chars
+        assert!(!is_post_buff_rework("2026050x"));
+    }
+
     #[test]
     fn rejects_bad_magic() {
         let mut b = sample(); b[0] = b'X';

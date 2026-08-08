@@ -1,6 +1,6 @@
 use serde::Serialize;
 use axilog_core::model::Encounter;
-use axilog_core::analysis::Metrics;
+use axilog_core::analysis::{buffs, Metrics};
 
 #[derive(Serialize)]
 pub struct Report {
@@ -10,6 +10,13 @@ pub struct Report {
     pub players: Vec<PlayerOut>,
     pub enemies: Vec<EnemyOut>,
     pub timeline: TimelineOut,
+    /// Structured, user-facing analysis warnings (final-review fix wave) --
+    /// see `axilog_core::analysis::Metrics::warnings`'s doc comment. Omitted
+    /// entirely from the JSON (not serialized as `[]`) when there are none,
+    /// matching this schema's existing omit-when-absent convention for
+    /// other optional/empty-by-default fields (e.g. `TickRateOut`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 #[derive(Serialize)]
 pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u64,
@@ -49,6 +56,35 @@ pub struct PerEnemyOut { pub enemy_id: u64, pub total: u64 }
 #[derive(Serialize)]
 pub struct CcOut { pub applied_total: u32, pub applied_duration_ms: u64,
     pub stun_breaks: u32, pub removed_stun_duration_ms: u64 }
+/// Self/group/squad boon-generation attribution (M3, Task 4) -- see
+/// `axilog_core::analysis::buffs::GenerationStats`'s doc comment for the
+/// exact scope of each field (mirrors `BuffStatistics.GetBuffsForSelf`/
+/// `GetBuffsForPlayers` 1:1). Same 0-100 (duration boons) / raw
+/// average-concurrent-stack-count (intensity boons, no `*100`) scale as
+/// `BoonOut.presence_pct`/`avg_stacks`.
+#[derive(Serialize)]
+pub struct GenerationOut { pub self_pct: f64, pub group_pct: f64, pub squad_pct: f64 }
+/// One tracked boon's whole-fight summary for one player (M3, Tasks 1-4).
+/// `presence_pct` is EI's "% of the fight with >=1 held stack" for every
+/// boon (0-100). `avg_stacks` (time-weighted mean held-stack count) is only
+/// meaningful -- and only serialized -- for the two INTENSITY-type boons
+/// (Might, Stability); it's always 0 for the other 10 (duration-type)
+/// boons, so it's omitted there rather than serialized as a meaningless
+/// zero (see `buffs::uptime`'s module doc for the EI field-meaning source).
+#[derive(Serialize)]
+pub struct BoonOut {
+    pub id: u32,
+    pub name: String,
+    pub presence_pct: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_stacks: Option<f64>,
+    pub generation: GenerationOut,
+}
+/// Condition-cleanse/boon-strip/resurrect counts (M3, Task 3). Stun-break
+/// counts stay on `CcOut` (already there since M1) rather than duplicated
+/// here -- see the Task 5 brief.
+#[derive(Serialize)]
+pub struct SupportOut { pub cleanses: u32, pub cleanses_self: u32, pub strips: u32, pub resurrects: u32 }
 #[derive(Serialize)]
 pub struct PlayerOut { pub account: String, pub character: String, pub profession: String,
     pub elite_spec: String, pub team: String, pub subgroup: u8, pub in_squad: bool,
@@ -65,7 +101,12 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     pub commander_tag: Option<CommanderTagOut>,
     pub damage: DamageOut, pub downs_dealt: u32, pub kills_dealt: u32,
     pub down_contribution: u64, pub downs_taken: u32, pub deaths: u32, pub damage_taken: u64,
-    pub cc: CcOut }
+    pub cc: CcOut,
+    /// Per-tracked-boon uptime/generation summary (M3, Tasks 1-4), one
+    /// entry per `buffs::BOON_IDS` id, in that table's order.
+    pub boons: Vec<BoonOut>,
+    /// Support-stat counts (M3, Task 3).
+    pub support: SupportOut }
 #[derive(Serialize)]
 pub struct EnemyOut { pub id: u64, pub name: String, pub team: String, pub is_player: bool,
     /// The enemy's current squad marker, mirroring `PlayerOut.marker`
@@ -106,6 +147,20 @@ pub fn build_report(enc: &Encounter, metrics: &Metrics, axilog_version: &str) ->
                         applied_duration_ms: m.map(|m| m.cc_duration_ms).unwrap_or(0),
                         stun_breaks: m.map(|m| m.stun_breaks).unwrap_or(0),
                         removed_stun_duration_ms: m.map(|m| m.removed_stun_duration_ms).unwrap_or(0) },
+            boons: buffs::BOON_IDS.iter().map(|&(id, name, is_intensity)| {
+                let u = metrics.boon_uptime.get(&(p.agent_addr, id)).copied()
+                    .unwrap_or(buffs::BoonUptime { presence_pct: 0.0, avg_stacks: 0.0 });
+                let g = metrics.boon_generation.get(&(p.agent_addr, id)).copied().unwrap_or_default();
+                BoonOut {
+                    id, name: name.to_string(), presence_pct: u.presence_pct,
+                    avg_stacks: if is_intensity { Some(u.avg_stacks) } else { None },
+                    generation: GenerationOut { self_pct: g.self_pct, group_pct: g.group_pct, squad_pct: g.squad_pct },
+                }
+            }).collect(),
+            support: m.map(|m| SupportOut {
+                cleanses: m.support.cleanses, cleanses_self: m.support.cleanses_self,
+                strips: m.support.strips, resurrects: m.support.resurrects,
+            }).unwrap_or(SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 }),
         }
     }).collect();
     Report {
@@ -123,6 +178,7 @@ pub fn build_report(enc: &Encounter, metrics: &Metrics, axilog_version: &str) ->
             per_second: PerSecondOut { squad_damage: metrics.timeline.squad_damage.clone(),
                 cc_applied: metrics.timeline.cc_applied.clone(),
                 downs: metrics.timeline.downs.clone() } },
+        warnings: metrics.warnings.clone(),
     }
 }
 
@@ -142,7 +198,9 @@ mod tests {
         let m = Metrics { players: vec![PlayerMetrics{agent_addr:1,damage_total:500,
             dps:500.0,..Default::default()}],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![500],
-            cc_applied:vec![0],downs:vec![0]} };
+            cc_applied:vec![0],downs:vec![0]},
+            boons: Default::default(), boon_uptime: Default::default(),
+            boon_generation: Default::default(), warnings: Default::default() };
         let report = build_report(&enc, &m, "0.1.0");
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.1");

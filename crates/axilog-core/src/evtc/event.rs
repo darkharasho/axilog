@@ -83,6 +83,76 @@ pub mod sc {
     /// comment above aren't independently corroborated anywhere we could
     /// find in GW2EI).
     pub const TICK: u8 = 84;
+    /// Pre-existing-stack buff application, for stacks that were already on
+    /// an agent at the moment the log started recording (M3, Task 1).
+    /// Verified against the arcdps EVTC reference by hand-counting `enum
+    /// cbtstatechange` from `CBTS_COMBAT = 0`: `CBTS_BUFFINITIAL` is index
+    /// 18. Cross-checked against GW2EI's `ArcDPSEnums.StateChange.BuffInitial
+    /// = 18` (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs`).
+    ///
+    /// IMPORTANT version note (verified against both sources): the arcdps
+    /// reference fetched live from deltaconnected.com today additionally
+    /// documents `CBTS_BUFFAPPLY`/`CBTS_BUFFCHANGE`/`CBTS_BUFFREMOVE_SINGLE`/
+    /// `CBTS_BUFFREMOVE_ALL` as their OWN dedicated `is_statechange` values
+    /// (69-72) -- but that is the *current* (2026-05+) arcdps wire format.
+    /// GW2EI's own `CombatItem.IsBuffApplyEvent`/`IsBuffRemoveEvent`
+    /// (`GW2EIEvtcParser/CombatItem.cs`) gate on
+    /// `ArcDPSBuilds.BuffAppliesAndRemovesAsStateChanges = 20260501` (the
+    /// SAME build as `ArcDPSBuilds.ResultEnumRework`, already documented on
+    /// `result::CROWD_CONTROL` above): only builds `>= 20260501` use that
+    /// dedicated-statechange shape. This project's golden/calibration
+    /// fixture is build 20260114 -- BEFORE that threshold -- so apply/remove
+    /// events there use the OLDER shape this module already implements:
+    /// ordinary `is_statechange == 0` combat events, apply flagged by
+    /// `buff == 1` (see `sc::COMBAT`/`decode_events` struct layout) and
+    /// removal flagged by `is_buffremove != 0` (see `buff_remove` module).
+    /// `CBTS_BUFFINITIAL` itself is NOT affected by this split -- it is
+    /// ordinal 18 in both eras (confirmed by the same hand-count against
+    /// both the live reference and `ArcDPSEnums.cs`), so `analysis::buffs`
+    /// treats `is_statechange == BUFF_INITIAL` as an apply event regardless
+    /// of build era.
+    pub const BUFF_INITIAL: u8 = 18;
+    /// Per-buff metadata arcdps emits once per tracked skill id in every
+    /// log (M3 Task 2). Verified against the arcdps EVTC reference
+    /// (hand-counted ordinal 30 from `CBTS_COMBAT = 0`) and cross-checked
+    /// against GW2EI's `ArcDPSEnums.StateChange.BuffInfo = 30`. Payload,
+    /// per the arcdps reference: `overstack_value: max combined duration`,
+    /// `skillid: skilldef id of buff`, `src_master_instid: stacking
+    /// limit`, `is_offcycle: category`, `pad61: buff stacking type`.
+    /// **Load-bearing**: GW2EI's `Buff.CreateSimulator`
+    /// (`GW2EIEvtcParser/EIData/Buffs/Buff.cs`) uses `src_master_instid`
+    /// (its `BuffInfoEvent.MaxStacks`) as the simulator's REAL capacity
+    /// whenever it's present, `> 0`, and different from GW2EI's own
+    /// hardcoded `CommonBuffs` table default -- i.e. arcdps's own
+    /// per-build-reported stack cap OVERRIDES the hardcoded guess. This
+    /// project's fixture reports `src_master_instid == 99` for most
+    /// Queue-type boons (Fury, Quickness, Alacrity, Protection, Vigor,
+    /// Resistance, Resolution, Swiftness) -- far above the hardcoded
+    /// 5-9 `simulator::capacity_for` previously assumed -- see
+    /// `analysis::buffs::events::extract_buff_capacities`.
+    pub const BUFF_INFO: u8 = 30;
+}
+
+/// `is_buffremove` enum values (arcdps `enum cbtbuffremove`). Verified
+/// against GW2EI's `ArcDPSEnums.BuffRemove`
+/// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs`): `None = 0, All = 1,
+/// Single = 2, Manual = 3`. Used on ordinary `is_statechange == 0` combat
+/// events (pre-`BuffAppliesAndRemovesAsStateChanges` era -- see
+/// `sc::BUFF_INITIAL` docs) to distinguish a buff-removal combat event from
+/// a plain strike/buff-apply/buff-damage-tick one, and to pick the removal
+/// kind.
+pub mod buff_remove {
+    pub const NONE: u8 = 0;
+    pub const ALL: u8 = 1;
+    pub const SINGLE: u8 = 2;
+    /// A manual removal (e.g. dodge-cancelling your own buff via a trait,
+    /// or certain UI-driven self-cleanses). GW2EI's `BuffRemoveManualEvent`
+    /// explicitly excludes these from the stack simulator entirely
+    /// (`IsBuffSimulatorCompliant` returns `false`, `UpdateSimulator` is a
+    /// no-op -- `GW2EIEvtcParser/ParsedData/CombatEvents/BuffEvents/
+    /// BuffRemoves/BuffRemoveManualEvent.cs`); `analysis::buffs` mirrors
+    /// this by not extracting Manual removals as simulator events at all.
+    pub const MANUAL: u8 = 3;
 }
 pub mod result {
     // combat result values (verified against arcdps cbtresult enum order)
@@ -118,6 +188,33 @@ pub struct RawEvent {
     pub is_activation: u8,
     pub is_buffremove: u8,
     pub is_statechange: u8,
+    /// Verified against the arcdps EVTC reference struct layout (`iff`
+    /// through `is_offcycle` are single bytes at offsets 48-59; see the
+    /// offset table in `decode_events` below): `is_shields` sits at offset
+    /// 58, between `is_flanking` (57) and `is_offcycle` (59). On a
+    /// `CBTS_BUFFAPPLY`-shaped event (`buff == 1`, apply -- see
+    /// `sc::BUFF_INITIAL` docs for this project's pre-rework event shape),
+    /// the arcdps reference documents it as "non-zero if buff is active
+    /// when applied". Cross-checked against GW2EI's `BuffApplyEvent`:
+    /// `_addedActive = evtcItem.IsShields > 0;`
+    /// (`ParsedData/CombatEvents/BuffEvents/BuffApplies/BuffApplyEvent.cs`),
+    /// which decides whether the new stack is inserted as the immediately
+    /// ACTIVE (ticking) one or appended to the back of the frozen queue --
+    /// see `analysis::buffs::simulator`'s duration-boon fix-round-1 rework.
+    pub is_shields: u8,
+    /// Offset 59, immediately after `is_shields` (M3 Task 2). On an
+    /// apply-shaped event (`buff == 1`, an `IsBuffApplyEvent`-matching
+    /// row), a nonzero value routes it to GW2EI's `BuffExtensionEvent`
+    /// instead of a plain `BuffApplyEvent` -- verified against
+    /// `GW2EIEvtcParser/ParsedData/CombatEvents/CombatEventFactory.cs`,
+    /// `AddBuffApplyEvent`'s pre-`ArcDPSBuilds.BuffAppliesAndRemovesAsStateChanges`
+    /// branch: `if (buffEvent.IsOffcycle > 0) { ... new BuffExtensionEvent(...) }
+    /// else { ... new BuffApplyEvent(...) }`. An extension event EXTENDS an
+    /// already-active stack's remaining duration in place (or becomes a
+    /// fresh active stack if none is active) rather than pushing a new
+    /// queued stack -- see `analysis::buffs::events::BuffEventKind::Extend`
+    /// and `simulator`'s `Extend` handling.
+    pub is_offcycle: u8,
 }
 
 pub fn decode_events(buf: &[u8], count: usize) -> Result<Vec<RawEvent>, EvtcError> {
@@ -154,6 +251,8 @@ pub fn decode_events(buf: &[u8], count: usize) -> Result<Vec<RawEvent>, EvtcErro
             is_activation: e[51],
             is_buffremove: e[52],
             is_statechange: e[56],
+            is_shields: e[58],
+            is_offcycle: e[59],
         });
     }
     Ok(out)
@@ -175,9 +274,18 @@ mod tests {
         b[48] = 1; // iff = FOE
         b[49] = 3; // buff (distinguishable probe value)
         // offsets: iff@48, buff@49, result@50, is_activation@51,
-        // is_buffremove@52, is_statechange@56
+        // is_buffremove@52, is_ninety@53, is_fifty@54, is_moving@55,
+        // is_statechange@56, is_flanking@57, is_shields@58, is_offcycle@59.
         b[50] = result::CRIT; // result
         b[56] = sc::ENTER_COMBAT; // is_statechange
+        // Wire-level probe for `is_shields` (offset 58): distinct nonzero
+        // values at is_shields itself AND at both immediate neighbors
+        // (is_flanking@57, is_offcycle@59), so a ±1 decoder offset bug
+        // (reading either neighbor instead of 58) fails the assertion in
+        // `decodes_strike` below rather than silently passing.
+        b[57] = 9; // is_flanking (neighbor probe, not asserted on RawEvent -- not decoded)
+        b[58] = 7; // is_shields (the field under test)
+        b[59] = 11; // is_offcycle (the OTHER field under test)
         b
     }
     #[test]
@@ -196,5 +304,7 @@ mod tests {
         assert_eq!(e.buff, 3);
         assert_eq!(e.result, result::CRIT);
         assert_eq!(e.is_statechange, sc::ENTER_COMBAT);
+        assert_eq!(e.is_shields, 7, "is_shields must decode from offset 58, not a ±1 neighbor");
+        assert_eq!(e.is_offcycle, 11, "is_offcycle must decode from offset 59, not a ±1 neighbor");
     }
 }

@@ -7,8 +7,8 @@ metrics it currently covers, and follows the arcdps spec more closely than EI in
 notably down contribution, CC-over-time, and full per-second timeline support. Unlike the
 original EI, it isn't tied to a single OS.
 
-Current focus is WvW logs (M1/M2). PvE encounter logic, boons/support stats, healing, and
-rotations are not implemented yet (see Milestones below).
+Current focus is WvW logs (M1/M2/M3). PvE encounter logic, healing, and rotation/skill-cast
+tracking are not implemented yet (see Milestones below).
 
 ## Install / build
 
@@ -30,19 +30,27 @@ cargo run -p axilog-cli -- parse <log.zevtc> --format table
 ### Parse a log
 
 ```sh
-axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json]
+axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json] [--view default|support|boons]
 ```
 
 - `json` (default) — axilog's own native schema (`axilog_schema::Report`): encounter info, teams,
-  per-player metrics (damage, downs/kills, down contribution, CC, stun breaks), and a per-second
-  timeline. This is the richest, most accurate representation — the other formats are lossy views
-  of it.
-- `table` — human-readable summary, one row per player, sorted by damage.
-- `csv` — same per-player fields as `table`, machine-readable.
+  per-player metrics (damage, downs/kills, down contribution, CC, stun breaks, boons, support), and
+  a per-second timeline. This is the richest, most accurate representation — the other formats are
+  lossy views of it.
+- `table` — human-readable summary, one row per player, sorted by damage (or by `--view`'s own sort
+  key — see below).
+- `csv` — same per-player fields as the default `table` view, machine-readable.
 - `ei-json` — a subset of the real Elite Insights / dps.report JSON shape, for tools that already
   consume EI's format. See **EI-JSON parity** below for exactly what is and isn't populated.
 
-Example `table` output (anonymized account names, from the committed golden fixture):
+`--view` (M3) selects the `table` format's column layout — ignored for every other `--format`:
+
+- `default` (default) — damage/DPS/downs/kills/deaths, sorted by damage.
+- `support` — condi cleanses, boon strips, resurrects, stun breaks, sorted by cleanses.
+- `boons` — Might average stacks plus presence % for Quickness/Alacrity/Stability/Protection,
+  sorted by account.
+
+Example `table --view default` output (anonymized account names, from the committed golden fixture):
 
 ```
 account                  profession       damage      DPS  downs  kills  deaths
@@ -51,6 +59,28 @@ account                  profession       damage      DPS  downs  kills  deaths
 :Anon110.5070            Necromancer      169689     3443      4      0       0
 :Anon116.5292            Necromancer      162652     3300      1      0       0
 :Anon107.4959            Mesmer           154899     3143      0      0       0
+```
+
+Example `table --view support` output:
+
+```
+account                  profession    cleanses  strips resurrects stunbreaks
+:Anon133.5921            Elementalist        93       0          0          1
+:Anon118.5366            Mesmer              76       1          0          1
+:Anon125.5625            Ranger              66       0          0          0
+:Anon108.4996            Ranger              56       1          1          1
+:Anon109.5033            Elementalist        56       0          1          1
+```
+
+Example `table --view boons` output:
+
+```
+account                  profession   Might(avg)  Quick%   Alac%   Stab%   Prot%
+:Anon104.4848            Engineer          19.07    66.2     0.0    72.7    90.9
+:Anon105.4885            Ranger            10.15    31.3     0.0    79.5    67.6
+:Anon106.4922            Guardian          13.81    44.4     0.0    70.1    98.0
+:Anon107.4959            Mesmer             8.64    63.8     0.0    72.8    87.6
+:Anon163.7031            Mesmer             8.60    29.0    37.4    77.8    66.2
 ```
 
 ### Anonymize a log for sharing
@@ -87,11 +117,39 @@ Calibrated against a real dps.report EI export for one WvW log (Green Alpine Bor
 | Per-second timeline (squad damage / CC applied / downs) | Native-only | EI's JSON doesn't expose a comparable per-second series; ours does (`timeline.per_second`) |
 | Down-contribution timeline (per-window breakdown) | Native-only, not yet exposed | the down-contribution algorithm already works in time windows internally; a windowed *timeline* (vs. today's single per-player total) is a planned native-only extension |
 | Squad markers (incl. commander-tag colour/variant), tick-rate telemetry | Native-only, implemented | `CBTS_MARKER`/`CBTS_TICK` decode: per-player/enemy `marker`, commander player `commander_tag { variant, guid }`, `encounter.markers[]` assignment timeline, `encounter.tick_rate { avg, min, per_second[] }`; EI's JSON can't express any of this, so the EI adapter is unaffected — see `docs/arcdps-dev-notes.md` |
+| Boon uptime — duration-type boons (Fury, Regeneration, Vigor, Swiftness, Protection, Aegis, Resolution, Quickness, Resistance, Alacrity) | Exact, build-dependent | `presence_pct` (our field) == EI's `buffUptimes[].buffData[0].uptime`; 0/370 cells (10 boons × 37 joined players) over the 2pp tolerance — calibrated only against a pre-"BuffAppliesAndRemovesAsStateChanges" build (< 20260501); see "Supported log eras" below |
+| Boon uptime — intensity-type boons (Might, Stability) presence % | Exact, build-dependent | 0/74 cells over 2pp — pre-rework builds only (< 20260501); see "Supported log eras" below |
+| Boon uptime — intensity-type boons (Might, Stability) average stacks | Approximate, build-dependent | 67/74 cells exact-tolerance (≤5% relative); 7 cells (all Stability) allowlisted — GW2EI types Stability `BuffStackType.StackingConditionalLoss` (loses a stack instead of being CC'd) vs. Might's plain `Stacking`, but GW2EI's own current simulator source has no `StackingConditionalLoss`-specific branching either; the affected players show legitimate multi-stack Stability grants with zero `CROWD_CONTROL` events, so the divergence is a genuine GW2EI-internal nuance not reverse-engineerable from the raw EVTC stream with confidence — allowlisted rather than guessed, see `INTENSITY_STACK_ALLOWLIST` in `crates/axilog-core/tests/boons_golden.rs`; also pre-rework builds only (< 20260501), see "Supported log eras" below |
+| Boon generation (self/group/squad attribution) — squad-average % for Might/Quickness/Alacrity/Stability | Exact, build-dependent | 148 cells (4 boons × 37 players) checked, worst delta 0.097pp, 0 over the 2pp tolerance, no allowlist needed — pre-rework builds only (< 20260501); see "Supported log eras" below |
+| Support: condi cleanses (squad total / self total) | Exact, build-dependent | `801` / `97`, matches EI's `condiCleanse`/`condiCleanseSelf` sums, per-player exact (no allowlist) — pre-rework builds only (< 20260501); see "Supported log eras" below |
+| Support: boon strips (squad total) | Exact, build-dependent | `437`, matches EI's `boonStrips` sum, per-player exact — pre-rework builds only (< 20260501); see "Supported log eras" below |
+| Support: resurrect casts (squad total) | Exact | `6`, matches EI's `resurrects` sum, per-player exact — resurrect-cast detection reads plain `is_activation` cast-start events, unaffected by the buff-statechange rework (see "Supported log eras" below) |
+| `buffMap` / `buffUptimes[]` / `support[0]` condi-cleanse/boon-strip/resurrect fields (`ei-json`) | Implemented | subset covering only the 12 tracked boons and the fields we actually compute — see **EI-JSON parity** note below |
 
 The `ei-json` output only emits fields backed by a real computed metric. Where real EI has a field
 we don't compute (e.g. per-target down-contribution/CC splits, most of `statsAll`'s damage-modifier
 and rotation detail), it's simply omitted — never faked — and the omission is documented inline in
 `crates/axilog-ei/src/lib.rs`.
+
+### Supported log eras
+
+Every calibration above is against a **pre-`BuffAppliesAndRemovesAsStateChanges`** arcdps build
+(build string < `20260501`, GW2EI's `ArcDPSBuilds` threshold), which reports boon
+apply/remove/initial rows as ordinary `is_statechange == 0` combat events. On builds on/after that
+threshold, arcdps instead reports them as dedicated statechange event kinds — a shape this
+project's buff extractor (`analysis/buffs/events.rs`, `analysis/support.rs`) doesn't decode yet.
+The practical effect: on a post-rework log, every boon-uptime/boon-generation/support (condi
+cleanses, boon strips, resurrects unaffected — see the resurrect row above) field silently reads
+zero rather than erroring. Everything else in this document (damage, downs/kills/deaths/down
+contribution, CC, timeline, markers/tick-rate) reads the header/agent/skill/plain-combat-event
+blocks, which are unaffected by this rework and work on both build eras.
+
+To make the zero-reading case visible rather than silent, `analyze` detects it (post-rework build,
+per `RawHeader::is_post_buff_rework`, **and** zero buff events actually extracted) and records a
+warning in `Metrics::warnings`. The native JSON schema surfaces this as a top-level
+`warnings: [...]` array (omitted when empty); the CLI's `--format table` prints each warning to
+stderr; `ei-json` has no comparable field and doesn't carry it. Supporting the post-rework wire
+shape itself is tracked as future work, not yet implemented.
 
 ## Fixture policy
 
@@ -124,8 +182,12 @@ PII-safe committed golden fixture (CI now runs real parity checks, not skip-and-
 `statsAll` CC fields, squad markers (`CBTS_MARKER`) + commander-tag colour/variant + tick-rate
 telemetry (`CBTS_TICK`) — native-schema-only, this README.
 
-**M3 (next):** boons and support stats (uptimes, generation, cleanses/corrupts) — the biggest
-remaining EI-parity gap.
+**M3 (done):** the 12 tracked boons' stack-count timelines, uptime/presence/average-stacks, and
+self/group/squad generation attribution (calibrated exact-to-near-exact vs. EI, see the parity
+table above); condi-cleanse/boon-strip/resurrect support stats (calibrated exact vs. EI, no
+allowlist); exposed in the native schema (`players[].boons[]`, `players[].support`), the EI adapter
+(`buffMap`, `buffUptimes[]`, extended `support[0]`), and two new CLI table views (`--view
+support`/`--view boons`).
 
 **Later:** healing/barrier stats, rotation/skill-cast tracking, PvE encounter logic (boss health
 phases, mechanics), Python/Node SDKs over the Rust core, HTML report output (incl. the tick-rate
