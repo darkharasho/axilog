@@ -262,6 +262,37 @@ class HealingOut(TypedDict):
     barrier_out: int
     downed_healing_out: int
 
+# --- hit-quality stats (M13, Task 1) ---------------------------------------
+
+class HitStatsOut(TypedDict):
+    """Outgoing hit-quality stats -- mirrors EI's `statsAll[0]`.
+    `against_downed_*`/`above90_*` are plain per-event wire flags (NOT
+    down-interval/health-tracker state); this block deliberately does NOT
+    fold pet/minion damage onto the owner (unlike `DamageOut`/
+    `SkillDamageOut`) -- EI's own `statsAll[0]` is actor-only. Always
+    present (not gated), like `boons`/`support`."""
+
+    crit_count: int
+    crit_damage: int
+    flank_count: int
+    glance_count: int
+    moving_count: int
+    connected_count: int
+    connected_damage: int
+    direct_count: int
+    direct_damage: int
+    condition_count: int
+    condition_damage: int
+    critable_direct_count: int
+    against_downed_count: int
+    against_downed_damage: int
+    life_leech_count: int
+    life_leech_damage: int
+    above90_power_count: int
+    above90_power_damage: int
+    above90_condition_count: int
+    above90_condition_damage: int
+
 # --- players / enemies -----------------------------------------------------
 
 class _PlayerOutRequired(TypedDict):
@@ -284,6 +315,7 @@ class _PlayerOutRequired(TypedDict):
     downed_by: ContributionOut
     boons: List[BoonOut]
     support: SupportOut
+    hit_stats: HitStatsOut
 
 class PlayerOut(_PlayerOutRequired, total=False):
     """`marker`/`commander_tag` are omitted (not `null`) when absent.

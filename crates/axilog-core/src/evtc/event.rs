@@ -599,11 +599,74 @@ pub mod buff_remove {
     pub const MANUAL: u8 = 3;
 }
 pub mod result {
-    // combat result values (verified against arcdps cbtresult enum order)
+    // combat result values (`enum cbtresult`) -- verified by hand-counting
+    // every enumerator, in order, from the live arcdps EVTC reference
+    // (`curl https://www.deltaconnected.com/arcdps/evtc/README.txt`,
+    // 2026-08-09): `CBTR_STRIKE_DAMAGENORMAL=0, CBTR_STRIKE_DAMAGECRIT=1,
+    // CBTR_STRIKE_DAMAGEGLANCE=2, CBTR_BLOCK=3, CBTR_EVADE=4,
+    // CBTR_INTERRUPT=5, CBTR_ABSORB=6, CBTR_BLIND=7, CBTR_KILLINGBLOW=8,
+    // CBTR_DOWNED=9, CBTR_DEFIANCE_DAMAGENORMAL=10, CBTR_SKILLCAST=11,
+    // CBTR_CROWDCONTROL=12, CBTR_INVERT=13, CBTR_BUFF_DAMAGECYCLE=14,
+    // CBTR_BUFF_DAMAGENOTCYCLE=15, CBTR_BUFF_DAMAGENOTCYCLEDMGTOTARGETONHIT=16,
+    // CBTR_BUFF_DAMAGENOTCYCLEDMGTOSOURCEONHIT=17,
+    // CBTR_BUFF_DAMAGENOTCYCLEDMGTOTARGETONSTACKREMOVE=18, CBTR_UNKNOWN=19`.
+    // Cross-checked byte-for-byte against GW2EI's `ArcDPSEnums.DamageResult`
+    // (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:211-232`): `DirectNormal
+    // =0, DirectCrit=1, DirectGlance=2, DirectBlock=3, DirectEvade=4,
+    // Interrupt=5, DirectOrBuffAbsorb=6, DirectBlind=7, KillingBlow=8,
+    // Downed=9, BreakbarDamage=10, Activation=11, CrowdControl=12,
+    // DirectOrBuffInvert=13, BuffCycle=14, BuffNotCycle=15,
+    // BuffNotCycle_DamageToTargetOnHit=16, BuffNotCycle_DamageToSourceOnHit
+    // =17, BuffNotCycle_DamageToTargetOnStackRemove=18, Unknown=19` --
+    // identical ordinals, values 0-18 inclusive. This is the SAME unified
+    // enum both `buff == 0` (direct/strike) rows AND post-`ResultEnumRework`
+    // `buff == 1` (buff/condition-damage) rows decode `result` through (see
+    // `cc::is_cc`'s doc comment for the full pre/post-era split citation --
+    // pre-era `buff == 1` rows instead decode through the separate, narrower,
+    // now-retired `ConditionResult` enum, values 0-4 only, anything >= 5
+    // (including this enum's own byte values from here) reads as `Unknown`
+    // and is silently dropped by GW2EI, never becoming any kind of event at
+    // all -- see `analysis::hit_stats`'s module doc for the classification
+    // consequences on a pre-era log).
     pub const NORMAL: u8 = 0;
     pub const CRIT: u8 = 1;
+    /// Glancing strike -- reduced (typically 50%) damage. M13 Task 1
+    /// (`analysis::hit_stats`): a `buff == 0` "hit" outcome (still connects,
+    /// still deals reduced direct damage), distinct from `BLOCK`/`EVADE`
+    /// (which deal zero damage).
+    pub const GLANCE: u8 = 2;
+    /// Attack was blocked (e.g. Mesmer Shield 4) -- deals zero damage, does
+    /// NOT connect. M13 Task 1.
+    pub const BLOCK: u8 = 3;
+    /// Attack was evaded (dodge, or a skill-based evade e.g. Mesmer Sword 2)
+    /// -- deals zero damage, does NOT connect. M13 Task 1.
+    pub const EVADE: u8 = 4;
+    /// The struck agent's skill-cast was interrupted by this hit -- a
+    /// marker result, not a damage-dealing one (GW2EI routes it to a
+    /// `NoDamageHealthDamageEvent`/`IsNotADamageEvent`, contributing to
+    /// none of `analysis::hit_stats`'s counters). M13 Task 1.
+    pub const INTERRUPT: u8 = 5;
+    /// Attack was invulnerable/absorbed (e.g. a Guardian elite skill) --
+    /// deals zero effective damage, does NOT connect. Shared by both
+    /// `buff == 0` (`DirectOrBuffAbsorb`) and post-era `buff == 1` rows
+    /// (same enum value). M13 Task 1.
+    pub const ABSORB: u8 = 6;
+    /// Attack missed entirely (a "blind"/miss outcome) -- deals zero
+    /// damage, does NOT connect. M13 Task 1.
+    pub const BLIND: u8 = 7;
     pub const KILLING_BLOW: u8 = 8;
     pub const DOWNED: u8 = 9;
+    /// Damage applied to a breakbar/defiance bar, not health -- a separate
+    /// (non-`HealthDamageEvent`) accounting path in GW2EI, out of scope for
+    /// `analysis::hit_stats`'s outgoing HEALTH-damage counters. M13 Task 1
+    /// (documented for completeness of the enum, not consumed).
+    pub const BREAKBAR_DAMAGE: u8 = 10;
+    /// "On-skill-use signal event" (`CBTS_SKILLCAST` per the arcdps
+    /// reference; GW2EI names the same ordinal `Activation`) -- a cast
+    /// marker, not a damage-dealing result; unrelated to this project's own
+    /// `RawEvent::is_activation` byte (a different field entirely). Not a
+    /// damage event (M13 Task 1, documented for completeness).
+    pub const ACTIVATION: u8 = 11;
     /// Crowd-control application marker. arcdps synthesizes these under
     /// generic pseudo-skills (e.g. "Generic Knockback and Pull", "Generic
     /// Launch", "Generic Control Effect From Buff"); `value`/`buff_dmg` on
@@ -611,6 +674,35 @@ pub mod result {
     /// damage accumulation — calibrated against the golden WvW fixture
     /// (Task 16A): including them over-counted squadTotalDamage.
     pub const CROWD_CONTROL: u8 = 12;
+    /// Damage was inverted (e.g. reflected back at its own source) -- GW2EI
+    /// treats this identically to `ABSORB` for the struck agent (zero
+    /// effective damage, does not connect; `IsAbsorbed = result ==
+    /// DirectOrBuffAbsorb || result == DirectOrBuffInvert`). M13 Task 1.
+    pub const INVERT: u8 = 13;
+    /// Post-era (`buff == 1` only) condition/buff damage tick that happened
+    /// on its regular tick timer (a normal DoT tick, e.g. an ordinary
+    /// Bleeding/Burning tick). A "hit" outcome for `analysis::hit_stats`.
+    /// M13 Task 1.
+    pub const BUFF_CYCLE: u8 = 14;
+    /// Post-era `buff == 1` buff damage that happened OFF its regular tick
+    /// timer (resistable proc damage, e.g. an on-hit condition proc). A
+    /// "hit" outcome. M13 Task 1.
+    pub const BUFF_NOT_CYCLE: u8 = 15;
+    /// Post-era `buff == 1` buff damage dealt TO the target ON HIT -- one of
+    /// the two life-leech-shaped result values (GW2EI: `IsLifeLeech = result
+    /// == BuffNotCycle_DamageToTargetOnHit || result ==
+    /// BuffNotCycle_DamageToTargetOnStackRemove`). M13 Task 1
+    /// (`analysis::hit_stats::life_leech_count`/`life_leech_damage`).
+    pub const BUFF_NOT_CYCLE_DMG_TO_TARGET_ON_HIT: u8 = 16;
+    /// Post-era `buff == 1` buff damage dealt TO the SOURCE on hitting the
+    /// target (e.g. a thorns/retaliation-shaped effect) -- a "hit" outcome,
+    /// NOT life-leech (GW2EI's `IsLifeLeech` check does not include this
+    /// value). M13 Task 1.
+    pub const BUFF_NOT_CYCLE_DMG_TO_SOURCE_ON_HIT: u8 = 17;
+    /// Post-era `buff == 1` buff damage dealt TO the target on the SOURCE
+    /// losing a stack (the other life-leech-shaped result value). M13 Task
+    /// 1 (`analysis::hit_stats::life_leech_count`/`life_leech_damage`).
+    pub const BUFF_NOT_CYCLE_DMG_TO_TARGET_ON_STACK_REMOVE: u8 = 18;
 }
 
 #[derive(Debug, Clone)]
@@ -631,6 +723,36 @@ pub struct RawEvent {
     pub result: u8,
     pub is_activation: u8,
     pub is_buffremove: u8,
+    /// Offset 53, between `is_buffremove` (52) and `is_fifty` (54, NOT
+    /// decoded -- unused by any analysis in this project so far). Decoded
+    /// starting M13 Task 1 (`analysis::hit_stats`'s above-90 fields need
+    /// it). Per the live arcdps EVTC reference (`curl
+    /// https://www.deltaconnected.com/arcdps/evtc/README.txt`, 2026-08-09,
+    /// `CBTS_COMBAT` block): "`is_ninety: src is above 90% health`" --
+    /// **the damage SOURCE's (attacker's) own health**, NOT the target's,
+    /// despite the field living on the target-directed damage row. Cross-
+    /// checked against GW2EI's `CombatItem.IsNinety`/`SkillEvent.
+    /// IsOverNinety = evtcItem.IsNinety > 0`
+    /// (`GW2EIEvtcParser/ParsedData/CombatEvents/SkillEvent.cs:36`), which
+    /// is what `OffensiveStatistics`'s `PowerDamageAbove90HPCount`/
+    /// `ConditionDamageAbove90HPCount` (EI's `statsAll[0].
+    /// connectedPowerAbove90HPCount`/`connectedConditionAbove90HPCount`)
+    /// read directly -- see `analysis::hit_stats`'s module doc for the full
+    /// "source's own health, not the target's" nuance writeup (this
+    /// deviates from a naive reading of "above90" as being about the
+    /// target).
+    pub is_ninety: u8,
+    /// Offset 55, between `is_fifty` (54, NOT decoded) and `is_statechange`
+    /// (56). Decoded starting M13 Task 1 (`analysis::hit_stats`'s
+    /// `moving_count` needs it). Per the live arcdps EVTC reference
+    /// (`CBTS_COMBAT` block): "`is_moving: bit0 set if src is moving, bit1
+    /// set if dst is moving`" -- a two-bit flag field, NOT a plain boolean.
+    /// Cross-checked against GW2EI's `SkillEvent` ctor: `IsMoving =
+    /// (evtcItem.IsMoving & 1) > 0` (source moving, not consumed by this
+    /// project), `AgainstMoving = (evtcItem.IsMoving & 2) > 0` (target
+    /// moving -- what EI's `statsAll[0].againstMovingRate` counts, and what
+    /// `analysis::hit_stats::moving_count` mirrors).
+    pub is_moving: u8,
     pub is_statechange: u8,
     /// Offset 57, between `is_statechange` (56) and `is_shields` (58) --
     /// decoded starting M10 Task 2 because the missile-family payloads need
@@ -717,6 +839,8 @@ pub fn decode_events(buf: &[u8], count: usize) -> Result<Vec<RawEvent>, EvtcErro
             result: e[50],
             is_activation: e[51],
             is_buffremove: e[52],
+            is_ninety: e[53],
+            is_moving: e[55],
             is_statechange: e[56],
             is_flanking: e[57],
             is_shields: e[58],
@@ -746,6 +870,14 @@ mod tests {
         // is_buffremove@52, is_ninety@53, is_fifty@54, is_moving@55,
         // is_statechange@56, is_flanking@57, is_shields@58, is_offcycle@59.
         b[50] = result::CRIT; // result
+        // Wire-level probe for `is_ninety` (offset 53) / `is_moving` (offset
+        // 55), decoded starting M13 Task 1: distinct nonzero values at each
+        // field under test AND at their immediate neighbors (is_buffremove@52,
+        // the undecoded is_fifty@54 gap on both sides), so a ±1 decoder
+        // offset bug fails the assertion in `decodes_strike` below rather
+        // than silently passing.
+        b[53] = 13; // is_ninety (the field under test, M13 Task 1)
+        b[55] = 15; // is_moving (the field under test, M13 Task 1)
         b[56] = sc::ENTER_COMBAT; // is_statechange
         // Wire-level probe for `is_shields` (offset 58): distinct nonzero
         // values at is_shields itself AND at both immediate neighbors
@@ -772,6 +904,8 @@ mod tests {
         assert_eq!(e.iff, 1);
         assert_eq!(e.buff, 3);
         assert_eq!(e.result, result::CRIT);
+        assert_eq!(e.is_ninety, 13, "is_ninety must decode from offset 53, not a ±1 neighbor");
+        assert_eq!(e.is_moving, 15, "is_moving must decode from offset 55, not a ±1 neighbor");
         assert_eq!(e.is_statechange, sc::ENTER_COMBAT);
         assert_eq!(e.is_flanking, 9, "is_flanking must decode from offset 57, not a ±1 neighbor");
         assert_eq!(e.is_shields, 7, "is_shields must decode from offset 58, not a ±1 neighbor");

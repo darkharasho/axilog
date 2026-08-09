@@ -659,7 +659,7 @@ mod tests {
     #[test]
     fn heals_and_barrier_map_to_ei_field_names_only_when_present() {
         use axilog_schema::{
-            CcOut, ContributionOut, DamageOut, EncounterOut, HealingOut, PlayerOut,
+            CcOut, ContributionOut, DamageOut, EncounterOut, HealingOut, HitStatsOut, PlayerOut,
             SupportOut, TimelineOut, PerSecondOut, Report,
         };
         fn base_player(account: &str, healing: Option<HealingOut>) -> PlayerOut {
@@ -679,6 +679,7 @@ mod tests {
                 skill_damage: None,
                 per_second: None,
                 dps_targets: vec![],
+                hit_stats: HitStatsOut::default(),
             }
         }
         let report = Report {
@@ -788,7 +789,7 @@ mod tests {
         per_second: Option<axilog_schema::PlayerPerSecondOut>,
         dps_targets: Vec<axilog_schema::DpsTargetOut>,
     ) -> axilog_schema::PlayerOut {
-        use axilog_schema::{CcOut, ContributionOut, DamageOut, PlayerOut, SupportOut};
+        use axilog_schema::{CcOut, ContributionOut, DamageOut, HitStatsOut, PlayerOut, SupportOut};
         PlayerOut {
             account: ":A.1".into(), character: "A".into(), profession: "Guardian".into(),
             elite_spec: "".into(), team: "red".into(), subgroup: 1, in_squad: true,
@@ -802,6 +803,7 @@ mod tests {
             support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
             healing: None,
             skill_damage, per_second, dps_targets,
+            hit_stats: HitStatsOut::default(),
         }
     }
 

@@ -203,6 +203,37 @@ export interface ContributionOut {
   movement_impairing: number
 }
 
+/**
+ * Outgoing hit-quality stats (M13, Task 1) -- mirrors EI's `statsAll[0]`.
+ * `against_downed`/`above90_*` are plain per-event wire flags (NOT
+ * down-interval/health-tracker state); this block deliberately does NOT
+ * fold pet/minion damage onto the owner (unlike `DamageOut`/
+ * `SkillDamageOut`) -- EI's own `statsAll[0]` is actor-only. Always present
+ * (not gated) -- no per-target/per-skill combinatorial blowup here.
+ */
+export interface HitStatsOut {
+  crit_count: number
+  crit_damage: number
+  flank_count: number
+  glance_count: number
+  moving_count: number
+  connected_count: number
+  connected_damage: number
+  direct_count: number
+  direct_damage: number
+  condition_count: number
+  condition_damage: number
+  critable_direct_count: number
+  against_downed_count: number
+  against_downed_damage: number
+  life_leech_count: number
+  life_leech_damage: number
+  above90_power_count: number
+  above90_power_damage: number
+  above90_condition_count: number
+  above90_condition_damage: number
+}
+
 export interface PlayerOut {
   account: string
   character: string
@@ -270,6 +301,11 @@ export interface PlayerOut {
    * entirely (not `[]`) when not requested.
    */
   dps_targets?: DpsTargetOut[]
+  /**
+   * Outgoing hit-quality stats (M13, Task 1). Always present, unlike
+   * `skill_damage`/`per_second`/`dps_targets`. See `HitStatsOut`.
+   */
+  hit_stats: HitStatsOut
 }
 
 export interface EnemyOut {

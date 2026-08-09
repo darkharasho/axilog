@@ -210,6 +210,7 @@ mod tests {
             result: 0,
             is_activation: 0,
             is_buffremove: 0,
+            is_ninety: 0, is_moving: 0,
             is_statechange: sc::HEALTH_UPDATE,
             is_flanking: 0,
             is_shields: 0,
