@@ -155,6 +155,26 @@ pub struct RawExtHealEvent {
     pub time: u64,
     pub src_instid: u16,
     pub dst_instid: u16,
+    /// Wire `src_master_instid`, UNMODIFIED by the extension's src-agent
+    /// adjustment (fix round, minion/pet folding). Verified against GW2EI's
+    /// `CombatItem.OverrideSrcAgent(AgentItem)` (the overload
+    /// `HealingStatsExtensionHandler.AdjustCombatEvent` calls): it sets
+    /// `SrcAgent`/`SrcInstid` to the resolved (englobing) agent's own
+    /// identity, but never touches `SrcMasterInstid` -- so this field still
+    /// carries whatever raw pet/minion-ownership instid arcdps originally
+    /// reported, exactly like an ordinary (non-extension) combat row.
+    /// `EvtcParser.cs`'s "Linking minions to their masters" pass
+    /// (`FindAgentMaster(c.Time, c.SrcMasterInstid, c.SrcAgent)`) runs on
+    /// EVERY combat item whose `SrcIsAgent()` is true -- which, for
+    /// extension rows, dispatches to the SAME `HealingStatsExtensionHandler.
+    /// SrcIsAgent` this decoder already gates on (`IsHealingEvent ||
+    /// IsBarrierEvent`) -- so a healing-extension row from a player's pet/
+    /// minion links to its owner via this field exactly like ordinary pet
+    /// damage does (`analysis::damage::pet_credit_events`'s own
+    /// `src_master_instid` use). 0 when absent (no owner link), matching
+    /// every other instid field's "0 = none" convention already used
+    /// elsewhere in this project.
+    pub src_master_instid: u16,
     /// Heal or barrier amount, always positive (already sign-flipped from
     /// the wire's negative `value`/`buff_dmg`).
     pub amount: u64,
@@ -216,6 +236,7 @@ pub fn decode_data_event(e: &RawEvent, signature: u32) -> Option<RawExtHealEvent
         time: e.time,
         src_instid: e.src_instid,
         dst_instid: e.dst_instid,
+        src_master_instid: e.src_master_instid,
         amount,
         is_barrier,
         against_downed,

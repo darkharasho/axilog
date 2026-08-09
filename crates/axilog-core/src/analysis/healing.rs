@@ -76,9 +76,45 @@
 //! x.From)` keys off, not just the resolved addr this module keys off) --
 //! judged out of scope for this task's "totals only" brief given the
 //! magnitude of the residual (bounded, single-digit-account, single-digit-
-//! percent at the squad level for healing, low-double-digit-percent for
-//! barrier -- see `tests/healing_golden.rs`) versus the depth of GW2EI-
-//! internal machinery required to close it exactly.
+//! percent at the squad level for healing, ~7.6% for barrier -- see
+//! `tests/healing_golden.rs`, which records the PLAN-OWNER RULING
+//! authorizing a `barrier_out`-only tolerance exception at the measured
+//! residual plus a small margin) versus the depth of GW2EI-internal
+//! machinery required to close it exactly.
+//!
+//! ## Pet/minion heal folding (fix round)
+//!
+//! GW2EI's `EXTSingleActorHealingHelper.InitHealEvents`/`EXTSingleActorBarrierHelper.
+//! InitBarrierEvents` both fold a player's minions' own outgoing heal/
+//! barrier events into the OWNER's totals (`_actor.GetMinions(log)` loop,
+//! `minion.EXTHealing.GetOutgoingHealEvents(null, log)`). This module
+//! replicates that: a decoded event whose raw resolved healer is NOT a
+//! squad player is still attributed to a squad player if `src_master_instid`
+//! (the WIRE field, untouched by the extension's src-agent adjustment --
+//! see `ext_healing::RawExtHealEvent::src_master_instid`'s doc comment)
+//! resolves, at that event's own time, to a squad player -- mirroring
+//! `analysis::damage::pet_credit_events`'s established owner-credit
+//! pattern exactly (same `InstidRegistry`, same field). Peer sanitization
+//! still happens on the RAW (pre-fold) healer identity first, matching
+//! GW2EI's own `GroupBy(x => x.From)` (a minion's events are sanitized in
+//! their own group, not merged with their owner's group, before folding).
+//!
+//! **Verified empirically to have zero effect on this project's two real
+//! fixtures**: both `fixtures/wvw-small.anon.zevtc` (2065 healing-extension
+//! data rows) and the local `fixtures/local/wvw-postrework.zevtc` (11401
+//! rows) have ZERO rows whose raw resolved healer is outside the squad --
+//! i.e. the arcdps healing-stats addon, in these captures, only ever
+//! reports player-sourced heals/barriers, never pet/minion-sourced ones
+//! (confirmed pets ARE present and active in the same log: ordinary pet
+//! DAMAGE credit, `analysis::damage::pet_credit_events`, finds 87 real
+//! pet-sourced damage events in `wvw-small.anon.zevtc`). The fold logic
+//! itself is exercised and correct (`tests::minion_sourced_*`,
+//! `tests::minion_owned_by_non_squad_agent_is_dropped`,
+//! `tests::minion_with_no_master_instid_is_uncredited`,
+//! `tests::minion_peer_sanitization_happens_before_owner_fold`) -- it's
+//! simply dormant on these two logs specifically, and does NOT explain any
+//! part of the residual described above (which is unchanged before/after
+//! this fold was added).
 
 use crate::analysis::damage::InstidRegistry;
 use crate::analysis::PlayerMetrics;
@@ -135,10 +171,23 @@ pub fn apply(
     // valid). Rows that fail to resolve (no registration yet at that time
     // for that instid) are dropped, matching `InstidRegistry`'s own
     // "leave uncredited rather than guess" convention.
+    //
+    // Fix round (pet/minion heal folding): `healer` here is the RAW
+    // resolved source identity (a player OR their pet/minion) -- NOT yet
+    // filtered to squad members, because GW2EI's own `SanitizeForSrc`
+    // groups (and peer-sanitizes) by this exact raw identity BEFORE a
+    // minion's kept events get folded into its owner's totals (see
+    // `EXTSingleActorHealingHelper.InitHealEvents`'s `_actor.GetMinions(log)`
+    // loop, replicated below via `src_master_instid`). Filtering out
+    // non-squad healers at THIS point (the pre-fix-round behavior) silently
+    // dropped every pet/minion-sourced heal -- e.g. Water Blast fields,
+    // Spirit of Nature-style pet skills, guardian tome-summoned constructs.
     #[derive(Clone, Copy)]
     struct Resolved {
+        time: u64,
         healer: u64,
         target: u64,
+        src_master_instid: u16,
         amount: u64,
         is_barrier: bool,
         against_downed: bool,
@@ -154,14 +203,11 @@ pub fn apply(
         }
         let Some(healer) = registry.resolve_at(ev.src_instid, ev.time) else { continue };
         let Some(target) = registry.resolve_at(ev.dst_instid, ev.time) else { continue };
-        // Only squad-player healers are in scope for this task's per-player
-        // stats (a squad player's own outgoing healing/barrier).
-        if !squad.contains(&healer) {
-            continue;
-        }
         resolved.push(Resolved {
+            time: ev.time,
             healer,
             target,
+            src_master_instid: ev.src_master_instid,
             amount: ev.amount,
             is_barrier: ev.is_barrier,
             against_downed: ev.against_downed,
@@ -172,7 +218,10 @@ pub fn apply(
     // Peer sanitization (module doc): group by (healer, is_barrier) -- heal
     // and barrier events are independent streams in GW2EI (`_healingEvents`
     // vs `_barrierEvents`, sanitized separately) -- and drop non-peer rows
-    // within any group that has at least one peer row.
+    // within any group that has at least one peer row. Grouped by the RAW
+    // healer identity (pre-owner-fold), matching GW2EI's own `GroupBy(x =>
+    // x.From)` -- a pet/minion's events are sanitized within their OWN
+    // group, exactly as if they were an independent healer, before folding.
     let mut groups: BTreeMap<(u64, bool), Vec<usize>> = BTreeMap::new();
     for (i, r) in resolved.iter().enumerate() {
         groups.entry((r.healer, r.is_barrier)).or_default().push(i);
@@ -193,7 +242,22 @@ pub fn apply(
         if !keep[i] {
             continue;
         }
-        let rep = addr_to_rep.get(&r.healer).copied().unwrap_or(r.healer);
+        // Owner resolution (fix round): a squad-player healer attributes
+        // directly; anyone else (a pet/minion, or an unrelated agent) only
+        // attributes if `src_master_instid` -- the WIRE field GW2EI's own
+        // "Linking minions to their masters" pass reads for EVERY agent-
+        // sourced combat item, extension rows included (`ext_healing::
+        // RawExtHealEvent::src_master_instid`'s doc comment) -- resolves,
+        // at this event's own time, to a squad player. Anything else (an
+        // enemy's pet, an unowned NPC) is dropped, matching `pet_credit_
+        // events`'s own "not our pet" exclusion (`analysis::damage`).
+        let attributed_healer = if squad.contains(&r.healer) {
+            Some(r.healer)
+        } else {
+            registry.resolve_at(r.src_master_instid, r.time).filter(|owner| squad.contains(owner))
+        };
+        let Some(attributed_healer) = attributed_healer else { continue };
+        let rep = addr_to_rep.get(&attributed_healer).copied().unwrap_or(attributed_healer);
         let Some(&pi) = idx.get(&rep) else { continue };
         let m = &mut players[pi].healing;
         if r.is_barrier {
@@ -251,6 +315,30 @@ mod tests {
             src_instid,
             dst_instid,
             value: -amount,
+            iff: 0,
+            ..base_event()
+        }
+    }
+
+    /// Same as `direct_heal` but with `src_master_instid` set (a pet/minion-
+    /// sourced heal, fix round) -- `is_barrier` via `is_shields`.
+    fn direct_heal_from_minion(
+        time: u64,
+        src_instid: u16,
+        src_master_instid: u16,
+        dst_instid: u16,
+        amount: i32,
+        is_barrier: bool,
+    ) -> RawEvent {
+        RawEvent {
+            is_statechange: sc::EXTENSION_COMBAT,
+            pad: ext_healing::HEALING_SIGNATURE,
+            time,
+            src_instid,
+            src_master_instid,
+            dst_instid,
+            value: -amount,
+            is_shields: if is_barrier { 1 } else { 0 },
             iff: 0,
             ..base_event()
         }
@@ -446,5 +534,126 @@ mod tests {
         let squad: BTreeSet<u64> = [2].into_iter().collect(); // 9 excluded
         apply(&mut players, &raw, &squad, &BTreeMap::new());
         assert_eq!(players[0].healing.healing_out_total, 0);
+    }
+
+    /// Fix round: a pet/minion's own heal (raw healer addr NOT in squad)
+    /// must fold into its OWNER's `healing_out_total` via `src_master_instid`
+    /// resolution -- mirroring `analysis::damage::pet_credit_events`'s own
+    /// pattern. Owner addr 1 (instid 10) has a pet, raw addr 99 (instid 33,
+    /// `src_master_instid=10`), which heals ally addr 2 (instid 22).
+    #[test]
+    fn minion_sourced_heal_folds_into_owner_not_dropped() {
+        let raw = raw_from(vec![
+            registration(1),
+            instid_reg(0, 1, 10),  // owner
+            instid_reg(0, 2, 22),  // ally target
+            instid_reg(0, 99, 33), // the pet itself, own addr/instid
+            direct_heal_from_minion(100, 33, 10, 22, 400, false),
+        ]);
+        let mut players = vec![player_metrics(1), player_metrics(2)];
+        let squad: BTreeSet<u64> = [1, 2].into_iter().collect(); // 99 (the pet) excluded
+        let present = apply(&mut players, &raw, &squad, &BTreeMap::new());
+        assert!(present);
+        assert_eq!(players[0].healing.healing_out_total, 400, "pet heal credited to owner");
+        assert_eq!(players[0].healing.healing_out_allies, 400);
+        assert_eq!(players[0].healing.healing_out_self, 0);
+    }
+
+    /// Fix round: a pet healing its OWN OWNER counts as a self-heal for the
+    /// owner (matches GW2EI's `outgoingHealingAllies[selfIndex]` semantics
+    /// -- the module doc's "self" definition is symmetric under minion
+    /// folding: target's representative == attributed healer's
+    /// representative).
+    #[test]
+    fn minion_sourced_heal_on_owner_counts_as_self() {
+        let raw = raw_from(vec![
+            registration(1),
+            instid_reg(0, 1, 10),  // owner
+            instid_reg(0, 99, 33), // pet
+            direct_heal_from_minion(100, 33, 10, 10, 250, false), // heals owner's own instid
+        ]);
+        let mut players = vec![player_metrics(1)];
+        let squad: BTreeSet<u64> = [1].into_iter().collect();
+        apply(&mut players, &raw, &squad, &BTreeMap::new());
+        assert_eq!(players[0].healing.healing_out_total, 250);
+        assert_eq!(players[0].healing.healing_out_self, 250);
+        assert_eq!(players[0].healing.healing_out_allies, 0);
+    }
+
+    /// Fix round: minion-sourced BARRIER folds the same way as heal.
+    #[test]
+    fn minion_sourced_barrier_folds_into_owner() {
+        let raw = raw_from(vec![
+            registration(1),
+            instid_reg(0, 1, 10),
+            instid_reg(0, 2, 22),
+            instid_reg(0, 99, 33),
+            direct_heal_from_minion(100, 33, 10, 22, 150, true),
+        ]);
+        let mut players = vec![player_metrics(1), player_metrics(2)];
+        let squad: BTreeSet<u64> = [1, 2].into_iter().collect();
+        apply(&mut players, &raw, &squad, &BTreeMap::new());
+        assert_eq!(players[0].healing.barrier_out, 150);
+        assert_eq!(players[0].healing.healing_out_total, 0, "barrier must not leak into healing");
+    }
+
+    /// A pet whose `src_master_instid` resolves to an addr that is NOT a
+    /// squad member (an enemy's pet, or an unowned NPC) must not attribute
+    /// anywhere -- matches `pet_credit_events`'s own "not our pet"
+    /// exclusion (`analysis::damage`).
+    #[test]
+    fn minion_owned_by_non_squad_agent_is_dropped() {
+        let raw = raw_from(vec![
+            registration(1),
+            instid_reg(0, 9, 10),  // owner addr 9, NOT in squad
+            instid_reg(0, 2, 22),  // ally target, in squad
+            instid_reg(0, 99, 33), // pet
+            direct_heal_from_minion(100, 33, 10, 22, 400, false),
+        ]);
+        let mut players = vec![player_metrics(2)];
+        let squad: BTreeSet<u64> = [2].into_iter().collect(); // 9 and 99 both excluded
+        apply(&mut players, &raw, &squad, &BTreeMap::new());
+        assert_eq!(players[0].healing.healing_out_total, 0);
+    }
+
+    /// A pet with NO `src_master_instid` at all (0 -- "none", per this
+    /// project's existing instid convention) is simply uncredited, not a
+    /// panic/default-to-something-wrong.
+    #[test]
+    fn minion_with_no_master_instid_is_uncredited() {
+        let raw = raw_from(vec![
+            registration(1),
+            instid_reg(0, 2, 22),
+            instid_reg(0, 99, 33),
+            direct_heal_from_minion(100, 33, 0, 22, 400, false),
+        ]);
+        let mut players = vec![player_metrics(2)];
+        let squad: BTreeSet<u64> = [2].into_iter().collect();
+        apply(&mut players, &raw, &squad, &BTreeMap::new());
+        assert_eq!(players[0].healing.healing_out_total, 0);
+    }
+
+    /// Peer sanitization for a minion's events happens PER MINION (its own
+    /// raw healer identity), before folding into the owner -- a duplicate
+    /// non-peer/peer pair from the SAME pet must still collapse to one
+    /// counted amount, exactly like a direct player healer.
+    #[test]
+    fn minion_peer_sanitization_happens_before_owner_fold() {
+        let mut non_peer = direct_heal_from_minion(100, 33, 10, 22, 300, false);
+        non_peer.is_offcycle = 0x40; // dst-peer only -> src_is_peer=false
+        let mut peer = direct_heal_from_minion(150, 33, 10, 22, 500, false);
+        peer.is_offcycle = 0x80; // src-peer
+        let raw = raw_from(vec![
+            registration(1),
+            instid_reg(0, 1, 10),
+            instid_reg(0, 2, 22),
+            instid_reg(0, 99, 33),
+            non_peer,
+            peer,
+        ]);
+        let mut players = vec![player_metrics(1), player_metrics(2)];
+        let squad: BTreeSet<u64> = [1, 2].into_iter().collect();
+        apply(&mut players, &raw, &squad, &BTreeMap::new());
+        assert_eq!(players[0].healing.healing_out_total, 500, "only the peer-reported pet heal counts");
     }
 }

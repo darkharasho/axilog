@@ -18,28 +18,57 @@
 //! per-player, zero mismatches across all 41 joined accounts -- these two
 //! fields never exhibited the residual described below.
 //!
-//! `healing_out_total`/`healing_out_allies`/`barrier_out`: bounded
-//! tolerance, NOT exact, after exhausting systematic causes (same
-//! "tolerance after exhausting systematic causes" posture as
-//! `boons_golden.rs`'s `INTENSITY_STACK_RELATIVE_TOLERANCE`/
-//! `PRESENCE_TOLERANCE_PP`). Squad-wide: `healing_out_total`/
-//! `healing_out_allies` are within 1% (0.68%/0.71% actual on this fixture);
-//! `barrier_out` is within 10% (7.6% actual). Root cause, verified by
-//! direct inspection of the raw decoded events for every mismatching
-//! account (not guessed): a handful of accounts cast a REPEATING skill
-//! (same skill id, same fixed heal/barrier amount, reapplied ~15-35s apart
-//! -- consistent with a recharge-gated repeatable skill, not a genuine
-//! duplicate) whose "peer" (cross-client relayed) copies straddle GW2EI's
-//! `SanitizeForSrc` all-or-nothing rule in a way this project's byte-level
-//! replication cannot perfectly reconstruct without also replicating
-//! GW2EI's internal per-agent-lifetime `AgentItem` identity tracking (out
-//! of scope -- see `evtc::ext_healing`'s module doc for the documented
-//! peer/non-peer mechanism this project DOES replicate exactly, which is
-//! what gets 37/41 accounts' `healing_out_total` and 40/41 accounts'
-//! `barrier_out` to EXACT parity already). The single largest outlier
-//! (one account's `barrier_out`, off by 21240 out of a 49691 golden value)
-//! traces to exactly one repeating skill id's peer-report cluster -- see
-//! `analysis::healing`'s module doc for the full investigation trail.
+//! `healing_out_total`/`healing_out_allies`: within the plan's 1% squad-wide
+//! bar (0.68%/0.71% actual on this fixture, 37/41 accounts exact
+//! per-player) -- **gated at 1%, not loosened** (fix-round instruction: this
+//! bar is met, so it stays exactly where the plan put it).
+//!
+//! `barrier_out`: **PLAN-OWNER RULING (fix round, recorded verbatim)**:
+//! *"The plan's bar is 1% squad sums ... after the pet-fold fix, re-measure.
+//! If barrier_out still exceeds 1%: an exception at the MEASURED residual +
+//! small margin (not a round 10%) is authorized for barrier_out ONLY, with
+//! the comment citing the traced SanitizeForSrc all-or-nothing dedup
+//! mechanism (byte-exact outlier 21240 = 5×4248) and this ruling --
+//! replicating GW2EI's lossy internal heuristic exactly is explicitly
+//! declined as not worth the complexity for a documented overcount.
+//! healing_out_total/allies must meet the 1% bar (they do; keep them gated
+//! there -- do not loosen)."*
+//!
+//! Post-pet-fold-fix measurement (`analysis::healing::apply`'s minion/pet
+//! owner-folding, added in the same fix round): **unchanged** -- both
+//! committed real fixtures (`wvw-small.anon.zevtc` and the local
+//! `wvw-postrework.zevtc`) have ZERO healing-extension data rows whose raw
+//! resolved healer is outside the squad at all (verified directly: 0 of
+//! 2065 / 0 of 11401 decoded rows), so the pet-fold fix -- itself correct
+//! and unit-tested (`analysis::healing::tests::minion_sourced_*`) -- has no
+//! effect on THIS fixture's numbers; the arcdps healing-stats addon
+//! apparently doesn't report pet/minion-sourced heals at all in these
+//! captures (ordinary pet DAMAGE credit still finds 87 real pet-sourced
+//! damage events in the same log, confirming pets are present and active --
+//! just not reported by this specific extension). `barrier_out`'s squad-wide
+//! residual is therefore still **7.60%** (300738 vs golden 279498, diff
+//! 21240) -- per the ruling, the tolerance below is set to the MEASURED
+//! residual (7.5993%) plus a small margin, **8.0%**, not the previously
+//! (unauthorized) round 10%.
+//!
+//! Root cause of the `barrier_out`/`healing_out_total`/`healing_out_allies`
+//! residual, verified by direct inspection of the raw decoded events for
+//! every mismatching account (not guessed): a handful of accounts cast a
+//! REPEATING skill (same skill id, same fixed heal/barrier amount,
+//! reapplied ~15-35s apart -- consistent with a recharge-gated repeatable
+//! skill, not a genuine wire-level duplicate) whose "peer" (cross-client
+//! relayed) copies straddle GW2EI's `SanitizeForSrc` all-or-nothing rule in
+//! a way this project's byte-level replication of *just that rule* cannot
+//! perfectly reconstruct without also replicating GW2EI's internal
+//! per-agent-lifetime `AgentItem` identity tracking -- explicitly declined
+//! per the ruling above (see `evtc::ext_healing`'s module doc for the
+//! documented peer/non-peer mechanism this project DOES replicate exactly,
+//! which is what gets 37/41 accounts' `healing_out_total` and 40/41
+//! accounts' `barrier_out` to EXACT parity already). The single largest
+//! outlier (one account's `barrier_out`, off by EXACTLY 21240 = 5×4248 out
+//! of a 49691 golden value) traces to exactly one repeating skill id's
+//! peer-report cluster -- see `analysis::healing`'s module doc for the full
+//! investigation trail.
 
 use axilog_core::analysis::analyze;
 use axilog_core::evtc::{anon_account, decode_raw};
@@ -62,12 +91,19 @@ const LOCAL_POSTREWORK_ZEVTC: &str = concat!(
     "/../../fixtures/local/wvw-postrework.zevtc"
 );
 
-/// Squad-wide tolerance for `healing_out_total`/`healing_out_allies` (module
-/// doc: 0.68%/0.71% actual on this fixture).
+/// Squad-wide tolerance for `healing_out_total`/`healing_out_allies` --
+/// the plan's stated 1% bar, MET (0.68%/0.71% actual on this fixture) and
+/// left exactly here per the fix-round instruction (not loosened).
 const SQUAD_HEALING_TOLERANCE: f64 = 0.01;
-/// Squad-wide tolerance for `barrier_out` (module doc: 7.6% actual, driven
-/// by one account's one repeating-skill peer-report cluster).
-const SQUAD_BARRIER_TOLERANCE: f64 = 0.10;
+/// Squad-wide tolerance for `barrier_out` -- PLAN-OWNER RULING (fix round,
+/// this module's doc comment has the ruling verbatim): "an exception at the
+/// MEASURED residual + small margin (not a round 10%) is authorized for
+/// barrier_out ONLY". Measured residual after the pet-fold fix: 7.5993%
+/// (300738 ours vs 279498 golden, diff 21240 = exactly 5 × 4248, one
+/// repeating skill's peer-report cluster -- see module doc). 8.0% is that
+/// measured value plus a ~0.4 percentage-point margin -- NOT a round number
+/// chosen for convenience.
+const SQUAD_BARRIER_TOLERANCE: f64 = 0.08;
 
 /// Per-player tolerance for `healing_out_total`/`healing_out_allies`: the
 /// larger of a flat floor (sized to comfortably cover one extra repeating-
@@ -75,11 +111,15 @@ const SQUAD_BARRIER_TOLERANCE: f64 = 0.10;
 /// relative tolerance (for large-magnitude accounts where a flat floor
 /// would be too tight). Covers all 4 known-affected accounts (largest:
 /// 3262 absolute / 23.96% relative on a low-magnitude account) with margin.
+/// Unaffected by the ruling above (that's `barrier_out`-only) -- these two
+/// fields stay gated at the same tolerance as before the fix round.
 const PLAYER_HEALING_ABS_FLOOR: f64 = 5_000.0;
 const PLAYER_HEALING_REL_TOLERANCE: f64 = 0.02;
-/// Per-player tolerance for `barrier_out`: same shape, larger floor (the
-/// single known-affected account's residual is ~5 pulses, ~21240).
-const PLAYER_BARRIER_ABS_FLOOR: f64 = 25_000.0;
+/// Per-player tolerance for `barrier_out` -- same "measured + small margin"
+/// principle as `SQUAD_BARRIER_TOLERANCE` above, applied per-account: the
+/// single known-affected account's residual is EXACTLY 21240 (5 × 4248);
+/// 22000 is that value plus a ~3.6% margin, not a round number.
+const PLAYER_BARRIER_ABS_FLOOR: f64 = 22_000.0;
 const PLAYER_BARRIER_REL_TOLERANCE: f64 = 0.02;
 
 fn within_tolerance(ours: i64, golden: i64, abs_floor: f64, rel_tolerance: f64) -> bool {
@@ -296,7 +336,7 @@ fn check_healing_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
 
     println!(
         "healing_matches_ei_golden: squad totals within tolerance (total/allies <=1%, barrier \
-         <=10%; self/downed EXACT), {joined} accounts joined, 0 mismatches"
+         <=8.0% per plan-owner ruling; self/downed EXACT), {joined} accounts joined, 0 mismatches"
     );
 }
 
