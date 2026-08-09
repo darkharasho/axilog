@@ -149,8 +149,36 @@ pub fn accumulate_pet_credit(
     friendly_team: Option<u32>,
     agent_team: &BTreeMap<u64, u32>,
 ) -> BTreeMap<u64, (u64, BTreeMap<u64, u64>)> {
+    accumulate_pet_credit_with_registry(
+        raw,
+        &InstidRegistry::build(raw),
+        squad,
+        friendly_team,
+        agent_team,
+    )
+}
+
+/// [`accumulate_pet_credit`] against a caller-supplied, already-built
+/// [`InstidRegistry`] (MPERF Task 2).
+///
+/// `InstidRegistry::build` is a pure function of `raw` -- a full linear scan
+/// over every event -- so every consumer that built its own was producing a
+/// bit-for-bit identical map. `analysis::analyze` now builds it exactly once
+/// and threads `&InstidRegistry` into each pass, which is provably
+/// output-identical while removing ~9 redundant whole-log scans per parse.
+/// The `raw`-only wrapper above stays for SDK/standalone/test callers that
+/// have no registry in hand.
+pub fn accumulate_pet_credit_with_registry(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+    friendly_team: Option<u32>,
+    agent_team: &BTreeMap<u64, u32>,
+) -> BTreeMap<u64, (u64, BTreeMap<u64, u64>)> {
     let mut out: BTreeMap<u64, (u64, BTreeMap<u64, u64>)> = BTreeMap::new();
-    for (_time, owner, dst, dmg) in pet_credit_events(raw, squad, friendly_team, agent_team) {
+    for (_time, owner, dst, dmg) in
+        pet_credit_events_with_registry(raw, registry, squad, friendly_team, agent_team)
+    {
         let entry = out.entry(owner).or_default();
         entry.0 += dmg;
         *entry.1.entry(dst).or_default() += dmg;
@@ -170,8 +198,26 @@ pub fn pet_credit_events(
     friendly_team: Option<u32>,
     agent_team: &BTreeMap<u64, u32>,
 ) -> Vec<(u64, u64, u64, u64)> {
-    let registry = InstidRegistry::build(raw);
+    pet_credit_events_with_registry(
+        raw,
+        &InstidRegistry::build(raw),
+        squad,
+        friendly_team,
+        agent_team,
+    )
+}
 
+/// [`pet_credit_events`] against a caller-supplied, already-built
+/// [`InstidRegistry`] (MPERF Task 2) -- see
+/// [`accumulate_pet_credit_with_registry`]'s doc comment for why the
+/// registry is threaded rather than rebuilt per consumer.
+pub fn pet_credit_events_with_registry(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+    friendly_team: Option<u32>,
+    agent_team: &BTreeMap<u64, u32>,
+) -> Vec<(u64, u64, u64, u64)> {
     let mut out = Vec::new();
     for e in &raw.events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }

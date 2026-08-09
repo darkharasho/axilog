@@ -162,6 +162,35 @@ pub fn apply(
     enemies: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
 ) {
+    apply_with_registry(
+        players,
+        raw,
+        &InstidRegistry::build(raw),
+        enc,
+        squad,
+        enemies,
+        addr_to_rep,
+    );
+}
+
+/// [`apply`] against a caller-supplied, already-built [`InstidRegistry`]
+/// (MPERF Task 2) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. The `raw`-only wrapper above stays for standalone/test callers.
+///
+/// Note the sibling `HealthTracker::build(raw)` below is deliberately NOT
+/// hoisted here: it is this module's only consumer, so it is already built
+/// exactly once per parse.
+pub fn apply_with_registry(
+    players: &mut [PlayerMetrics],
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    enc: &Encounter,
+    squad: &BTreeSet<u64>,
+    enemies: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) {
     let idx: BTreeMap<u64, usize> =
         players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
     let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
@@ -198,7 +227,6 @@ pub fn apply(
     downs.sort_by_key(|d| d.time);
 
     let health = HealthTracker::build(raw);
-    let registry = InstidRegistry::build(raw);
     let post_era = raw.header.is_post_buff_rework();
     let boon_ids: BTreeSet<u32> = BOON_IDS.iter().map(|&(id, _, _)| id).collect();
     let log_start = raw.events.first().map(|e| e.time).unwrap_or(0);
@@ -224,7 +252,7 @@ pub fn apply(
             Direction::Incoming => squad,
         };
         let credits =
-            credit_window(&raw.events, &registry, lo, t_down, target, exclude_side, &boon_ids, post_era);
+            credit_window(&raw.events, registry, lo, t_down, target, exclude_side, &boon_ids, post_era);
 
         match down.dir {
             Direction::Outgoing => {

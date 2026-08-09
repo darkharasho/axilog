@@ -327,6 +327,23 @@ pub(crate) fn simulate_boon_generation_ms(
     raw: &RawLog,
     enc: &Encounter,
 ) -> BTreeMap<(u64, u32), BTreeMap<u64, u64>> {
+    simulate_boon_generation_ms_with_registry(
+        raw,
+        &crate::analysis::damage::InstidRegistry::build(raw),
+        enc,
+    )
+}
+
+/// [`simulate_boon_generation_ms`] against a caller-supplied, already-built
+/// [`crate::analysis::damage::InstidRegistry`] (MPERF Task 2) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. The `raw`-only wrapper above stays for test callers.
+pub(crate) fn simulate_boon_generation_ms_with_registry(
+    raw: &RawLog,
+    registry: &crate::analysis::damage::InstidRegistry,
+    enc: &Encounter,
+) -> BTreeMap<(u64, u32), BTreeMap<u64, u64>> {
     let addr_to_rep: BTreeMap<u64, u64> = enc
         .players
         .iter()
@@ -336,7 +353,7 @@ pub(crate) fn simulate_boon_generation_ms(
     let intensity_ids: BTreeSet<u32> =
         BOON_IDS.iter().filter(|&&(_, _, is_intensity)| is_intensity).map(|&(id, _, _)| id).collect();
 
-    let raw_events = events::extract_buff_events(raw, &boon_ids);
+    let raw_events = events::extract_buff_events_with_registry(raw, registry, &boon_ids);
     let arcdps_capacities = events::extract_buff_capacities(raw, &boon_ids);
 
     let mut grouped: BTreeMap<(u64, u32), Vec<BuffEvent>> = BTreeMap::new();

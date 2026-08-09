@@ -82,6 +82,19 @@ pub const BOON_IDS: [(u32, &str, bool); 12] = [
 /// account's boon uptime stays on one entry instead of splitting across
 /// addrs.
 pub fn simulate_boons(raw: &RawLog, enc: &Encounter) -> BTreeMap<(u64, u32), BoonTimeline> {
+    simulate_boons_with_registry(raw, &crate::analysis::damage::InstidRegistry::build(raw), enc)
+}
+
+/// [`simulate_boons`] against a caller-supplied, already-built
+/// [`crate::analysis::damage::InstidRegistry`] (MPERF Task 2) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. The `raw`-only wrapper above stays for standalone/test callers.
+pub fn simulate_boons_with_registry(
+    raw: &RawLog,
+    registry: &crate::analysis::damage::InstidRegistry,
+    enc: &Encounter,
+) -> BTreeMap<(u64, u32), BoonTimeline> {
     let addr_to_rep: BTreeMap<u64, u64> = enc
         .players
         .iter()
@@ -91,7 +104,7 @@ pub fn simulate_boons(raw: &RawLog, enc: &Encounter) -> BTreeMap<(u64, u32), Boo
     let intensity_ids: BTreeSet<u32> =
         BOON_IDS.iter().filter(|&&(_, _, is_intensity)| is_intensity).map(|&(id, _, _)| id).collect();
 
-    let raw_events = events::extract_buff_events(raw, &boon_ids);
+    let raw_events = events::extract_buff_events_with_registry(raw, registry, &boon_ids);
     // arcdps's own reported per-buff stack capacity (M3 Task 2) --
     // preferred over the hardcoded `simulator::capacity_for` table
     // whenever present, mirroring GW2EI's `Buff.CreateSimulator` (see

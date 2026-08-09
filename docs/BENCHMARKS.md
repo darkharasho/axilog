@@ -5,6 +5,9 @@ It is a pure-measurement artifact: no analysis/parsing code changed to
 produce these numbers. Tasks 2/3 of the MPERF milestone (any actual
 refactor work) measure against this baseline using the same harness.
 
+Results of the refactor tasks are appended below the baseline, newest last:
+see [After Task 2](#after-task-2--shared-instidregistry-build-once-thread-by-reference).
+
 ## Harness
 
 - Location: `crates/axilog-cli/benches/pipeline.rs`, wired via
@@ -83,6 +86,73 @@ Full criterion output (including outlier counts) is not reproduced here;
 re-run the command above to regenerate it, or see
 `target/criterion/*/report/index.html` for the detailed HTML report
 criterion writes locally.
+
+## After Task 2 — shared `InstidRegistry` (build once, thread by reference)
+
+MPERF **Task 2** made `analysis::analyze` build one
+`analysis::damage::InstidRegistry` up front and thread `&InstidRegistry`
+into every consumer, instead of each pass rebuilding its own. The registry
+is a pure function of `raw` (one full linear scan over all 120,435 events
+into a `BTreeMap<u16, Vec<(u64, u64)>>`), so all the per-pass copies were
+bit-for-bit identical and ~10 of the 11 builds per parse were pure waste
+(pet-credit damage, CC pet-credit, the CC timeline, contribution, healing,
+skill-damage, timeseries, and three separate buff-event extractions).
+
+**Accuracy is frozen and verified:** the committed fixture's native JSON
+(plain and with every opt-in flag) and its `ei-json` output are all
+byte-identical before/after — `diff` reports no differences on all three.
+
+Same machine/fixture/toolchain as the baseline above. Measured 2026-08-09.
+
+| Stage | Baseline (Task 1) | After Task 2 | Delta |
+|---|---|---|---|
+| `decode_raw` | 8.3730 ms | 8.5771 ms `[8.5065 ms, 8.6528 ms]` | +2.4% (untouched code — run-to-run noise) |
+| `model::resolve` | 659.20 µs | 664.58 µs `[660.72 µs, 668.96 µs]` | +0.8% (untouched code — run-to-run noise) |
+| `analysis::analyze` | 39.495 ms | **22.052 ms** `[21.972 ms, 22.137 ms]` | **−44.2%** (1.79× faster) |
+| `full_pipeline` | 49.215 ms | **31.632 ms** `[31.458 ms, 31.820 ms]` | **−35.7%** (1.56× faster) |
+
+`analysis::analyze` drops from ~80% to ~70% of `full_pipeline`'s wall time,
+so it remains the right target for further MPERF work — but the single
+largest duplicated-work item in it is now gone. (`decode_raw` /
+`model::resolve` were not touched by this task; their small deltas are
+measurement noise, not regressions.)
+
+Raw criterion run used to produce this table:
+
+```
+$ cargo bench -p axilog-cli --bench pipeline
+fixture/wvw-small/decode_raw
+                        time:   [8.5065 ms 8.5771 ms 8.6528 ms]
+fixture/wvw-small/model::resolve
+                        time:   [660.72 µs 664.58 µs 668.96 µs]
+fixture/wvw-small/analysis::analyze
+                        time:   [21.972 ms 22.052 ms 22.137 ms]
+fixture/wvw-small/full_pipeline (decode+resolve+analyze+build_report)
+                        time:   [31.458 ms 31.632 ms 31.820 ms]
+
+AXILOG_BENCH_LOG not set -- skipping real-log benchmark arm
+```
+
+### API shape
+
+Each affected pass keeps its original `raw`-only signature as a thin
+wrapper that builds a private registry and delegates, so SDK, standalone
+(`replay`/`missiles`) and test callers are unchanged. `analyze()` calls the
+new `_with_registry` variants instead:
+
+| `raw`-only (unchanged, still public) | shared-registry variant used by `analyze()` |
+|---|---|
+| `damage::accumulate_pet_credit` | `damage::accumulate_pet_credit_with_registry` |
+| `damage::pet_credit_events` | `damage::pet_credit_events_with_registry` |
+| `cc::apply_cc` | `cc::apply_cc_with_registry` |
+| `cc::timeline` | `cc::timeline_with_registry` |
+| `contribution::apply` | `contribution::apply_with_registry` |
+| `healing::apply` | `healing::apply_with_registry` |
+| `skill_damage::build` | `skill_damage::build_with_registry` |
+| `timeseries::build` | `timeseries::build_with_registry` |
+| `buffs::events::extract_buff_events` | `buffs::events::extract_buff_events_with_registry` |
+| `buffs::simulate_boons` | `buffs::simulate_boons_with_registry` |
+| `buffs::generation::simulate_boon_generation_ms` | `..._with_registry` (crate-private) |
 
 ## Real-log reference
 
