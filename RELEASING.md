@@ -21,7 +21,7 @@ Pushing a tag matching `v*` triggers `.github/workflows/release.yml`, which:
    - `aarch64-apple-darwin`
 3. **`addon-build`** / **`npm-pack-main`** / **`npm-install-shape`** — build the napi-rs
    native addon for the same 5 targets, stage each into its `crates/axilog-node/npm/<platform>`
-   package, `npm pack` every platform package plus the main `@axi/axilog` package, and
+   package, `npm pack` every platform package plus the main `@axiapps/axilog` package, and
    validate the install shape end-to-end (packs the main + linux-x64-gnu tarballs into a
    throwaway project, installs, requires, parses the committed fixture, asserts 42 players /
    squad damage total 2138414).
@@ -29,19 +29,29 @@ Pushing a tag matching `v*` triggers `.github/workflows/release.yml`, which:
    abi3 — one wheel per platform covers every CPython ≥3.9) for
    `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`, `x86_64-apple-darwin`,
    `aarch64-apple-darwin`, plus a platform-independent sdist (`maturin sdist`) on Linux.
-5. **`npm-publish`** / **`pypi-publish`** — gated publish steps (see below).
-6. **`release`** — downloads every build's artifacts, re-checks the version guard,
+5. **`pypi-validate`** — pre-release Python gate: `twine check` on every wheel + the
+   sdist, then a real install-smoke (venv `pip install` of the manylinux x86_64 wheel,
+   `import axilog`, end-to-end parse of the committed fixture). The `release` job
+   `needs` this, so a broken wheel never becomes a release asset.
+6. **`npm-publish`** — gated npm publish step (see below).
+7. **`release`** — downloads every build's artifacts, re-checks the version guard,
    generates a consolidated `SHA256SUMS`, and creates the GitHub Release (`gh release
    create`) with generated release notes and every archive/tarball/wheel/sdist +
    checksum file attached.
+8. **PyPI publish** happens in a SEPARATE workflow, `.github/workflows/pypl-publish.yml`,
+   which fires when the GitHub Release is *published*: it downloads the release's wheel +
+   sdist assets and uploads them to PyPI via **trusted publishing** (OIDC — no token
+   secret). The PyPI trusted-publisher config is bound to that exact filename; do not
+   rename it.
 
 Every job above runs the same way whether the workflow was triggered by a tag push or by
 `workflow_dispatch` (manual "dry run" — see the workflow file's header comment) — the only
-difference is that `npm-publish`, `pypi-publish`, and `release` are gated to run **only**
+difference is that `npm-publish` and `release` are gated to run **only**
 on `github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')`. A
 `workflow_dispatch` run — even one manually pointed at an existing tag ref — always
 dry-runs: it builds, packs, and validates everything, but never creates a Release or
-publishes to npm/PyPI.
+publishes to npm (and since no Release is created, PyPI trusted publishing never fires
+either).
 
 ### aarch64-unknown-linux-gnu cross-compilation
 
@@ -145,7 +155,7 @@ release needs both to agree.
    named `vX.Y.Z` will exist with:
    - One `axilog-X.Y.Z-<target>.tar.gz` / `.zip` per CLI target, each with a `.sha256`
      alongside it
-   - One `.tgz` per npm package (main `@axi/axilog` + all 5 platform packages)
+   - One `.tgz` per npm package (main `@axiapps/axilog` + all 5 platform packages)
    - One `.whl` per Python wheel target, plus one sdist `.tar.gz`
    - A consolidated `SHA256SUMS` covering every archive/tarball/wheel/sdist
    - Auto-generated release notes
@@ -155,23 +165,24 @@ If the tag doesn't match `Cargo.toml`'s version, the workflow fails immediately 
 clear error — fix the version, delete the bad tag (`git tag -d vX.Y.Z && git push
 --delete origin vX.Y.Z`), and retag.
 
-## Publishing to npm / PyPI (optional, gated)
+## Publishing to npm / PyPI
 
-`npm-publish` and `pypi-publish` only run on a real tag **push** (never on
-`workflow_dispatch`, even one pointed at an existing tag — see the workflow's header
-comment), and each additionally requires its registry token to be configured as a
-repository secret:
+- **npm** (`npm-publish` job in `release.yml`): only runs on a real tag **push** (never
+  on `workflow_dispatch`, even one pointed at an existing tag — see the workflow's
+  header comment) and requires the `NPM_TOKEN` repository secret (an npm
+  automation/publish token with publish rights on the `axiapps` org). Publishes every
+  packed tarball (`@axiapps/axilog` + the 5 platform packages) with `--access public`,
+  skipping any name@version that is already on the registry (idempotent re-runs).
+  Without the secret, the step logs a clear skip message and exits successfully.
+- **PyPI** (`pypl-publish.yml`, separate workflow): fires on the GitHub Release
+  `published` event and uses **trusted publishing** (OIDC) — no token secret at all.
+  The trusted-publisher config on PyPI is bound to the repo + the exact workflow
+  filename `pypl-publish.yml`. `skip-existing: true` makes re-runs idempotent; a
+  `workflow_dispatch` input allows re-publishing an existing release tag after a
+  partial failure.
 
-- **npm**: set the `NPM_TOKEN` repository secret (an npm automation/publish token) to
-  enable `npm publish --access public` for every packed tarball on the next tag push.
-- **PyPI**: set the `PYPI_TOKEN` repository secret (a PyPI API token, used as
-  `TWINE_PASSWORD` with `TWINE_USERNAME=__token__`) to enable `twine upload` for every
-  wheel + the sdist on the next tag push.
-
-Without the corresponding secret, the publish step logs a clear skip message and exits
-successfully — the GitHub Release itself (and its attached npm tarballs / wheels /
-sdist) is still created either way, so consumers can always install from the Release
-even before either registry is wired up.
+The GitHub Release itself (and its attached npm tarballs / wheels / sdist) is created
+regardless of registry publishing, so consumers can always install from the Release.
 
 ## Verifying a downloaded release archive
 

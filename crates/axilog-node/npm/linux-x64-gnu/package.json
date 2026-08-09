@@ -1,6 +1,6 @@
 {
-  "name": "@axi/axilog-linux-x64-gnu",
-  "version": "0.1.0",
+  "name": "@axiapps/axilog-linux-x64-gnu",
+  "version": "0.1.1",
   "cpu": [
     "x64"
   ],

@@ -1,3 +1,3 @@
-# `@axi/axilog-darwin-x64`
+# `@axiapps/axilog-darwin-x64`
 
-This is the **x86_64-apple-darwin** binary for `@axi/axilog`
+This is the **x86_64-apple-darwin** binary for `@axiapps/axilog`

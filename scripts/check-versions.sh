@@ -132,3 +132,29 @@ if [ "$FAIL" -ne 0 ]; then
 fi
 
 echo "OK: all versions in sync ($CARGO_VERSION)."
+
+# --- crates/axilog-node/index.js (napi-generated version literals) ---
+# The generated loader hard-codes the expected platform-package version in
+# every `require` branch ("Native binding package version mismatch, expected
+# X"). `napi build` regenerates these from package.json, but the committed
+# file can go stale if a bump edits package.json by hand without a rebuild
+# (the exact gap this M8-parked check closes). Assert every literal in the
+# committed file agrees with the workspace version.
+INDEX_JS="$REPO_ROOT/crates/axilog-node/index.js"
+if [ -f "$INDEX_JS" ]; then
+  STALE_LITERALS="$(grep -oE "expected [0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.-]*" "$INDEX_JS" | sort -u | grep -v "expected $CARGO_VERSION\$" || true)"
+  if [ -n "$STALE_LITERALS" ]; then
+    echo "MISMATCH: crates/axilog-node/index.js -- stale version literal(s): $STALE_LITERALS (workspace is $CARGO_VERSION). Regenerate with 'npm run build' in crates/axilog-node or update the literals." >&2
+    FAIL=1
+  else
+    echo "OK: crates/axilog-node/index.js version literals ($CARGO_VERSION)"
+  fi
+else
+  echo "MISMATCH: $INDEX_JS does not exist" >&2
+  FAIL=1
+fi
+
+if [ "$FAIL" -ne 0 ]; then
+  echo "FAILED (index.js literal check)." >&2
+  exit 1
+fi

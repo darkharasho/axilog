@@ -1,0 +1,95 @@
+# PyPI publish via TRUSTED PUBLISHING (OIDC) -- MPUB.
+#
+# THIS FILENAME IS LOAD-BEARING: the PyPI trusted-publisher configuration
+# for the `axilog` project is bound to `pypl-publish.yml` in this repo. Do
+# not rename this file without updating the publisher config on PyPI first,
+# or every publish will fail with an OIDC claim mismatch.
+#
+# Flow: release.yml (on a v* tag push) builds the wheels + sdist, gates
+# them behind `pypi-validate` (twine check + venv install-smoke + fixture
+# parse), and attaches them as GitHub Release assets. When that release is
+# PUBLISHED, this workflow downloads exactly those assets and hands them to
+# pypa/gh-action-pypi-publish, which exchanges this run's OIDC token for a
+# short-lived PyPI API token -- no long-lived PYPI_TOKEN secret anywhere.
+#
+# `skip-existing: true` is the idempotency half of the M8-parked publish
+# hardening: re-running this workflow (or re-publishing a release) after a
+# partial failure re-uploads only what's missing instead of failing on the
+# first duplicate.
+#
+# The asset patterns are deliberately narrow: `*.whl` plus the sdist's
+# exact `axilog-<version>.tar.gz` name -- the release also carries CLI
+# binary tarballs (`axilog-<target-triple>.tar.gz`), which must never be
+# handed to PyPI.
+name: pypl-publish
+
+on:
+  release:
+    types: [published]
+  # Manual re-run against an existing release tag (e.g. after a partial
+  # upload). Publishing is still safe under `skip-existing`.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to (re)publish to PyPI (e.g. v0.1.1)"
+        required: true
+        type: string
+
+jobs:
+  pypi-publish:
+    name: Publish to PyPI (trusted publishing)
+    runs-on: ubuntu-latest
+    permissions:
+      # Required for the OIDC token exchange with PyPI.
+      id-token: write
+      # Required to download the release assets.
+      contents: read
+    steps:
+      - name: Resolve tag and version
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${EVENT_TAG:-$INPUT_TAG}"
+          if [ -z "$TAG" ]; then
+            echo "error: no tag from release event or dispatch input" >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing release $TAG (PyPI version $VERSION)"
+
+      - name: Download wheel + sdist release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "${{ steps.meta.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --dir dist \
+            --pattern '*.whl' \
+            --pattern "axilog-${{ steps.meta.outputs.version }}.tar.gz"
+          echo "Assets to publish:"
+          ls -la dist/
+          # Belt-and-braces: fail loudly if the narrow patterns somehow
+          # matched a CLI binary tarball (axilog-<target-triple>.tar.gz).
+          for f in dist/*.tar.gz; do
+            case "$(basename "$f")" in
+              "axilog-${{ steps.meta.outputs.version }}.tar.gz") ;;
+              *)
+                echo "error: unexpected non-sdist tarball $f -- refusing to publish" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true

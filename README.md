@@ -38,7 +38,7 @@ Targets published per release: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linu
 
 ### Node SDK (npm tarball)
 
-`@axi/axilog` is not yet published to the npm registry (see **SDKs** below) — until then, install
+`@axiapps/axilog` is not yet published to the npm registry (see **SDKs** below) — until then, install
 the tarballs attached to a GitHub Release directly:
 
 ```sh
@@ -47,7 +47,7 @@ npm install ./axi-axilog-X.Y.Z.tgz ./axi-axilog-linux-x64-gnu-X.Y.Z.tgz
 ```
 
 ```js
-const { parseFile } = require('@axi/axilog')
+const { parseFile } = require('@axiapps/axilog')
 console.log(parseFile('./fight.zevtc').players.length)
 ```
 
@@ -296,7 +296,7 @@ or committing it as a test fixture — never commit a raw `.zevtc`/`.evtc` (see 
 
 ### Node
 
-`crates/axilog-node` (package `@axi/axilog`) is a native addon over the same Rust core the CLI
+`crates/axilog-node` (package `@axiapps/axilog`) is a native addon over the same Rust core the CLI
 uses — [napi-rs](https://napi.rs) bindings, not a subprocess wrapper, so there's no JSON-over-pipe
 overhead and no separate implementation to drift from the CLI's output (a dual-path parity test
 asserts the two stay identical). Not yet published to npm — see below.
@@ -308,7 +308,7 @@ npm run build   # compiles the Rust crate to a platform .node addon
 ```
 
 ```js
-const { parseFile, parseFileEi } = require('@axi/axilog')
+const { parseFile, parseFileEi } = require('@axiapps/axilog')
 
 // Native schema (axilog_schema::Report) — the same JSON the CLI's
 // `--format json` prints, typed via index.d.ts/types.d.ts.
@@ -555,7 +555,7 @@ zero extracted buff events; added `tests/postrework_golden.rs`, a real-capture c
 that activates automatically the moment a `fixtures/local/wvw-postrework.zevtc` fixture exists —
 see "Supported log eras" above.
 
-**M5 (done):** Node SDK (`crates/axilog-node`, `@axi/axilog`) — napi-rs native addon exporting
+**M5 (done):** Node SDK (`crates/axilog-node`, `@axiapps/axilog`) — napi-rs native addon exporting
 `parseFile`/`parseBuffer`/`parseFileEi`/`anonymizeFile` over the same decode → resolve → analyze →
 build_report pipeline the CLI drives (no reimplementation, no JSON-over-subprocess); hand-maintained
 TypeScript types (`types.d.ts`) for the native schema, patched into the generated `index.d.ts`; a
@@ -588,7 +588,7 @@ containers, byte-for-byte determinism, size budgets: <250KB total report, <50KB 
 report** above.
 
 **M8 (done):** tag-triggered release pipeline (`.github/workflows/release.yml`, `v*` tags) — CLI
-binaries for all 5 targets, `@axi/axilog` npm main + platform packages (all 5), and `axilog`
+binaries for all 5 targets, `@axiapps/axilog` npm main + platform packages (all 5), and `axilog`
 Python wheels (abi3, 4 platforms) + sdist, all attached to one GitHub Release with a consolidated
 `SHA256SUMS`; a version single-source guard (`scripts/check-versions.sh`, wired into `ci.yml`)
 keeps `Cargo.toml`/`package.json`/npm platform packages/`pyproject.toml` from drifting apart, plus
