@@ -86,6 +86,20 @@ enum Cmd {
         /// dps_targets` doc comments for the full numbers.
         #[arg(long)]
         timeseries: bool,
+        /// Embed the native per-player rotation (cast tracking) block (M14
+        /// Task 1): per-squad-player cast list grouped by skill id --
+        /// `axilog_core::analysis::rotation`. Already computed
+        /// unconditionally by `analyze()` regardless of this flag (cheap);
+        /// this only controls whether the `Report` passed to every
+        /// `--format` carries it. `--format json` embeds it in each
+        /// `players[].rotation` field; every other format ignores it. Off
+        /// by default -- measured on the committed WvW fixture (compact
+        /// JSON): 170,451 -> 284,535 bytes (+66.9%), well past the ~30%
+        /// size-discipline guideline (see `axilog_schema::Report::players`'s
+        /// `PlayerOut::rotation` doc comment for the full writeup), so
+        /// it's opt-in like `--skill-damage`/`--timeseries`.
+        #[arg(long)]
+        rotation: bool,
     },
     /// Rewrite every player's character/account name in a .zevtc to a
     /// deterministic `Anon<N>` placeholder and write the result as a new
@@ -123,12 +137,25 @@ enum View {
     /// Incoming defenses (M13, Task 3): blocks/evades/dodges, total damage
     /// taken (+ strike/condi split), downs taken.
     Defense,
+    /// Per-player rotation summary (M14, Task 3): total animated-cast count
+    /// (`axilog_core::analysis::rotation::total_casts`) plus APM (Actions
+    /// Per Minute, `casts / (active_ms / 60_000)`, using M11's
+    /// `ActivityIntervals::active_ms` as the active-time denominator).
+    /// Reads `axilog_core::analysis::Metrics::players[].rotation` DIRECTLY
+    /// (via the `metrics`/`activity` this table-rendering path already has
+    /// in scope), NOT `Report::players[].rotation` -- unlike every other
+    /// view above, this one does NOT require `--rotation` to have also been
+    /// passed, since `PlayerMetrics::rotation` is always computed by
+    /// `analyze()` regardless of that flag (that flag only gates whether
+    /// the native/ei-json JSON payload carries the full per-cast detail --
+    /// see `axilog_schema::PlayerOut::rotation`'s doc comment).
+    Rotation,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage, timeseries } => {
+        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage, timeseries, rotation } => {
             let bytes = std::fs::read(&path)?;
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
@@ -142,6 +169,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
             let missiles_data =
                 missiles.then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
+            // M11 Task 3: down/dead intervals + activeTimes are cheap (no
+            // position decode/downsample), so they're computed
+            // unconditionally -- unlike `--replay`'s `replay_data` above,
+            // which stays opt-in. Originally only threaded into the
+            // `ei-json` branch below; M14 Task 3's `--view rotation` (APM)
+            // needs the same data for the `table` branch too, so this is
+            // hoisted out here and shared by both rather than computed
+            // twice.
+            let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
             let report = axilog_schema::build_report(
                 &enc,
                 &metrics,
@@ -150,6 +186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 missiles_data.as_ref(),
                 skill_damage,
                 timeseries,
+                rotation,
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
             // post-2026-05-01 buff-statechange-rework build producing
@@ -167,17 +204,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let rendered = match format {
                 Format::Json => format!("{}\n", serde_json::to_string_pretty(&report)?),
                 Format::EiJson => {
-                    // M11 Task 3: down/dead intervals + activeTimes are
-                    // cheap (no position decode/downsample), so they're
-                    // computed here unconditionally -- unlike `--replay`'s
-                    // `replay_data` above, which stays opt-in.
-                    let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
                     format!(
                         "{}\n",
                         serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report, &activity))?
                     )
                 }
-                Format::Table => axilog_cli_table(&report, view),
+                Format::Table => axilog_cli_table(&report, view, &metrics, &activity),
                 Format::Csv => axilog_cli_csv(&report),
                 Format::Html => axilog_html::render(&report),
             };
@@ -206,14 +238,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 // table/csv helpers added in Task 14; `view` (M3, Task 5) selects the
-// column layout below.
-fn axilog_cli_table(r: &axilog_schema::Report, view: View) -> String {
+// column layout below. `metrics`/`activity` (M14, Task 3) are only used by
+// `View::Rotation` (see that variant's doc comment for why it reads
+// `Metrics` directly rather than `Report`) -- every other view ignores
+// them.
+fn axilog_cli_table(
+    r: &axilog_schema::Report,
+    view: View,
+    metrics: &axilog_core::analysis::Metrics,
+    activity: &[axilog_core::analysis::replay::ActivityIntervals],
+) -> String {
     match view {
         View::Default => axilog_cli_table_default(r),
         View::Support => axilog_cli_table_support(r),
         View::Boons => axilog_cli_table_boons(r),
         View::Healing => axilog_cli_table_healing(r),
         View::Defense => axilog_cli_table_defense(r),
+        View::Rotation => axilog_cli_table_rotation(r, metrics, activity),
     }
 }
 fn axilog_cli_table_default(r: &axilog_schema::Report) -> String {
@@ -322,6 +363,48 @@ fn axilog_cli_table_defense(r: &axilog_schema::Report) -> String {
             p.defenses.blocked_count, p.defenses.evaded_count, p.defenses.dodge_count,
             p.damage_taken, p.defenses.strike_damage, p.defenses.condition_damage,
             p.downs_taken));
+    }
+    s
+}
+/// `--view rotation` (M14, Task 3): per-player total animated-cast count
+/// (`axilog_core::analysis::rotation::total_casts`, summed across every
+/// skill id in `PlayerMetrics::rotation`) plus APM (Actions Per Minute --
+/// `casts / (active_ms / 60_000.0)`, using M11's `ActivityIntervals::
+/// active_ms` as the active-time denominator, not raw fight duration --
+/// mirrors how EI's own "per-minute" derived stats scale off active time,
+/// not wall-clock duration). `r.players`/`metrics.players`/`activity` are
+/// positionally joined -- all three are built by iterating `enc.players` in
+/// the same order (`axilog_schema::build_report`'s player loop,
+/// `axilog_core::analysis::analyze`'s own `enc.players.iter().map(..)`
+/// player-list construction, and `build_activity_intervals`'s doc comment,
+/// respectively -- the SAME positional-join convention `axilog_ei::
+/// to_ei_json`'s own `player_idx` join for `activeTimes`/`combatReplayData`
+/// already establishes). Reads `PlayerMetrics::rotation` DIRECTLY rather
+/// than `PlayerOut::rotation` -- see `View::Rotation`'s own doc comment for
+/// why this view doesn't need `--rotation` to have also been passed.
+fn axilog_cli_table_rotation(
+    r: &axilog_schema::Report,
+    metrics: &axilog_core::analysis::Metrics,
+    activity: &[axilog_core::analysis::replay::ActivityIntervals],
+) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("{:<24} {:<12} {:>8} {:>8}\n", "account", "profession", "casts", "APM"));
+    let mut rows: Vec<(String, String, usize, f64)> = r
+        .players
+        .iter()
+        .zip(metrics.players.iter())
+        .zip(activity.iter())
+        .map(|((p, pm), act)| {
+            let casts = axilog_core::analysis::rotation::total_casts(&pm.rotation);
+            let active_secs = act.active_ms() as f64 / 1000.0;
+            let apm = if active_secs > 0.0 { casts as f64 / (active_secs / 60.0) } else { 0.0 };
+            (p.account.clone(), p.profession.clone(), casts, apm)
+        })
+        .collect();
+    rows.sort_by_key(|(_, _, casts, _)| std::cmp::Reverse(*casts));
+    for (account, profession, casts, apm) in rows {
+        s.push_str(&format!("{:<24} {:<12} {:>8} {:>8.1}\n",
+            trunc(&account, 24), trunc(&profession, 12), casts, apm));
     }
     s
 }

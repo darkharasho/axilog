@@ -60,6 +60,27 @@ pub mod hit_stats;
 /// in `LifeLeechDamageTakenCount` this module deliberately does NOT
 /// reproduce.
 pub mod defenses;
+/// Per-player rotation (cast tracking) (M14, Task 1) -- like `skill_damage`/
+/// `timeseries`/`hit_stats`/`defenses` above, wired into [`analyze`] below
+/// (`PlayerMetrics::rotation`), computed unconditionally (one extra scan
+/// over `raw.events`, classifying `is_activation`/`ANIMATION_START`/
+/// `ANIMATION_STOP` cast-boundary rows and running a per-skill start/end
+/// pairing state machine -- no pet-credit fold, casts belong to the caster
+/// only). See `rotation`'s module doc for the full GW2EI
+/// `CombatEventFactory.CreateCastEvents`/`AnimatedCastEvent` citation trail
+/// and the documented `InstantCastEvent`-machinery scope gap.
+pub mod rotation;
+/// Best-effort `skillMap` built from the log's own skill table (M14, Task 2)
+/// -- like `hit_stats`/`defenses` above, wired into [`analyze`] below
+/// (`Metrics::skill_map`), computed ONCE after every per-player pass
+/// (`skill_damage`/`rotation`) has finished, since it's scoped to whatever
+/// skill ids those passes actually referenced (not a per-player metric
+/// itself, so it lives on `Metrics` directly, alongside
+/// `combat_participant_enemies` -- same "derived from already-finished
+/// per-player data" placement). See `skill_map`'s module doc for the full
+/// name-gap-vs-EI honesty writeup and the `is_swap`/`can_crit`/`auto_attack`
+/// citation trail.
+pub mod skill_map;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -109,7 +130,11 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     /// Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
     /// Task 2). See `defenses`'s module doc. Purely additive alongside
     /// `downs_taken`/`deaths`/`damage_taken`/`cc` above.
-    pub defenses: defenses::DefenseStats }
+    pub defenses: defenses::DefenseStats,
+    /// Per-skill cast list (M14, Task 1) -- see `rotation`'s module doc.
+    /// Sorted by skill id ascending; `rotation::total_casts` sums the
+    /// per-skill cast counts.
+    pub rotation: rotation::RotationMetrics }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
@@ -193,7 +218,13 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// (unfiltered, EI-adapter-only) preserves that faithfulness while
     /// `Report::enemies` (native output + HTML chips) uses this set. See
     /// `build_report`'s doc comment for the full design-choice writeup.
-    pub combat_participant_enemies: BTreeSet<u64> }
+    pub combat_participant_enemies: BTreeSet<u64>,
+    /// Best-effort skillMap (M14, Task 2) -- see `skill_map`'s module doc.
+    /// Scoped to only the skill ids squad players' `skill_damage`/
+    /// `rotation`/tracked-boons actually reference, not a dump of the whole
+    /// log skill table. Always computed (not opt-in) -- see that module's
+    /// doc for the measured-modest-size reasoning.
+    pub skill_map: skill_map::SkillMap }
 
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // A friendly account can own several raw agent addrs (relog / build
@@ -351,6 +382,15 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             p.defenses = *d;
         }
     }
+    // M14 Task 1: per-player rotation (cast tracking) -- see `rotation`'s
+    // module doc. No `squad`/`enemies` filter needed beyond `addr_to_rep`
+    // itself (only registered for squad player addrs).
+    let rotation_by_rep = rotation::build(raw, &addr_to_rep);
+    for p in &mut players {
+        if let Some(r) = rotation_by_rep.get(&p.agent_addr) {
+            p.rotation = r.clone();
+        }
+    }
     let timeline = cc::timeline(enc, raw, &squad, &enemies);
     // Computed last, after every other pass, per the Task 1 brief -- does
     // not read or alter `players`/`timeline` above.
@@ -397,8 +437,13 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     if !has_healing_extension {
         warnings.push("healing extension not present in this log".to_string());
     }
+    // M14 Task 2: best-effort skillMap, scoped to whatever `skill_damage`/
+    // `rotation` (both already populated on `players` above) actually
+    // referenced, plus the always-tracked boon ids -- see `skill_map`'s
+    // module doc.
+    let skill_map = skill_map::build(raw, &players);
     Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings, has_healing_extension,
-        combat_participant_enemies }
+        combat_participant_enemies, skill_map }
 }
 
 #[cfg(test)]

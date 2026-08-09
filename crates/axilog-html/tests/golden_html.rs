@@ -30,7 +30,7 @@ fn fixture_report() -> Report {
     let raw = decode_raw(&bytes).expect("fixture decodes");
     let enc = resolve(&raw);
     let metrics = analyze(&enc, &raw);
-    build_report(&enc, &metrics, "0.1.0-test", None, None, false, false)
+    build_report(&enc, &metrics, "0.1.0-test", None, None, false, false, false)
 }
 
 /// Same pipeline, but with `--replay` (M9, Task 2): computes
@@ -43,7 +43,7 @@ fn fixture_report_with_replay() -> Report {
     let enc = resolve(&raw);
     let metrics = analyze(&enc, &raw);
     let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
-    build_report(&enc, &metrics, "0.1.0-test", Some(&replay), None, false, false)
+    build_report(&enc, &metrics, "0.1.0-test", Some(&replay), None, false, false, false)
 }
 
 /// Extract the raw text between the `axilog-data` script tags and parse it
@@ -141,20 +141,35 @@ fn render_is_deterministic_for_the_real_fixture() {
     assert_eq!(a, b, "render() must be byte-for-byte deterministic for identical input");
 }
 
+/// M14 Task 2: the budget here was raised from the original M7 250,000-byte
+/// figure to 275,000 to make room for the now-always-on `skill_map` block
+/// (`Report::skill_map` -- NOT gated behind an opt-in flag, unlike
+/// `skill_damage`/`per_second`/`dps_targets`/`rotation`, per that field's
+/// own doc comment: it's scoped to only REFERENCED skill ids, not a dump of
+/// the whole log skill table, so it stays modest even though it's always
+/// on). Measured directly on this same committed fixture: adding
+/// `skill_map` alone (every other opt-in block still off, matching this
+/// test's `fixture_report()`) grew the rendered HTML from 236,198 to
+/// 260,520 bytes (**+10.3%**, 368 referenced skill ids, a 24,309-byte JSON
+/// block) -- real growth, but well under the ~30% guideline every OTHER
+/// block in this schema was measured against before being gated, so this
+/// stays a budget adjustment, not a new opt-in flag (see `axilog_core::
+/// analysis::skill_map`'s module doc for the full scoping/size writeup).
+/// 275,000 keeps ~14.5KB of headroom above the current measured 260,520.
 #[test]
 fn total_report_size_stays_under_budget() {
     let report = fixture_report();
     let html = axilog_html::render(&report);
     assert!(
-        html.len() < 250_000,
-        "fixture report is {} bytes, must stay under the 250KB total-file budget",
+        html.len() < 275_000,
+        "fixture report is {} bytes, must stay under the 275KB total-file budget",
         html.len()
     );
 }
 
 /// M9 Task 2 size gate: a replay-enabled fixture report must stay under
 /// 600KB (the plan's Global Constraints budget -- deliberately looser than
-/// the non-replay report's 250KB budget above, since `ReplayOut.tracks[]`
+/// the non-replay report's 275KB budget above, since `ReplayOut.tracks[]`
 /// adds a full downsampled position track per squad/enemy-player). Also
 /// logs the embedded replay block's own serialized byte size (informational
 /// only, per the Task 2 brief -- "no hard gate" on that number alone).

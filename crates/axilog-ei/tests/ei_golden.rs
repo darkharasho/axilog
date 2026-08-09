@@ -44,7 +44,7 @@ fn ei_json_matches_the_golden_isfake_down_dead_and_active_times() {
     let enc = resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
-    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false);
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
     let ei = axilog_ei::to_ei_json(&report, &activity);
 
     // -- isFake: every target, no exceptions --
@@ -180,7 +180,7 @@ fn ei_json_per_skill_and_per_second_blocks_match_the_golden() {
     // calibrating what `to_ei_json` emits WHEN they're present (the
     // gate-respecting omission-when-absent behavior is covered by
     // `axilog-ei`'s own unit tests, not this golden-fixture test).
-    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true);
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true, false);
     let ei = axilog_ei::to_ei_json(&report, &[]);
 
     let mut joined = 0usize;
@@ -262,6 +262,95 @@ fn ei_json_per_skill_and_per_second_blocks_match_the_golden() {
     );
 }
 
+/// M14 Task 3: `to_ei_json`'s `rotation[]` mapping, calibrated against the
+/// golden fixture's own `players[].rotation` (itself extracted -- see this
+/// file's module doc's "Task 1 (M14)" entry -- pre-filtered to the same
+/// `AnimatedCastEvent`-pipeline subset `axilog_core::analysis::rotation`
+/// computes). Like `ei_json_per_skill_and_per_second_blocks_match_the_golden`
+/// above, this test's job is narrower than `rotation_golden.rs`'s own
+/// `Metrics`-level calibration: confirm the ei-json ADAPTER LAYER carries
+/// the already-calibrated per-skill cast data through into EI's own flat,
+/// non-phase-wrapped `rotation[]` shape unchanged, not re-derive the
+/// underlying cast-classification calibration itself. Per-player TOTAL
+/// cast count (summed across every skill id) is asserted EXACT -- the same
+/// "cast COUNT: EXACT" claim `rotation_golden.rs`'s own module doc makes at
+/// the `Metrics` layer.
+#[test]
+fn ei_json_rotation_cast_counts_match_the_golden() {
+    use axilog_core::evtc::anon_account;
+    use std::collections::HashMap;
+
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let golden = read_json(GOLDEN_JSON_PATH);
+    let golden_players = golden["players"].as_array().expect("players array");
+    let mut golden_by_account: HashMap<String, &serde_json::Value> = HashMap::new();
+    for p in golden_players {
+        let account = p["account"].as_str().expect("account").to_string();
+        golden_by_account.insert(account, p);
+    }
+
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    // `--rotation` requested -- this test's whole point is calibrating what
+    // `to_ei_json` emits WHEN it's present (the gate-respecting
+    // omission-when-absent behavior is covered by `axilog-ei`'s own unit
+    // tests, not this golden-fixture test).
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, true);
+    let ei = axilog_ei::to_ei_json(&report, &[]);
+
+    let mut joined = 0usize;
+    let mut count_mismatches: Vec<String> = Vec::new();
+
+    for (i, agent) in raw.agents.iter().enumerate() {
+        if !agent.is_player() {
+            continue;
+        }
+        let expected_account = anon_account(i);
+        let key = expected_account.trim_start_matches(':').to_string();
+        let Some(golden_p) = golden_by_account.get(&key) else { continue };
+        let Some(golden_rotation) = golden_p.get("rotation").and_then(|v| v.as_array()) else { continue };
+        let Some(player_idx) = enc.players.iter().position(|p| p.agent_addrs.contains(&agent.addr)) else { continue };
+        joined += 1;
+
+        let our_player = &ei["players"][player_idx];
+        assert_eq!(
+            our_player["account"].as_str().map(|s| s.trim_start_matches(':')),
+            Some(key.as_str()),
+            "positional join sanity: ei-json players[{player_idx}] must be this same account"
+        );
+
+        let golden_count: usize = golden_rotation
+            .iter()
+            .map(|sr| sr["skills"].as_array().map(|s| s.len()).unwrap_or(0))
+            .sum();
+        let our_rotation = our_player["rotation"]
+            .as_array()
+            .unwrap_or_else(|| panic!("account {key}: rotation must be an array"));
+        let our_count: usize = our_rotation
+            .iter()
+            .map(|sr| sr["skills"].as_array().map(|s| s.len()).unwrap_or(0))
+            .sum();
+        if our_count != golden_count {
+            count_mismatches.push(format!("{key}: ours={our_count} golden={golden_count}"));
+        }
+    }
+
+    assert!(joined >= 30, "expected at least 30 accounts to join, got {joined}");
+    assert!(
+        count_mismatches.is_empty(),
+        "{} account(s) with a rotation cast COUNT mismatch (ei-json adapter layer):\n{}",
+        count_mismatches.len(),
+        count_mismatches.join("\n")
+    );
+
+    println!(
+        "ei_json_rotation_cast_counts_match_the_golden: {joined} accounts joined, \
+         0 rotation cast-count mismatches"
+    );
+}
+
 /// M13 Task 3: `to_ei_json`'s `statsAll[0]` hit-quality mapping and
 /// `defenses[0]` mapping, calibrated against the SAME golden sidecar fields
 /// `hit_stats_golden.rs`/`defenses_golden.rs` already calibrate the
@@ -299,7 +388,7 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
     let raw = decode_raw(&bytes).expect("decode WvW fixture");
     let enc = resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
-    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false);
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
     let ei = axilog_ei::to_ei_json(&report, &[]);
 
     // (ei-json statsAll[0] key, golden hitStats key) EXACT count/sum pairs.

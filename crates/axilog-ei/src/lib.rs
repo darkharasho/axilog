@@ -498,6 +498,45 @@ pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
                 }),
             );
         }
+        // `rotation[]` (M14, Task 3): only present when this player's
+        // native `rotation` block is present (`--rotation`/SDK
+        // `rotation: true` was requested when the `Report` was built --
+        // `axilog_schema::PlayerOut::rotation`'s doc comment) -- keyed off
+        // THAT presence, not a separate flag threaded through `to_ei_json`
+        // itself, same "presence, not a flag" convention `skill_damage`'s
+        // `totalDamageDist`/`per_second`'s `damage1S` mappings above already
+        // establish. Real EI shape (verified against a real dps.report
+        // export, axibridge's `test-fixtures/boon/20260117-181030.json`,
+        // `players[0].rotation[0]`): a flat array of `{ id, skills: [ {
+        // castTime, duration, timeGained, quickness } ] }`, one entry per
+        // skill id this player cast -- NOT wrapped in a phase array (unlike
+        // `statsAll`/`totalDamageDist`/etc above, real EI's own
+        // `rotation[]` has no phase dimension at all). Field-for-field
+        // straight copy of `axilog_schema::CastOut`/`SkillRotationOut`
+        // (themselves a mirror of `axilog_core::analysis::rotation::Cast`/
+        // `SkillRotation` -- see that module's doc comment for the full
+        // GW2EI `AnimatedCastEvent` derivation this reproduces, and its
+        // documented `InstantCastEvent`-pipeline scope gap, which applies
+        // here identically since this is a direct copy of the same
+        // already-computed data).
+        if let Some(rotation) = &p.rotation {
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
+            let rotation_json: Vec<Value> = rotation
+                .iter()
+                .map(|sr| {
+                    json!({
+                        "id": sr.skill_id,
+                        "skills": sr.casts.iter().map(|c| json!({
+                            "castTime": c.cast_time_ms,
+                            "duration": c.duration_ms,
+                            "timeGained": c.time_gained_ms,
+                            "quickness": c.quickness,
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            obj.insert("rotation".to_string(), json!(rotation_json));
+        }
         v
     }).collect();
     // M10 Task 3: `all_enemies`, not `enemies` -- see the `stats_targets`
@@ -542,6 +581,35 @@ pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
     let buff_map: BTreeMap<String, Value> = BOON_IDS.iter().map(|&(id, name, is_intensity)| {
         (format!("b{id}"), json!({ "name": name, "stacking": is_intensity }))
     }).collect();
+    // `skillMap` (M14, Task 3): keyed `"s<id>"` per real EI's convention
+    // (verified against axibridge's `test-fixtures/boon/
+    // 20260117-181030.json`, `skillMap.s45534` etc -- same `"s"`-prefix
+    // pattern `buffMap`'s `"b"` prefix above already mirrors for boons).
+    // ALWAYS present (not gated) -- `Report::skill_map` itself is always
+    // populated (`axilog_core::analysis::Metrics::skill_map`'s doc comment:
+    // "Always computed (not opt-in)"), same always-on convention as
+    // `buffMap`/`targets` above. Only the fields this project actually
+    // computes are emitted (`axilog_core::analysis::skill_map::
+    // SkillMapEntry`'s own fields, via `axilog_schema::SkillMapEntryOut`):
+    // `name` (log-table best-effort, NOT EI's richer API-backed name --
+    // see that module's doc comment's honesty writeup), `isSwap`, `canCrit`.
+    // Real EI's sibling fields on the same entry -- `icon` (a
+    // render.guildwars2.com URL) and `autoAttack` (needs the external GW2
+    // API, this project's `auto_attack` is always `None` -- see that
+    // module's doc comment's "`auto_attack`: OMITTED, not guessed"
+    // section) -- as well as `isInstantCast`/`isTraitProc`/
+    // `isUnconditionalProc`/`isGearProc`/`isNotAccurate`/
+    // `conversionBasedHealing`/`hybridHealing` (all needing the same
+    // external DB) are NOT computed anywhere in this project, so they're
+    // omitted rather than faked, same "don't fake absent data" convention
+    // `statsTargets`/`support`/`extHealingStats` above already follow.
+    let skill_map: BTreeMap<String, Value> = report.skill_map.iter().map(|(&id, e)| {
+        (format!("s{id}"), json!({
+            "name": e.name,
+            "isSwap": e.is_swap,
+            "canCrit": e.can_crit,
+        }))
+    }).collect();
     json!({
         "fightName": format!("Detailed WvW - {}", report.encounter.map),
         "durationMS": report.encounter.duration_ms,
@@ -551,6 +619,7 @@ pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
         "players": players,
         "targets": targets,
         "buffMap": buff_map,
+        "skillMap": skill_map,
         "wvWMapData": {
             "redTeamID": team_id_for("red"),
             "blueTeamID": team_id_for("blue"),
@@ -598,8 +667,8 @@ mod tests {
             // `to_ei_json` reads `report.all_enemies` (unfiltered) though,
             // so this doesn't change `maps_core_ei_fields`'s `targets[]`
             // assertions below -- it's set for realism, not correctness.
-            combat_participant_enemies: [9u64].into_iter().collect()};
-        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false)
+            combat_participant_enemies: [9u64].into_iter().collect(), skill_map: Default::default()};
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false)
     }
     #[test]
     fn maps_core_ei_fields() {
@@ -683,8 +752,9 @@ mod tests {
             warnings: Default::default(),
             has_healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
+            skill_map: Default::default(),
         };
-        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false)
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false)
     }
 
     #[test]
@@ -762,6 +832,7 @@ mod tests {
                 dps_targets: vec![],
                 hit_stats: HitStatsOut::default(),
                 defenses: DefensesOut::default(),
+                rotation: None,
             }
         }
         let report = Report {
@@ -781,6 +852,7 @@ mod tests {
             warnings: vec![],
             replay: None,
             missiles: None,
+            skill_map: Default::default(),
         };
         let v = to_ei_json(&report, &[]);
         let healing = &v["players"][0]["extHealingStats"]["outgoingHealing"][0];
@@ -887,6 +959,7 @@ mod tests {
             skill_damage, per_second, dps_targets,
             hit_stats: HitStatsOut::default(),
             defenses: DefensesOut::default(),
+            rotation: None,
         }
     }
 
@@ -906,6 +979,7 @@ mod tests {
             warnings: vec![],
             replay: None,
             missiles: None,
+            skill_map: Default::default(),
         }
     }
 
@@ -1040,5 +1114,101 @@ mod tests {
         assert!(p.get("damageTaken1S").is_none());
         assert!(p.get("targetDamage1S").is_none());
         assert!(p.get("dpsTargets").is_none(), "dpsTargets omitted even though the Vec field itself is always present/empty on PlayerOut");
+    }
+
+    /// M14 Task 3: `rotation[]` is present, correctly shaped (a flat array
+    /// of `{ id, skills: [ { castTime, duration, timeGained, quickness } ]
+    /// }`, NOT phase-wrapped -- see `to_ei_json`'s own `rotation` mapping
+    /// comment for the citation against a real dps.report export), and
+    /// carries the exact computed values only when `rotation` was requested
+    /// (`PlayerOut::rotation: Some(..)`).
+    #[test]
+    fn rotation_ei_json_shape_and_known_value_when_present() {
+        use axilog_schema::{CastOut, SkillRotationOut};
+        let mut player = skill_and_timeseries_player(None, None, vec![]);
+        player.rotation = Some(vec![SkillRotationOut {
+            skill_id: 5008,
+            casts: vec![
+                CastOut { cast_time_ms: -100, duration_ms: 500, time_gained_ms: 20, quickness: 0.15 },
+                CastOut { cast_time_ms: 600, duration_ms: 250, time_gained_ms: -50, quickness: -0.3 },
+            ],
+        }]);
+        let report = report_with_players(vec![], vec![player]);
+
+        let v = to_ei_json(&report, &[]);
+        let rotation = &v["players"][0]["rotation"];
+        assert_eq!(rotation.as_array().unwrap().len(), 1, "one entry per cast skill id, no phase wrapper");
+        assert_eq!(rotation[0]["id"], 5008);
+        let skills = rotation[0]["skills"].as_array().unwrap();
+        assert_eq!(skills.len(), 2);
+        assert_eq!(skills[0]["castTime"], -100);
+        assert_eq!(skills[0]["duration"], 500);
+        assert_eq!(skills[0]["timeGained"], 20);
+        assert_eq!(skills[0]["quickness"], 0.15);
+        assert_eq!(skills[1]["castTime"], 600);
+        assert_eq!(skills[1]["quickness"], -0.3);
+    }
+
+    /// M14 Task 3: `rotation` must be OMITTED entirely (not emitted empty)
+    /// when the `Report` was built without `--rotation` (`PlayerOut::
+    /// rotation: None`) -- the gate-respecting requirement keyed off
+    /// presence, not a flag, same convention `skill_damage`/`per_second`
+    /// above already establish.
+    #[test]
+    fn rotation_ei_json_omitted_when_absent() {
+        let player = skill_and_timeseries_player(None, None, vec![]); // rotation: None inside the builder
+        let report = report_with_players(vec![], vec![player]);
+
+        let v = to_ei_json(&report, &[]);
+        assert!(v["players"][0].get("rotation").is_none(), "rotation must be omitted, not emitted empty");
+    }
+
+    /// M14 Task 3: top-level `skillMap` is ALWAYS present (unlike
+    /// `rotation`/`skill_damage`/`per_second` above), keyed `"s<id>"`, and
+    /// carries only the fields this project actually computes (`name`/
+    /// `isSwap`/`canCrit`) -- real EI's sibling `icon`/`autoAttack` fields
+    /// (and every proc/instant/accuracy classifier) must NOT be faked in.
+    #[test]
+    fn skill_map_ei_json_keyed_and_carries_only_computed_fields() {
+        use axilog_schema::SkillMapEntryOut;
+        let player = skill_and_timeseries_player(None, None, vec![]);
+        let mut report = report_with_players(vec![], vec![player]);
+        report.skill_map.insert(5492, SkillMapEntryOut {
+            name: "Fire Attunement".into(),
+            auto_attack: None,
+            is_swap: true,
+            can_crit: false,
+        });
+        report.skill_map.insert(5008, SkillMapEntryOut {
+            name: "Skill 5008".into(),
+            auto_attack: None,
+            is_swap: false,
+            can_crit: true,
+        });
+
+        let v = to_ei_json(&report, &[]);
+        let skill_map = v["skillMap"].as_object().expect("skillMap must be an object");
+        assert_eq!(skill_map.len(), 2);
+        assert_eq!(v["skillMap"]["s5492"]["name"], "Fire Attunement");
+        assert_eq!(v["skillMap"]["s5492"]["isSwap"], true);
+        assert_eq!(v["skillMap"]["s5492"]["canCrit"], false);
+        assert_eq!(v["skillMap"]["s5008"]["name"], "Skill 5008");
+        assert_eq!(v["skillMap"]["s5008"]["isSwap"], false);
+        assert_eq!(v["skillMap"]["s5008"]["canCrit"], true);
+        // Real EI's `icon`/`autoAttack` (and every proc/instant/accuracy
+        // classifier) are never computed by this project -- must be
+        // omitted, not faked as `null`/`false`.
+        assert!(v["skillMap"]["s5492"].get("icon").is_none());
+        assert!(v["skillMap"]["s5492"].get("autoAttack").is_none());
+    }
+
+    /// M14 Task 3: `skillMap` is present (as an empty object, not omitted)
+    /// even when `Report::skill_map` is empty -- always-on convention,
+    /// matching `buffMap`'s own unconditional presence above.
+    #[test]
+    fn skill_map_ei_json_present_and_empty_when_report_skill_map_empty() {
+        let v = to_ei_json(&sample_report(), &[]);
+        assert!(v.get("skillMap").is_some(), "skillMap key must always be present");
+        assert_eq!(v["skillMap"].as_object().unwrap().len(), 0, "sample_report's Metrics::skill_map is Default::default() (empty)");
     }
 }

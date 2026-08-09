@@ -56,6 +56,7 @@ fn build_report_from_bytes(
     want_skill_damage: bool,
     want_timeseries: bool,
     want_missiles: bool,
+    want_rotation: bool,
 ) -> PyResult<axilog_schema::Report> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(value_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -71,7 +72,7 @@ fn build_report_from_bytes(
         .then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
     Ok(axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
-        want_skill_damage, want_timeseries,
+        want_skill_damage, want_timeseries, want_rotation,
     ))
 }
 
@@ -97,6 +98,7 @@ fn build_report_and_activity_from_bytes(
     want_skill_damage: bool,
     want_timeseries: bool,
     want_missiles: bool,
+    want_rotation: bool,
 ) -> PyResult<(axilog_schema::Report, Vec<axilog_core::analysis::replay::ActivityIntervals>)> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(value_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -113,7 +115,7 @@ fn build_report_and_activity_from_bytes(
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
-        want_skill_damage, want_timeseries,
+        want_skill_damage, want_timeseries, want_rotation,
     );
     Ok((report, activity))
 }
@@ -141,15 +143,19 @@ fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
 /// WvW log with many enemies, so both stay behind this one flag).
 /// `missiles=True` (final-review fix wave) opts into embedding the native
 /// top-level missile analytics block (`Report.missiles`), mirroring the
-/// CLI's `--missiles` flag. All four default to `False` for back-compat
-/// with every existing positional-only call site.
+/// CLI's `--missiles` flag. `rotation=True` (M14, Task 1) opts into
+/// embedding the native per-player rotation (cast tracking) block
+/// (measured +66.9% JSON size on the committed fixture when always-on, see
+/// `PlayerOut::rotation`'s doc comment). All five default to `False` for
+/// back-compat with every existing positional-only call site.
 #[pyfunction]
-#[pyo3(signature = (path, replay=false, skill_damage=false, timeseries=false, missiles=false))]
+#[pyo3(signature = (path, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false))]
 fn parse_file(
     py: Python<'_>, path: &str, replay: bool, skill_damage: bool, timeseries: bool, missiles: bool,
+    rotation: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let report = build_report_from_bytes(&bytes, replay, skill_damage, timeseries, missiles)?;
+    let report = build_report_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation)?;
     value_to_py(py, &report_to_value(&report)?)
 }
 
@@ -162,11 +168,12 @@ fn parse_file(
 /// `missiles=True` (final-review fix wave) opts into embedding the native
 /// top-level missile analytics block.
 #[pyfunction]
-#[pyo3(signature = (data, replay=false, skill_damage=false, timeseries=false, missiles=false))]
+#[pyo3(signature = (data, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false))]
 fn parse_bytes(
     py: Python<'_>, data: &[u8], replay: bool, skill_damage: bool, timeseries: bool, missiles: bool,
+    rotation: bool,
 ) -> PyResult<Py<PyAny>> {
-    let report = build_report_from_bytes(data, replay, skill_damage, timeseries, missiles)?;
+    let report = build_report_from_bytes(data, replay, skill_damage, timeseries, missiles, rotation)?;
     value_to_py(py, &report_to_value(&report)?)
 }
 
@@ -185,13 +192,14 @@ fn parse_bytes(
 /// to `False`, keeping the existing zero-arg call shape's behavior
 /// unchanged.
 #[pyfunction]
-#[pyo3(signature = (path, *, replay=false, skill_damage=false, timeseries=false, missiles=false))]
+#[pyo3(signature = (path, *, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false))]
 fn parse_file_ei(
     py: Python<'_>, path: &str, replay: bool, skill_damage: bool, timeseries: bool, missiles: bool,
+    rotation: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
     let (report, activity) =
-        build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles)?;
+        build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation)?;
     let ei = axilog_ei::to_ei_json(&report, &activity);
     value_to_py(py, &ei)
 }

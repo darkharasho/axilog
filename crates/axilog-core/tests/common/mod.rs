@@ -28,7 +28,11 @@ pub const RELATIVE_TOLERANCE: f64 = 0.005;
 /// True if `a` and `b` are within `tol` relative of each other, relative to
 /// `b` (the golden/expected value) -- `golden.rs`'s `rel_close`/`rel_close_cc`
 /// generalized to a caller-supplied tolerance so this one function covers
-/// both conventions.
+/// both conventions. `#[allow(dead_code)]`: same reasoning as
+/// `RELATIVE_TOLERANCE` above -- not every `tests/*.rs` file that pulls in
+/// this shared module needs this particular helper (M14 Task 2's
+/// `skill_map_golden.rs` only needs `read_bytes_or_skip`/`read_json_or_skip`).
+#[allow(dead_code)]
 pub fn rel_close(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol * b.abs().max(1.0)
 }

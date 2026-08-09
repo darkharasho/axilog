@@ -75,10 +75,17 @@ export declare function parseFileEi(path: string, opts?: ParseOptions | undefine
  * `axilog_core::analysis::missiles`'s module doc for exactly what it
  * contains. Omitted (or `false`) keeps `Report.missiles` absent, matching
  * its serde skip-when-`None`.
+ * `rotation: true` (M14, Task 1) opts into embedding the native
+ * per-player rotation (cast tracking) block (`SkillRotationOut[]`) on
+ * every `players[]` entry -- see `axilog_schema::Report::players`'s
+ * `PlayerOut::rotation` doc comment for why this defaults to opt-in
+ * (well past the ~30% size-discipline guideline on the committed fixture
+ * when always-on).
  */
 export interface ParseOptions {
   replay?: boolean
   skillDamage?: boolean
   timeseries?: boolean
   missiles?: boolean
+  rotation?: boolean
 }

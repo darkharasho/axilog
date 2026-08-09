@@ -9,8 +9,10 @@ closely than EI in a few places — notably down
 contribution, CC-over-time, and full per-second timeline support. Unlike the original EI, it isn't
 tied to a single OS.
 
-Current focus is WvW logs. PvE encounter logic and rotation/skill-cast tracking are not
-implemented yet (see Milestones below).
+Current focus is WvW logs. Per-player rotation (cast tracking) and a best-effort skill map are
+implemented (M14, opt-in `--rotation` for the former, always-on for the latter — see **Usage**
+below). PvE encounter logic (boss health phases, mechanics) is not implemented yet (see Milestones
+below).
 
 ## Install
 
@@ -87,7 +89,7 @@ release artifact.
 ### Parse a log
 
 ```sh
-axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons|healing|defense] [-o FILE] [--replay] [--missiles] [--skill-damage] [--timeseries]
+axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons|healing|defense|rotation] [-o FILE] [--replay] [--missiles] [--skill-damage] [--timeseries] [--rotation]
 ```
 
 - `json` (default) — axilog's own native schema (`axilog_schema::Report`): encounter info, teams,
@@ -134,6 +136,19 @@ fixture when always-on (see **EI-JSON parity** below and `axilog_schema::Report:
 +36.4% JSON size respectively on the committed fixture when always-on (see **EI-JSON parity**
 below).
 
+`--rotation` (M14 Task 1) computes and embeds each squad player's per-skill cast list — a
+GW2EI-`AnimatedCastEvent`-pipeline reproduction, grouped by skill id, each cast carrying
+`cast_time_ms`/`duration_ms`/`time_gained_ms`/`quickness` (see `axilog_core::analysis::rotation`'s
+module doc for the full cast-boundary/quickness derivation this mirrors, and its documented
+`InstantCastEvent`-pipeline scope gap — weapon swaps/procs/instant-cast mechanics aren't decoded).
+`--format json` embeds it as each player's `rotation` field; `--format ei-json` maps the same data
+into EI's own flat `rotation[]` shape (`{id, skills:[{castTime,duration,timeGained,quickness}]}`,
+gated by the SAME presence, not a separate flag); every other format ignores it. Off by default —
+measured +66.9% JSON size on the committed fixture when always-on (see **EI-JSON parity** below).
+`--view rotation` (M14 Task 3) does NOT require this flag — it reads the underlying per-player cast
+data directly, always computed regardless of `--rotation` (that flag only gates the full per-cast
+JSON payload).
+
 `--view` (M3/M10) selects the `table` format's column layout — ignored for every other `--format`:
 
 - `default` (default) — damage/DPS/downs/kills/deaths, sorted by damage.
@@ -145,6 +160,11 @@ below).
   healing-extension data at all.
 - `defense` (M13) — incoming defenses: blocks, evades, dodges, total damage taken, a strike/condi
   split, downs taken, sorted by damage taken.
+- `rotation` (M14) — total animated-cast count plus APM (Actions Per Minute, `casts /
+  active_minutes`, using the same active-time base as `ei-json`'s `activeTimes`), sorted by cast
+  count. Unlike every other view, this one does NOT require `--rotation` to also be passed — it
+  reads the underlying per-player cast data directly (always computed by `analyze()`); `--rotation`
+  only gates whether the full per-cast JSON detail is also emitted.
 
 Example `table --view default` output (anonymized account names, from the committed golden fixture):
 
@@ -188,6 +208,17 @@ account                  profession    blocks  evades  dodges  dmg taken    stri
 :Anon130.5810            Guardian          19       0       0      66177     64312       661      1
 :Anon105.4885            Ranger            16       0       1      63912     62634      1120      1
 :Anon133.5921            Elementalist       3       5       3      63506     62613       667      2
+```
+
+Example `table --view rotation` output:
+
+```
+account                  profession      casts      APM
+:Anon129.5773            Mesmer             55     67.0
+:Anon125.5625            Ranger             52     63.3
+:Anon118.5366            Mesmer             51     62.1
+:Anon140.6180            Mesmer             44     53.6
+:Anon119.5403            Guardian           43     52.4
 ```
 
 ### HTML report
@@ -377,16 +408,18 @@ Calibrated against a real dps.report EI export for one WvW log (Green Alpine Bor
 | `players[].dpsTargets[][]` (`ei-json`) | Emitted, opt-in | `[targetIndex][phase]{dps, damage}`, positionally keyed to `targets[]`; only the two fields this project computes (real EI's `condiDps`/`powerDps`/`breakbarDamage`/`actor*` duplicates aren't tracked, omitted). Gated by the SAME `--timeseries` flag as `damage1S` above (not a separate one — `axilog_schema::build_report` populates both off one bool); a real WvW log's large enemy roster makes `dpsTargets` alone exceed the size-discipline guideline (+36.4%), so it's opt-in too, not always-on as originally considered |
 | `players[].statsAll[0]` hit-quality fields (`criticalRate`/`criticalDmg`/`flankingRate`/`glanceRate`/`againstMovingRate`/`connectedDamageCount`/`connectedDmg`/`connectedDirectDamageCount`/`connectedDirectDmg`/`connectedConditionCount`/`connectedConditionDamage`/`critableDirectDamageCount`/`againstDownedCount`/`againstDownedDamage`/`connectedLifeLeechCount`/`connectedLifeLeechDamage`/`connectedPowerAbove90HPCount`/`connectedPowerAbove90HPDamage`/`connectedConditionAbove90HPCount`/`connectedConditionAbove90HPDamage`) (`ei-json`) | Emitted, always-on | mapped from the native `hit_stats` block (M13 Task 1); EI field names exact, actor-only scope (no pet-credit fold — matches real EI's own `statsAll[0]`). Pre-era (< 20260501): every field matches the golden fixture **exactly** (37/37 joined accounts, `crates/axilog-ei/tests/ei_golden.rs`); post-era (≥ 20260501): the condition/power/life-leech buff==1 split is approximate pending condition-skill-id catalog — immune fields (crit/flank/glance/block/evade/dodge/miss/interrupt/invuln) and all damage totals remain exact |
 | `players[].defenses[0]` hit-outcome + damage-taken-breakdown fields (`blockedCount`/`evadedCount`/`dodgeCount`/`missedCount`/`interruptedCount`/`invulnedCount`/`strikeDamageTaken(Count)`/`powerDamageTaken(Count)`/`conditionDamageTaken(Count)`/`lifeLeechDamageTaken(Count)`/`damageBarrier(Count)`/`breakbarDamageTaken(Count)`) (`ei-json`) | Emitted, always-on | mapped from the native `defenses` block (M13 Task 2). Pre-era (< 20260501): every field matches the golden fixture **exactly** except `lifeLeechDamageTakenCount` (37/37 joined accounts, `crates/axilog-ei/tests/ei_golden.rs`) — this project deliberately emits the TRUE derived life-leech count rather than reproducing a real, verified GW2EI bug; post-era (≥ 20260501): the condition/power/life-leech damage-taken split is approximate pending condition-skill-id catalog — hit-outcome counts (blocked/evaded/dodge/miss/interrupt/invuln) remain exact both eras. See `axilog_core::analysis::defenses`'s module doc for the full citation |
+| `players[].rotation[]` (`ei-json`) | Emitted, opt-in | flat array of `{id, skills:[{castTime,duration,timeGained,quickness}]}` — NOT phase-wrapped (unlike `statsAll`/`totalDamageDist`/etc above, real EI's own `rotation[]` has no phase dimension). Straight copy of the native `rotation` block (M14 Task 1's `AnimatedCastEvent`-pipeline reproduction — see `axilog_core::analysis::rotation`'s module doc for the documented `InstantCastEvent`-pipeline scope gap, ~29% of a real log's cast entries). Present only when the `Report` was built with `--rotation`/SDK `rotation: true` (keyed off that presence, not a separate flag — same convention `skill_damage`/`per_second` above establish); omitted entirely (not emitted empty) otherwise. Per-player total cast COUNT matches the golden fixture's own `rotation[]` **exactly** (37/37 joined accounts, `crates/axilog-ei/tests/ei_golden.rs`) |
+| `skillMap` (`ei-json`) | Emitted, always-on, partial | top-level, keyed `"s<id>"` per real EI's convention, scoped to only the skill ids squad players' `skill_damage`/`rotation`/tracked-boons actually reference (M14 Task 2 — not a dump of the log's whole ~1,000-entry skill table). Only the fields this project computes are emitted: `name` (this log's own skill-table text, best-effort — falls back to `"Skill <id>"`; a genuinely different, narrower data source than EI's bundled/API-backed skill DB, so name strings are NOT calibrated against EI, only spot-checked, see `axilog_core::analysis::skill_map`'s module doc), `isSwap` (the `WeaponSwap` sentinel plus 3 curated non-sentinel categories — elementalist attunement swaps, revenant legend swaps, necromancer shroud transforms — still narrower than EI's own broader check, which also covers Weaver's separate combo-attunement table), `canCrit` (reused verbatim from M13's already-calibrated `NonCritableSkills` table, matches EI exactly on every overlapping id). Real EI's `icon` (a render.guildwars2.com URL) and `autoAttack` (needs the external, live GW2 API — this project's `auto_attack` is always omitted, not guessed) are NOT computed here, so they're omitted rather than faked, same for every proc/instant/accuracy classifier flag (`isInstantCast`/`isTraitProc`/etc) |
 
 The `ei-json` output only emits fields backed by a real computed metric. Where real EI has a field
 we don't compute (e.g. per-target down-contribution/CC splits, most of `statsAll`'s damage-modifier
-and rotation detail), it's simply omitted — never faked — and the omission is documented inline in
-`crates/axilog-ei/src/lib.rs`. As of M13 (hit-quality/defenses), the remaining axibridge-flagged
-gaps in this table are narrower still: the per-skill/per-second/dpsTargets family (M12) and the
-hit-quality/defenses fine-grained outcome counts (crit/flank/glance/miss/block/evade/interrupt/
-invuln — M13) that used to be entirely absent from `ei-json` are now both emitted — what's left
-absent is rotation/skillMap (M14), replay positions in EI's own coordinate grid (M15), and
-damage-modifier attribution (M16), per `docs/ROADMAP.md`'s Queued list.
+detail, skill icons/DB names), it's simply omitted — never faked — and the omission is documented
+inline in `crates/axilog-ei/src/lib.rs`. As of M14 (rotation/skillMap), the remaining
+axibridge-flagged Tier-1 analysis gaps are closed: the per-skill/per-second/dpsTargets family (M12),
+the hit-quality/defenses fine-grained outcome counts (M13), and rotation/skillMap (M14) that used to
+be entirely absent from `ei-json` are now all emitted — what's left absent is replay positions in
+EI's own coordinate grid (M15) and damage-modifier attribution (M16), per `docs/ROADMAP.md`'s
+Queued list.
 
 ### Supported log eras
 
@@ -579,11 +612,11 @@ against the full, unfiltered roster, matching real EI's own behavior). Team ids
 truncating cast on dynamic `CBTS_WVWTEAMS` ids (future-proofing; no real fixture currently has an
 id large enough for the truncation to have mattered).
 
-**Later:** rotation/skill-cast tracking, PvE encounter logic (boss health phases, mechanics),
-actually publishing to the npm/PyPI registries (the pipeline is gated and ready — see M8 — but
-`NPM_TOKEN`/`PYPI_TOKEN` aren't configured yet), HTML report extras (tick-rate corner widget,
-mounts/glider/capping replay eye candy, a healing tab, missile analytics — see arcdps-dev-notes),
-real-capture calibration of the M4 post-rework code paths once a fixture is available.
+**Later:** PvE encounter logic (boss health phases, mechanics), actually publishing to the
+npm/PyPI registries (the pipeline is gated and ready — see M8 — but `NPM_TOKEN`/`PYPI_TOKEN`
+aren't configured yet), HTML report extras (tick-rate corner widget, mounts/glider/capping replay
+eye candy, a healing tab, missile analytics — see arcdps-dev-notes), real-capture calibration of
+the M4 post-rework code paths once a fixture is available.
 
 ## License
 

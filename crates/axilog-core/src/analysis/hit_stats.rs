@@ -216,7 +216,11 @@ const NON_CRITABLE_SKILLS: &[u32] = &[
     13752, 22499, 21795, 43630, 45534, 10606,
 ];
 
-fn can_crit(skillid: u32) -> bool {
+/// `pub(crate)`: also reused by `analysis::skill_map` (M14, Task 2) for its
+/// `SkillMapEntry::can_crit` field -- see that module's doc comment for the
+/// citation trail (unchanged from this module's own, since it's the exact
+/// same `NonCritableSkills` table).
+pub(crate) fn can_crit(skillid: u32) -> bool {
     !NON_CRITABLE_SKILLS.contains(&skillid)
 }
 

@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::BTreeMap;
 use axilog_core::model::Encounter;
 use axilog_core::analysis::{buffs, Metrics};
 use axilog_core::analysis::replay::Replay;
@@ -59,6 +60,29 @@ pub struct Report {
     /// `replay`'s same opt-in/omit-when-absent convention.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub missiles: Option<MissilesOut>,
+    /// Best-effort skillMap (M14, Task 2) -- see
+    /// `axilog_core::analysis::skill_map`'s module doc for the full
+    /// name-gap-vs-EI honesty writeup. ALWAYS present (not opt-in, unlike
+    /// `replay`/`missiles`) -- `axilog_core::analysis::Metrics::skill_map`
+    /// is always computed, and measured modest in size (a small object per
+    /// REFERENCED skill id, not a dump of the whole log skill table -- see
+    /// that module's doc comment's "Scope of referenced ids" section).
+    /// Keyed by skill id as a string (plain `serde_json` object-key
+    /// stringification of the `u32` key), e.g. `"5491"`.
+    pub skill_map: BTreeMap<u32, SkillMapEntryOut>,
+}
+/// One skill's best-effort entry (M14, Task 2) -- mirrors
+/// `axilog_core::analysis::skill_map::SkillMapEntry` field-for-field.
+/// `auto_attack` is omitted from the JSON entirely (not serialized as
+/// `null`) when `None` -- currently ALWAYS the case, see that module's doc
+/// comment's "`auto_attack`: OMITTED, not guessed" section for why.
+#[derive(Serialize)]
+pub struct SkillMapEntryOut {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_attack: Option<bool>,
+    pub is_swap: bool,
+    pub can_crit: bool,
 }
 /// Native-only opt-in missile analytics (M10, Task 2) -- see
 /// `axilog_core::analysis::missiles`'s module doc for exactly what each
@@ -319,6 +343,25 @@ pub struct SkillDamageOut {
     pub outgoing: Vec<SkillEntryOut>,
     pub taken: Vec<SkillEntryOut>,
     pub per_target: Vec<PerTargetSkillsOut>,
+}
+/// One recorded cast of a skill (M14, Task 1) -- mirrors
+/// `axilog_core::analysis::rotation::Cast` field-for-field, which itself
+/// mirrors GW2EI's `JsonRotation.JsonSkill` (`castTime`/`duration`/
+/// `timeGained`/`quickness`) -- see that module's doc comment for the full
+/// derivation/calibration writeup.
+#[derive(Serialize)]
+pub struct CastOut {
+    pub cast_time_ms: i64,
+    pub duration_ms: i64,
+    pub time_gained_ms: i64,
+    pub quickness: f64,
+}
+/// All recorded casts of one skill id, for one player (M14, Task 1) --
+/// mirrors `axilog_core::analysis::rotation::SkillRotation`.
+#[derive(Serialize)]
+pub struct SkillRotationOut {
+    pub skill_id: u32,
+    pub casts: Vec<CastOut>,
 }
 /// One enemy's cumulative per-second outgoing-damage series (M12, Task 2) --
 /// mirrors `axilog_core::analysis::timeseries::TargetSeries` field-for-
@@ -602,7 +645,33 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
     /// Task 2). Always present, same convention as `hit_stats`. See
     /// `DefensesOut`'s doc comment.
-    pub defenses: DefensesOut }
+    pub defenses: DefensesOut,
+    /// Per-skill cast list (M14, Task 1), opt-in like `skill_damage`/
+    /// `per_second` -- only present when the caller requested it (CLI
+    /// `--rotation` / SDK `rotation: true` passed to [`build_report`]).
+    /// Omitted entirely from the JSON (not `null`) when not requested,
+    /// matching `skill_damage`'s own omit-when-absent convention.
+    ///
+    /// Measured on the committed WvW fixture (`fixtures/wvw-small.anon.
+    /// zevtc`, 42 players, compact `serde_json::to_string`, same method
+    /// `skill_damage`/`per_second`'s doc comments use -- against TODAY's
+    /// actual baseline, not the M12-era 135,526-byte figure those older
+    /// comments cite, which predates M13's always-on `hit_stats`/
+    /// `defenses` fields and is stale for a byte-for-byte comparison):
+    /// baseline (every opt-in block off) is 170,451 bytes; including
+    /// `rotation` alone (1,222 casts across 37 of 42 players -- the
+    /// `AnimatedCastEvent`-pipeline subset this module computes, see
+    /// `rotation`'s module doc for the ~29% of EI's own richer `rotation[]`
+    /// this deliberately excludes) grows that to 284,535 bytes
+    /// (**+66.9%**) -- well past the ~30% size-discipline guideline, so
+    /// this stays opt-in for the default `json`/`csv`/`table`/`html`
+    /// output, same reasoning as `skill_damage`/`per_second`/
+    /// `dps_targets`. The underlying computation itself stays unconditional
+    /// and cheap (`axilog_core::analysis::Metrics::players[].rotation` is
+    /// always populated by `analyze()`); this flag only gates whether
+    /// [`build_report`] copies it into the schema.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<Vec<SkillRotationOut>> }
 #[derive(Serialize)]
 pub struct EnemyOut { pub id: u64, pub name: String, pub team: String, pub is_player: bool,
     /// The enemy's current squad marker, mirroring `PlayerOut.marker`
@@ -656,6 +725,18 @@ fn skill_entry_out(e: &axilog_core::analysis::skill_damage::SkillEntry) -> Skill
 /// budget when shipped unconditionally -- so it's gated behind this SAME
 /// flag rather than a separate one, for one simple on/off switch per
 /// caller.
+///
+/// `include_rotation` (M14, Task 1) works the same way as
+/// `include_skill_damage`/`include_timeseries` -- `PlayerMetrics::rotation`
+/// is always computed by `analyze()`; this bool gates whether
+/// `PlayerOut::rotation` is populated. See `PlayerOut::rotation`'s doc
+/// comment for the measured size rationale. This is the 8th parameter
+/// (past clippy's default `too_many_arguments` threshold of 7) -- every
+/// prior opt-in block (`replay`/`missiles`/`skill_damage`/`timeseries`)
+/// added one more `bool`/`Option<&T>` the same way rather than introducing
+/// an options struct, so this one flag is allowed rather than restructuring
+/// the whole call surface for one more parameter.
+#[allow(clippy::too_many_arguments)]
 pub fn build_report(
     enc: &Encounter,
     metrics: &Metrics,
@@ -664,6 +745,7 @@ pub fn build_report(
     missiles: Option<&Missiles>,
     include_skill_damage: bool,
     include_timeseries: bool,
+    include_rotation: bool,
 ) -> Report {
     let pm: std::collections::BTreeMap<u64, &axilog_core::analysis::PlayerMetrics> =
         metrics.players.iter().map(|p| (p.agent_addr, p)).collect();
@@ -780,6 +862,17 @@ pub fn build_report(
                 barrier_count: d.barrier_count, barrier_damage: d.barrier_damage,
                 breakbar_count: d.breakbar_count, breakbar_damage: d.breakbar_damage,
             }}).unwrap_or_default(),
+            rotation: if include_rotation {
+                Some(m.map(|m| m.rotation.iter().map(|s| SkillRotationOut {
+                    skill_id: s.skill_id,
+                    casts: s.casts.iter().map(|c| CastOut {
+                        cast_time_ms: c.cast_time_ms, duration_ms: c.duration_ms,
+                        time_gained_ms: c.time_gained_ms, quickness: c.quickness,
+                    }).collect(),
+                }).collect()).unwrap_or_default())
+            } else {
+                None
+            },
         }
     }).collect();
     Report {
@@ -812,6 +905,16 @@ pub fn build_report(
         warnings: metrics.warnings.clone(),
         replay: replay.map(build_replay_out),
         missiles: missiles.map(|m| build_missiles_out(m, enc)),
+        // M14 Task 2: straight copy of `Metrics::skill_map` -- already
+        // fully computed by `analyze()`, no gating flag needed (see
+        // `Report::skill_map`'s doc comment for why this stays always-on).
+        skill_map: metrics
+            .skill_map
+            .iter()
+            .map(|(&id, e)| {
+                (id, SkillMapEntryOut { name: e.name.clone(), auto_attack: e.auto_attack, is_swap: e.is_swap, can_crit: e.can_crit })
+            })
+            .collect(),
     }
 }
 
@@ -843,8 +946,8 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(),
-            combat_participant_enemies: [9u64].into_iter().collect() };
-        let report = build_report(&enc, &m, "0.1.0", None, None, false, false);
+            combat_participant_enemies: [9u64].into_iter().collect(), skill_map: Default::default() };
+        let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
         assert_eq!(report.enemies.len(), 1, "only the participant enemy stays in the filtered list");
         assert_eq!(report.enemies[0].id, 9);
         assert_eq!(report.all_enemies.len(), 2, "all_enemies keeps the full roster, including the loot bag");
@@ -869,8 +972,8 @@ mod tests {
             cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
-        let report = build_report(&enc, &m, "0.1.0", None, None, false, false);
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
+        let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.2");
         assert_eq!(v["axilog_version"], "0.1.0");
@@ -913,8 +1016,8 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: true, combat_participant_enemies: Default::default() };
-        let report = build_report(&enc, &m, "0.1.0", None, None, false, false);
+            has_healing_extension: true, combat_participant_enemies: Default::default(), skill_map: Default::default() };
+        let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["players"][0]["healing"]["healing_out_total"], 500);
         assert_eq!(v["players"][0]["healing"]["healing_out_allies"], 300);
@@ -957,13 +1060,13 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: false, combat_participant_enemies: Default::default() };
+            has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
 
-        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false);
+        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
         let v = serde_json::to_value(&omitted).unwrap();
         assert!(v["players"][0].get("skill_damage").is_none(), "skill_damage must be omitted when not requested");
 
-        let included = build_report(&enc, &m, "0.1.0", None, None, true, false);
+        let included = build_report(&enc, &m, "0.1.0", None, None, true, false, false);
         let v = serde_json::to_value(&included).unwrap();
         let sd = &v["players"][0]["skill_damage"];
         assert_eq!(sd["outgoing"][0]["skill_id"], 100);
@@ -1006,14 +1109,14 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0,0],cc_applied:vec![0,0],downs:vec![0,0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: false, combat_participant_enemies: Default::default() };
+            has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
 
-        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false);
+        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
         let v = serde_json::to_value(&omitted).unwrap();
         assert!(v["players"][0].get("per_second").is_none(), "per_second must be omitted when not requested");
         assert!(v["players"][0].get("dps_targets").is_none(), "dps_targets must be omitted when not requested");
 
-        let included = build_report(&enc, &m, "0.1.0", None, None, false, true);
+        let included = build_report(&enc, &m, "0.1.0", None, None, false, true, false);
         let v = serde_json::to_value(&included).unwrap();
         let ps = &v["players"][0]["per_second"];
         assert_eq!(ps["damage"], serde_json::json!([50, 80]));
@@ -1023,6 +1126,50 @@ mod tests {
         assert_eq!(v["players"][0]["dps_targets"][0]["enemy_id"], 9);
         assert_eq!(v["players"][0]["dps_targets"][0]["damage"], 80);
         assert_eq!(v["players"][0]["dps_targets"][0]["dps"], 40.0);
+    }
+
+    /// M14 Task 1: `rotation` is opt-in like `skill_damage`/`per_second` --
+    /// omitted entirely (`include_rotation: false`, every existing call
+    /// site) even though `PlayerMetrics::rotation` is ALWAYS computed by
+    /// `analyze()`; present (and correctly copied field-for-field) only
+    /// when `include_rotation: true`. See `PlayerOut::rotation`'s doc
+    /// comment for the measured size rationale (+66.9% on the committed
+    /// fixture when always-on).
+    #[test]
+    fn rotation_is_opt_in_like_skill_damage_and_timeseries() {
+        use axilog_core::analysis::rotation::{Cast, SkillRotation};
+        let enc = Encounter { kind:"wvw".into(), map:"".into(),
+            duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
+            teams:vec![], players:vec![
+                Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
+                    profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+            ],
+            enemies:vec![], markers:vec![], tick_rate:None };
+        let m = Metrics { players: vec![
+            PlayerMetrics{agent_addr:1,
+                rotation: vec![SkillRotation { skill_id: 500, casts: vec![
+                    Cast { cast_time_ms: 100, duration_ms: 700, time_gained_ms: 300, quickness: 0.0 },
+                ]}],
+                ..Default::default()},
+        ],
+            timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
+            boons: Default::default(), boon_uptime: Default::default(),
+            boon_generation: Default::default(), warnings: Default::default(),
+            has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
+
+        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
+        let v = serde_json::to_value(&omitted).unwrap();
+        assert!(v["players"][0].get("rotation").is_none(), "rotation must be omitted when not requested");
+
+        let included = build_report(&enc, &m, "0.1.0", None, None, false, false, true);
+        let v = serde_json::to_value(&included).unwrap();
+        let r = &v["players"][0]["rotation"][0];
+        assert_eq!(r["skill_id"], 500);
+        assert_eq!(r["casts"][0]["cast_time_ms"], 100);
+        assert_eq!(r["casts"][0]["duration_ms"], 700);
+        assert_eq!(r["casts"][0]["time_gained_ms"], 300);
+        assert_eq!(r["casts"][0]["quickness"], 0.0);
     }
 
     /// M10 Task 3: a single non-finite (`Infinity`) sample coordinate mixed
@@ -1101,9 +1248,9 @@ mod tests {
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
         let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
-        let report = build_report(&enc, &m, "0.1.0", Some(&replay), None, false, false);
+        let report = build_report(&enc, &m, "0.1.0", Some(&replay), None, false, false, false);
         assert!(report.replay.is_some());
         let r = report.replay.unwrap();
         assert_eq!(r.poll_ms, DEFAULT_POLL_MS);
@@ -1153,9 +1300,9 @@ mod tests {
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
         let missiles = build_missiles(&raw, &enc);
-        let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles), false, false);
+        let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles), false, false, false);
         assert!(report.missiles.is_some());
         let mo = report.missiles.unwrap();
         assert_eq!(mo.players.len(), 1);

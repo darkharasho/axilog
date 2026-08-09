@@ -158,6 +158,30 @@ fn table_view_defense_has_header_and_known_row() {
     assert!(row.contains("1652"), "known row missing condi damage 1652: {row}");
 }
 
+/// M14, Task 3: `--view rotation` — header token plus a known row value from
+/// the committed anon fixture (`:Anon129.5773`, Mesmer, the fixture's top
+/// cast count: 55 animated casts, ~67.0 APM -- see
+/// `axilog-core/tests/rotation_golden.rs` for the calibration this cast
+/// count traces back to). Deliberately does NOT pass `--rotation` -- this
+/// view reads `PlayerMetrics::rotation` directly (always computed by
+/// `analyze()`), not the opt-in `Report::players[].rotation` JSON block, so
+/// it must produce this same row with or without that flag.
+#[test]
+fn table_view_rotation_has_header_and_known_row() {
+    let out = Command::new(env!("CARGO_BIN_EXE_axilog"))
+        .args(["parse", ANON_FIXTURE_PATH, "--format", "table", "--view", "rotation"])
+        .output()
+        .expect("run axilog");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("casts"), "rotation view header missing 'casts'");
+    assert!(s.contains("APM"), "rotation view header missing 'APM'");
+    let row = s.lines().find(|l| l.contains(":Anon129.5773")).expect("known player row present");
+    assert!(row.contains("Mesmer"), "known row missing profession: {row}");
+    assert!(row.contains("55"), "known row missing cast count 55: {row}");
+    assert!(row.contains("67.0"), "known row missing APM 67.0: {row}");
+}
+
 /// Task 5 (M2): the `anonymize` subcommand itself, exercised against the
 /// already-anonymized committed fixture (always present, so this runs in
 /// CI — running it on an already-`Anon<N>`-named file just re-anonymizes to
