@@ -539,35 +539,25 @@ impl MapTransform {
     }
 
     /// GW2EI's `WvWLogic.GetCombatMapInternal`
-    /// (`GW2EIEvtcParser/LogLogic/WvW/WvWLogic.cs:102-148`), map-id
-    /// constants from `ParserHelpers/IDs/MapIDs.cs:6-11`:
-    /// ```csharp
-    /// case EternalBattleground:      // 38
-    ///     new CombatReplayMap((954, 1000), (-36864 + 950, -36864 + 2250, 36864 + 950, 36864 + 2250), ...);
-    /// case GreenAlpineBorderland:    // 95
-    ///     new CombatReplayMap((697, 1000), (-30720, -43008, 30720, 43008), ...);
-    /// case BlueAlpineBorderland:     // 96
-    ///     new CombatReplayMap((697, 1000), (-30720, -43008, 30720, 43008), ...);
-    /// case RedDesertBorderland:      // 1099
-    ///     new CombatReplayMap((1000, 1000), (-36864, -36864, 36864, 36864), ...);
-    /// case EdgeOfTheMists:           // 968
-    ///     new CombatReplayMap((3556, 3646), (-36864, -36864, 36864, 36864));
-    /// default: base.GetCombatMapInternal(...);   // (800, 800), (0,0,0,0) + ComputeBoundingBox
-    /// ```
-    /// Returns `None` for the `default` branch: GW2EI then derives the rect
-    /// from the union of every squad player's polled positions
-    /// (`CombatReplayMap.ComputeBoundingBox` + `FixAspectRatio`), which
-    /// [`bounding_box_transform`] implements separately because it needs
-    /// the polled tracks that this transform is an input to.
+    /// (`GW2EIEvtcParser/LogLogic/WvW/WvWLogic.cs:102-148`) per-map
+    /// `(_pixelSize, _rectInMap)` constants.
+    ///
+    /// M15 Task 2: the constants themselves now live in
+    /// [`crate::wvw::maps::WVW_MAPS`] -- axilog's single source of truth
+    /// for WvW map geometry, shared with `wvw::map_name`, the arena image
+    /// URLs [`combat_replay_meta`] exports, and the native replay's golden
+    /// test. That module's doc comment carries the full `switch`
+    /// transcription and per-value citations.
+    ///
+    /// Returns `None` for GW2EI's `default` branch (any map id not in the
+    /// table): GW2EI then derives the rect from the union of every squad
+    /// player's polled positions (`CombatReplayMap.ComputeBoundingBox` +
+    /// `FixAspectRatio`), which [`bounding_box_transform`] implements
+    /// separately because it needs the polled tracks that this transform is
+    /// an input to.
     pub fn for_map_id(map_id: u32) -> Option<Self> {
-        let (img, rect) = match map_id {
-            38 => ((954, 1000), (-36864.0 + 950.0, -36864.0 + 2250.0, 36864.0 + 950.0, 36864.0 + 2250.0)),
-            95 | 96 => ((697, 1000), (-30720.0, -43008.0, 30720.0, 43008.0)),
-            1099 => ((1000, 1000), (-36864.0, -36864.0, 36864.0, 36864.0)),
-            968 => ((3556, 3646), (-36864.0, -36864.0, 36864.0, 36864.0)),
-            _ => return None,
-        };
-        Some(Self::new(img, rect))
+        let def = crate::wvw::maps::map_def(map_id)?;
+        Some(Self::new(def.pixel_size, def.rect))
     }
 
     /// The `CBTS_MAPID` (`sc::MAP_ID`, 25) statechange's `src_agent` is the
@@ -615,6 +605,123 @@ impl MapTransform {
             f64::from(round_ei(scale_y * (self.img_h - self.img_h * fy))),
         ]
     }
+}
+
+/// One entry of GW2EI's exported `combatReplayMetaData.maps` --
+/// `JsonCombatReplayMetaData.CombatReplayMap`
+/// (`GW2EIJSON/JsonCombatReplayMetaData.cs:10-28`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CombatReplayMapImage {
+    /// The arena image URL (GW2EI's `ArenaDecorationMetadataDescription.
+    /// Image`, i.e. the `LogImages` constant the map's `ArenaDecoration`
+    /// was constructed with).
+    pub url: &'static str,
+    /// `[start, end]` in log-relative ms: the window this image is the
+    /// active backdrop for. GW2EI's
+    /// `[mapItem.Start, mapItem.End]`, which is the decoration's lifespan.
+    pub interval: [i64; 2],
+    /// `[x, y]`, in MAP pixels, of the image's top-left corner.
+    pub position: [f64; 2],
+}
+
+/// GW2EI's exported `combatReplayMetaData` object
+/// (`GW2EIJSON/JsonCombatReplayMetaData.cs`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CombatReplayMeta {
+    /// `CombatReplayMap.GetInchToPixel()` -- see
+    /// [`MapTransform::inch_to_pixel`].
+    ///
+    /// `f32`, not `f64`, deliberately: GW2EI's `JsonCombatReplayMetaData.
+    /// InchToPixel` is a C# `float`, so the reference export's text is
+    /// `0.009` -- the shortest decimal that round-trips through single
+    /// precision. Widened to `f64` the same value prints as
+    /// `0.008999999612569809`, which would not be byte-identical to EI's
+    /// output. Keeping the narrow type here means the JSON writer gets it
+    /// right by construction.
+    pub inch_to_pixel: f32,
+    /// `ParserHelper.CombatReplayPollingRate` -- always [`EI_POLL_MS`].
+    pub polling_rate: i64,
+    /// `[width, height]` of the replay canvas in map pixels --
+    /// `GetPixelMapSize()`, see [`MapTransform::sizes`].
+    pub sizes: [i64; 2],
+    /// The arena backdrop image(s). A `Vec` rather than a single image
+    /// because GW2EI's shape allows time-sliced backdrops (Adina's arena
+    /// swaps image per phase --
+    /// `LogLogic/Raids/RaidWings/W7/Bosses/Adina.cs:575-600` pushes one
+    /// `ArenaDecoration` per phase); WvW always yields exactly one, so this
+    /// is a one-element `Vec` for every id in [`crate::wvw::maps::WVW_MAPS`].
+    pub maps: Vec<CombatReplayMapImage>,
+}
+
+/// GW2EI's `JsonCombatReplayMetaDataBuilder.BuildJsonCombatReplayMetaData`
+/// (`GW2EIBuilders/JsonModels/JsonCombatReplayMetaDataBuilder.cs`),
+/// specialized to WvW:
+///
+/// ```csharp
+/// CombatReplayMap map = log.LogData.Logic.GetCombatReplayMap(log);
+/// var jsonCR = new JsonCombatReplayMetaData()
+/// {
+///     InchToPixel = map.GetInchToPixel(),
+///     Sizes       = [map.GetPixelMapSize().width, map.GetPixelMapSize().height],
+///     PollingRate = ParserHelper.CombatReplayPollingRate,
+///     Maps        = maps
+/// };
+/// foreach (var mapItem in mapDecorations) {
+///     if (mapItem.ConnectedTo is PositionConnectorDescription posConnector && ...) {
+///         maps.Add(new JsonCombatReplayMetaData.CombatReplayMap() {
+///             Url      = metadata.Image,
+///             Interval = [mapItem.Start, mapItem.End],
+///             Position = posConnector.Position
+///         });
+///     }
+/// }
+/// ```
+///
+/// The three per-image fields resolve, for WvW, as:
+///
+/// - `Url` -- `WvWLogic.GetCombatMapInternal` builds the map's single
+///   `ArenaDecoration` with the `LogImages` constant tabulated in
+///   [`crate::wvw::maps::WvwMapDef::image_url`].
+/// - `Interval` -- the decoration's lifespan, and `GetCombatMapInternal`
+///   builds it with `var lifespan = (log.LogData.LogStart,
+///   log.LogData.LogEnd)`, i.e. the whole fight. In log-relative ms that is
+///   `[0, fight_end_ms]`, which the reference export confirms
+///   (`[0, 348362]` for a 348362ms log).
+///   `DecorationRenderingDescription`'s constructor throws on
+///   `End <= Start`, so a non-positive `fight_end_ms` yields an EMPTY
+///   `maps` list here rather than a degenerate entry.
+/// - `Position` -- `PositionConnectorDescription` runs the connector
+///   through `map.GetMapCoordRounded`, and `ArenaDecoration`'s
+///   `CombatReplayMap` overload connects at `new Vector3(crMap.TopX,
+///   crMap.BottomY, 0)` -- the world-space corner that maps to the image's
+///   top-left, hence `[0, 0]`. Computed rather than hard-coded so it stays
+///   honest if a future map's rect is not corner-aligned.
+///
+/// `None` for any map id absent from [`crate::wvw::maps::WVW_MAPS`]: GW2EI
+/// would fall back to the computed bounding box, which has no arena image
+/// and therefore no meaningful `url`/`position` to export. Callers should
+/// omit `combatReplayMetaData` entirely in that case (the EI-JSON field is
+/// nullable).
+pub fn combat_replay_meta(map_id: u32, fight_end_ms: i64) -> Option<CombatReplayMeta> {
+    let def = crate::wvw::maps::map_def(map_id)?;
+    let map = MapTransform::new(def.pixel_size, def.rect);
+    let mut maps = Vec::new();
+    if fight_end_ms > 0 {
+        maps.push(CombatReplayMapImage {
+            url: def.image_url,
+            interval: [0, fight_end_ms],
+            // `new Vector3(crMap.TopX, crMap.BottomY, 0)` -- note GW2EI's
+            // `Vector3` is `float`, so the world corner is narrowed to
+            // `f32` before the transform, exactly as here.
+            position: map.to_map_pixel(def.rect.0 as f32, def.rect.3 as f32),
+        });
+    }
+    Some(CombatReplayMeta {
+        inch_to_pixel: map.inch_to_pixel() as f32,
+        polling_rate: EI_POLL_MS,
+        sizes: map.sizes(),
+        maps,
+    })
 }
 
 /// C#'s `(float)Math.Round(value, 3)`. .NET's `Math.Round(double, int)`
@@ -1405,6 +1512,72 @@ mod tests {
     #[test]
     fn unknown_map_id_has_no_builtin_transform() {
         assert!(MapTransform::for_map_id(1).is_none());
+    }
+
+    // -- combatReplayMetaData (M15 Task 2) --
+
+    /// The controller-verified reference values for mapID 96, reproduced
+    /// offline (the fixture-backed version of this assertion lives in
+    /// `tests/ei_replay_golden.rs`).
+    #[test]
+    fn combat_replay_meta_reproduces_the_blue_alpine_reference() {
+        let meta = combat_replay_meta(96, 348362).expect("mapID 96");
+        assert_eq!(meta.inch_to_pixel, 0.009f32);
+        assert_eq!(meta.polling_rate, 300);
+        assert_eq!(meta.sizes, [523, 750]);
+        assert_eq!(
+            meta.maps,
+            vec![CombatReplayMapImage {
+                url: "https://i.imgur.com/nVu2ivF.png",
+                interval: [0, 348362],
+                position: [0.0, 0.0],
+            }]
+        );
+    }
+
+    /// Every map in the table exports one image whose `position` is the
+    /// canvas origin -- the `ArenaDecoration` is connected at `(TopX,
+    /// BottomY)`, the world corner that transforms to the image's top-left
+    /// -- and whose `interval` spans the whole log.
+    #[test]
+    fn every_wvw_map_exports_one_full_length_origin_anchored_image() {
+        for def in crate::wvw::maps::WVW_MAPS {
+            let meta = combat_replay_meta(def.map_id, 1234).expect("table entry");
+            assert_eq!(meta.polling_rate, EI_POLL_MS);
+            assert_eq!(meta.maps.len(), 1, "map {}", def.map_id);
+            let img = meta.maps[0];
+            assert_eq!(img.url, def.image_url, "map {}", def.map_id);
+            assert_eq!(img.interval, [0, 1234], "map {}", def.map_id);
+            assert_eq!(img.position, [0.0, 0.0], "map {}", def.map_id);
+            assert_eq!(
+                meta.sizes,
+                MapTransform::for_map_id(def.map_id).unwrap().sizes(),
+                "map {}: metadata sizes must be the transform's",
+                def.map_id
+            );
+            assert!(meta.inch_to_pixel > 0.0, "map {}", def.map_id);
+        }
+    }
+
+    /// `DecorationRenderingDescription`'s constructor throws on
+    /// `End <= Start`, so a zero-or-negative duration must yield no image
+    /// rather than a degenerate one. The scalars are still meaningful.
+    #[test]
+    fn non_positive_duration_yields_no_arena_image() {
+        for d in [0i64, -1] {
+            let meta = combat_replay_meta(95, d).expect("mapID 95");
+            assert!(meta.maps.is_empty(), "duration {d}");
+            assert_eq!(meta.sizes, [523, 750]);
+        }
+    }
+
+    #[test]
+    fn combat_replay_meta_is_none_for_maps_gw2ei_has_no_image_for() {
+        // Obsidian Sanctum / Armistice Bastion: named by GW2EI, empty
+        // `LogImages` constant, no `GetCombatMapInternal` case.
+        assert!(combat_replay_meta(899, 1000).is_none());
+        assert!(combat_replay_meta(1315, 1000).is_none());
+        assert!(combat_replay_meta(0, 1000).is_none());
     }
 
     /// 3 decimals, round-half-to-even, narrowed to `f32` -- GW2EI's

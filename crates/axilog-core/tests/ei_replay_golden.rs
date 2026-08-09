@@ -36,8 +36,11 @@
 
 mod common;
 
-use axilog_core::analysis::ei_replay::{build_ei_replay, EiTrack, MapTransform, EI_POLL_MS};
+use axilog_core::analysis::ei_replay::{
+    build_ei_replay, combat_replay_meta, EiTrack, MapTransform, EI_POLL_MS,
+};
 use axilog_core::evtc::decode_raw;
+use axilog_core::icons::{prof_icon_url, spec_icon_url};
 use axilog_core::model::resolve;
 use std::collections::HashMap;
 
@@ -307,6 +310,106 @@ fn ei_replay_matches_gw2ei_export_on_the_local_postrework_capture() {
         ang_exact as f64 / ang_total as f64 >= 0.999,
         "orientations f32-exactness regressed: {ang_exact}/{ang_total}"
     );
+}
+
+/// M15 Task 2: `combat_replay_meta` must reproduce the reference export's
+/// `combatReplayMetaData` object EXACTLY -- every scalar, the arena image
+/// URL, its interval and its pixel position.
+///
+/// The reference value (Blue Alpine Borderlands, mapID 96, 348362ms):
+/// ```json
+/// { "inchToPixel": 0.009, "pollingRate": 300, "sizes": [523, 750],
+///   "maps": [{ "url": "https://i.imgur.com/nVu2ivF.png",
+///              "interval": [0, 348362], "position": [0, 0] }] }
+/// ```
+#[test]
+fn combat_replay_meta_matches_the_local_reference_exactly() {
+    let Some(golden) = read_json(&common::local_fixture("wvw-postrework.ei.json")) else {
+        return;
+    };
+    let map_id = golden["mapID"].as_u64().expect("mapID") as u32;
+    assert_eq!(map_id, 96, "expected Blue Alpine Borderlands");
+    let duration = golden["durationMS"].as_i64().expect("durationMS");
+    let want = &golden["combatReplayMetaData"];
+
+    let got = combat_replay_meta(map_id, duration).expect("mapID 96 is in the WvW map table");
+
+    // Compared in `f32`: the reference JSON's `0.009` is the shortest
+    // decimal that round-trips through the C# `float` EI serializes, so the
+    // equality only holds at single precision (see `CombatReplayMeta::
+    // inch_to_pixel`).
+    assert_eq!(got.inch_to_pixel, want["inchToPixel"].as_f64().unwrap() as f32);
+    assert_eq!(got.polling_rate, want["pollingRate"].as_i64().unwrap());
+    assert_eq!(
+        got.sizes,
+        [want["sizes"][0].as_i64().unwrap(), want["sizes"][1].as_i64().unwrap()]
+    );
+
+    let want_maps = want["maps"].as_array().expect("maps array");
+    assert_eq!(got.maps.len(), want_maps.len(), "WvW exports exactly one arena image");
+    for (mine, theirs) in got.maps.iter().zip(want_maps) {
+        assert_eq!(mine.url, theirs["url"].as_str().unwrap());
+        assert_eq!(
+            mine.interval,
+            [theirs["interval"][0].as_i64().unwrap(), theirs["interval"][1].as_i64().unwrap()]
+        );
+        assert_eq!(
+            mine.position,
+            [theirs["position"][0].as_f64().unwrap(), theirs["position"][1].as_f64().unwrap()]
+        );
+    }
+}
+
+/// M15 Task 2: the profession/elite-spec icon table must reproduce EI's
+/// `combatReplayData.iconURL` EXACTLY for every spec present in the
+/// reference export (16 distinct ones), joining on EI's own
+/// `players[].profession` -- which is its flat `Spec` name, i.e. exactly
+/// what `icons::spec_icon_url` is keyed on.
+#[test]
+fn icon_urls_match_the_local_reference_exactly() {
+    let Some(golden) = read_json(&common::local_fixture("wvw-postrework.ei.json")) else {
+        return;
+    };
+    let mut checked: std::collections::BTreeSet<String> = Default::default();
+    for p in golden["players"].as_array().expect("players array") {
+        let spec = p["profession"].as_str().expect("profession");
+        let Some(want) = p["combatReplayData"]["iconURL"].as_str() else {
+            continue;
+        };
+        assert_eq!(spec_icon_url(spec), want, "iconURL mismatch for spec {spec}");
+        assert_ne!(
+            spec_icon_url(spec),
+            axilog_core::icons::UNKNOWN_PROFESSION_ICON,
+            "{spec} is missing from BASE_RES_PROF_ICONS"
+        );
+        checked.insert(spec.to_string());
+    }
+    assert!(
+        checked.len() >= 16,
+        "expected the reference export's 16 distinct specs, checked {}: {checked:?}",
+        checked.len()
+    );
+
+    // And the join axilog itself will make: every parsed player's own
+    // (profession, elite_spec) pair must resolve to a known icon, i.e.
+    // `model::profession_name` must not be leaving numeric spec ids behind
+    // for any spec this log contains.
+    let Some(bytes) = common::read_bytes_or_skip(
+        &common::local_fixture("wvw-postrework.zevtc"),
+        "M15 icon calibration",
+    ) else {
+        return;
+    };
+    let enc = resolve(&decode_raw(&bytes).expect("decode postrework fixture"));
+    for p in &enc.players {
+        assert_ne!(
+            prof_icon_url(&p.profession, &p.elite_spec),
+            axilog_core::icons::UNKNOWN_PROFESSION_ICON,
+            "no icon for parsed player spec ({}, {})",
+            p.profession,
+            p.elite_spec
+        );
+    }
 }
 
 /// `combatReplayData.{dc,down,dead}` -> `Vec<[i64; 2]>` (absent/null => empty).
