@@ -244,12 +244,17 @@ fn axilog_cli_table_healing(r: &axilog_schema::Report) -> String {
     }
     s
 }
+/// M11 Task 2: the `down_contribution` column now reports
+/// `downs_contribution.damage` -- the arcdps-methodology `damage_to_downs`
+/// value (see `axilog_core::analysis::contribution`'s module doc), not the
+/// retired M1-era 10s-window approximation the same column name used to
+/// carry. The CSV header keeps the same column name for stability.
 fn axilog_cli_csv(r: &axilog_schema::Report) -> String {
     let mut s = String::from("account,character,profession,team,damage,dps,downs_dealt,kills_dealt,down_contribution,deaths\n");
     for p in &r.players {
         s.push_str(&format!("{},{},{},{},{},{:.0},{},{},{},{}\n",
             p.account, p.character, p.profession, p.team, p.damage.total, p.damage.dps,
-            p.downs_dealt, p.kills_dealt, p.down_contribution, p.deaths));
+            p.downs_dealt, p.kills_dealt, p.downs_contribution.damage, p.deaths));
     }
     s
 }

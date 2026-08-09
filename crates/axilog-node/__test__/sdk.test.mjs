@@ -83,7 +83,7 @@ function firstDiffPaths(a, b, limit = 10, path = '$', out = []) {
 test('parseFile: schema, player count, squad damage, one boon value, support sums', () => {
   const report = sdk.parseFile(FIXTURE)
 
-  assert.equal(report.schema_version, '0.1')
+  assert.equal(report.schema_version, '0.2')
   assert.equal(typeof report.axilog_version, 'string')
   assert.ok(report.players.length > 0, 'expected at least one player')
   assert.equal(report.players.length, 42)

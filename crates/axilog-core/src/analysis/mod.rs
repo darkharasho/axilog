@@ -18,6 +18,12 @@ pub mod missiles;
 /// the ordinal/payload citation trail and the "why not on `Metrics`" design
 /// note.
 pub mod health;
+/// The arcdps-methodology down/CC/strip/movement-impair contribution family
+/// (M11 Task 2) -- unlike `health` above, this IS wired into [`analyze`]
+/// below (`PlayerMetrics::downs_contribution`/`downed_by`), replacing the
+/// retired `downs::apply` 10s-window approximation. See `contribution`'s
+/// module doc for the full methodology writeup.
+pub mod contribution;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -26,7 +32,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, Default)]
 pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: f64,
     pub per_enemy: Vec<(u64,u64)>, pub downs_dealt: u32, pub kills_dealt: u32,
-    pub down_contribution: u64, pub downs_taken: u32, pub deaths: u32,
+    pub downs_taken: u32, pub deaths: u32,
     pub damage_taken: u64, pub cc_applied: u32, pub cc_duration_ms: u64,
     pub stun_breaks: u32, pub removed_stun_duration_ms: u64,
     /// Condition cleanses / boon strips / resurrects (M3, Task 3) -- see
@@ -38,7 +44,15 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     /// player who never healed/granted barrier -- `Metrics::
     /// has_healing_extension` is the flag that distinguishes "genuinely
     /// zero" from "extension absent", used to gate schema/warning output.
-    pub healing: healing::HealingMetrics }
+    pub healing: healing::HealingMetrics,
+    /// Outgoing arcdps-methodology contribution toward downing enemy
+    /// players (M11 Task 2) -- see `contribution`'s module doc. Replaces
+    /// the retired M1-era `down_contribution` 10s-window approximation
+    /// (schema 0.1 -> 0.2 bump).
+    pub downs_contribution: contribution::ContributionMetrics,
+    /// The mirror: what non-squad contributors did to THIS player before
+    /// each of their own downs, aggregated onto this row (M11 Task 2).
+    pub downed_by: contribution::ContributionMetrics }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
@@ -230,6 +244,9 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     downs::apply(&mut players, enc, raw, &squad, &enemies, &addr_to_rep);
     cc::apply_cc(&mut players, raw, &squad, &enemies, &addr_to_rep);
     support::apply(&mut players, raw, enc, &enemies, &addr_to_rep);
+    // M11 Task 2: the arcdps-methodology contribution family
+    // (downs_contribution/downed_by) -- see `contribution`'s module doc.
+    contribution::apply(&mut players, raw, enc, &squad, &enemies, &addr_to_rep);
     // M10 Task 1: cheap (a handful of linear scans over `raw.events`), so
     // computed unconditionally like every other pass above -- returns
     // whether the extension was present at all (see `Metrics::

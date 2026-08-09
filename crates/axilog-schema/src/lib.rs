@@ -308,6 +308,22 @@ pub struct BoonOut {
 /// here -- see the Task 5 brief.
 #[derive(Serialize)]
 pub struct SupportOut { pub cleanses: u32, pub cleanses_self: u32, pub strips: u32, pub resurrects: u32 }
+/// The arcdps-methodology contribution family's four stats (M11, Task 2) --
+/// mirrors `axilog_core::analysis::contribution::ContributionMetrics`
+/// field-for-field. Used for BOTH `PlayerOut::downs_contribution`
+/// (outgoing: this player's own credit toward downing enemy players) and
+/// `PlayerOut::downed_by` (incoming: what non-squad contributors did to
+/// THIS player before each of their own downs, aggregated onto this row,
+/// not broken down by attacker) -- see `contribution`'s module doc for the
+/// full methodology writeup. Replaces the retired M1-era `down_contribution`
+/// 10s-window approximation (schema 0.1 -> 0.2).
+#[derive(Serialize)]
+pub struct ContributionOut {
+    pub damage: u64,
+    pub cc: u32,
+    pub strips: u32,
+    pub movement_impairing: u64,
+}
 /// arcdps healing-extension totals (M10, Task 1) -- see
 /// `axilog_core::analysis::healing::HealingMetrics`'s doc comment for the
 /// exact field definitions (mirrors EI's `extHealingStats`/
@@ -336,8 +352,15 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commander_tag: Option<CommanderTagOut>,
     pub damage: DamageOut, pub downs_dealt: u32, pub kills_dealt: u32,
-    pub down_contribution: u64, pub downs_taken: u32, pub deaths: u32, pub damage_taken: u64,
+    pub downs_taken: u32, pub deaths: u32, pub damage_taken: u64,
     pub cc: CcOut,
+    /// Outgoing arcdps-methodology contribution toward downing enemy
+    /// players (M11, Task 2). See `ContributionOut`'s doc comment.
+    pub downs_contribution: ContributionOut,
+    /// The mirror: what non-squad contributors did to THIS player before
+    /// each of their own downs (M11, Task 2). See `ContributionOut`'s doc
+    /// comment.
+    pub downed_by: ContributionOut,
     /// Per-tracked-boon uptime/generation summary (M3, Tasks 1-4), one
     /// entry per `buffs::BOON_IDS` id, in that table's order.
     pub boons: Vec<BoonOut>,
@@ -398,7 +421,6 @@ pub fn build_report(
             },
             downs_dealt: m.map(|m| m.downs_dealt).unwrap_or(0),
             kills_dealt: m.map(|m| m.kills_dealt).unwrap_or(0),
-            down_contribution: m.map(|m| m.down_contribution).unwrap_or(0),
             downs_taken: m.map(|m| m.downs_taken).unwrap_or(0),
             deaths: m.map(|m| m.deaths).unwrap_or(0),
             damage_taken: m.map(|m| m.damage_taken).unwrap_or(0),
@@ -406,6 +428,14 @@ pub fn build_report(
                         applied_duration_ms: m.map(|m| m.cc_duration_ms).unwrap_or(0),
                         stun_breaks: m.map(|m| m.stun_breaks).unwrap_or(0),
                         removed_stun_duration_ms: m.map(|m| m.removed_stun_duration_ms).unwrap_or(0) },
+            downs_contribution: m.map(|m| ContributionOut {
+                damage: m.downs_contribution.damage, cc: m.downs_contribution.cc,
+                strips: m.downs_contribution.strips, movement_impairing: m.downs_contribution.movement_impairing,
+            }).unwrap_or(ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 }),
+            downed_by: m.map(|m| ContributionOut {
+                damage: m.downed_by.damage, cc: m.downed_by.cc,
+                strips: m.downed_by.strips, movement_impairing: m.downed_by.movement_impairing,
+            }).unwrap_or(ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 }),
             boons: buffs::BOON_IDS.iter().map(|&(id, name, is_intensity)| {
                 let u = metrics.boon_uptime.get(&(p.agent_addr, id)).copied()
                     .unwrap_or(buffs::BoonUptime { presence_pct: 0.0, avg_stacks: 0.0 });
@@ -435,7 +465,11 @@ pub fn build_report(
         }
     }).collect();
     Report {
-        schema_version: "0.1", axilog_version: axilog_version.to_string(),
+        // M11 Task 2: 0.1 -> 0.2 -- the legacy `down_contribution` field is
+        // removed (replaced by `downs_contribution`/`downed_by`), a
+        // deliberate breaking change (see the contribution family's module
+        // doc / the M11 plan's "grep-audit for the old field name" gate).
+        schema_version: "0.2", axilog_version: axilog_version.to_string(),
         encounter: EncounterOut { kind: enc.kind.clone(), map: enc.map.clone(),
             duration_ms: enc.duration_ms, build: enc.build.clone(), revision: enc.revision,
             recorded_by: enc.recorded_by.clone(),
@@ -520,7 +554,7 @@ mod tests {
             has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None);
         let v = serde_json::to_value(&report).unwrap();
-        assert_eq!(v["schema_version"], "0.1");
+        assert_eq!(v["schema_version"], "0.2");
         assert_eq!(v["axilog_version"], "0.1.0");
         assert_eq!(v["players"][0]["damage"]["total"], 500);
         assert_eq!(v["encounter"]["map"], "Eternal Battlegrounds");

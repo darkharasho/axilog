@@ -60,8 +60,20 @@ pub fn to_ei_json(report: &Report) -> Value {
         // `appliedCrowdControlDurationDownContribution` (CC's own down-contribution
         // split) exist in real EI but we don't compute that finer breakdown,
         // so they're intentionally omitted rather than faked.
+        //
+        // M11 Task 2: `downContribution` now maps to `p.downs_contribution.
+        // damage` (the arcdps-methodology `damage_to_downs` value), NOT
+        // EI's own down-contribution number — EI computes down-contribution
+        // with a DIFFERENT algorithm BY DESIGN (see `axilog_core::analysis::
+        // contribution`'s module doc: no EI golden exists to calibrate this
+        // engine against, by design, since the whole point of this project's
+        // founding differentiator is to diverge from EI's approximation and
+        // match the real arcdps methodology instead). This mapping is a
+        // best-effort "closest real EI field for this concept" placement,
+        // not a parity claim — a consumer wanting EI's OWN algorithm's
+        // number has no equivalent field in this adapter's output at all.
         let stats_all = json!([ {
-            "downContribution": p.down_contribution,
+            "downContribution": p.downs_contribution.damage,
             "killed": p.kills_dealt,
             "downed": p.downs_dealt,
             "appliedCrowdControl": p.cc.applied_total,
@@ -265,12 +277,14 @@ mod tests {
             Enemy{id:10,instid:10,name:"Gadget".into(),team:"blue".into(),
             is_player:false,marker:None,agent_addrs:vec![10]}],
             markers:vec![],tick_rate:None};
+        use axilog_core::analysis::contribution::ContributionMetrics;
         let m = Metrics{players:vec![
             PlayerMetrics{agent_addr:1,damage_total:500,dps:500.0,per_enemy:vec![(9,500)],
-            downs_dealt:1,kills_dealt:1,down_contribution:400,deaths:0,
+            downs_dealt:1,kills_dealt:1,
+            downs_contribution: ContributionMetrics{damage:400,..Default::default()},deaths:0,
             cc_applied:3,cc_duration_ms:1200,..Default::default()},
             PlayerMetrics{agent_addr:2,damage_total:300,dps:300.0,
-            downs_dealt:0,kills_dealt:0,down_contribution:0,deaths:1,..Default::default()}],
+            downs_dealt:0,kills_dealt:0,deaths:1,..Default::default()}],
             timeline:Timeline{resolution_ms:1000,squad_damage:vec![800],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
@@ -423,8 +437,8 @@ mod tests {
     #[test]
     fn heals_and_barrier_map_to_ei_field_names_only_when_present() {
         use axilog_schema::{
-            CcOut, DamageOut, EncounterOut, HealingOut, PlayerOut, SupportOut, TimelineOut,
-            PerSecondOut, Report,
+            CcOut, ContributionOut, DamageOut, EncounterOut, HealingOut, PlayerOut, SupportOut,
+            TimelineOut, PerSecondOut, Report,
         };
         fn base_player(account: &str, healing: Option<HealingOut>) -> PlayerOut {
             PlayerOut {
@@ -432,16 +446,18 @@ mod tests {
                 profession: "Guardian".into(), elite_spec: "".into(), team: "red".into(),
                 subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
                 damage: DamageOut { total: 0, dps: 0.0, per_enemy: vec![] },
-                downs_dealt: 0, kills_dealt: 0, down_contribution: 0, downs_taken: 0, deaths: 0,
+                downs_dealt: 0, kills_dealt: 0, downs_taken: 0, deaths: 0,
                 damage_taken: 0,
                 cc: CcOut { applied_total: 0, applied_duration_ms: 0, stun_breaks: 0, removed_stun_duration_ms: 0 },
+                downs_contribution: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
+                downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
                 boons: vec![],
                 support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
                 healing,
             }
         }
         let report = Report {
-            schema_version: "0.1", axilog_version: "0.1.0".to_string(),
+            schema_version: "0.2", axilog_version: "0.1.0".to_string(),
             encounter: EncounterOut { kind: "wvw".into(), map: "".into(), duration_ms: 10_000,
                 build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None },
             players: vec![

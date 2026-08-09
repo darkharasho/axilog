@@ -115,7 +115,7 @@ class ParseFileTests(unittest.TestCase):
     def test_shape_and_calibrated_values(self):
         report = axilog.parse_file(FIXTURE)
 
-        self.assertEqual(report["schema_version"], "0.1")
+        self.assertEqual(report["schema_version"], "0.2")
         self.assertIsInstance(report["axilog_version"], str)
         self.assertGreater(len(report["players"]), 0)
         self.assertEqual(len(report["players"]), EXPECTED_PLAYER_COUNT)
