@@ -9,6 +9,11 @@ pub mod healing;
 /// Combat replay position tracks (M9 Task 1) -- standalone from
 /// [`analyze`]; see `replay::build_replay`.
 pub mod replay;
+/// GW2EI-shape fixed-rate combat replay (M15 Task 1) -- the EI-compatible
+/// counterpart to `replay` above (map-pixel positions/orientations on
+/// GW2EI's own polling grid, plus `dc` sentinel bracketing). Standalone
+/// from [`analyze`], same as `replay`; see `ei_replay::build_ei_replay`.
+pub mod ei_replay;
 /// Opt-in missile (projectile) analytics (M10 Task 2) -- standalone from
 /// [`analyze`]; see `missiles::build_missiles`.
 pub mod missiles;

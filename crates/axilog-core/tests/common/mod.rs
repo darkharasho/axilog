@@ -86,3 +86,29 @@ pub fn account_key(account: &str) -> &str {
 pub fn boon_id_set() -> BTreeSet<u32> {
     axilog_core::analysis::buffs::BOON_IDS.iter().map(|&(id, _, _)| id).collect()
 }
+
+/// Resolves a gitignored local fixture (`fixtures/local/<name>`) to an
+/// absolute path, honouring the `AXILOG_LOCAL_FIXTURES` environment
+/// variable (M15 Task 1).
+///
+/// Every pre-M15 local-fixture test hard-codes
+/// `concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/...")`,
+/// which only works in a checkout that actually holds the (PII-bearing,
+/// never-committed) captures. Work done in a `git worktree` gets an EMPTY
+/// `fixtures/local/`, and copying the captures across would duplicate PII
+/// — so instead point the env var at the primary checkout's directory:
+///
+/// ```sh
+/// AXILOG_LOCAL_FIXTURES=/path/to/axilog/fixtures/local \
+///     cargo test -p axilog-core --test ei_replay_golden -- --nocapture
+/// ```
+///
+/// Unset (the CI/default case) it resolves to the in-tree
+/// `fixtures/local/`, so behaviour is unchanged for existing callers.
+#[allow(dead_code)]
+pub fn local_fixture(name: &str) -> String {
+    let dir = std::env::var("AXILOG_LOCAL_FIXTURES").unwrap_or_else(|_| {
+        format!("{}/../../fixtures/local", env!("CARGO_MANIFEST_DIR"))
+    });
+    format!("{dir}/{name}")
+}

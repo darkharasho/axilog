@@ -1,0 +1,1793 @@
+//! GW2EI-shape fixed-rate combat replay (M15 Task 1): per-actor
+//! `{ start, end, positions, orientations, dc }` in MAP PIXELS on GW2EI's
+//! own polling grid, byte-compatible with GW2EI's exported
+//! `players[].combatReplayData`.
+//!
+//! Sibling of [`crate::analysis::replay`] (M9), which produces this
+//! project's *native* replay shape: raw world-unit samples, a grid that
+//! stops at the last real position event, and half-open down/dead
+//! intervals. That native shape is deliberately narrower than GW2EI's (it
+//! only ever emits samples backed by real bracketing position data). This
+//! module instead reproduces GW2EI's exported shape exactly -- same grid
+//! bounds, same hold/interpolate branch, same map-pixel rounding, same
+//! `dc` sentinel bracketing -- so `axilog-ei`'s EI-JSON output (M15 Task 3)
+//! can be a straight copy. Both live side by side; neither is computed
+//! unless a caller asks for it.
+//!
+//! # GW2EI algorithm citations
+//!
+//! Everything below is transcribed from a local clone of
+//! <https://github.com/baaron4/GW2-Elite-Insights-Parser> (`master`, commit
+//! `7a6fe03`). File + method are cited at every step; the arcdps wire
+//! formats are NOT re-derived here -- they are reused verbatim from M9
+//! (`crate::analysis::replay::decode_position` / `crate::evtc::sc::POSITION`).
+//!
+//! ## 1. Which raw events feed the tracks
+//!
+//! `GW2EIEvtcParser/EIData/Actors/SingleActor.cs`, `InitCombatReplay`:
+//! ```csharp
+//! foreach (MovementEvent movementEvent in log.CombatData.GetMovementData(AgentItem))
+//! {
+//!     movementEvent.AddPoint3D(CombatReplay);
+//! }
+//! CombatReplay.PollingRate(log.LogData.LogDuration, AgentItem.Type == AgentItem.AgentType.Player);
+//! ```
+//! The three `MovementEvent` subclasses filter their own payloads before
+//! appending (`ParsedData/CombatEvents/StatusEvents/MovementEvents/`):
+//! - `PositionEvent.AddPoint3D`: drops the point when
+//!   `point.XYZ == default` (all three components exactly zero),
+//!   `point.IsNaNOrInfinity()`, or `point.XYZ.XY().LengthSquared() > 16e8`
+//!   (i.e. `|xy| > 40000`, outside any real map).
+//! - `RotationEvent.AddPoint3D` / `VelocityEvent.AddPoint3D`: drop only on
+//!   NaN/infinity (a zero facing/velocity vector IS kept -- and a zero
+//!   velocity is load-bearing, it is exactly what triggers the "hold"
+//!   branch in `HandlePosition` below).
+//!
+//! Reproduced by [`collect_movement`].
+//!
+//! ## 2. The polling grid
+//!
+//! `GW2EIEvtcParser/EIData/CombatReplay/CombatReplay.cs`, `PollingRate`:
+//! ```csharp
+//! if (_Positions.Count == 0 && forcePolling) { _Positions = [new(int.MinValue, int.MinValue, 0, 0)]; }
+//! else if (_Positions.Count == 0) { return; }
+//! int rate = ParserHelper.CombatReplayPollingRate;              // 300
+//! bool doRotation = _Rotations.Count > 0;
+//! long posStartOffset = Math.Min(0, rate * ((_Positions[0].Time / rate) - 1));
+//! long rotStartOffset = doRotation ? Math.Min(0, rate * ((_Rotations[0].Time / rate) - 1)) : 0;
+//! long startOffset = Math.Min(posStartOffset, rotStartOffset);
+//! for (long t = startOffset; t < logDuration; t += rate) { HandlePosition(...); HandleRotation(...); }
+//! ```
+//! `ParserHelper.CombatReplayPollingRate = 300`
+//! (`GW2EIEvtcParser/ParserHelpers/ParserHelper.cs:15`) -- a compile-time
+//! constant, NOT fight-length dependent; independently confirmed by the
+//! reference export's `combatReplayMetaData.pollingRate = 300`.
+//!
+//! Because C# integer division truncates toward zero and every axilog time
+//! is log-relative (`>= 0`), `startOffset` is `0` when the first sample is
+//! at or after `rate`, and `-rate` when it is before -- either way a
+//! multiple of `rate`. So **the grid is exactly the multiples of `rate`**,
+//! run while `t < logDuration`. `logDuration` is
+//! `log.LogData.LogDuration`, this project's [`Encounter::duration_ms`].
+//!
+//! Note that polling happens over the WHOLE log for every actor; per-actor
+//! narrowing happens in `Trim` (step 3), not here. Consequently
+//! `orientations` is always the same length as `positions` whenever the
+//! actor has ANY facing event, and empty otherwise -- there is no
+//! independent rotation window.
+//!
+//! Reproduced by [`poll`].
+//!
+//! ## 3. Per-actor trimming -> `start` / `end`
+//!
+//! `SingleActor.cs`, `TrimCombatReplay`:
+//! ```csharp
+//! long trimStart = FirstAware; long trimEnd = LastAware;
+//! ... // trimStart = actives[0].Start, trimEnd = actives[^1].End, when actives is non-empty
+//! replay.Trim(Math.Max(trimStart, FirstAware), Math.Min(trimEnd, LastAware));
+//! ```
+//! and `CombatReplay.Trim`:
+//! ```csharp
+//! _start = Math.Max(start, _start);                    // _start starts at LogData.LogStart
+//! _end   = Math.Max(_start, Math.Min(end, _end));      // _end   starts at LogData.LogEnd
+//! _PolledPositions = _PolledPositions.Where(x => x.Time >= _start && x.Time <= _end)...
+//! _PolledRotations = ... same predicate ...
+//! ```
+//! `SingleActorCombatReplayDescription`'s exported `Start`/`End` are
+//! exactly this trimmed `replay.TimeOffsets`.
+//!
+//! In this project's log-relative frame `LogStart = 0` and
+//! `LogEnd = duration_ms`, and the `actives` segments (step 4) always
+//! begin at or after `FirstAware` and end at or before `LastAware`, so
+//! this reduces to: `start = max(0, actives_start)`,
+//! `end = max(start, min(actives_end, duration_ms))`, with `actives_start`
+//! / `actives_end` defaulting to first/last aware. Verified against all 48
+//! players of the reference export (`fixtures/local/wvw-postrework.ei.json`):
+//! every `combatReplayData.start` equals that player's first-aware time and
+//! every `.end` its last-aware time, and the resulting sample count
+//! (`|multiples of 300 in [start, end] that are < 348362|`) reproduces
+//! GW2EI's own `positions.length` for all 48 (1159 for the 45 players whose
+//! first-aware is in `1..=300`, 1160 for the 3 whose first-aware is exactly
+//! `0`, 1032 for the one who joined at `t=38317`).
+//!
+//! Reproduced by [`trim_bounds`] + [`grid_window`].
+//!
+//! ## 4. `dc` (and `down` / `dead`) intervals
+//!
+//! `GW2EIEvtcParser/EIData/Actors/ActorsHelper/SingleActorStatusHelper.cs`,
+//! `FillStatus` / `AddValueToStatusList`:
+//! ```csharp
+//! AddSegment(dc, long.MinValue, FirstAware);                        // always, first
+//! if (status.Count == 0) { AddSegment(actives, FirstAware, LastAware);
+//!                          AddSegment(dc, LastAware, long.MaxValue); return; }
+//! status = status.OrderBy(x => x.Time).ToList();
+//! for (int i = 0; i < status.Count - 1; i++) AddValueToStatusList(..., status[i], status[i+1], FirstAware, i);
+//! AddValueToStatusList(..., status[^1], (LastAware, null), FirstAware, status.Count - 1);
+//! if (status[^1].evt is DeadEvent) AddSegment(dead, LastAware, long.MaxValue);
+//! else                             AddSegment(dc,   LastAware, long.MaxValue);
+//! ```
+//! with `AddSegment` a no-op unless `start < end`, and:
+//! ```csharp
+//! if (curEvt is DownEvent)    { if (index == 0) AddSegment(actives, minTime, cTime); AddSegment(down, cTime, next.Time); }
+//! else if (curEvt is DeadEvent)   { if (index == 0) AddSegment(actives, minTime, cTime); AddSegment(dead, cTime, next.Time); }
+//! else if (curEvt is DespawnEvent){ if (index == 0) AddSegment(actives, minTime, cTime); AddSegment(dc,   cTime, next.Time); }
+//! else { if (index == 0 && cTime - minTime > 50) AddSegment(dc, minTime, cTime); AddSegment(actives, cTime, next.Time); }
+//! ```
+//! So the two `i64::MIN`/`i64::MAX` sentinels observed on the reference
+//! export are the *always-present* `[MIN, FirstAware]` head and the
+//! `[LastAware, MAX]` tail; genuine mid-fight disconnects are
+//! `CBTS_DESPAWN` -> `[despawn_t, next_status_t]` segments in between, and
+//! a late spawn more than 50ms after first-aware adds a
+//! `[FirstAware, spawn_t]` segment. A player still dead at the end of the
+//! log gets `[LastAware, MAX]` on `dead` instead of on `dc`.
+//!
+//! The status-event stream is `DownEvent` (`CBTS_CHANGEDOWN`, 5),
+//! `AliveEvent` (`CBTS_CHANGEUP`, 3), `DeadEvent` (`CBTS_CHANGEDEAD`, 4),
+//! `SpawnEvent` (`CBTS_SPAWN`, 6) and `DespawnEvent` (`CBTS_DESPAWN`, 7)
+//! -- ids per `GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:258-267`
+//! (`ChangeUp = 3, ChangeDead = 4, ChangeDown = 5, Spawn = 6, Despawn = 7`),
+//! matching this crate's existing [`sc::CHANGE_UP`]/[`sc::CHANGE_DEAD`]/
+//! [`sc::CHANGE_DOWN`] plus the two added for this module. `GetAgentStatus`
+//! concatenates them in the order downs, alives, deads, spawns, despawns
+//! and then `OrderBy(x => x.Time)` -- LINQ's `OrderBy` is a documented
+//! STABLE sort, so that concatenation order is the same-timestamp tiebreak,
+//! reproduced here by [`StatusKind`]'s discriminant ordering.
+//!
+//! Reproduced by [`fill_status`].
+//!
+//! ## 5. World -> map pixel
+//!
+//! `GW2EIEvtcParser/EIData/CombatReplay/CombatReplayMap.cs`,
+//! `GetMapCoordRounded` + `GetPixelMapSize`:
+//! ```csharp
+//! var (width, height) = GetPixelMapSize();            // image size rescaled so max dim == 750
+//! double scaleX = (double)width / _pixelSize.width;
+//! double scaleY = (double)height / _pixelSize.height;
+//! double x = (realX - _rectInMap.topX) / (_rectInMap.bottomX - _rectInMap.topX);
+//! double y = (realY - _rectInMap.topY) / (_rectInMap.bottomY - _rectInMap.topY);
+//! return new((float)Math.Round(scaleX * _pixelSize.width * x, 3),
+//!            (float)Math.Round(scaleY * (_pixelSize.height - _pixelSize.height * y), 3));
+//! ```
+//! `ParserHelper.CombatReplayDataDigit = 3`
+//! (`ParserHelpers/ParserHelper.cs:27`) -- confirming the reference
+//! export's 3-decimal positions is ROUNDING, not truncation, and
+//! specifically C#'s `Math.Round(double, int)`, which is round-half-to-EVEN
+//! (`MidpointRounding.ToEven` is the documented default overload). Note the
+//! `(float)` casts: GW2EI's exported positions/angles are single-precision,
+//! so this module rounds in `f64`, narrows to `f32`, then widens back --
+//! producing the exact `f32` GW2EI serializes. Reproduced by
+//! [`round_ei`] / [`MapTransform::to_map_pixel`].
+//!
+//! The per-map `(_pixelSize, _rectInMap)` constants come from
+//! `GW2EIEvtcParser/LogLogic/WvW/WvWLogic.cs`, `GetCombatMapInternal`, and
+//! are transcribed into [`MapTransform::for_map_id`].
+//!
+//! ## 6. Orientations
+//!
+//! `SingleActorCombatReplayDescription`'s constructor:
+//! ```csharp
+//! foreach (var facing in replay.PolledRotations) { angles.Add(-facing.XYZ.GetRoundedZRotationDeg()); }
+//! ```
+//! and `EIData/MathUtils/VectorExtensions.cs:147` +
+//! `EIData/MathUtils/Trigonometry.cs:5`:
+//! ```csharp
+//! public static float GetRoundedZRotationDeg(this in Vector3 facing)
+//!     => (float)Math.Round(RadianToDegree(GetZRotationRadians(facing)), CombatReplayDataDigit);
+//! public static float GetZRotationRadians(this in Vector3 facing) => (float)Math.Atan2(facing.Y, facing.X);
+//! internal static double RadianToDegree(double radian) => radian * 180.0 / Math.PI;
+//! ```
+//! So the convention is `-round(degrees(atan2(y, x)), 3)` -- note the
+//! leading MINUS (screen-space y grows downward, world-space y grows
+//! upward), the `(float)` narrowing of the radian value BEFORE the degree
+//! conversion, and that the negation happens AFTER rounding. Range is
+//! `[-180, 180]`. Reproduced by [`facing_to_degrees`].
+//!
+//! # Calibration
+//!
+//! `crates/axilog-core/tests/ei_replay_golden.rs`, against the real
+//! post-rework capture + its GW2EI export
+//! (`fixtures/local/wvw-postrework.{zevtc,ei.json}`, Blue Alpine
+//! Borderlands, 348362ms, 2026-08-09):
+//!
+//! - 44 squad players joined by account; `start`, `end`, `dc`, `down` and
+//!   `dead` **exact for every one** (the brief's exactness gate).
+//! - positions: **50999/50999 (100.00%)** within 1 map pixel, and in fact
+//!   **50999/50999 (100.00%) bit-exact** once both sides are narrowed to
+//!   the `f32` GW2EI serializes -- worst residual `3.2e-5 px`, which is
+//!   purely `serde_json` widening GW2EI's decimal text back to `f64`. (M9's
+//!   native `replay` module manages 99.77% within 1px on the same data; the
+//!   difference is entirely the two `HandlePosition` subtleties documented
+//!   on [`handle_position`] -- interpolating from the previous POLLED point
+//!   and the velocity-gated hold branch.)
+//! - orientations: **50999/50999 (100.00%)** bit-exact, worst residual
+//!   `7.6e-6 deg` (same `f32` widening artefact). The achievable floor is
+//!   set by GW2EI's own 3-decimal rounding; the committed gate is the
+//!   looser "99% within 1 deg" because `atan2` is not bit-reproducible
+//!   across platform libms.
+//!
+//! Both eras additionally get a structural sweep (monotone grid at the
+//! declared rate, sample counts on the grid, no NaN/infinite coordinates,
+//! angles in `[-180, 180]`, `dc` sentinel bracketing): the committed
+//! pre-rework anonymized fixture (`fixtures/wvw-small.anon.zevtc`, Green
+//! Alpine Borderlands, 49285ms) yields 74 plausible moving tracks, all
+//! carrying orientations.
+//!
+//! See this module's `tests` for the algorithm-level unit tests
+//! (interpolation, edge clamping, the hold branch, the empty track, `dc`
+//! bracketing).
+
+use crate::analysis::replay::DEFAULT_POLL_MS;
+use crate::evtc::{sc, RawEvent, RawLog};
+use crate::model::Encounter;
+use std::collections::BTreeSet;
+
+/// GW2EI's `ParserHelper.CombatReplayPollingRate` (`ParserHelper.cs:15`),
+/// re-exported here as an `i64` for this module's signed-time arithmetic.
+/// Same value as [`DEFAULT_POLL_MS`]; kept as a separate constant so a
+/// caller overriding the native replay's `poll_ms` cannot silently change
+/// the EI-shape output's grid.
+pub const EI_POLL_MS: i64 = DEFAULT_POLL_MS as i64;
+
+/// GW2EI's `ArcDPSEnums.ArcDPSPollingRate` (`ArcDPSEnums.cs:6`): arcdps's
+/// own movement-telemetry emission period. Used ONLY in `HandlePosition`/
+/// `HandleRotation`'s "gap too big to interpolate across" test
+/// (`nextPos.Time - last.Time > ArcDPSPollingRate + rate`). Coincidentally
+/// equal to [`EI_POLL_MS`], but a semantically distinct constant.
+pub const ARCDPS_POLL_MS: i64 = 300;
+
+/// GW2EI's `ParserHelper.CombatReplayDataDigit` (`ParserHelper.cs:27`):
+/// decimal places every exported combat-replay coordinate/angle is rounded
+/// to.
+pub const DATA_DIGITS: i32 = 3;
+
+/// `10^DATA_DIGITS`, precomputed (matching .NET's own
+/// `roundPower10Double[digits]` table lookup inside `Math.Round(double,
+/// int)`).
+const DATA_SCALE: f64 = 1000.0;
+
+/// GW2EI's `CombatReplayMap.GetPixelMapSize`'s target max dimension.
+const PIXEL_MAP_MAX_DIM: f64 = 750.0;
+
+// -- statechange ids GW2EI's status stream needs that this crate's `sc`
+//    module doesn't already name (M15 Task 1). Values per
+//    `GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:258-267`
+//    (`StateChange.Spawn = 6`, `StateChange.Despawn = 7`), which the M9
+//    module doc already established as a faithful transcription of the
+//    arcdps `cbtstatechange` enum ordering (`CBTS_SPAWN` is the 7th entry,
+//    `CBTS_DESPAWN` the 8th, counting from `CBTS_NONE = 0`).
+
+/// `CBTS_SPAWN` -- agent (re)entered tracking range.
+const SC_SPAWN: u8 = 6;
+/// `CBTS_DESPAWN` -- agent left tracking range. GW2EI's ONLY source of
+/// mid-fight `dc` segments.
+const SC_DESPAWN: u8 = 7;
+
+/// One decoded movement point: log-relative time plus a 3-vector. Mirrors
+/// GW2EI's `ParametricPoint3D`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point3 {
+    pub t: i64,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+impl Point3 {
+    fn with_time(self, t: i64) -> Self {
+        Self { t, ..self }
+    }
+
+    /// `System.Numerics.Vector3.Lerp(a, b, r)`, which .NET implements as
+    /// `a * (1 - r) + b * r` (NOT `a + (b - a) * r`) -- the two differ in
+    /// the last ULP, and this module reproduces GW2EI bit-for-bit where it
+    /// cheaply can.
+    fn lerp(a: Self, b: Self, r: f32, t: i64) -> Self {
+        let inv = 1.0 - r;
+        Self {
+            t,
+            x: a.x * inv + b.x * r,
+            y: a.y * inv + b.y * r,
+            z: a.z * inv + b.z * r,
+        }
+    }
+
+    fn len(&self) -> f32 {
+        (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
+    }
+
+    fn is_finite(&self) -> bool {
+        self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
+    }
+}
+
+/// GW2EI's `CombatReplayMap`, reduced to the parts the world -> map-pixel
+/// transform needs (the decoration/viewpoint machinery is out of scope).
+///
+/// `img_w`/`img_h` are the map IMAGE's native pixel size (GW2EI's
+/// `_pixelSize`); `out_w`/`out_h` are `GetPixelMapSize()`'s rescale of that
+/// to a 750px max dimension (GW2EI's exported
+/// `combatReplayMetaData.sizes`). Both are retained because
+/// `GetMapCoordRounded` multiplies by `out/img * img` rather than by `out`
+/// directly, and that round-trip is not exactly the identity in binary
+/// floating point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MapTransform {
+    /// GW2EI's `_rectInMap.topX` -- world (inch) x of the image's left edge.
+    pub top_x: f64,
+    /// GW2EI's `_rectInMap.topY` -- world (inch) y of the image's BOTTOM
+    /// edge (the y axis is flipped on output; see [`Self::to_map_pixel`]).
+    pub top_y: f64,
+    pub bottom_x: f64,
+    pub bottom_y: f64,
+    /// GW2EI's `_pixelSize.width`.
+    pub img_w: f64,
+    /// GW2EI's `_pixelSize.height`.
+    pub img_h: f64,
+    /// `GetPixelMapSize().width`.
+    pub out_w: f64,
+    /// `GetPixelMapSize().height`.
+    pub out_h: f64,
+}
+
+impl MapTransform {
+    /// Build from GW2EI's own `new CombatReplayMap((imgW, imgH), (topX,
+    /// topY, bottomX, bottomY))` arguments, applying `GetPixelMapSize`:
+    /// ```csharp
+    /// double ratio = (double)_pixelSize.width / _pixelSize.height;
+    /// const int pixelSize = 750;
+    /// if (ratio > 1.0)      return (pixelSize, (int)Math.Round(pixelSize / ratio));
+    /// else if (ratio < 1.0) return ((int)Math.Round(ratio * pixelSize), pixelSize);
+    /// else                  return (pixelSize, pixelSize);
+    /// ```
+    /// (`Math.Round(double)` is round-half-to-even, matching
+    /// [`round_ties_even`].)
+    pub fn new(img: (u32, u32), rect: (f64, f64, f64, f64)) -> Self {
+        let img_w = f64::from(img.0);
+        let img_h = f64::from(img.1);
+        let ratio = img_w / img_h;
+        let (out_w, out_h) = if ratio > 1.0 {
+            (PIXEL_MAP_MAX_DIM, round_ties_even(PIXEL_MAP_MAX_DIM / ratio))
+        } else if ratio < 1.0 {
+            (round_ties_even(ratio * PIXEL_MAP_MAX_DIM), PIXEL_MAP_MAX_DIM)
+        } else {
+            (PIXEL_MAP_MAX_DIM, PIXEL_MAP_MAX_DIM)
+        };
+        let (top_x, top_y, bottom_x, bottom_y) = rect;
+        Self { top_x, top_y, bottom_x, bottom_y, img_w, img_h, out_w, out_h }
+    }
+
+    /// GW2EI's `WvWLogic.GetCombatMapInternal`
+    /// (`GW2EIEvtcParser/LogLogic/WvW/WvWLogic.cs:102-148`), map-id
+    /// constants from `ParserHelpers/IDs/MapIDs.cs:6-11`:
+    /// ```csharp
+    /// case EternalBattleground:      // 38
+    ///     new CombatReplayMap((954, 1000), (-36864 + 950, -36864 + 2250, 36864 + 950, 36864 + 2250), ...);
+    /// case GreenAlpineBorderland:    // 95
+    ///     new CombatReplayMap((697, 1000), (-30720, -43008, 30720, 43008), ...);
+    /// case BlueAlpineBorderland:     // 96
+    ///     new CombatReplayMap((697, 1000), (-30720, -43008, 30720, 43008), ...);
+    /// case RedDesertBorderland:      // 1099
+    ///     new CombatReplayMap((1000, 1000), (-36864, -36864, 36864, 36864), ...);
+    /// case EdgeOfTheMists:           // 968
+    ///     new CombatReplayMap((3556, 3646), (-36864, -36864, 36864, 36864));
+    /// default: base.GetCombatMapInternal(...);   // (800, 800), (0,0,0,0) + ComputeBoundingBox
+    /// ```
+    /// Returns `None` for the `default` branch: GW2EI then derives the rect
+    /// from the union of every squad player's polled positions
+    /// (`CombatReplayMap.ComputeBoundingBox` + `FixAspectRatio`), which
+    /// [`bounding_box_transform`] implements separately because it needs
+    /// the polled tracks that this transform is an input to.
+    pub fn for_map_id(map_id: u32) -> Option<Self> {
+        let (img, rect) = match map_id {
+            38 => ((954, 1000), (-36864.0 + 950.0, -36864.0 + 2250.0, 36864.0 + 950.0, 36864.0 + 2250.0)),
+            95 | 96 => ((697, 1000), (-30720.0, -43008.0, 30720.0, 43008.0)),
+            1099 => ((1000, 1000), (-36864.0, -36864.0, 36864.0, 36864.0)),
+            968 => ((3556, 3646), (-36864.0, -36864.0, 36864.0, 36864.0)),
+            _ => return None,
+        };
+        Some(Self::new(img, rect))
+    }
+
+    /// The `CBTS_MAPID` (`sc::MAP_ID`, 25) statechange's `src_agent` is the
+    /// WvW map id -- same lookup `crate::wvw::apply` already does for
+    /// `Encounter::map`. `None` when the log has no map-id event or the id
+    /// isn't one GW2EI has an image for.
+    pub fn from_log(raw: &RawLog) -> Option<Self> {
+        let map_id = raw
+            .events
+            .iter()
+            .find(|e| e.is_statechange == sc::MAP_ID)
+            .map(|e| e.src_agent as u32)?;
+        Self::for_map_id(map_id)
+    }
+
+    /// GW2EI's exported `combatReplayMetaData.sizes`.
+    pub fn sizes(&self) -> [i64; 2] {
+        [self.out_w as i64, self.out_h as i64]
+    }
+
+    /// GW2EI's `CombatReplayMap.GetInchToPixel`:
+    /// ```csharp
+    /// float ratio = (float)(_rectInMap.bottomX - _rectInMap.topX) / GetPixelMapSize().width;
+    /// return (float)Math.Round(1.0f / ratio, 3);
+    /// ```
+    /// (All-`f32` arithmetic in GW2EI, mirrored here.) For Alpine
+    /// Borderlands this yields `round(1 / (61440 / 523), 3) = 0.009`, which
+    /// is exactly the reference export's `inchToPixel`.
+    pub fn inch_to_pixel(&self) -> f64 {
+        let ratio = ((self.bottom_x - self.top_x) as f32) / (self.out_w as f32);
+        f64::from(round_ei(f64::from(1.0f32 / ratio)))
+    }
+
+    /// GW2EI's `CombatReplayMap.GetMapCoordRounded(float realX, float
+    /// realY)` -- see this module's doc comment (section 5) for the
+    /// transcription. Note the y flip (`out_h * (1 - y_frac)`): world y
+    /// grows northward, image y grows downward.
+    pub fn to_map_pixel(&self, x: f32, y: f32) -> [f64; 2] {
+        let scale_x = self.out_w / self.img_w;
+        let scale_y = self.out_h / self.img_h;
+        let fx = (f64::from(x) - self.top_x) / (self.bottom_x - self.top_x);
+        let fy = (f64::from(y) - self.top_y) / (self.bottom_y - self.top_y);
+        [
+            f64::from(round_ei(scale_x * self.img_w * fx)),
+            f64::from(round_ei(scale_y * (self.img_h - self.img_h * fy))),
+        ]
+    }
+}
+
+/// C#'s `(float)Math.Round(value, 3)`. .NET's `Math.Round(double, int)`
+/// with the default `MidpointRounding.ToEven` scales by `10^digits`, calls
+/// the half-to-even `Math.Round(double)`, and unscales; GW2EI then narrows
+/// the result to `float` before serializing. Ties are vanishingly unlikely
+/// on real coordinates, but reproducing the exact mode costs nothing and
+/// removes a whole class of "off by one in the last digit" parity noise.
+fn round_ei(v: f64) -> f32 {
+    (round_ties_even(v * DATA_SCALE) / DATA_SCALE) as f32
+}
+
+/// `f64::round_ties_even`, hand-rolled: the standard-library method is only
+/// stable since Rust 1.77 and this crate's MSRV is 1.74 (`Cargo.toml`'s
+/// `rust-version`), which `clippy::incompatible_msrv` correctly flags.
+///
+/// `f64::round` is round-half-AWAY-from-zero, so it already agrees with
+/// round-half-to-even everywhere except at an exact `.5`; there, step the
+/// result one toward zero when it came out odd.
+fn round_ties_even(v: f64) -> f64 {
+    let r = v.round();
+    if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
+        r - v.signum()
+    } else {
+        r
+    }
+}
+
+/// GW2EI's `-facing.XYZ.GetRoundedZRotationDeg()` -- see this module's doc
+/// comment (section 6). The `(float)` narrowing of `Math.Atan2`'s `double`
+/// result BEFORE the radian -> degree conversion is deliberate and
+/// reproduced: skipping it shifts the last exported decimal on a
+/// meaningful fraction of samples.
+fn facing_to_degrees(x: f32, y: f32) -> f64 {
+    let rad = f64::from(y).atan2(f64::from(x)) as f32;
+    let deg = f64::from(rad) * 180.0 / std::f64::consts::PI;
+    f64::from(-round_ei(deg))
+}
+
+/// Which GW2EI `StatusEvent` subclass a statechange maps to. The
+/// discriminant order is GW2EI's own `GetAgentStatus` concatenation order
+/// (downs, alives, deads, spawns, despawns), which LINQ's STABLE
+/// `OrderBy(x => x.Time)` preserves as the same-timestamp tiebreak.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum StatusKind {
+    Down,
+    Alive,
+    Dead,
+    Spawn,
+    Despawn,
+}
+
+/// A closed `[start, end]` interval in GW2EI's exported shape: a plain
+/// two-element array of (possibly sentinel) i64 milliseconds.
+pub type EiInterval = [i64; 2];
+
+/// One actor's GW2EI-shape `combatReplayData`. Field names/semantics match
+/// GW2EI's `JsonActorCombatReplayData` exactly (M15 Task 3 maps this 1:1
+/// into the EI-JSON output); `agent_addr`/`name`/`is_squad` are the join
+/// keys back to [`Encounter::players`]/[`Encounter::enemies`], mirroring
+/// [`crate::analysis::replay::Track`]'s own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EiTrack {
+    /// Representative raw agent addr (first of `agent_addrs`).
+    pub agent_addr: u64,
+    /// `Player::character` / `Enemy::name`.
+    pub name: String,
+    /// `true` for squad players, `false` for enemy-player representatives.
+    pub is_squad: bool,
+    /// GW2EI's `combatReplayData.start` -- the trimmed replay window's
+    /// start (in practice this actor's first-aware time).
+    pub start: i64,
+    /// GW2EI's `combatReplayData.end`.
+    pub end: i64,
+    /// GW2EI's `combatReplayData.positions`: one `[x, y]` MAP-PIXEL pair
+    /// per grid point in `[start, end]`.
+    pub positions: Vec<[f64; 2]>,
+    /// GW2EI's `combatReplayData.orientations`: degrees, same length as
+    /// `positions` when the actor has any facing telemetry, EMPTY
+    /// otherwise (GW2EI polls rotations only when `_Rotations.Count > 0`).
+    pub orientations: Vec<f64>,
+    /// GW2EI's `combatReplayData.dc`, including the `[i64::MIN,
+    /// first_aware]` / `[last_aware, i64::MAX]` sentinel bracketing.
+    pub dc: Vec<EiInterval>,
+    /// GW2EI's `combatReplayData.down`.
+    pub down: Vec<EiInterval>,
+    /// GW2EI's `combatReplayData.dead`.
+    pub dead: Vec<EiInterval>,
+}
+
+/// Build GW2EI-shape combat-replay data for every squad player and every
+/// enemy-player representative, in exactly the order
+/// [`crate::analysis::replay::build_replay`] uses (all of `enc.players`,
+/// then the `is_player` entries of `enc.enemies`) -- so the two are
+/// positionally interchangeable and Task 3 can join either way.
+///
+/// `map` is the world -> map-pixel transform; get it from
+/// [`MapTransform::from_log`], or from [`bounding_box_transform`] when the
+/// log's map isn't one GW2EI ships an image for.
+///
+/// Deterministic: no hashing anywhere on this path (agent folding uses
+/// [`BTreeSet`], every other collection is an ordered `Vec` built by a
+/// single forward scan).
+pub fn build_ei_replay(raw: &RawLog, enc: &Encounter, map: &MapTransform) -> Vec<EiTrack> {
+    let world = build_world_tracks(raw, enc);
+    world
+        .into_iter()
+        .map(|w| w.into_ei_track(map))
+        .collect()
+}
+
+/// The pre-transform half of [`build_ei_replay`]: polled tracks still in
+/// WORLD (game-inch) units. Split out because
+/// [`bounding_box_transform`] needs them to derive a transform, which is
+/// then applied to these same tracks -- GW2EI has the identical
+/// chicken-and-egg (`CombatReplayMap.ComputeBoundingBox` reads
+/// `p.GetCombatReplayPolledPositions(log)`).
+pub fn build_world_tracks(raw: &RawLog, enc: &Encounter) -> Vec<WorldTrack> {
+    let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let log_duration = enc.duration_ms as i64;
+
+    let mut out = Vec::with_capacity(enc.players.len() + enc.enemies.len());
+    for p in &enc.players {
+        out.push(build_world_track(
+            raw,
+            t0,
+            log_duration,
+            &p.agent_addrs,
+            p.character.clone(),
+            true,
+        ));
+    }
+    for en in &enc.enemies {
+        if !en.is_player {
+            continue; // GW2EI's `players[]` array is player actors only
+        }
+        out.push(build_world_track(
+            raw,
+            t0,
+            log_duration,
+            &en.agent_addrs,
+            en.name.clone(),
+            false,
+        ));
+    }
+    out
+}
+
+/// One actor's polled track, still in world units. See
+/// [`build_world_tracks`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorldTrack {
+    pub agent_addr: u64,
+    pub name: String,
+    pub is_squad: bool,
+    pub start: i64,
+    pub end: i64,
+    /// Polled world positions, already trimmed to `[start, end]`.
+    pub positions: Vec<Point3>,
+    /// Polled world facing vectors, already trimmed to `[start, end]`;
+    /// empty when the actor emitted no `CBTS_FACING` events.
+    pub rotations: Vec<Point3>,
+    pub dc: Vec<EiInterval>,
+    pub down: Vec<EiInterval>,
+    pub dead: Vec<EiInterval>,
+}
+
+impl WorldTrack {
+    /// Apply the world -> map-pixel transform and GW2EI's angle
+    /// convention, yielding the exported shape.
+    pub fn into_ei_track(self, map: &MapTransform) -> EiTrack {
+        EiTrack {
+            agent_addr: self.agent_addr,
+            name: self.name,
+            is_squad: self.is_squad,
+            start: self.start,
+            end: self.end,
+            positions: self.positions.iter().map(|p| map.to_map_pixel(p.x, p.y)).collect(),
+            orientations: self.rotations.iter().map(|r| facing_to_degrees(r.x, r.y)).collect(),
+            dc: self.dc,
+            down: self.down,
+            dead: self.dead,
+        }
+    }
+}
+
+/// GW2EI's fallback map rect for logs whose map id it has no image for
+/// (`LogLogic.GetCombatMapInternal`'s `new CombatReplayMap((800, 800), (0,
+/// 0, 0, 0))` followed by `GetCombatReplayMap`'s
+/// `Map.ComputeBoundingBox(log)`):
+/// ```csharp
+/// foreach (Player p in log.PlayerList) {                 // SQUAD players only
+///     if (!p.HasCombatReplayPositions(log)) continue;
+///     var pos = p.GetCombatReplayPolledPositions(log);   // trimmed, polled
+///     _rectInMap.topX    = Math.Min(Math.Floor(pos.Min(x => x.XYZ.X)) - 250, _rectInMap.topX);
+///     _rectInMap.topY    = Math.Min(Math.Floor(pos.Min(x => x.XYZ.Y)) - 250, _rectInMap.topY);
+///     _rectInMap.bottomX = Math.Max(Math.Floor(pos.Max(x => x.XYZ.X)) + 250, _rectInMap.bottomX);
+///     _rectInMap.bottomY = Math.Max(Math.Floor(pos.Max(x => x.XYZ.Y)) + 250, _rectInMap.bottomY);
+/// }
+/// FixAspectRatio();   // pad the shorter axis symmetrically until width == height
+/// ```
+/// (The seed values are `int.MaxValue`/`int.MinValue`, so the first player
+/// simply establishes the box.) With `width == height` after
+/// `FixAspectRatio`, `GetPixelMapSize` returns `(750, 750)`.
+///
+/// Returns `None` when no squad player has any polled position (nothing to
+/// bound).
+pub fn bounding_box_transform(tracks: &[WorldTrack]) -> Option<MapTransform> {
+    let mut top_x = f64::INFINITY;
+    let mut top_y = f64::INFINITY;
+    let mut bottom_x = f64::NEG_INFINITY;
+    let mut bottom_y = f64::NEG_INFINITY;
+    let mut any = false;
+    for tr in tracks.iter().filter(|t| t.is_squad && !t.positions.is_empty()) {
+        any = true;
+        let min_x = tr.positions.iter().map(|p| f64::from(p.x)).fold(f64::INFINITY, f64::min);
+        let min_y = tr.positions.iter().map(|p| f64::from(p.y)).fold(f64::INFINITY, f64::min);
+        let max_x = tr.positions.iter().map(|p| f64::from(p.x)).fold(f64::NEG_INFINITY, f64::max);
+        let max_y = tr.positions.iter().map(|p| f64::from(p.y)).fold(f64::NEG_INFINITY, f64::max);
+        top_x = top_x.min(min_x.floor() - 250.0);
+        top_y = top_y.min(min_y.floor() - 250.0);
+        bottom_x = bottom_x.max(max_x.floor() + 250.0);
+        bottom_y = bottom_y.max(max_y.floor() + 250.0);
+    }
+    if !any {
+        return None;
+    }
+    // `CombatReplayMap.FixAspectRatio`.
+    let width = bottom_x - top_x;
+    let height = bottom_y - top_y;
+    let pad = (width - height).abs() / 2.0;
+    if width > height {
+        top_y -= pad;
+        bottom_y += pad;
+    } else if height > width {
+        top_x -= pad;
+        bottom_x += pad;
+    }
+    Some(MapTransform::new((800, 800), (top_x, top_y, bottom_x, bottom_y)))
+}
+
+fn build_world_track(
+    raw: &RawLog,
+    t0: u64,
+    log_duration: i64,
+    addrs: &[u64],
+    name: String,
+    is_squad: bool,
+) -> WorldTrack {
+    let addr_set: BTreeSet<u64> = addrs.iter().copied().collect();
+    let agent_addr = addrs.first().copied().unwrap_or(0);
+
+    let (positions, velocities, rotations, statuses, aware) = collect_movement(raw, t0, &addr_set);
+    // GW2EI's `AgentItem.FirstAware`/`LastAware`. An agent with no events
+    // at all is degenerate (it wouldn't be in the roster); fall back to an
+    // empty `[0, 0]` window rather than leaking sentinels.
+    let (first_aware, last_aware) = aware.unwrap_or((0, 0));
+
+    let status = fill_status(&statuses, first_aware, last_aware);
+    let (start, end) = trim_bounds(&status.actives, first_aware, last_aware, log_duration);
+
+    // `AgentItem.Type == Player` for every roster entry here (squad players
+    // and enemy-player representatives alike), so GW2EI's `forcePolling` is
+    // unconditionally `true` on this path.
+    let (polled_pos, polled_rot) = poll(&positions, &velocities, &rotations, log_duration, true, EI_POLL_MS);
+
+    let keep = |p: &&Point3| p.t >= start && p.t <= end;
+    WorldTrack {
+        agent_addr,
+        name,
+        is_squad,
+        start,
+        end,
+        positions: polled_pos.iter().filter(keep).copied().collect(),
+        rotations: polled_rot.iter().filter(keep).copied().collect(),
+        dc: status.dc,
+        down: status.down,
+        dead: status.dead,
+    }
+}
+
+/// Decode one folded agent's `CBTS_POSITION`/`CBTS_VELOCITY`/`CBTS_FACING`
+/// payloads and collect its status events + first/last-aware bounds in a
+/// single pass over `raw.events`.
+///
+/// Payload decode is M9's, unchanged: `dst_agent`'s low/high f32 halves are
+/// x/y, `value`'s bit pattern is z (see
+/// [`crate::analysis::replay`]'s module doc and `sc::POSITION`'s for the
+/// citation trail). The per-kind validity filters are GW2EI's
+/// `PositionEvent`/`RotationEvent`/`VelocityEvent.AddPoint3D` -- see this
+/// module's doc comment, section 1.
+///
+/// Returns `(positions, velocities, rotations, statuses, aware)` with every
+/// list ascending by time; `aware` is `None` only when the agent has no
+/// events at all.
+#[allow(clippy::type_complexity)]
+fn collect_movement(
+    raw: &RawLog,
+    t0: u64,
+    addr_set: &BTreeSet<u64>,
+) -> (
+    Vec<Point3>,
+    Vec<Point3>,
+    Vec<Point3>,
+    Vec<(i64, StatusKind)>,
+    Option<(i64, i64)>,
+) {
+    let mut positions = Vec::new();
+    let mut velocities = Vec::new();
+    let mut rotations = Vec::new();
+    let mut statuses = Vec::new();
+    let mut first_aware = i64::MAX;
+    let mut last_aware = i64::MIN;
+    let mut any = false;
+
+    for e in raw.events.iter().filter(|e| addr_set.contains(&e.src_agent)) {
+        let t = time_rel(e, t0);
+        any = true;
+        first_aware = first_aware.min(t);
+        last_aware = last_aware.max(t);
+        match e.is_statechange {
+            sc::POSITION => {
+                let p = decode_point(e, t);
+                // `PositionEvent.AddPoint3D`: drop all-zero, non-finite, or
+                // |xy| > 40000 points.
+                let zero = p.x == 0.0 && p.y == 0.0 && p.z == 0.0;
+                let far = f64::from(p.x) * f64::from(p.x) + f64::from(p.y) * f64::from(p.y) > 16e8;
+                if !zero && p.is_finite() && !far {
+                    positions.push(p);
+                }
+            }
+            sc::VELOCITY => {
+                let p = decode_point(e, t);
+                if p.is_finite() {
+                    velocities.push(p);
+                }
+            }
+            sc::FACING => {
+                let p = decode_point(e, t);
+                if p.is_finite() {
+                    rotations.push(p);
+                }
+            }
+            sc::CHANGE_DOWN => statuses.push((t, StatusKind::Down)),
+            sc::CHANGE_UP => statuses.push((t, StatusKind::Alive)),
+            sc::CHANGE_DEAD => statuses.push((t, StatusKind::Dead)),
+            SC_SPAWN => statuses.push((t, StatusKind::Spawn)),
+            SC_DESPAWN => statuses.push((t, StatusKind::Despawn)),
+            _ => {}
+        }
+    }
+
+    // `raw.events` is already time-ascending, but folding across relog
+    // addrs and defending against a non-monotone capture both argue for an
+    // explicit stable sort. `sort_by_key` IS stable, so equal-time entries
+    // keep their original relative order (which for `statuses` is then
+    // re-tiebroken by `StatusKind` to match GW2EI's concatenation order --
+    // see this module's doc comment, section 4).
+    positions.sort_by_key(|p| p.t);
+    velocities.sort_by_key(|p| p.t);
+    rotations.sort_by_key(|p| p.t);
+    statuses.sort_by_key(|s| (s.0, s.1));
+
+    let aware = if any { Some((first_aware, last_aware)) } else { None };
+    (positions, velocities, rotations, statuses, aware)
+}
+
+fn time_rel(e: &RawEvent, t0: u64) -> i64 {
+    e.time as i64 - t0 as i64
+}
+
+/// M9's `decode_position`, generalized to all three movement statechanges
+/// (they share `MovementEvent`'s packed layout in GW2EI, and `CBTS_VELOCITY`
+/// / `CBTS_FACING` in arcdps).
+fn decode_point(e: &RawEvent, t: i64) -> Point3 {
+    let dst = e.dst_agent.to_le_bytes();
+    Point3 {
+        t,
+        x: f32::from_le_bytes(dst[0..4].try_into().unwrap()),
+        y: f32::from_le_bytes(dst[4..8].try_into().unwrap()),
+        z: f32::from_bits(e.value as u32),
+    }
+}
+
+/// GW2EI's `SingleActorStatusHelper.FillStatus` output.
+#[derive(Debug, Clone, PartialEq, Default)]
+struct Status {
+    dead: Vec<EiInterval>,
+    down: Vec<EiInterval>,
+    dc: Vec<EiInterval>,
+    actives: Vec<EiInterval>,
+}
+
+/// GW2EI's `AddSegment`: append `[start, end]` only when `start < end`.
+fn add_segment(v: &mut Vec<EiInterval>, start: i64, end: i64) {
+    if start < end {
+        v.push([start, end]);
+    }
+}
+
+/// GW2EI's `SingleActorStatusHelper.FillStatus` + `AddValueToStatusList` --
+/// see this module's doc comment, section 4, for the full transcription.
+/// `statuses` must be ascending by `(time, kind)`.
+fn fill_status(statuses: &[(i64, StatusKind)], first_aware: i64, last_aware: i64) -> Status {
+    let mut s = Status::default();
+    add_segment(&mut s.dc, i64::MIN, first_aware);
+
+    if statuses.is_empty() {
+        add_segment(&mut s.actives, first_aware, last_aware);
+        add_segment(&mut s.dc, last_aware, i64::MAX);
+        return s;
+    }
+
+    for i in 0..statuses.len() {
+        let (t, kind) = statuses[i];
+        let next_t = if i + 1 < statuses.len() { statuses[i + 1].0 } else { last_aware };
+        match kind {
+            StatusKind::Down => {
+                if i == 0 {
+                    add_segment(&mut s.actives, first_aware, t);
+                }
+                add_segment(&mut s.down, t, next_t);
+            }
+            StatusKind::Dead => {
+                if i == 0 {
+                    add_segment(&mut s.actives, first_aware, t);
+                }
+                add_segment(&mut s.dead, t, next_t);
+            }
+            StatusKind::Despawn => {
+                if i == 0 {
+                    add_segment(&mut s.actives, first_aware, t);
+                }
+                add_segment(&mut s.dc, t, next_t);
+            }
+            StatusKind::Alive | StatusKind::Spawn => {
+                // GW2EI's 50ms grace: an alive/spawn event within 50ms of
+                // first-aware is treated as "was there all along", not as a
+                // late join.
+                if i == 0 && t - first_aware > 50 {
+                    add_segment(&mut s.dc, first_aware, t);
+                }
+                add_segment(&mut s.actives, t, next_t);
+            }
+        }
+    }
+
+    // GW2EI's tail: an actor still DEAD at last-aware extends `dead` to the
+    // sentinel; everything else extends `dc`.
+    if statuses[statuses.len() - 1].1 == StatusKind::Dead {
+        add_segment(&mut s.dead, last_aware, i64::MAX);
+    } else {
+        add_segment(&mut s.dc, last_aware, i64::MAX);
+    }
+    s
+}
+
+/// GW2EI's `SingleActor.TrimCombatReplay` + `CombatReplay.Trim`, reduced to
+/// the `[start, end]` window they produce -- see this module's doc comment,
+/// section 3. `log_start` is `0` in this project's log-relative frame and
+/// `log_end` is the log duration.
+fn trim_bounds(actives: &[EiInterval], first_aware: i64, last_aware: i64, log_end: i64) -> (i64, i64) {
+    let trim_start = actives.first().map(|a| a[0]).unwrap_or(first_aware);
+    let trim_end = actives.last().map(|a| a[1]).unwrap_or(last_aware);
+    let start = trim_start.max(first_aware).max(0);
+    let end = start.max(trim_end.min(last_aware).min(log_end));
+    (start, end)
+}
+
+/// The multiples of `poll_ms` that survive [`trim_bounds`] -- i.e. the grid
+/// points GW2EI actually exports. Exposed for tests/callers that want the
+/// sample TIMES (the exported JSON only carries the values); equivalent to
+/// `(start..=end).step_by(poll)` intersected with the `t < log_duration`
+/// polling loop bound.
+pub fn grid_window(start: i64, end: i64, log_duration: i64, poll_ms: i64) -> impl Iterator<Item = i64> {
+    let poll = poll_ms.max(1);
+    // First multiple of `poll` at or after `start` (ceiling division that
+    // is also correct for negative `start`).
+    let first = start.div_euclid(poll) * poll + if start.rem_euclid(poll) == 0 { 0 } else { poll };
+    // Last multiple of `poll` at or before `end` AND strictly below
+    // `log_duration` (the `t < logDuration` loop bound).
+    let cap = end.min(log_duration - 1);
+    let last = cap.div_euclid(poll) * poll;
+    let n = if last >= first { (last - first) / poll + 1 } else { 0 };
+    (0..n).map(move |i| first + i * poll)
+}
+
+/// GW2EI's `CombatReplay.PollingRate` (+ `HandlePosition`/`HandleRotation`)
+/// -- see this module's doc comment, section 2. Returns the UNTRIMMED
+/// polled position and rotation tracks.
+///
+/// `force` is GW2EI's `forcePolling`: when the actor has no usable position
+/// events at all, GW2EI synthesizes the single sentinel point
+/// `new(int.MinValue, int.MinValue, 0, 0)` for players so the actor still
+/// gets a (degenerate, far-off-map) track rather than vanishing from the
+/// replay. Faithfully reproduced -- callers that would rather drop such
+/// actors should filter on an empty raw-position list themselves.
+fn poll(
+    positions: &[Point3],
+    velocities: &[Point3],
+    rotations: &[Point3],
+    log_duration: i64,
+    force: bool,
+    rate: i64,
+) -> (Vec<Point3>, Vec<Point3>) {
+    let rate = rate.max(1);
+    let sentinel;
+    let positions: &[Point3] = if positions.is_empty() {
+        if !force {
+            return (Vec::new(), Vec::new());
+        }
+        sentinel = [Point3 { t: 0, x: i32::MIN as f32, y: i32::MIN as f32, z: 0.0 }];
+        &sentinel
+    } else {
+        positions
+    };
+
+    let do_rotation = !rotations.is_empty();
+    // C# integer division truncates toward zero; `i64::div_euclid` does
+    // NOT, so use the truncating `/` (Rust's default) to match.
+    let pos_start_offset = 0.min(rate * ((positions[0].t / rate) - 1));
+    let rot_start_offset = if do_rotation { 0.min(rate * ((rotations[0].t / rate) - 1)) } else { 0 };
+    let start_offset = pos_start_offset.min(rot_start_offset);
+
+    let cap = ((log_duration - start_offset) / rate + 1).max(0) as usize;
+    let mut polled_pos: Vec<Point3> = Vec::with_capacity(cap);
+    let mut polled_rot: Vec<Point3> = Vec::with_capacity(if do_rotation { cap } else { 0 });
+
+    let mut pos_i = 0usize;
+    let mut vel_i = 0i64;
+    let mut rot_i = 0usize;
+
+    let mut t = start_offset;
+    while t < log_duration {
+        handle_position(t, positions, velocities, &mut polled_pos, &mut pos_i, &mut vel_i, rate);
+        if do_rotation {
+            handle_rotation(t, rotations, &mut polled_rot, &mut rot_i, rate);
+        }
+        t += rate;
+    }
+    (polled_pos, polled_rot)
+}
+
+/// GW2EI's `CombatReplay.HandlePosition`, tail recursion turned into a
+/// loop:
+/// ```csharp
+/// ParametricPoint3D pos = _Positions[positionTableIndex];
+/// if (t <= pos.Time) { emit pos@t; }                                  // before the track starts: hold
+/// else if (positionTableIndex == _Positions.Count - 1) { emit pos@t; }// after it ends: hold
+/// else {
+///     ParametricPoint3D nextPos = _Positions[positionTableIndex + 1];
+///     if (nextPos.Time < t) { positionTableIndex++; recurse; }
+///     else {
+///         var last = _PolledPositions[polledPositionTableIndex - 1].Time > pos.Time
+///                  ? _PolledPositions[polledPositionTableIndex - 1] : pos;
+///         velocityTableIndex = UpdateVelocityIndex(_Velocities, t, velocityTableIndex);
+///         var velocity = (index in range) ? _Velocities[velocityTableIndex] : default;
+///         if (nextPos.Time - last.Time > ArcDPSPollingRate + rate && velocity.XYZ.Length() < 1e-3)
+///              emit pos@t;                                            // stale gap + standing still: hold
+///         else emit Vector3.Lerp(last.XYZ, nextPos.XYZ, (t - last.Time) / (nextPos.Time - last.Time))@t;
+///     }
+/// }
+/// ```
+/// Two details worth spelling out, because a naive "lerp between the two
+/// bracketing raw events" (which is what M9's native
+/// [`crate::analysis::replay::downsample`] does) gets them wrong:
+///
+/// 1. **`last` is the PREVIOUS POLLED point when that is later than the
+///    current raw point.** While the bracketing segment is unchanged this
+///    is algebraically identical to interpolating from the raw point
+///    (successive lerps toward a fixed target with matching ratios lie on
+///    the same line), but after a HOLD it is not -- the track then eases
+///    from where it was frozen toward the next real sample instead of
+///    snapping onto the raw segment.
+/// 2. **The hold branch.** When the next raw sample is more than
+///    `ArcDPSPollingRate + rate` (600ms) away AND the most recent velocity
+///    sample is ~zero, GW2EI refuses to interpolate and freezes the actor
+///    at `pos`. This is the "player stood still, arcdps stopped emitting
+///    position events" case; interpolating across it would drag the icon
+///    smoothly toward a position it teleported to.
+fn handle_position(
+    t: i64,
+    positions: &[Point3],
+    velocities: &[Point3],
+    out: &mut Vec<Point3>,
+    pos_i: &mut usize,
+    vel_i: &mut i64,
+    rate: i64,
+) {
+    loop {
+        let pos = positions[*pos_i];
+        if t <= pos.t || *pos_i == positions.len() - 1 {
+            out.push(pos.with_time(t));
+            return;
+        }
+        let next = positions[*pos_i + 1];
+        if next.t < t {
+            *pos_i += 1;
+            continue;
+        }
+        // GW2EI indexes `_PolledPositions[polledPositionTableIndex - 1]`
+        // unguarded; that index is always valid in practice because the
+        // very first grid point (`startOffset <= 0 <= positions[0].t`)
+        // always takes the `t <= pos.Time` branch above. `last()` keeps us
+        // panic-free if a future caller feeds negative times.
+        let last = match out.last() {
+            Some(l) if l.t > pos.t => *l,
+            _ => pos,
+        };
+        let vel_len = update_velocity_index(velocities, t, vel_i)
+            .map(|v| v.len())
+            .unwrap_or(0.0);
+        if next.t - last.t > ARCDPS_POLL_MS + rate && vel_len < 1e-3 {
+            out.push(pos.with_time(t));
+        } else if next.t == last.t {
+            out.push(next.with_time(t));
+        } else {
+            let ratio = (t - last.t) as f32 / (next.t - last.t) as f32;
+            out.push(Point3::lerp(last, next, ratio, t));
+        }
+        return;
+    }
+}
+
+/// GW2EI's `CombatReplay.HandleRotation` -- identical to
+/// [`handle_position`] minus the velocity term (the hold branch fires on
+/// the stale-gap test alone).
+fn handle_rotation(t: i64, rotations: &[Point3], out: &mut Vec<Point3>, rot_i: &mut usize, rate: i64) {
+    loop {
+        let rot = rotations[*rot_i];
+        if t <= rot.t || *rot_i == rotations.len() - 1 {
+            out.push(rot.with_time(t));
+            return;
+        }
+        let next = rotations[*rot_i + 1];
+        if next.t < t {
+            *rot_i += 1;
+            continue;
+        }
+        let last = match out.last() {
+            Some(l) if l.t > rot.t => *l,
+            _ => rot,
+        };
+        if next.t - last.t > ARCDPS_POLL_MS + rate {
+            out.push(rot.with_time(t));
+        } else if next.t == last.t {
+            out.push(next.with_time(t));
+        } else {
+            let ratio = (t - last.t) as f32 / (next.t - last.t) as f32;
+            out.push(Point3::lerp(last, next, ratio, t));
+        }
+        return;
+    }
+}
+
+/// GW2EI's `CombatReplay.UpdateVelocityIndex`:
+/// ```csharp
+/// if (velocities.Count == 0) return -1;
+/// int res = Math.Max(currentIndex, 0);
+/// ParametricPoint3D cuvVelocity = velocities[res];
+/// while (res < velocities.Count && cuvVelocity.Time < time) { res++; if (res < velocities.Count) cuvVelocity = velocities[res]; }
+/// return res - 1;
+/// ```
+/// i.e. advance a monotone cursor to the first velocity at or after `time`
+/// and report the one before it (`None` when `time` precedes every
+/// velocity sample -- GW2EI's `default(ParametricPoint3D)`, a zero vector,
+/// which reads as "standing still" in the hold test).
+fn update_velocity_index(velocities: &[Point3], time: i64, cursor: &mut i64) -> Option<Point3> {
+    if velocities.is_empty() {
+        *cursor = -1;
+        return None;
+    }
+    let mut res = (*cursor).max(0) as usize;
+    while res < velocities.len() && velocities[res].t < time {
+        res += 1;
+    }
+    let idx = res as i64 - 1;
+    *cursor = idx;
+    if idx >= 0 && (idx as usize) < velocities.len() {
+        Some(velocities[idx as usize])
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(t: i64, x: f32, y: f32) -> Point3 {
+        Point3 { t, x, y, z: 0.0 }
+    }
+
+    // -- map transform (GW2EI `CombatReplayMap`) --
+
+    /// `GetPixelMapSize` for Alpine Borderlands' `(697, 1000)` image:
+    /// `ratio = 0.697 < 1` => `(round(0.697 * 750), 750) = (523, 750)`,
+    /// exactly the reference export's `combatReplayMetaData.sizes`, and
+    /// `GetInchToPixel` => `0.009`, exactly its `inchToPixel`.
+    #[test]
+    fn alpine_borderlands_matches_exported_metadata() {
+        let m = MapTransform::for_map_id(96).expect("Blue Alpine Borderlands");
+        assert_eq!(m.sizes(), [523, 750]);
+        // GW2EI computes (and serializes) this as an `f32`, so the exact
+        // `f64` here is `0.009f32` widened, not the decimal 0.009.
+        assert_eq!(m.inch_to_pixel() as f32, 0.009f32, "got {}", m.inch_to_pixel());
+    }
+
+    #[test]
+    fn pixel_map_size_handles_both_aspect_ratio_branches() {
+        // Wider than tall -> width pinned to 750.
+        let wide = MapTransform::new((2000, 1000), (0.0, 0.0, 1.0, 1.0));
+        assert_eq!(wide.sizes(), [750, 375]);
+        // Square -> 750x750, no rounding.
+        let square = MapTransform::for_map_id(1099).expect("Red Desert Borderlands");
+        assert_eq!(square.sizes(), [750, 750]);
+        // Edge of the Mists: 3556/3646 < 1 -> (round(0.97531 * 750), 750).
+        let eotm = MapTransform::for_map_id(968).expect("Edge of the Mists");
+        assert_eq!(eotm.sizes(), [731, 750]);
+    }
+
+    /// The corners of the world rect must land on the corners of the output
+    /// image, with the y axis FLIPPED (world north == image top).
+    #[test]
+    fn to_map_pixel_maps_rect_corners_with_flipped_y() {
+        let m = MapTransform::for_map_id(95).expect("Green Alpine Borderlands");
+        assert_eq!(m.to_map_pixel(-30720.0, -43008.0), [0.0, 750.0]);
+        assert_eq!(m.to_map_pixel(30720.0, 43008.0), [523.0, 0.0]);
+        assert_eq!(m.to_map_pixel(0.0, 0.0), [261.5, 375.0]);
+    }
+
+    #[test]
+    fn unknown_map_id_has_no_builtin_transform() {
+        assert!(MapTransform::for_map_id(1).is_none());
+    }
+
+    /// 3 decimals, round-half-to-even, narrowed to `f32` -- GW2EI's
+    /// `(float)Math.Round(v, ParserHelper.CombatReplayDataDigit)`.
+    /// The hand-rolled `f64::round_ties_even` stand-in (MSRV 1.74) must
+    /// agree with the standard library's semantics on every tie, on both
+    /// signs, and be a plain round everywhere else.
+    #[test]
+    fn round_ties_even_matches_the_std_semantics() {
+        for (input, want) in [
+            (0.5f64, 0.0f64),
+            (1.5, 2.0),
+            (2.5, 2.0),
+            (3.5, 4.0),
+            (-0.5, 0.0),
+            (-1.5, -2.0),
+            (-2.5, -2.0),
+            (0.4, 0.0),
+            (0.6, 1.0),
+            (-0.6, -1.0),
+            (12.0, 12.0),
+        ] {
+            assert_eq!(round_ties_even(input), want, "round_ties_even({input})");
+        }
+    }
+
+    #[test]
+    fn round_ei_is_three_digit_half_to_even() {
+        assert_eq!(round_ei(1.23456), 1.235);
+        assert_eq!(round_ei(-1.23456), -1.235);
+        assert_eq!(round_ei(0.0025), 0.002, "half-to-even rounds .0025 down to .002");
+        assert_eq!(round_ei(0.0035), 0.004, "half-to-even rounds .0035 up to .004");
+    }
+
+    // -- orientation convention --
+
+    /// `-round(degrees(atan2(y, x)), 3)`: facing +x is 0, facing +y is
+    /// -90 (the sign flip is GW2EI's, see the module doc's section 6).
+    #[test]
+    fn facing_to_degrees_uses_negated_atan2_y_x() {
+        assert_eq!(facing_to_degrees(1.0, 0.0), 0.0);
+        assert_eq!(facing_to_degrees(0.0, 1.0), -90.0);
+        assert_eq!(facing_to_degrees(-1.0, 0.0), -180.0);
+        assert_eq!(facing_to_degrees(0.0, -1.0), 90.0);
+        assert!((facing_to_degrees(1.0, 1.0) - -45.0).abs() < 1e-9);
+    }
+
+    // -- the polling grid --
+
+    #[test]
+    fn grid_window_is_the_multiples_of_the_poll_rate_inside_start_end() {
+        let g: Vec<i64> = grid_window(23, 1000, 100_000, 300).collect();
+        assert_eq!(g, vec![300, 600, 900]);
+        // start exactly on a grid point is INCLUSIVE.
+        let g: Vec<i64> = grid_window(0, 600, 100_000, 300).collect();
+        assert_eq!(g, vec![0, 300, 600]);
+    }
+
+    /// The reference export's own sample counts (see the module doc,
+    /// section 3): 1159 for a player first-aware at 23, 1160 for one
+    /// first-aware at 0, 1032 for the one who joined at 38317 -- all with
+    /// `end` in `347736..=347977` and `logDuration = 348362`.
+    #[test]
+    fn grid_window_reproduces_the_reference_export_sample_counts() {
+        const DUR: i64 = 348_362;
+        assert_eq!(grid_window(23, 347_977, DUR, 300).count(), 1159);
+        assert_eq!(grid_window(0, 347_976, DUR, 300).count(), 1160);
+        assert_eq!(grid_window(2, 347_736, DUR, 300).count(), 1159);
+        assert_eq!(grid_window(38_317, 347_977, DUR, 300).count(), 1032);
+    }
+
+    /// The `t < logDuration` loop bound: a grid point exactly AT the log
+    /// duration is never polled, even if `end` would allow it.
+    #[test]
+    fn grid_window_excludes_a_point_exactly_at_log_duration() {
+        let g: Vec<i64> = grid_window(0, 900, 900, 300).collect();
+        assert_eq!(g, vec![0, 300, 600]);
+    }
+
+    #[test]
+    fn grid_window_is_empty_when_start_is_past_end() {
+        assert_eq!(grid_window(500, 400, 100_000, 300).count(), 0);
+    }
+
+    // -- interpolation / edge clamping --
+
+    /// Two raw samples 300ms apart (inside the 600ms stale-gap threshold,
+    /// so the hold branch never fires): the grid points between them are a
+    /// straight linear interpolation.
+    #[test]
+    fn interpolates_linearly_between_two_bracketing_samples() {
+        let pos = [p(0, 0.0, 0.0), p(300, 30.0, 60.0)];
+        let (pp, pr) = poll(&pos, &[], &[], 400, true, 100);
+        // Grid: startOffset = min(0, 100*((0/100)-1)) = -100, then
+        // -100, 0, 100, 200, 300 (t < 400).
+        let times: Vec<i64> = pp.iter().map(|q| q.t).collect();
+        assert_eq!(times, vec![-100, 0, 100, 200, 300]);
+        assert_eq!((pp[0].x, pp[0].y), (0.0, 0.0), "held before the track starts");
+        assert_eq!((pp[2].x, pp[2].y), (10.0, 20.0));
+        assert_eq!((pp[3].x, pp[3].y), (20.0, 40.0));
+        assert_eq!((pp[4].x, pp[4].y), (30.0, 60.0));
+        assert!(pr.is_empty(), "no facing events -> no polled rotations");
+    }
+
+    /// Before the first and after the last raw sample GW2EI HOLDS the
+    /// nearest endpoint (it never extrapolates).
+    #[test]
+    fn clamps_by_holding_the_first_and_last_sample() {
+        let pos = [p(500, 10.0, 20.0), p(800, 40.0, 20.0)];
+        let (pp, _) = poll(&pos, &[], &[], 2000, true, 300);
+        // startOffset = min(0, 300*((500/300)-1)) = min(0, 0) = 0.
+        assert_eq!(pp.first().unwrap().t, 0);
+        assert_eq!((pp[0].x, pp[0].y), (10.0, 20.0), "held at the first sample");
+        let last = pp.last().unwrap();
+        assert_eq!(last.t, 1800);
+        assert_eq!((last.x, last.y), (40.0, 20.0), "held at the last sample");
+    }
+
+    /// The hold branch: a >600ms gap to the next raw sample WITH a ~zero
+    /// velocity freezes the actor instead of sliding it. Same inputs with
+    /// a non-zero velocity interpolate instead -- this is the assertion
+    /// that a plain-lerp implementation fails.
+    #[test]
+    fn holds_across_a_stale_gap_only_when_velocity_is_zero() {
+        let pos = [p(0, 0.0, 0.0), p(3000, 3000.0, 0.0)];
+        let still = [Point3 { t: 0, x: 0.0, y: 0.0, z: 0.0 }];
+        let (held, _) = poll(&pos, &still, &[], 1000, true, 300);
+        assert!(
+            held.iter().all(|q| q.x == 0.0),
+            "zero velocity + 3000ms gap (> ArcDPSPollingRate + rate) must hold: {held:?}"
+        );
+
+        let moving = [Point3 { t: 0, x: 5.0, y: 0.0, z: 0.0 }];
+        let (lerped, _) = poll(&pos, &moving, &[], 1000, true, 300);
+        let at_300 = lerped.iter().find(|q| q.t == 300).expect("t=300");
+        assert!((at_300.x - 300.0).abs() < 1e-3, "non-zero velocity must interpolate: {at_300:?}");
+    }
+
+    /// A velocity sample only counts once its own timestamp is at or
+    /// before the grid point (GW2EI's `UpdateVelocityIndex` reports the
+    /// last velocity strictly BEFORE `t`), so a movement burst that starts
+    /// after the grid point still reads as "standing still".
+    #[test]
+    fn velocity_cursor_reports_the_sample_before_the_grid_point() {
+        let vels = [
+            Point3 { t: 100, x: 0.0, y: 0.0, z: 0.0 },
+            Point3 { t: 700, x: 9.0, y: 0.0, z: 0.0 },
+        ];
+        let mut cursor = 0i64;
+        assert!(update_velocity_index(&vels, 50, &mut cursor).is_none(), "nothing before t=50");
+        let mut cursor = 0i64;
+        assert_eq!(update_velocity_index(&vels, 500, &mut cursor).map(|v| v.x), Some(0.0));
+        assert_eq!(update_velocity_index(&vels, 900, &mut cursor).map(|v| v.x), Some(9.0));
+    }
+
+    /// Rotations are polled on the SAME grid as positions, and the
+    /// combined `startOffset` is the earlier of the two tracks' own
+    /// offsets -- so `orientations.len() == positions.len()` always (before
+    /// trimming, and therefore after it too, since both are trimmed with
+    /// the same predicate).
+    #[test]
+    fn rotations_are_polled_on_the_same_grid_as_positions() {
+        let pos = [p(0, 0.0, 0.0), p(600, 6.0, 0.0)];
+        let rot = [p(0, 1.0, 0.0), p(600, 0.0, 1.0)];
+        let (pp, pr) = poll(&pos, &[], &rot, 900, true, 300);
+        assert_eq!(pp.len(), pr.len());
+        assert_eq!(pr.iter().map(|q| q.t).collect::<Vec<_>>(), pp.iter().map(|q| q.t).collect::<Vec<_>>());
+    }
+
+    /// GW2EI's `forcePolling` sentinel: a player with NO usable position
+    /// events still gets a full-length track, pinned at
+    /// `(int.MinValue, int.MinValue)`.
+    #[test]
+    fn empty_position_track_yields_the_force_polling_sentinel() {
+        let (pp, _) = poll(&[], &[], &[], 900, true, 300);
+        assert_eq!(pp.len(), 4, "grid -300, 0, 300, 600 (t < 900)");
+        assert!(pp.iter().all(|q| q.x == i32::MIN as f32 && q.y == i32::MIN as f32));
+        // Without forcePolling (GW2EI's non-player actors) the track is
+        // simply empty.
+        let (none, _) = poll(&[], &[], &[], 900, false, 300);
+        assert!(none.is_empty());
+    }
+
+    /// A rotation track with no positions polls NOTHING -- GW2EI's
+    /// `PollingRate` returns before the loop when `_Positions` is empty and
+    /// `forcePolling` is false.
+    #[test]
+    fn rotations_without_positions_and_without_force_poll_nothing() {
+        let rot = [p(0, 1.0, 0.0)];
+        let (pp, pr) = poll(&[], &[], &rot, 900, false, 300);
+        assert!(pp.is_empty() && pr.is_empty());
+    }
+
+    #[test]
+    fn polling_is_deterministic() {
+        let pos = [p(0, 0.0, 0.0), p(137, 5.0, -5.0), p(401, 12.0, 8.0), p(900, 0.0, 0.0)];
+        let a = poll(&pos, &[], &[], 1200, true, 300);
+        let b = poll(&pos, &[], &[], 1200, true, 300);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn polled_positions_are_never_nan() {
+        let pos = [p(0, 1.0, 2.0), p(50, 1.0, 2.0), p(50, 3.0, 4.0), p(900, 9.0, 9.0)];
+        let (pp, _) = poll(&pos, &[], &[], 1200, true, 300);
+        assert!(pp.iter().all(|q| q.x.is_finite() && q.y.is_finite()), "{pp:?}");
+    }
+
+    // -- dc / down / dead bracketing --
+
+    /// The reference export's universal shape: no status events at all ->
+    /// `dc = [[i64::MIN, first_aware], [last_aware, i64::MAX]]`.
+    #[test]
+    fn dc_brackets_the_awareness_window_with_i64_sentinels() {
+        let s = fill_status(&[], 23, 347_977);
+        assert_eq!(s.dc, vec![[i64::MIN, 23], [347_977, i64::MAX]]);
+        assert_eq!(s.actives, vec![[23, 347_977]]);
+        assert!(s.down.is_empty() && s.dead.is_empty());
+    }
+
+    /// Down/up cycles land on `down` and leave `dc` at just the two
+    /// sentinels -- reproducing `harasho.4281`'s reference shape
+    /// (`down = [[183019, 185181], [188193, 199231]]`).
+    #[test]
+    fn down_up_cycles_fill_down_not_dc() {
+        let st = [
+            (183_019, StatusKind::Down),
+            (185_181, StatusKind::Alive),
+            (188_193, StatusKind::Down),
+            (199_231, StatusKind::Alive),
+        ];
+        let s = fill_status(&st, 0, 347_977);
+        assert_eq!(s.down, vec![[183_019, 185_181], [188_193, 199_231]]);
+        assert_eq!(s.dc, vec![[i64::MIN, 0], [347_977, i64::MAX]]);
+    }
+
+    /// `doodlejump.4250`'s reference shape: down -> dead -> respawn.
+    #[test]
+    fn down_then_dead_then_respawn() {
+        let st = [
+            (300_150, StatusKind::Down),
+            (304_801, StatusKind::Dead),
+            (310_123, StatusKind::Alive),
+        ];
+        let s = fill_status(&st, 2, 347_941);
+        assert_eq!(s.down, vec![[300_150, 304_801]]);
+        assert_eq!(s.dead, vec![[304_801, 310_123]]);
+        assert_eq!(s.dc, vec![[i64::MIN, 2], [347_941, i64::MAX]]);
+    }
+
+    /// Still dead at the end of the log: the trailing sentinel goes on
+    /// `dead`, NOT on `dc`.
+    #[test]
+    fn dead_at_log_end_extends_dead_to_the_sentinel_instead_of_dc() {
+        let st = [(1000, StatusKind::Down), (2000, StatusKind::Dead)];
+        let s = fill_status(&st, 0, 5000);
+        assert_eq!(s.dead, vec![[2000, 5000], [5000, i64::MAX]]);
+        assert_eq!(s.dc, vec![[i64::MIN, 0]], "no trailing dc sentinel when dead at the end");
+    }
+
+    /// A genuine mid-fight disconnect is `CBTS_DESPAWN` -> a `dc` segment
+    /// between the two sentinels, ending at the respawn.
+    #[test]
+    fn mid_fight_despawn_adds_an_interior_dc_segment() {
+        let st = [
+            (1000, StatusKind::Despawn),
+            (9000, StatusKind::Spawn),
+        ];
+        let s = fill_status(&st, 0, 20_000);
+        assert_eq!(s.dc, vec![[i64::MIN, 0], [1000, 9000], [20_000, i64::MAX]]);
+        assert_eq!(s.actives, vec![[0, 1000], [9000, 20_000]]);
+    }
+
+    /// A late spawn more than 50ms after first-aware is a leading `dc`
+    /// segment; within 50ms it is GW2EI's grace window and adds nothing.
+    #[test]
+    fn late_spawn_grace_window_is_fifty_milliseconds() {
+        let late = fill_status(&[(500, StatusKind::Alive)], 0, 5000);
+        assert_eq!(late.dc, vec![[i64::MIN, 0], [0, 500], [5000, i64::MAX]]);
+
+        let prompt = fill_status(&[(50, StatusKind::Alive)], 0, 5000);
+        assert_eq!(prompt.dc, vec![[i64::MIN, 0], [5000, i64::MAX]], "50ms is NOT > 50");
+    }
+
+    /// Same-timestamp status events break ties in GW2EI's own
+    /// concatenation order (downs, alives, deads, spawns, despawns), which
+    /// its stable `OrderBy` preserves.
+    #[test]
+    fn status_kind_ordering_matches_gw2ei_concatenation_order() {
+        let mut v = vec![
+            StatusKind::Despawn,
+            StatusKind::Dead,
+            StatusKind::Down,
+            StatusKind::Spawn,
+            StatusKind::Alive,
+        ];
+        v.sort();
+        assert_eq!(
+            v,
+            vec![
+                StatusKind::Down,
+                StatusKind::Alive,
+                StatusKind::Dead,
+                StatusKind::Spawn,
+                StatusKind::Despawn
+            ]
+        );
+    }
+
+    // -- trimming --
+
+    #[test]
+    fn trim_bounds_defaults_to_the_awareness_window() {
+        assert_eq!(trim_bounds(&[[23, 347_977]], 23, 347_977, 348_362), (23, 347_977));
+        // No actives at all (degenerate) -> first/last aware.
+        assert_eq!(trim_bounds(&[], 5, 900, 10_000), (5, 900));
+    }
+
+    #[test]
+    fn trim_bounds_clamps_to_the_log_end_and_never_inverts() {
+        // `end` past the log duration is clamped down...
+        assert_eq!(trim_bounds(&[[0, 99_999]], 0, 99_999, 5_000), (0, 5_000));
+        // ...and `end` can never precede `start`.
+        assert_eq!(trim_bounds(&[[900, 100]], 900, 100, 10_000), (900, 900));
+    }
+
+    /// Mid-fight despawn/respawn: GW2EI trims to the FIRST active
+    /// segment's start and the LAST one's end, spanning the gap.
+    #[test]
+    fn trim_bounds_spans_a_mid_fight_dc_gap() {
+        let actives = [[0, 1000], [9000, 20_000]];
+        assert_eq!(trim_bounds(&actives, 0, 20_000, 30_000), (0, 20_000));
+    }
+
+    // -- bounding-box fallback --
+
+    #[test]
+    fn bounding_box_transform_pads_and_squares_the_squad_extent() {
+        let tr = WorldTrack {
+            agent_addr: 1,
+            name: "A".into(),
+            is_squad: true,
+            start: 0,
+            end: 300,
+            positions: vec![p(0, 0.0, 0.0), p(300, 1000.0, 500.0)],
+            rotations: vec![],
+            dc: vec![],
+            down: vec![],
+            dead: vec![],
+        };
+        let m = bounding_box_transform(&[tr]).expect("one squad track");
+        // x: [0-250, 1000+250] = [-250, 1250] (width 1500)
+        // y: [0-250,  500+250] = [-250,  750] (height 1000) -> pad 250 each side
+        assert_eq!((m.top_x, m.bottom_x), (-250.0, 1250.0));
+        assert_eq!((m.top_y, m.bottom_y), (-500.0, 1000.0));
+        assert_eq!(m.sizes(), [750, 750], "square rect -> square output");
+    }
+
+    #[test]
+    fn bounding_box_transform_ignores_enemies_and_empty_tracks() {
+        let enemy = WorldTrack {
+            agent_addr: 2,
+            name: "E".into(),
+            is_squad: false,
+            start: 0,
+            end: 300,
+            positions: vec![p(0, 5.0, 5.0)],
+            rotations: vec![],
+            dc: vec![],
+            down: vec![],
+            dead: vec![],
+        };
+        assert!(bounding_box_transform(&[enemy]).is_none());
+    }
+
+    // -- end-to-end over a synthetic log --
+
+    use crate::evtc::{RawHeader, RawLog};
+    use crate::model::{Enemy, Encounter, Player};
+
+    fn mov_event(time: u64, src: u64, statechange: u8, x: f32, y: f32, z: f32) -> RawEvent {
+        let mut dst = [0u8; 8];
+        dst[0..4].copy_from_slice(&x.to_le_bytes());
+        dst[4..8].copy_from_slice(&y.to_le_bytes());
+        RawEvent {
+            time,
+            src_agent: src,
+            dst_agent: u64::from_le_bytes(dst),
+            value: z.to_bits() as i32,
+            is_statechange: statechange,
+            ..blank()
+        }
+    }
+
+    fn state_event(time: u64, src: u64, statechange: u8) -> RawEvent {
+        RawEvent { time, src_agent: src, is_statechange: statechange, ..blank() }
+    }
+
+    fn blank() -> RawEvent {
+        RawEvent {
+            time: 0,
+            src_agent: 0,
+            dst_agent: 0,
+            value: 0,
+            buff_dmg: 0,
+            overstack: 0,
+            skillid: 0,
+            src_instid: 0,
+            dst_instid: 0,
+            src_master_instid: 0,
+            dst_master_instid: 0,
+            iff: 0,
+            buff: 0,
+            result: 0,
+            is_activation: 0,
+            is_buffremove: 0,
+            is_ninety: 0,
+            is_moving: 0,
+            is_statechange: 0,
+            is_flanking: 0,
+            is_shields: 0,
+            is_offcycle: 0,
+            pad: 0,
+        }
+    }
+
+    fn raw_from(events: Vec<RawEvent>) -> RawLog {
+        RawLog {
+            header: RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 },
+            agents: vec![],
+            skills: vec![],
+            events,
+            guid_map: vec![],
+        }
+    }
+
+    fn player(addr: u64, name: &str) -> Player {
+        Player {
+            agent_addr: addr,
+            account: format!(":{name}.1"),
+            character: name.into(),
+            profession: "Thief".into(),
+            elite_spec: String::new(),
+            team: "red".into(),
+            subgroup: 1,
+            in_squad: true,
+            commander: false,
+            marker: None,
+            commander_tag: None,
+            agent_addrs: vec![addr],
+        }
+    }
+
+    fn enc_with(players: Vec<Player>, enemies: Vec<Enemy>, duration_ms: u64) -> Encounter {
+        Encounter {
+            kind: "wvw".into(),
+            map: "Blue Alpine Borderlands".into(),
+            duration_ms,
+            build: String::new(),
+            revision: 1,
+            recorded_by: None,
+            teams: vec![],
+            players,
+            enemies,
+            markers: vec![],
+            tick_rate: None,
+        }
+    }
+
+    #[test]
+    fn end_to_end_track_is_in_map_pixels_on_the_ei_grid() {
+        let enc = enc_with(vec![player(1, "Alice")], vec![], 1200);
+        let raw = raw_from(vec![
+            // NB: `z = 1.0`, because GW2EI drops an all-zero position
+            // payload (`point.XYZ == default`) -- see `collect_movement`.
+            mov_event(0, 1, sc::POSITION, 0.0, 0.0, 1.0),
+            mov_event(0, 1, sc::FACING, 1.0, 0.0, 0.0),
+            // Three quarters across the map rect on both axes. (Not the
+            // rect CORNER: |xy| there is 52857, past GW2EI's 40000 validity
+            // radius, so that payload would be dropped.)
+            mov_event(600, 1, sc::POSITION, 15360.0, 21504.0, 1.0),
+            mov_event(600, 1, sc::FACING, 0.0, 1.0, 0.0),
+        ]);
+        let map = MapTransform::for_map_id(96).unwrap();
+        let tracks = build_ei_replay(&raw, &enc, &map);
+        assert_eq!(tracks.len(), 1);
+        let tr = &tracks[0];
+        assert_eq!((tr.start, tr.end), (0, 600));
+        // Grid points 0, 300, 600 (all within [0, 600], all < 1200).
+        assert_eq!(tr.positions.len(), 3);
+        assert_eq!(tr.orientations.len(), 3);
+        assert_eq!(tr.positions[0], [261.5, 375.0], "world origin -> map center");
+        assert_eq!(tr.positions[2], [392.25, 187.5], "3/4 across the rect -> 3/4 across the image");
+        assert_eq!(tr.positions[1], [326.875, 281.25], "midpoint grid sample is linearly interpolated");
+        assert_eq!(tr.orientations[0], 0.0);
+        assert_eq!(tr.dc, vec![[i64::MIN, 0], [600, i64::MAX]]);
+        assert!(tr.positions.iter().all(|q| q[0].is_finite() && q[1].is_finite()));
+    }
+
+    /// Relog folding: both raw addrs' movement AND status events land on
+    /// the same track, exactly like [`crate::analysis::replay::build_track`].
+    #[test]
+    fn folds_events_across_relog_addrs() {
+        let mut p1 = player(1, "Alice");
+        p1.agent_addrs = vec![1, 2];
+        let enc = enc_with(vec![p1], vec![], 1200);
+        let raw = raw_from(vec![
+            mov_event(0, 1, sc::POSITION, 0.0, 0.0, 1.0),
+            state_event(100, 1, sc::CHANGE_DOWN),
+            state_event(200, 2, sc::CHANGE_UP),
+            mov_event(600, 2, sc::POSITION, 600.0, 0.0, 1.0),
+        ]);
+        let map = MapTransform::for_map_id(96).unwrap();
+        let tracks = build_ei_replay(&raw, &enc, &map);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].down, vec![[100, 200]]);
+        assert_eq!(tracks[0].positions.len(), 3, "positions from both addrs on one grid");
+    }
+
+    #[test]
+    fn only_enemy_players_get_tracks_not_npcs() {
+        let enc = enc_with(
+            vec![],
+            vec![
+                Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(),
+                    is_player: true, marker: None, agent_addrs: vec![9] },
+                Enemy { id: 10, instid: 0, name: "Sentry".into(), team: "blue".into(),
+                    is_player: false, marker: None, agent_addrs: vec![10] },
+            ],
+            900,
+        );
+        let raw = raw_from(vec![
+            mov_event(0, 9, sc::POSITION, 1.0, 1.0, 0.0),
+            mov_event(0, 10, sc::POSITION, 2.0, 2.0, 0.0),
+        ]);
+        let map = MapTransform::for_map_id(96).unwrap();
+        let tracks = build_ei_replay(&raw, &enc, &map);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].agent_addr, 9);
+        assert!(!tracks[0].is_squad);
+    }
+
+    /// GW2EI's `PositionEvent.AddPoint3D` validity filters: an all-zero
+    /// point and an out-of-range one are both dropped, so they cannot drag
+    /// the interpolation off the real track.
+    #[test]
+    fn invalid_position_payloads_are_dropped() {
+        let enc = enc_with(vec![player(1, "Alice")], vec![], 900);
+        let raw = raw_from(vec![
+            mov_event(0, 1, sc::POSITION, 100.0, 100.0, 1.0),
+            mov_event(300, 1, sc::POSITION, 0.0, 0.0, 0.0), // all-zero -> dropped
+            mov_event(600, 1, sc::POSITION, 99_999.0, 0.0, 1.0), // |xy| > 40000 -> dropped
+        ]);
+        let map = MapTransform::for_map_id(96).unwrap();
+        let tracks = build_ei_replay(&raw, &enc, &map);
+        // Only the t=0 point survives, so every grid sample holds it.
+        let first = tracks[0].positions[0];
+        assert!(tracks[0].positions.iter().all(|q| *q == first), "{:?}", tracks[0].positions);
+    }
+
+    /// A player with NO position events still gets a full-length track
+    /// (GW2EI's `forcePolling` sentinel) rather than being dropped -- and
+    /// nothing NaNs out on the way through the map transform.
+    #[test]
+    fn player_without_position_events_still_gets_a_track() {
+        let enc = enc_with(vec![player(1, "Ghost")], vec![], 900);
+        let raw = raw_from(vec![
+            state_event(0, 1, sc::CHANGE_UP),
+            state_event(800, 1, sc::CHANGE_DOWN),
+        ]);
+        let map = MapTransform::for_map_id(96).unwrap();
+        let tracks = build_ei_replay(&raw, &enc, &map);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].positions.len(), 3, "grid 0, 300, 600 within [0, 800]");
+        assert!(tracks[0].positions.iter().all(|q| q[0].is_finite() && q[1].is_finite()));
+        assert!(tracks[0].orientations.is_empty(), "no facing events -> no orientations");
+    }
+
+    #[test]
+    fn build_ei_replay_is_deterministic() {
+        let enc = enc_with(vec![player(1, "Alice"), player(2, "Bob")], vec![], 2400);
+        let raw = raw_from(vec![
+            mov_event(0, 1, sc::POSITION, 10.0, 10.0, 0.0),
+            mov_event(0, 2, sc::POSITION, -10.0, 10.0, 0.0),
+            mov_event(137, 1, sc::FACING, 1.0, 0.0, 0.0),
+            mov_event(400, 1, sc::VELOCITY, 3.0, 0.0, 0.0),
+            mov_event(900, 1, sc::POSITION, 900.0, 10.0, 0.0),
+            mov_event(1500, 2, sc::POSITION, -900.0, 10.0, 0.0),
+        ]);
+        let map = MapTransform::for_map_id(96).unwrap();
+        assert_eq!(build_ei_replay(&raw, &enc, &map), build_ei_replay(&raw, &enc, &map));
+    }
+
+    #[test]
+    fn map_transform_from_log_reads_the_map_id_statechange() {
+        let raw = raw_from(vec![RawEvent {
+            time: 0,
+            src_agent: 95,
+            is_statechange: sc::MAP_ID,
+            ..blank()
+        }]);
+        assert_eq!(MapTransform::from_log(&raw), MapTransform::for_map_id(95));
+    }
+}
