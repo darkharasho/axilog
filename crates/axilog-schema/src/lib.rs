@@ -455,6 +455,40 @@ pub struct HitStatsOut {
     pub above90_condition_count: u32,
     pub above90_condition_damage: u64,
 }
+/// Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
+/// Task 2) -- mirrors `axilog_core::analysis::defenses::DefenseStats`
+/// field-for-field. See that module's doc comment for the exact EI
+/// `defenses[0]` derivation/citation per field, notably: `dodge_count` is
+/// NOT derived from any incoming event (a self-cast dodge-skill count,
+/// genuinely independent of `evaded_count`), `power_count`/`power_damage`
+/// always equal `strike_count`/`strike_damage` + `life_leech_count`/
+/// `life_leech_damage`, and `life_leech_count`/`life_leech_damage` are the
+/// TRUE values (a real GW2EI counting bug in its own
+/// `lifeLeechDamageTakenCount` is deliberately NOT reproduced here). Purely
+/// additive alongside `PlayerOut`'s pre-existing `downs_taken`/`deaths`/
+/// `damage_taken`/`cc` fields -- always present (not gated), same
+/// always-on convention as `hit_stats`.
+#[derive(Serialize, Default)]
+pub struct DefensesOut {
+    pub blocked_count: u32,
+    pub evaded_count: u32,
+    pub dodge_count: u32,
+    pub missed_count: u32,
+    pub interrupted_count: u32,
+    pub invulned_count: u32,
+    pub strike_count: u32,
+    pub strike_damage: u64,
+    pub power_count: u32,
+    pub power_damage: u64,
+    pub condition_count: u32,
+    pub condition_damage: u64,
+    pub life_leech_count: u32,
+    pub life_leech_damage: u64,
+    pub barrier_count: u32,
+    pub barrier_damage: u64,
+    pub breakbar_count: u32,
+    pub breakbar_damage: u64,
+}
 #[derive(Serialize)]
 pub struct PlayerOut { pub account: String, pub character: String, pub profession: String,
     pub elite_spec: String, pub team: String, pub subgroup: u8, pub in_squad: bool,
@@ -564,7 +598,11 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     pub dps_targets: Vec<DpsTargetOut>,
     /// Outgoing hit-quality stats (M13, Task 1). See `HitStatsOut`'s doc
     /// comment.
-    pub hit_stats: HitStatsOut }
+    pub hit_stats: HitStatsOut,
+    /// Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
+    /// Task 2). Always present, same convention as `hit_stats`. See
+    /// `DefensesOut`'s doc comment.
+    pub defenses: DefensesOut }
 #[derive(Serialize)]
 pub struct EnemyOut { pub id: u64, pub name: String, pub team: String, pub is_player: bool,
     /// The enemy's current squad marker, mirroring `PlayerOut.marker`
@@ -731,6 +769,16 @@ pub fn build_report(
                 life_leech_count: h.life_leech_count, life_leech_damage: h.life_leech_damage,
                 above90_power_count: h.above90_power_count, above90_power_damage: h.above90_power_damage,
                 above90_condition_count: h.above90_condition_count, above90_condition_damage: h.above90_condition_damage,
+            }}).unwrap_or_default(),
+            defenses: m.map(|m| { let d = m.defenses; DefensesOut {
+                blocked_count: d.blocked_count, evaded_count: d.evaded_count, dodge_count: d.dodge_count,
+                missed_count: d.missed_count, interrupted_count: d.interrupted_count, invulned_count: d.invulned_count,
+                strike_count: d.strike_count, strike_damage: d.strike_damage,
+                power_count: d.power_count, power_damage: d.power_damage,
+                condition_count: d.condition_count, condition_damage: d.condition_damage,
+                life_leech_count: d.life_leech_count, life_leech_damage: d.life_leech_damage,
+                barrier_count: d.barrier_count, barrier_damage: d.barrier_damage,
+                breakbar_count: d.breakbar_count, breakbar_damage: d.breakbar_damage,
             }}).unwrap_or_default(),
         }
     }).collect();

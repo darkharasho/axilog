@@ -234,6 +234,38 @@ export interface HitStatsOut {
   above90_condition_damage: number
 }
 
+/**
+ * Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
+ * Task 2) -- mirrors EI's `defenses[0]`. `dodge_count` is NOT derived from
+ * any incoming event (a self-cast dodge-skill count, independent of
+ * `evaded_count`); `power_count`/`power_damage` always equal
+ * `strike_count`/`strike_damage` + `life_leech_count`/`life_leech_damage`;
+ * `life_leech_count`/`life_leech_damage` are the TRUE values (a real GW2EI
+ * counting bug in its own `lifeLeechDamageTakenCount` is deliberately not
+ * reproduced). Purely additive alongside `downs_taken`/`deaths`/
+ * `damage_taken`/`cc`. Always present (not gated), like `hit_stats`.
+ */
+export interface DefensesOut {
+  blocked_count: number
+  evaded_count: number
+  dodge_count: number
+  missed_count: number
+  interrupted_count: number
+  invulned_count: number
+  strike_count: number
+  strike_damage: number
+  power_count: number
+  power_damage: number
+  condition_count: number
+  condition_damage: number
+  life_leech_count: number
+  life_leech_damage: number
+  barrier_count: number
+  barrier_damage: number
+  breakbar_count: number
+  breakbar_damage: number
+}
+
 export interface PlayerOut {
   account: string
   character: string
@@ -306,6 +338,11 @@ export interface PlayerOut {
    * `skill_damage`/`per_second`/`dps_targets`. See `HitStatsOut`.
    */
   hit_stats: HitStatsOut
+  /**
+   * Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
+   * Task 2). Always present, same as `hit_stats`. See `DefensesOut`.
+   */
+  defenses: DefensesOut
 }
 
 export interface EnemyOut {

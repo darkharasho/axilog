@@ -293,6 +293,38 @@ class HitStatsOut(TypedDict):
     above90_condition_count: int
     above90_condition_damage: int
 
+# --- incoming defenses (M13, Task 2) ----------------------------------------
+
+class DefensesOut(TypedDict):
+    """Incoming defenses: hit-outcome counts + damage-taken breakdown --
+    mirrors EI's `defenses[0]`. `dodge_count` is NOT derived from any
+    incoming event (a self-cast dodge-skill count, independent of
+    `evaded_count`); `power_count`/`power_damage` always equal
+    `strike_count`/`strike_damage` + `life_leech_count`/`life_leech_damage`;
+    `life_leech_count`/`life_leech_damage` are the TRUE values (a real GW2EI
+    counting bug in its own `lifeLeechDamageTakenCount` is deliberately not
+    reproduced). Purely additive alongside `downs_taken`/`deaths`/
+    `damage_taken`/`cc`. Always present (not gated), like `hit_stats`."""
+
+    blocked_count: int
+    evaded_count: int
+    dodge_count: int
+    missed_count: int
+    interrupted_count: int
+    invulned_count: int
+    strike_count: int
+    strike_damage: int
+    power_count: int
+    power_damage: int
+    condition_count: int
+    condition_damage: int
+    life_leech_count: int
+    life_leech_damage: int
+    barrier_count: int
+    barrier_damage: int
+    breakbar_count: int
+    breakbar_damage: int
+
 # --- players / enemies -----------------------------------------------------
 
 class _PlayerOutRequired(TypedDict):
@@ -316,6 +348,7 @@ class _PlayerOutRequired(TypedDict):
     boons: List[BoonOut]
     support: SupportOut
     hit_stats: HitStatsOut
+    defenses: DefensesOut
 
 class PlayerOut(_PlayerOutRequired, total=False):
     """`marker`/`commander_tag` are omitted (not `null`) when absent.

@@ -1,6 +1,6 @@
 {
   "_source": "axibridge test-fixtures/boon/20260117-181030.json (dps.report EI JSON, accounts anonymized)",
-  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index \u2014 the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (`rincka.1608`, would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task). Task 1 (M9): each matched player's `combatReplay` object holds EI's raw `combatReplayData` `{start, count, first, last}` (start = EI's own log-relative start ms; count/first/last = positions.length / positions[0] / positions[-1], EI's map-pixel space) for parity spot-checks, plus a full verbatim `positions` array (EI map-pixel `[x,y]` pairs, one per 300ms poll) for the 3 longest tracks (Anon104.4848/Anon108.4996/Anon122.5514, 165 samples each) for full-track calibration. Source: this log's mapID=95 (Green Alpine Borderlands) `combatReplayMetaData` {inchToPixel:0.009, pollingRate:300, sizes:[523,750]}. Same real-account join method as Tasks 2-4 (M3) (obfuscate(real account) -> raw agent-table index -> `Anon<N>`); 37 of 41 players matched (4 `Non Squad Player N` rows have no real account to join from, same as `generation`). See `crates/axilog-core/tests/replay_golden.rs` for how this is consumed (raw world positions decoded from `wvw-small.anon.zevtc`'s `CBTS_POSITION` events, downsampled via `analysis::replay::build_replay`, then transformed into this same map-pixel space via the Green/Blue Alpine Borderland affine transform derived from GW2EI's `WvWLogic.GetCombatMapInternal`/`CombatReplayMap.GetMapCoordRounded` -- the test file cites the exact formula). Task 1 (M10): each player's `healing` object holds the arcdps healing-extension totals for the full fight (single phase, matching this fixture's `phases` length of 1): `healing`/`downedHealing` mirror EI's raw `extHealingStats.outgoingHealing[0]` `{healing, downedHealing}` fields verbatim (target=null, i.e. every friendly-directed heal this player cast, self included); `barrier` mirrors `extBarrierStats.outgoingBarrier[0].barrier` verbatim. `healingSelf` is EI's own `outgoingHealingAllies[selfIndex][0].healing` (selfIndex = this player's own position in EI's `Friendlies`/`players[]` ordering, verified to line up 1:1 with axibridge's `players[]` array index for all 41 rows here -- self healing at that index never exceeds the player's own `healing` total, the sanity check used to confirm the assumption). `healingAllies` is DERIVED (`healing - healingSelf`), NOT a sum of EI's own per-friendly `outgoingHealingAllies[*][0].healing` array -- that array's sum under-counts real ally healing (e.g. Anon-index 21's ally-array sums to 165971 vs its true `healing` total of 205820) because EI's per-friendly breakdown only enumerates real `Friendlies` (players), never non-enumerated friendly targets like pets/minions that legitimately receive `ToFriendly` heals and count toward the scalar total. Same real-account join method as prior tasks (profession + `dpsAll[0].damage` + `statsAll[0].appliedCrowdControl` triple -> unique row, verified unique across all 41 rows with zero collisions), since the healing extension has no separate obfuscated-account reference to join through. `squadHealingTotal`/`squadHealingSelf`/`squadHealingAllies`/`squadDownedHealing`/`squadBarrierTotal` are sums of the same fields over all 41 players (1008414/36563/971851/55681/279498) -- the calibration targets `healing_golden.rs` checks against. Task 3 (M11): each player's `activeTimes` (single-element array, matching this fixture's one-phase convention) and `combatReplayData` `{start, end, down, dead}` are EI's raw fields verbatim (real `combatReplayData.positions`/`orientations`/`iconURL`/`dc` are NOT copied here -- not needed by this task's calibration, `positions` in particular stays a deliberately heavier, still-`--replay`-gated concept per M9). Same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, both already cross-checked profession+damage+CC with zero mismatches across all 41 rows). `start`/`end` are GW2EI's own `AgentItem.FirstAware`/`LastAware` (verified: `DaringCanyon.5440`, this fixture's `players[35]`, has `start=1 end=49266` -- exactly `combatReplay.start=1` from the M9 Task 1 addition above, an independent field on the same row, confirming the join). `activeTimes[0]` is GW2EI's `SingleActor.GetActiveDuration(log, 0, durationMS)` (`GW2EIEvtcParser/EIData/Actors/ActorsHelper/SingleActorStatusHelper.cs`): `(end - start) - sum(dead \u2229 [start,end]) - sum(dc \u2229 [start,end])` -- verified NOT to subtract down time (that same row, `players[35]`, has a real 2870ms down interval `combatReplayData.down=[[12642,15512]]` yet `activeTimes[0]=49265` equals `end-start` exactly); every one of this log's 41 players has `dead=[]` (no deaths, only downs), so this fixture alone can't distinguish \"dead subtracted\" from \"dead not subtracted\" -- confirmed from the GW2EI source formula directly, not just this fixture's numbers. Two players (`players[35]`/`DaringCanyon.5440` and `players[40]`/`Non Squad Player 10`) have non-empty `down` arrays -- the only two in the whole log; `crates/axilog-ei/tests/ei_golden.rs` asserts byte-exact `down`/`dead` interval reproduction for the one of the two reachable through its real-account join (`DaringCanyon.5440` -- `Non Squad Player 10` has no real account to join through at all, same limitation the M9/M3 golden tests already document for that row type). Task 2 (M12): each player's `timeSeries` object holds four scalars extracted from the source EI JSON's per-second series/target fields, for the per-player per-second calibration `crates/axilog-core/tests/timeseries_golden.rs` checks -- NOT full arrays (kept the fixture growth small; only final/summed values are needed to calibrate this project's own cumulative buckets, which are recomputed from raw events every test run, not replayed from a stored series). `damage1SFinal`/`damageTaken1SFinal` are the LAST element of the source's `damage1S[0]`/`damageTaken1S[0]` arrays (phase 0, i.e. the whole-fight cumulative total at the final second) -- verified these equal `dpsAll[0].damage`/`defenses[0].damageTaken` exactly on every one of this fixture's 41 rows, confirming GW2EI's `damage1S`/`damageTaken1S` are CUMULATIVE per-second running totals, not per-second deltas (`GW2EIEvtcParser/EIData/Actors/ActorHelpers/ActorDamageHelper.cs`'s `Get1SDamageList` builds these via `Statistics.GetCastLogsByFilter`-style running sums over `DamageLogs`, matching the same monotonic-non-decreasing shape this project's own `timeseries::build` buckets produce). `targetDamage1SFinal` sums the LAST element of every target's `targetDamage1S[target][0]` array (only one target exists on this non-`detailedWvW` fixture, the synthetic `Enemy Players` aggregate); `dpsTargetsTotalDamage` sums `dpsTargets[0][*].damage` the same way -- the two match each other exactly on every row (as expected, since `dpsTargets[*].damage` IS `targetDamage1S[*][0][-1]` under a different key) but are BOTH systematically smaller than `damage1SFinal` (e.g. player 0: `targetDamage1SFinal=71362` vs `damage1SFinal=96084`, a 24722 gap) -- GW2EI's non-`detailedWvW` `targets[]`/`dpsTargets` only enumerate the one synthetic enemy-PLAYER aggregate, silently excluding damage dealt to non-player-enemy NPCs (siege equipment, dolyaks, guards) that this fixture's WvW log still contains combat events against -- that damage is still counted in the whole-player `damage1SFinal`/`dpsAll[0].damage` scalar, just not attributable to any one `targets[]` entry in this fixture's non-detailed export. This is DIFFERENT from (and larger than) Task 1's separately-documented pet/minion `skillDamage` gap -- see `timeseries_golden.rs`'s module doc for the full writeup, including why this project's own `dps_targets` (built from the `per_enemy` map, which DOES enumerate every NPC enemy the log tracks) can only be checked for INTERNAL consistency (`sum(dps_targets) == damage_total`) against this fixture, not for an exact per-target match against GW2EI's own narrower `dpsTargets`. Joined by a (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) triple key against this fixture's existing `players[]` rows (verified unique across all 41 rows on both sides, zero collisions) rather than the `anon_account` join every prior task used -- this lets all 41 rows join (including the 4 `Non Squad Player N` placeholder rows Tasks 2-4/M3's account-based join couldn't reach), since none of these four scalars are account-identifying on their own. Task 1 (M13): each squad-member player's `hitStats` object holds a subset of EI's real `statsAll[0]` fields verbatim, extracted the same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, already cross-checked profession+damage+CC with zero mismatches for all 41 rows) -- `criticalRate`/`criticalDmg`/`flankingRate`/`glanceRate`/`againstMovingRate`/`connectedDamageCount`/`connectedDmg`/`connectedDirectDamageCount`/`connectedDirectDmg`/`connectedConditionCount`/`connectedConditionDamage`/`critableDirectDamageCount`/`againstDownedCount`/`againstDownedDamage`/`connectedLifeLeechCount`/`connectedLifeLeechDamage`/`connectedPowerAbove90HPCount`/`connectedPowerAbove90HPDamage`/`connectedConditionAbove90HPCount`/`connectedConditionAbove90HPDamage`. Unlike `skillDamage`'s `damage` scalar (which mirrors `dpsAll[0].damage`, pet-inclusive), `statsAll[0]` -- and therefore every `hitStats` field -- is ACTOR-ONLY (verified: `statsAll[0].connectedDmg` equals `sum(totalDamageDist)` exactly for all 41 players, including the 4 pet/minion-affected accounts `skillDamage`'s own note documents, where it is strictly LESS than `dpsAll[0].damage`/this fixture's own `damage` field) -- see `axilog_core::analysis::hit_stats`'s module doc for the full citation trail. `crates/axilog-core/tests/hit_stats_golden.rs` calibrates `axilog_core::analysis::hit_stats::HitStats` against these fields: all 12 count fields EXACT and all 8 damage-sum fields EXACT (0 measured residual against a 0.5% plan tolerance) across all 37 joined accounts.",
+  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index \u2014 the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (`rincka.1608`, would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task). Task 1 (M9): each matched player's `combatReplay` object holds EI's raw `combatReplayData` `{start, count, first, last}` (start = EI's own log-relative start ms; count/first/last = positions.length / positions[0] / positions[-1], EI's map-pixel space) for parity spot-checks, plus a full verbatim `positions` array (EI map-pixel `[x,y]` pairs, one per 300ms poll) for the 3 longest tracks (Anon104.4848/Anon108.4996/Anon122.5514, 165 samples each) for full-track calibration. Source: this log's mapID=95 (Green Alpine Borderlands) `combatReplayMetaData` {inchToPixel:0.009, pollingRate:300, sizes:[523,750]}. Same real-account join method as Tasks 2-4 (M3) (obfuscate(real account) -> raw agent-table index -> `Anon<N>`); 37 of 41 players matched (4 `Non Squad Player N` rows have no real account to join from, same as `generation`). See `crates/axilog-core/tests/replay_golden.rs` for how this is consumed (raw world positions decoded from `wvw-small.anon.zevtc`'s `CBTS_POSITION` events, downsampled via `analysis::replay::build_replay`, then transformed into this same map-pixel space via the Green/Blue Alpine Borderland affine transform derived from GW2EI's `WvWLogic.GetCombatMapInternal`/`CombatReplayMap.GetMapCoordRounded` -- the test file cites the exact formula). Task 1 (M10): each player's `healing` object holds the arcdps healing-extension totals for the full fight (single phase, matching this fixture's `phases` length of 1): `healing`/`downedHealing` mirror EI's raw `extHealingStats.outgoingHealing[0]` `{healing, downedHealing}` fields verbatim (target=null, i.e. every friendly-directed heal this player cast, self included); `barrier` mirrors `extBarrierStats.outgoingBarrier[0].barrier` verbatim. `healingSelf` is EI's own `outgoingHealingAllies[selfIndex][0].healing` (selfIndex = this player's own position in EI's `Friendlies`/`players[]` ordering, verified to line up 1:1 with axibridge's `players[]` array index for all 41 rows here -- self healing at that index never exceeds the player's own `healing` total, the sanity check used to confirm the assumption). `healingAllies` is DERIVED (`healing - healingSelf`), NOT a sum of EI's own per-friendly `outgoingHealingAllies[*][0].healing` array -- that array's sum under-counts real ally healing (e.g. Anon-index 21's ally-array sums to 165971 vs its true `healing` total of 205820) because EI's per-friendly breakdown only enumerates real `Friendlies` (players), never non-enumerated friendly targets like pets/minions that legitimately receive `ToFriendly` heals and count toward the scalar total. Same real-account join method as prior tasks (profession + `dpsAll[0].damage` + `statsAll[0].appliedCrowdControl` triple -> unique row, verified unique across all 41 rows with zero collisions), since the healing extension has no separate obfuscated-account reference to join through. `squadHealingTotal`/`squadHealingSelf`/`squadHealingAllies`/`squadDownedHealing`/`squadBarrierTotal` are sums of the same fields over all 41 players (1008414/36563/971851/55681/279498) -- the calibration targets `healing_golden.rs` checks against. Task 3 (M11): each player's `activeTimes` (single-element array, matching this fixture's one-phase convention) and `combatReplayData` `{start, end, down, dead}` are EI's raw fields verbatim (real `combatReplayData.positions`/`orientations`/`iconURL`/`dc` are NOT copied here -- not needed by this task's calibration, `positions` in particular stays a deliberately heavier, still-`--replay`-gated concept per M9). Same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, both already cross-checked profession+damage+CC with zero mismatches across all 41 rows). `start`/`end` are GW2EI's own `AgentItem.FirstAware`/`LastAware` (verified: `DaringCanyon.5440`, this fixture's `players[35]`, has `start=1 end=49266` -- exactly `combatReplay.start=1` from the M9 Task 1 addition above, an independent field on the same row, confirming the join). `activeTimes[0]` is GW2EI's `SingleActor.GetActiveDuration(log, 0, durationMS)` (`GW2EIEvtcParser/EIData/Actors/ActorsHelper/SingleActorStatusHelper.cs`): `(end - start) - sum(dead \u2229 [start,end]) - sum(dc \u2229 [start,end])` -- verified NOT to subtract down time (that same row, `players[35]`, has a real 2870ms down interval `combatReplayData.down=[[12642,15512]]` yet `activeTimes[0]=49265` equals `end-start` exactly); every one of this log's 41 players has `dead=[]` (no deaths, only downs), so this fixture alone can't distinguish \"dead subtracted\" from \"dead not subtracted\" -- confirmed from the GW2EI source formula directly, not just this fixture's numbers. Two players (`players[35]`/`DaringCanyon.5440` and `players[40]`/`Non Squad Player 10`) have non-empty `down` arrays -- the only two in the whole log; `crates/axilog-ei/tests/ei_golden.rs` asserts byte-exact `down`/`dead` interval reproduction for the one of the two reachable through its real-account join (`DaringCanyon.5440` -- `Non Squad Player 10` has no real account to join through at all, same limitation the M9/M3 golden tests already document for that row type). Task 2 (M12): each player's `timeSeries` object holds four scalars extracted from the source EI JSON's per-second series/target fields, for the per-player per-second calibration `crates/axilog-core/tests/timeseries_golden.rs` checks -- NOT full arrays (kept the fixture growth small; only final/summed values are needed to calibrate this project's own cumulative buckets, which are recomputed from raw events every test run, not replayed from a stored series). `damage1SFinal`/`damageTaken1SFinal` are the LAST element of the source's `damage1S[0]`/`damageTaken1S[0]` arrays (phase 0, i.e. the whole-fight cumulative total at the final second) -- verified these equal `dpsAll[0].damage`/`defenses[0].damageTaken` exactly on every one of this fixture's 41 rows, confirming GW2EI's `damage1S`/`damageTaken1S` are CUMULATIVE per-second running totals, not per-second deltas (`GW2EIEvtcParser/EIData/Actors/ActorHelpers/ActorDamageHelper.cs`'s `Get1SDamageList` builds these via `Statistics.GetCastLogsByFilter`-style running sums over `DamageLogs`, matching the same monotonic-non-decreasing shape this project's own `timeseries::build` buckets produce). `targetDamage1SFinal` sums the LAST element of every target's `targetDamage1S[target][0]` array (only one target exists on this non-`detailedWvW` fixture, the synthetic `Enemy Players` aggregate); `dpsTargetsTotalDamage` sums `dpsTargets[0][*].damage` the same way -- the two match each other exactly on every row (as expected, since `dpsTargets[*].damage` IS `targetDamage1S[*][0][-1]` under a different key) but are BOTH systematically smaller than `damage1SFinal` (e.g. player 0: `targetDamage1SFinal=71362` vs `damage1SFinal=96084`, a 24722 gap) -- GW2EI's non-`detailedWvW` `targets[]`/`dpsTargets` only enumerate the one synthetic enemy-PLAYER aggregate, silently excluding damage dealt to non-player-enemy NPCs (siege equipment, dolyaks, guards) that this fixture's WvW log still contains combat events against -- that damage is still counted in the whole-player `damage1SFinal`/`dpsAll[0].damage` scalar, just not attributable to any one `targets[]` entry in this fixture's non-detailed export. This is DIFFERENT from (and larger than) Task 1's separately-documented pet/minion `skillDamage` gap -- see `timeseries_golden.rs`'s module doc for the full writeup, including why this project's own `dps_targets` (built from the `per_enemy` map, which DOES enumerate every NPC enemy the log tracks) can only be checked for INTERNAL consistency (`sum(dps_targets) == damage_total`) against this fixture, not for an exact per-target match against GW2EI's own narrower `dpsTargets`. Joined by a (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) triple key against this fixture's existing `players[]` rows (verified unique across all 41 rows on both sides, zero collisions) rather than the `anon_account` join every prior task used -- this lets all 41 rows join (including the 4 `Non Squad Player N` placeholder rows Tasks 2-4/M3's account-based join couldn't reach), since none of these four scalars are account-identifying on their own. Task 1 (M13): each squad-member player's `hitStats` object holds a subset of EI's real `statsAll[0]` fields verbatim, extracted the same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, already cross-checked profession+damage+CC with zero mismatches for all 41 rows) -- `criticalRate`/`criticalDmg`/`flankingRate`/`glanceRate`/`againstMovingRate`/`connectedDamageCount`/`connectedDmg`/`connectedDirectDamageCount`/`connectedDirectDmg`/`connectedConditionCount`/`connectedConditionDamage`/`critableDirectDamageCount`/`againstDownedCount`/`againstDownedDamage`/`connectedLifeLeechCount`/`connectedLifeLeechDamage`/`connectedPowerAbove90HPCount`/`connectedPowerAbove90HPDamage`/`connectedConditionAbove90HPCount`/`connectedConditionAbove90HPDamage`. Unlike `skillDamage`'s `damage` scalar (which mirrors `dpsAll[0].damage`, pet-inclusive), `statsAll[0]` -- and therefore every `hitStats` field -- is ACTOR-ONLY (verified: `statsAll[0].connectedDmg` equals `sum(totalDamageDist)` exactly for all 41 players, including the 4 pet/minion-affected accounts `skillDamage`'s own note documents, where it is strictly LESS than `dpsAll[0].damage`/this fixture's own `damage` field) -- see `axilog_core::analysis::hit_stats`'s module doc for the full citation trail. `crates/axilog-core/tests/hit_stats_golden.rs` calibrates `axilog_core::analysis::hit_stats::HitStats` against these fields: all 12 count fields EXACT and all 8 damage-sum fields EXACT (0 measured residual against a 0.5% plan tolerance) across all 37 joined accounts. Task 2 (M13): each squad-member player's `defenses` object holds a subset of EI's real `defenses[0]` fields verbatim, extracted the same index-order join as every prior task (source players[i] -> this fixture's players[i], already cross-checked profession+damage+CC with zero mismatches for all 41 rows) -- blockedCount/evadedCount/missedCount/dodgeCount/invulnedCount/interruptedCount/strikeDamageTaken(Count)/powerDamageTaken(Count)/conditionDamageTaken(Count)/lifeLeechDamageTaken(Count)/damageBarrier(Count)/breakbarDamageTaken(Count). IMPORTANT: GW2EI's own `lifeLeechDamageTakenCount` is 0 for all 41 players here despite nonzero `lifeLeechDamageTaken` sums -- a real, reproducible GW2EI source bug (`DefensePerTargetStatistics.cs`'s life-leech branch increments `LifeLeechDamageTaken++` a second time instead of `LifeLeechDamageTakenCount++`, so the sum field is also inflated by exactly the true count). `crates/axilog-core/tests/defenses_golden.rs` derives the TRUE life-leech count/sum as `powerDamageTaken(Count) - strikeDamageTaken(Count)` instead of trusting the buggy fields directly (verified algebraically exact against `axilog_core::analysis::defenses`'s own module doc, which documents the bug in full). All other fields here are trusted verbatim. `breakbarDamageTaken(Count)` is 0 for every player in this fixture (a real WvW zerg log records no defiance-bar damage against squad players) -- covered by unit tests + a real-log sanity check instead of golden-value calibration. `dodgeCount` (56 total across 41 players) does NOT track `evadedCount` (122 total) at all -- see `analysis::defenses`'s module doc for why (dodge is a self-cast-skill count, evade is an incoming-hit result-byte outcome, genuinely independent concepts).",
   "fightName": "World vs World - Green Alpine Borderlands",
   "durationMS": 49285,
   "friendlyPlayerCount": 41,
@@ -313,6 +313,26 @@
         "connectedPowerAbove90HPDamage": 90061,
         "connectedConditionAbove90HPCount": 86,
         "connectedConditionAbove90HPDamage": 6023
+      },
+      "defenses": {
+        "blockedCount": 3,
+        "evadedCount": 4,
+        "missedCount": 0,
+        "dodgeCount": 1,
+        "invulnedCount": 0,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 8421,
+        "strikeDamageTakenCount": 11,
+        "powerDamageTaken": 8553,
+        "powerDamageTakenCount": 13,
+        "conditionDamageTaken": 440,
+        "conditionDamageTakenCount": 6,
+        "lifeLeechDamageTaken": 134,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 387,
+        "damageBarrierCount": 4,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -670,6 +690,26 @@
         "connectedPowerAbove90HPDamage": 2396,
         "connectedConditionAbove90HPCount": 13,
         "connectedConditionAbove90HPDamage": 399
+      },
+      "defenses": {
+        "blockedCount": 3,
+        "evadedCount": 5,
+        "missedCount": 2,
+        "dodgeCount": 3,
+        "invulnedCount": 0,
+        "interruptedCount": 2,
+        "strikeDamageTaken": 62613,
+        "strikeDamageTakenCount": 62,
+        "powerDamageTaken": 62839,
+        "powerDamageTakenCount": 67,
+        "conditionDamageTaken": 667,
+        "conditionDamageTakenCount": 11,
+        "lifeLeechDamageTaken": 231,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 0,
+        "damageBarrierCount": 0,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -895,6 +935,26 @@
         "connectedPowerAbove90HPDamage": 82830,
         "connectedConditionAbove90HPCount": 15,
         "connectedConditionAbove90HPDamage": 2207
+      },
+      "defenses": {
+        "blockedCount": 3,
+        "evadedCount": 1,
+        "missedCount": 0,
+        "dodgeCount": 6,
+        "invulnedCount": 6,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 251,
+        "strikeDamageTakenCount": 1,
+        "powerDamageTaken": 251,
+        "powerDamageTakenCount": 1,
+        "conditionDamageTaken": 62,
+        "conditionDamageTakenCount": 4,
+        "lifeLeechDamageTaken": 0,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 20,
+        "damageBarrierCount": 1,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -1292,6 +1352,26 @@
         "connectedPowerAbove90HPDamage": 3891,
         "connectedConditionAbove90HPCount": 39,
         "connectedConditionAbove90HPDamage": 3338
+      },
+      "defenses": {
+        "blockedCount": 14,
+        "evadedCount": 0,
+        "missedCount": 1,
+        "dodgeCount": 2,
+        "invulnedCount": 30,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 20251,
+        "strikeDamageTakenCount": 68,
+        "powerDamageTaken": 20446,
+        "powerDamageTakenCount": 72,
+        "conditionDamageTaken": 629,
+        "conditionDamageTakenCount": 7,
+        "lifeLeechDamageTaken": 199,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 6136,
+        "damageBarrierCount": 25,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -1621,6 +1701,26 @@
         "connectedPowerAbove90HPDamage": 11428,
         "connectedConditionAbove90HPCount": 23,
         "connectedConditionAbove90HPDamage": 2583
+      },
+      "defenses": {
+        "blockedCount": 13,
+        "evadedCount": 0,
+        "missedCount": 1,
+        "dodgeCount": 1,
+        "invulnedCount": 28,
+        "interruptedCount": 1,
+        "strikeDamageTaken": 12023,
+        "strikeDamageTakenCount": 25,
+        "powerDamageTaken": 12938,
+        "powerDamageTakenCount": 36,
+        "conditionDamageTaken": 657,
+        "conditionDamageTakenCount": 13,
+        "lifeLeechDamageTaken": 926,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 1361,
+        "damageBarrierCount": 8,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -1922,6 +2022,26 @@
         "connectedPowerAbove90HPDamage": 134443,
         "connectedConditionAbove90HPCount": 19,
         "connectedConditionAbove90HPDamage": 1996
+      },
+      "defenses": {
+        "blockedCount": 9,
+        "evadedCount": 3,
+        "missedCount": 2,
+        "dodgeCount": 6,
+        "invulnedCount": 2,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 30559,
+        "strikeDamageTakenCount": 14,
+        "powerDamageTaken": 30691,
+        "powerDamageTakenCount": 16,
+        "conditionDamageTaken": 141,
+        "conditionDamageTakenCount": 6,
+        "lifeLeechDamageTaken": 134,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 0,
+        "damageBarrierCount": 0,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -2849,6 +2969,26 @@
         "connectedPowerAbove90HPDamage": 6326,
         "connectedConditionAbove90HPCount": 3,
         "connectedConditionAbove90HPDamage": 522
+      },
+      "defenses": {
+        "blockedCount": 5,
+        "evadedCount": 1,
+        "missedCount": 3,
+        "dodgeCount": 1,
+        "invulnedCount": 7,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 1575,
+        "strikeDamageTakenCount": 5,
+        "powerDamageTaken": 1637,
+        "powerDamageTakenCount": 7,
+        "conditionDamageTaken": 681,
+        "conditionDamageTakenCount": 5,
+        "lifeLeechDamageTaken": 64,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 1176,
+        "damageBarrierCount": 4,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -3298,6 +3438,26 @@
         "connectedPowerAbove90HPDamage": 57925,
         "connectedConditionAbove90HPCount": 11,
         "connectedConditionAbove90HPDamage": 356
+      },
+      "defenses": {
+        "blockedCount": 14,
+        "evadedCount": 18,
+        "missedCount": 0,
+        "dodgeCount": 1,
+        "invulnedCount": 7,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 52263,
+        "strikeDamageTakenCount": 75,
+        "powerDamageTaken": 53539,
+        "powerDamageTakenCount": 97,
+        "conditionDamageTaken": 2390,
+        "conditionDamageTakenCount": 29,
+        "lifeLeechDamageTaken": 1298,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 3286,
+        "damageBarrierCount": 17,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -3539,6 +3699,26 @@
         "connectedPowerAbove90HPDamage": 6969,
         "connectedConditionAbove90HPCount": 18,
         "connectedConditionAbove90HPDamage": 1576
+      },
+      "defenses": {
+        "blockedCount": 4,
+        "evadedCount": 2,
+        "missedCount": 0,
+        "dodgeCount": 0,
+        "invulnedCount": 1,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 142,
+        "strikeDamageTakenCount": 2,
+        "powerDamageTaken": 142,
+        "powerDamageTakenCount": 2,
+        "conditionDamageTaken": 481,
+        "conditionDamageTakenCount": 5,
+        "lifeLeechDamageTaken": 0,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 303,
+        "damageBarrierCount": 4,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -3880,6 +4060,26 @@
         "connectedPowerAbove90HPDamage": 855,
         "connectedConditionAbove90HPCount": 10,
         "connectedConditionAbove90HPDamage": 344
+      },
+      "defenses": {
+        "blockedCount": 10,
+        "evadedCount": 3,
+        "missedCount": 0,
+        "dodgeCount": 1,
+        "invulnedCount": 1,
+        "interruptedCount": 1,
+        "strikeDamageTaken": 27731,
+        "strikeDamageTakenCount": 50,
+        "powerDamageTaken": 27793,
+        "powerDamageTakenCount": 52,
+        "conditionDamageTaken": 894,
+        "conditionDamageTakenCount": 19,
+        "lifeLeechDamageTaken": 64,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 6972,
+        "damageBarrierCount": 27,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -4193,6 +4393,26 @@
         "connectedPowerAbove90HPDamage": 108602,
         "connectedConditionAbove90HPCount": 21,
         "connectedConditionAbove90HPDamage": 4601
+      },
+      "defenses": {
+        "blockedCount": 9,
+        "evadedCount": 0,
+        "missedCount": 1,
+        "dodgeCount": 1,
+        "invulnedCount": 8,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 6968,
+        "strikeDamageTakenCount": 12,
+        "powerDamageTaken": 7034,
+        "powerDamageTakenCount": 13,
+        "conditionDamageTaken": 46,
+        "conditionDamageTakenCount": 4,
+        "lifeLeechDamageTaken": 67,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 4934,
+        "damageBarrierCount": 9,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -4690,6 +4910,26 @@
         "connectedPowerAbove90HPDamage": 8799,
         "connectedConditionAbove90HPCount": 8,
         "connectedConditionAbove90HPDamage": 551
+      },
+      "defenses": {
+        "blockedCount": 24,
+        "evadedCount": 2,
+        "missedCount": 2,
+        "dodgeCount": 4,
+        "invulnedCount": 16,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 79652,
+        "strikeDamageTakenCount": 87,
+        "powerDamageTaken": 80321,
+        "powerDamageTakenCount": 101,
+        "conditionDamageTaken": 1652,
+        "conditionDamageTakenCount": 19,
+        "lifeLeechDamageTaken": 683,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 10411,
+        "damageBarrierCount": 19,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -5649,6 +5889,26 @@
         "connectedPowerAbove90HPDamage": 1489,
         "connectedConditionAbove90HPCount": 10,
         "connectedConditionAbove90HPDamage": 646
+      },
+      "defenses": {
+        "blockedCount": 6,
+        "evadedCount": 0,
+        "missedCount": 1,
+        "dodgeCount": 0,
+        "invulnedCount": 0,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 13788,
+        "strikeDamageTakenCount": 25,
+        "powerDamageTaken": 13983,
+        "powerDamageTakenCount": 28,
+        "conditionDamageTaken": 0,
+        "conditionDamageTakenCount": 0,
+        "lifeLeechDamageTaken": 198,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 2433,
+        "damageBarrierCount": 7,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -5958,6 +6218,26 @@
         "connectedPowerAbove90HPDamage": 87318,
         "connectedConditionAbove90HPCount": 53,
         "connectedConditionAbove90HPDamage": 5999
+      },
+      "defenses": {
+        "blockedCount": 9,
+        "evadedCount": 0,
+        "missedCount": 0,
+        "dodgeCount": 0,
+        "invulnedCount": 0,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 9009,
+        "strikeDamageTakenCount": 20,
+        "powerDamageTaken": 9229,
+        "powerDamageTakenCount": 23,
+        "conditionDamageTaken": 58,
+        "conditionDamageTakenCount": 3,
+        "lifeLeechDamageTaken": 223,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 264,
+        "damageBarrierCount": 2,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -6243,6 +6523,26 @@
         "connectedPowerAbove90HPDamage": 2499,
         "connectedConditionAbove90HPCount": 1,
         "connectedConditionAbove90HPDamage": 14
+      },
+      "defenses": {
+        "blockedCount": 9,
+        "evadedCount": 0,
+        "missedCount": 1,
+        "dodgeCount": 0,
+        "invulnedCount": 0,
+        "interruptedCount": 1,
+        "strikeDamageTaken": 17396,
+        "strikeDamageTakenCount": 27,
+        "powerDamageTaken": 17524,
+        "powerDamageTakenCount": 31,
+        "conditionDamageTaken": 11,
+        "conditionDamageTakenCount": 2,
+        "lifeLeechDamageTaken": 132,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 2246,
+        "damageBarrierCount": 4,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -6684,6 +6984,26 @@
         "connectedPowerAbove90HPDamage": 150970,
         "connectedConditionAbove90HPCount": 30,
         "connectedConditionAbove90HPDamage": 2213
+      },
+      "defenses": {
+        "blockedCount": 7,
+        "evadedCount": 0,
+        "missedCount": 1,
+        "dodgeCount": 1,
+        "invulnedCount": 0,
+        "interruptedCount": 3,
+        "strikeDamageTaken": 49495,
+        "strikeDamageTakenCount": 64,
+        "powerDamageTaken": 50474,
+        "powerDamageTakenCount": 76,
+        "conditionDamageTaken": 1286,
+        "conditionDamageTakenCount": 25,
+        "lifeLeechDamageTaken": 991,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 3651,
+        "damageBarrierCount": 7,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -7101,6 +7421,26 @@
         "connectedPowerAbove90HPDamage": 6651,
         "connectedConditionAbove90HPCount": 9,
         "connectedConditionAbove90HPDamage": 452
+      },
+      "defenses": {
+        "blockedCount": 16,
+        "evadedCount": 0,
+        "missedCount": 0,
+        "dodgeCount": 0,
+        "invulnedCount": 0,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 59644,
+        "strikeDamageTakenCount": 76,
+        "powerDamageTaken": 60435,
+        "powerDamageTakenCount": 88,
+        "conditionDamageTaken": 2486,
+        "conditionDamageTakenCount": 27,
+        "lifeLeechDamageTaken": 803,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 8454,
+        "damageBarrierCount": 10,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -7378,6 +7718,26 @@
         "connectedPowerAbove90HPDamage": 8422,
         "connectedConditionAbove90HPCount": 12,
         "connectedConditionAbove90HPDamage": 920
+      },
+      "defenses": {
+        "blockedCount": 14,
+        "evadedCount": 1,
+        "missedCount": 0,
+        "dodgeCount": 1,
+        "invulnedCount": 7,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 3709,
+        "strikeDamageTakenCount": 13,
+        "powerDamageTaken": 4065,
+        "powerDamageTakenCount": 15,
+        "conditionDamageTaken": 401,
+        "conditionDamageTakenCount": 7,
+        "lifeLeechDamageTaken": 358,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 1141,
+        "damageBarrierCount": 4,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -7727,6 +8087,26 @@
         "connectedPowerAbove90HPDamage": 75439,
         "connectedConditionAbove90HPCount": 73,
         "connectedConditionAbove90HPDamage": 7678
+      },
+      "defenses": {
+        "blockedCount": 7,
+        "evadedCount": 6,
+        "missedCount": 1,
+        "dodgeCount": 2,
+        "invulnedCount": 4,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 14839,
+        "strikeDamageTakenCount": 28,
+        "powerDamageTaken": 15229,
+        "powerDamageTakenCount": 36,
+        "conditionDamageTaken": 636,
+        "conditionDamageTakenCount": 10,
+        "lifeLeechDamageTaken": 398,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 136,
+        "damageBarrierCount": 1,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -8108,6 +8488,26 @@
         "connectedPowerAbove90HPDamage": 162081,
         "connectedConditionAbove90HPCount": 31,
         "connectedConditionAbove90HPDamage": 5514
+      },
+      "defenses": {
+        "blockedCount": 5,
+        "evadedCount": 0,
+        "missedCount": 0,
+        "dodgeCount": 0,
+        "invulnedCount": 11,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 30265,
+        "strikeDamageTakenCount": 30,
+        "powerDamageTaken": 30329,
+        "powerDamageTakenCount": 32,
+        "conditionDamageTaken": 502,
+        "conditionDamageTakenCount": 12,
+        "lifeLeechDamageTaken": 66,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 757,
+        "damageBarrierCount": 5,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -9119,6 +9519,26 @@
         "connectedPowerAbove90HPDamage": 177532,
         "connectedConditionAbove90HPCount": 91,
         "connectedConditionAbove90HPDamage": 21558
+      },
+      "defenses": {
+        "blockedCount": 7,
+        "evadedCount": 4,
+        "missedCount": 0,
+        "dodgeCount": 4,
+        "invulnedCount": 5,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 24208,
+        "strikeDamageTakenCount": 20,
+        "powerDamageTaken": 24455,
+        "powerDamageTakenCount": 23,
+        "conditionDamageTaken": 1063,
+        "conditionDamageTakenCount": 10,
+        "lifeLeechDamageTaken": 250,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 4868,
+        "damageBarrierCount": 15,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -9420,6 +9840,26 @@
         "connectedPowerAbove90HPDamage": 6282,
         "connectedConditionAbove90HPCount": 6,
         "connectedConditionAbove90HPDamage": 226
+      },
+      "defenses": {
+        "blockedCount": 9,
+        "evadedCount": 2,
+        "missedCount": 0,
+        "dodgeCount": 2,
+        "invulnedCount": 4,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 11913,
+        "strikeDamageTakenCount": 22,
+        "powerDamageTaken": 11977,
+        "powerDamageTakenCount": 24,
+        "conditionDamageTaken": 166,
+        "conditionDamageTakenCount": 4,
+        "lifeLeechDamageTaken": 66,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 5585,
+        "damageBarrierCount": 14,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -9817,6 +10257,26 @@
         "connectedPowerAbove90HPDamage": 112299,
         "connectedConditionAbove90HPCount": 66,
         "connectedConditionAbove90HPDamage": 16053
+      },
+      "defenses": {
+        "blockedCount": 9,
+        "evadedCount": 24,
+        "missedCount": 0,
+        "dodgeCount": 4,
+        "invulnedCount": 2,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 20799,
+        "strikeDamageTakenCount": 34,
+        "powerDamageTaken": 20997,
+        "powerDamageTakenCount": 37,
+        "conditionDamageTaken": 171,
+        "conditionDamageTakenCount": 10,
+        "lifeLeechDamageTaken": 201,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 7335,
+        "damageBarrierCount": 19,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -10246,6 +10706,26 @@
         "connectedPowerAbove90HPDamage": 5043,
         "connectedConditionAbove90HPCount": 24,
         "connectedConditionAbove90HPDamage": 1797
+      },
+      "defenses": {
+        "blockedCount": 15,
+        "evadedCount": 1,
+        "missedCount": 2,
+        "dodgeCount": 0,
+        "invulnedCount": 20,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 67535,
+        "strikeDamageTakenCount": 89,
+        "powerDamageTaken": 68278,
+        "powerDamageTakenCount": 102,
+        "conditionDamageTaken": 1160,
+        "conditionDamageTakenCount": 13,
+        "lifeLeechDamageTaken": 756,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 5644,
+        "damageBarrierCount": 14,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -10579,6 +11059,26 @@
         "connectedPowerAbove90HPDamage": 2226,
         "connectedConditionAbove90HPCount": 2,
         "connectedConditionAbove90HPDamage": 175
+      },
+      "defenses": {
+        "blockedCount": 8,
+        "evadedCount": 5,
+        "missedCount": 2,
+        "dodgeCount": 3,
+        "invulnedCount": 25,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 26778,
+        "strikeDamageTakenCount": 38,
+        "powerDamageTaken": 27364,
+        "powerDamageTakenCount": 49,
+        "conditionDamageTaken": 457,
+        "conditionDamageTakenCount": 9,
+        "lifeLeechDamageTaken": 597,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 5599,
+        "damageBarrierCount": 26,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -10836,6 +11336,26 @@
         "connectedPowerAbove90HPDamage": 954,
         "connectedConditionAbove90HPCount": 0,
         "connectedConditionAbove90HPDamage": 0
+      },
+      "defenses": {
+        "blockedCount": 7,
+        "evadedCount": 0,
+        "missedCount": 0,
+        "dodgeCount": 0,
+        "invulnedCount": 1,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 7391,
+        "strikeDamageTakenCount": 22,
+        "powerDamageTaken": 7391,
+        "powerDamageTakenCount": 22,
+        "conditionDamageTaken": 81,
+        "conditionDamageTakenCount": 2,
+        "lifeLeechDamageTaken": 0,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 6431,
+        "damageBarrierCount": 22,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -11157,6 +11677,26 @@
         "connectedPowerAbove90HPDamage": 148518,
         "connectedConditionAbove90HPCount": 23,
         "connectedConditionAbove90HPDamage": 1089
+      },
+      "defenses": {
+        "blockedCount": 9,
+        "evadedCount": 1,
+        "missedCount": 2,
+        "dodgeCount": 1,
+        "invulnedCount": 3,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 4258,
+        "strikeDamageTakenCount": 12,
+        "powerDamageTaken": 4290,
+        "powerDamageTakenCount": 13,
+        "conditionDamageTaken": 25,
+        "conditionDamageTakenCount": 2,
+        "lifeLeechDamageTaken": 33,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 2262,
+        "damageBarrierCount": 7,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -11550,6 +12090,26 @@
         "connectedPowerAbove90HPDamage": 113436,
         "connectedConditionAbove90HPCount": 27,
         "connectedConditionAbove90HPDamage": 1404
+      },
+      "defenses": {
+        "blockedCount": 16,
+        "evadedCount": 0,
+        "missedCount": 2,
+        "dodgeCount": 1,
+        "invulnedCount": 0,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 62634,
+        "strikeDamageTakenCount": 75,
+        "powerDamageTaken": 62792,
+        "powerDamageTakenCount": 80,
+        "conditionDamageTaken": 1120,
+        "conditionDamageTakenCount": 19,
+        "lifeLeechDamageTaken": 163,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 3993,
+        "damageBarrierCount": 5,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -11835,6 +12395,26 @@
         "connectedPowerAbove90HPDamage": 3837,
         "connectedConditionAbove90HPCount": 6,
         "connectedConditionAbove90HPDamage": 70
+      },
+      "defenses": {
+        "blockedCount": 6,
+        "evadedCount": 0,
+        "missedCount": 1,
+        "dodgeCount": 0,
+        "invulnedCount": 0,
+        "interruptedCount": 1,
+        "strikeDamageTaken": 12474,
+        "strikeDamageTakenCount": 31,
+        "powerDamageTaken": 12821,
+        "powerDamageTakenCount": 42,
+        "conditionDamageTaken": 2513,
+        "conditionDamageTakenCount": 25,
+        "lifeLeechDamageTaken": 358,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 1710,
+        "damageBarrierCount": 10,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -12212,6 +12792,26 @@
         "connectedPowerAbove90HPDamage": 174647,
         "connectedConditionAbove90HPCount": 72,
         "connectedConditionAbove90HPDamage": 10790
+      },
+      "defenses": {
+        "blockedCount": 12,
+        "evadedCount": 15,
+        "missedCount": 0,
+        "dodgeCount": 1,
+        "invulnedCount": 0,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 31479,
+        "strikeDamageTakenCount": 31,
+        "powerDamageTaken": 31887,
+        "powerDamageTakenCount": 38,
+        "conditionDamageTaken": 479,
+        "conditionDamageTakenCount": 14,
+        "lifeLeechDamageTaken": 415,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 7731,
+        "damageBarrierCount": 26,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -12649,6 +13249,26 @@
         "connectedPowerAbove90HPDamage": 5855,
         "connectedConditionAbove90HPCount": 12,
         "connectedConditionAbove90HPDamage": 383
+      },
+      "defenses": {
+        "blockedCount": 14,
+        "evadedCount": 9,
+        "missedCount": 1,
+        "dodgeCount": 1,
+        "invulnedCount": 0,
+        "interruptedCount": 3,
+        "strikeDamageTaken": 61514,
+        "strikeDamageTakenCount": 102,
+        "powerDamageTaken": 62152,
+        "powerDamageTakenCount": 112,
+        "conditionDamageTaken": 964,
+        "conditionDamageTakenCount": 17,
+        "lifeLeechDamageTaken": 648,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 6802,
+        "damageBarrierCount": 22,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -12930,6 +13550,26 @@
         "connectedPowerAbove90HPDamage": 1393,
         "connectedConditionAbove90HPCount": 7,
         "connectedConditionAbove90HPDamage": 98
+      },
+      "defenses": {
+        "blockedCount": 15,
+        "evadedCount": 1,
+        "missedCount": 3,
+        "dodgeCount": 1,
+        "invulnedCount": 10,
+        "interruptedCount": 1,
+        "strikeDamageTaken": 15960,
+        "strikeDamageTakenCount": 25,
+        "powerDamageTaken": 16118,
+        "powerDamageTakenCount": 30,
+        "conditionDamageTaken": 212,
+        "conditionDamageTakenCount": 5,
+        "lifeLeechDamageTaken": 163,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 2690,
+        "damageBarrierCount": 11,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -13359,6 +13999,26 @@
         "connectedPowerAbove90HPDamage": 75016,
         "connectedConditionAbove90HPCount": 87,
         "connectedConditionAbove90HPDamage": 12785
+      },
+      "defenses": {
+        "blockedCount": 12,
+        "evadedCount": 7,
+        "missedCount": 0,
+        "dodgeCount": 0,
+        "invulnedCount": 2,
+        "interruptedCount": 2,
+        "strikeDamageTaken": 47430,
+        "strikeDamageTakenCount": 62,
+        "powerDamageTaken": 48484,
+        "powerDamageTakenCount": 79,
+        "conditionDamageTaken": 1279,
+        "conditionDamageTakenCount": 19,
+        "lifeLeechDamageTaken": 1071,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 11019,
+        "damageBarrierCount": 19,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -13608,6 +14268,26 @@
         "connectedPowerAbove90HPDamage": 1055,
         "connectedConditionAbove90HPCount": 0,
         "connectedConditionAbove90HPDamage": 0
+      },
+      "defenses": {
+        "blockedCount": 6,
+        "evadedCount": 7,
+        "missedCount": 0,
+        "dodgeCount": 2,
+        "invulnedCount": 1,
+        "interruptedCount": 1,
+        "strikeDamageTaken": 3718,
+        "strikeDamageTakenCount": 13,
+        "powerDamageTaken": 3979,
+        "powerDamageTakenCount": 18,
+        "conditionDamageTaken": 865,
+        "conditionDamageTakenCount": 7,
+        "lifeLeechDamageTaken": 266,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 1930,
+        "damageBarrierCount": 14,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -13949,6 +14629,26 @@
         "connectedPowerAbove90HPDamage": 3895,
         "connectedConditionAbove90HPCount": 15,
         "connectedConditionAbove90HPDamage": 580
+      },
+      "defenses": {
+        "blockedCount": 15,
+        "evadedCount": 0,
+        "missedCount": 1,
+        "dodgeCount": 2,
+        "invulnedCount": 23,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 27510,
+        "strikeDamageTakenCount": 54,
+        "powerDamageTaken": 27606,
+        "powerDamageTakenCount": 57,
+        "conditionDamageTaken": 256,
+        "conditionDamageTakenCount": 7,
+        "lifeLeechDamageTaken": 99,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 11679,
+        "damageBarrierCount": 34,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -14387,6 +15087,26 @@
         "connectedPowerAbove90HPDamage": 10824,
         "connectedConditionAbove90HPCount": 1,
         "connectedConditionAbove90HPDamage": 1
+      },
+      "defenses": {
+        "blockedCount": 19,
+        "evadedCount": 0,
+        "missedCount": 1,
+        "dodgeCount": 0,
+        "invulnedCount": 23,
+        "interruptedCount": 2,
+        "strikeDamageTaken": 64312,
+        "strikeDamageTakenCount": 78,
+        "powerDamageTaken": 65516,
+        "powerDamageTakenCount": 95,
+        "conditionDamageTaken": 661,
+        "conditionDamageTakenCount": 13,
+        "lifeLeechDamageTaken": 1221,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 9621,
+        "damageBarrierCount": 28,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -14700,6 +15420,26 @@
         "connectedPowerAbove90HPDamage": 57095,
         "connectedConditionAbove90HPCount": 88,
         "connectedConditionAbove90HPDamage": 16293
+      },
+      "defenses": {
+        "blockedCount": 4,
+        "evadedCount": 0,
+        "missedCount": 0,
+        "dodgeCount": 3,
+        "invulnedCount": 1,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 27283,
+        "strikeDamageTakenCount": 19,
+        "powerDamageTaken": 27577,
+        "powerDamageTakenCount": 22,
+        "conditionDamageTaken": 43,
+        "conditionDamageTakenCount": 2,
+        "lifeLeechDamageTaken": 297,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 6834,
+        "damageBarrierCount": 3,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -14817,6 +15557,26 @@
         "connectedPowerAbove90HPDamage": 0,
         "connectedConditionAbove90HPCount": 0,
         "connectedConditionAbove90HPDamage": 0
+      },
+      "defenses": {
+        "blockedCount": 0,
+        "evadedCount": 0,
+        "missedCount": 0,
+        "dodgeCount": 0,
+        "invulnedCount": 0,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 0,
+        "strikeDamageTakenCount": 0,
+        "powerDamageTaken": 0,
+        "powerDamageTakenCount": 0,
+        "conditionDamageTaken": 0,
+        "conditionDamageTakenCount": 0,
+        "lifeLeechDamageTaken": 0,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 0,
+        "damageBarrierCount": 0,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -14934,6 +15694,26 @@
         "connectedPowerAbove90HPDamage": 0,
         "connectedConditionAbove90HPCount": 0,
         "connectedConditionAbove90HPDamage": 0
+      },
+      "defenses": {
+        "blockedCount": 0,
+        "evadedCount": 0,
+        "missedCount": 0,
+        "dodgeCount": 0,
+        "invulnedCount": 0,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 0,
+        "strikeDamageTakenCount": 0,
+        "powerDamageTaken": 0,
+        "powerDamageTakenCount": 0,
+        "conditionDamageTaken": 0,
+        "conditionDamageTakenCount": 0,
+        "lifeLeechDamageTaken": 0,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 0,
+        "damageBarrierCount": 0,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -15051,6 +15831,26 @@
         "connectedPowerAbove90HPDamage": 0,
         "connectedConditionAbove90HPCount": 0,
         "connectedConditionAbove90HPDamage": 0
+      },
+      "defenses": {
+        "blockedCount": 0,
+        "evadedCount": 0,
+        "missedCount": 0,
+        "dodgeCount": 0,
+        "invulnedCount": 0,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 0,
+        "strikeDamageTakenCount": 0,
+        "powerDamageTaken": 0,
+        "powerDamageTakenCount": 0,
+        "conditionDamageTaken": 0,
+        "conditionDamageTakenCount": 0,
+        "lifeLeechDamageTaken": 0,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 0,
+        "damageBarrierCount": 0,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     },
     {
@@ -15177,6 +15977,26 @@
         "connectedPowerAbove90HPDamage": 0,
         "connectedConditionAbove90HPCount": 0,
         "connectedConditionAbove90HPDamage": 0
+      },
+      "defenses": {
+        "blockedCount": 0,
+        "evadedCount": 0,
+        "missedCount": 0,
+        "dodgeCount": 0,
+        "invulnedCount": 0,
+        "interruptedCount": 0,
+        "strikeDamageTaken": 0,
+        "strikeDamageTakenCount": 0,
+        "powerDamageTaken": 0,
+        "powerDamageTakenCount": 0,
+        "conditionDamageTaken": 0,
+        "conditionDamageTakenCount": 0,
+        "lifeLeechDamageTaken": 0,
+        "lifeLeechDamageTakenCount": 0,
+        "damageBarrier": 0,
+        "damageBarrierCount": 0,
+        "breakbarDamageTaken": 0,
+        "breakbarDamageTakenCount": 0
       }
     }
   ],

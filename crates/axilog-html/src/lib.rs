@@ -53,7 +53,7 @@ fn escape_for_script(json: &str) -> String {
 mod tests {
     use super::*;
     use axilog_schema::{
-        CcOut, ContributionOut, DamageOut, EncounterOut, HitStatsOut, PlayerOut, Report,
+        CcOut, ContributionOut, DamageOut, DefensesOut, EncounterOut, HitStatsOut, PlayerOut, Report,
         SupportOut, TeamOut, TimelineOut, PerSecondOut,
     };
 
@@ -107,6 +107,7 @@ mod tests {
                 per_second: None,
                 dps_targets: vec![],
                 hit_stats: HitStatsOut::default(),
+                defenses: DefensesOut::default(),
             }],
             enemies: vec![],
             all_enemies: vec![],
