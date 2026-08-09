@@ -162,6 +162,12 @@ mod tests {
     /// has something to wire up, regardless of report content -- the
     /// tables themselves are built client-side from the embedded data, so
     /// this is a structural (container-id) check, not a data check.
+    ///
+    /// M9 Task 3: the skeleton always carries a fourth tab/panel pair for
+    /// Replay too (`hidden` by default -- see `report_js_contains_replay_markers`
+    /// and `golden_html.rs`'s `contains_replay_tab_and_panel_containers_regardless_of_replay_data`
+    /// for the data-conditional-visibility half of that story), so the
+    /// `role="tab"`/`role="tabpanel"` counts below are 4, not 3.
     #[test]
     fn contains_view_containers_and_tab_bar() {
         let html = render(&fixture_report());
@@ -170,9 +176,11 @@ mod tests {
             "axilog-tab-damage",
             "axilog-tab-support",
             "axilog-tab-boons",
+            "axilog-tab-replay",
             "axilog-view-damage",
             "axilog-view-support",
             "axilog-view-boons",
+            "axilog-view-replay",
         ] {
             assert!(
                 html.contains(&format!(r#"id="{id}""#)),
@@ -182,8 +190,8 @@ mod tests {
         // Keyboard-accessible: real <button role="tab"> elements, not divs
         // with click handlers.
         assert!(html.contains(r#"role="tablist""#));
-        assert!(html.matches(r#"role="tab""#).count() == 3);
-        assert!(html.matches(r#"role="tabpanel""#).count() == 3);
+        assert!(html.matches(r#"role="tab""#).count() == 4);
+        assert!(html.matches(r#"role="tabpanel""#).count() == 4);
     }
 
     /// Task 3: the SVG damage timeline's section/heading/chart-mount
@@ -241,6 +249,25 @@ mod tests {
         // renderer must both ship.
         for needle in ["buildTimelinePaths", "renderTimeline", "downMarkers", "ccBars", "xTicks", "yTicks"] {
             assert!(JS.contains(needle), "report.js missing timeline marker {needle}");
+        }
+    }
+
+    /// M9 Task 3: pin the shipped Replay tab's pure functions (node-tested
+    /// in `tests/js/pure_fn_tests.mjs`) and its data-conditional gate/DOM
+    /// glue markers -- mirrors `report_js_contains_column_definitions`
+    /// above (a text-containment check on the asset source, since Rust
+    /// never executes the JS itself).
+    #[test]
+    fn report_js_contains_replay_markers() {
+        for needle in [
+            // pure functions (node-tested)
+            "hasReplay", "replayViewBox", "positionsAt", "isDownAt", "isDeadAt",
+            "REPLAY_FADE_MS",
+            // DOM glue / data-conditional wiring
+            "renderReplayView", "REPLAY_SPEEDS", "REPLAY_DEFAULT_SPEED",
+            "requestAnimationFrame", "axilog-tab-replay", "axilog-view-replay",
+        ] {
+            assert!(JS.contains(needle), "report.js missing replay marker {needle}");
         }
     }
 

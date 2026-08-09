@@ -329,4 +329,89 @@ test("buildTimelinePaths: down markers sit ON the damage line (same y as that se
   assert.equal(result.downMarkers[0].y, Number(lineYAtSecond1));
 });
 
+// ---- replay: hasReplay / replayViewBox / positionsAt / isDownAt/isDeadAt --
+
+test("hasReplay: false for absent/empty, true for at least one track", () => {
+  assert.equal(AxilogReport.hasReplay(null), false);
+  assert.equal(AxilogReport.hasReplay({}), false);
+  assert.equal(AxilogReport.hasReplay({ replay: { tracks: [] } }), false);
+  assert.equal(AxilogReport.hasReplay({ replay: { tracks: [{}] } }), true);
+});
+
+test("replayViewBox: pads bounds 5% on every side", () => {
+  const vb = AxilogReport.replayViewBox({ min_x: 0, min_y: 0, max_x: 100, max_y: 50 });
+  assert.deepEqual(vb, { x: -5, y: -2.5, width: 110, height: 55 });
+});
+
+test("replayViewBox: degenerate (zero-area) bounds fall back to a 1x1 span before padding", () => {
+  const vb = AxilogReport.replayViewBox({ min_x: 5, min_y: 5, max_x: 5, max_y: 5 });
+  assert.equal(vb.width, 1.1);
+  assert.equal(vb.height, 1.1);
+});
+
+function replayTrack(overrides) {
+  return Object.assign(
+    {
+      name: "Alpha",
+      team: "red",
+      commander: false,
+      is_squad: true,
+      samples: [
+        [0, 0, 0],
+        [1000, 10, 10],
+        [2000, 20, 0],
+      ],
+      down_intervals: [[500, 900]],
+      dead_intervals: [],
+    },
+    overrides || {}
+  );
+}
+
+test("positionsAt: exact-sample hit returns that sample's position at full opacity", () => {
+  const [pos] = AxilogReport.positionsAt([replayTrack()], 1000);
+  assert.deepEqual(pos, { x: 10, y: 10, opacity: 1 });
+});
+
+test("positionsAt: between-samples linearly interpolates", () => {
+  const [pos] = AxilogReport.positionsAt([replayTrack()], 1500);
+  assert.deepEqual(pos, { x: 15, y: 5, opacity: 1 });
+});
+
+test("positionsAt: before-first holds the first sample at full opacity", () => {
+  const [pos] = AxilogReport.positionsAt([replayTrack()], -500);
+  assert.deepEqual(pos, { x: 0, y: 0, opacity: 1 });
+});
+
+test("positionsAt: after-last holds the last sample and fades opacity over REPLAY_FADE_MS", () => {
+  const half = AxilogReport.positionsAt([replayTrack()], 2000 + AxilogReport.REPLAY_FADE_MS / 2)[0];
+  assert.equal(half.x, 20);
+  assert.equal(half.y, 0);
+  assert.equal(half.opacity, 0.5);
+
+  const full = AxilogReport.positionsAt([replayTrack()], 2000 + AxilogReport.REPLAY_FADE_MS)[0];
+  assert.equal(full.opacity, 0);
+});
+
+test("positionsAt: empty track (no samples) returns null, not a position", () => {
+  const [pos] = AxilogReport.positionsAt([replayTrack({ samples: [] })], 500);
+  assert.equal(pos, null);
+});
+
+test("isDownAt / isDeadAt: inside/outside/boundary of their respective intervals", () => {
+  const track = replayTrack({ down_intervals: [[500, 900]], dead_intervals: [[900, 1200]] });
+  assert.equal(AxilogReport.isDownAt(track, 700), true);
+  assert.equal(AxilogReport.isDownAt(track, 500), true); // inclusive start
+  assert.equal(AxilogReport.isDownAt(track, 900), true); // inclusive end
+  assert.equal(AxilogReport.isDownAt(track, 100), false);
+  assert.equal(AxilogReport.isDeadAt(track, 1000), true);
+  assert.equal(AxilogReport.isDeadAt(track, 700), false);
+});
+
+test("isDownAt / isDeadAt: empty intervals never match", () => {
+  const track = replayTrack({ down_intervals: [], dead_intervals: [] });
+  assert.equal(AxilogReport.isDownAt(track, 700), false);
+  assert.equal(AxilogReport.isDeadAt(track, 700), false);
+});
+
 console.log(`ok - ${ran} pure-function tests passed`);

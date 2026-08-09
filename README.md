@@ -87,7 +87,7 @@ release artifact.
 ### Parse a log
 
 ```sh
-axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons] [-o FILE]
+axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons] [-o FILE] [--replay]
 ```
 
 - `json` (default) — axilog's own native schema (`axilog_schema::Report`): encounter info, teams,
@@ -103,6 +103,12 @@ axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view
 
 `-o/--output FILE` writes the rendered output to `FILE` instead of stdout — works with every
 `--format`, not just `html`.
+
+`--replay` (M9) computes and embeds a native-only combat-replay block (per-squad-player and
+per-enemy-player-representative position tracks, downsampled to 300ms, plus down/dead intervals) —
+`--format json` embeds it as a top-level `replay` field, `--format html` feeds the animated Replay
+tab (see **HTML report** below). Every other `--format` ignores it. Off by default (adds
+meaningfully to output size — see **HTML report**'s size-budget notes).
 
 `--view` (M3) selects the `table` format's column layout — ignored for every other `--format`:
 
@@ -179,14 +185,29 @@ The report contains:
   share the damage y-axis — see `buildTimelinePaths`'s doc comment in `report.js`). Time axis in
   `mm:ss`, damage axis in `k`-format (e.g. `45k`). The chart uses an SVG `viewBox` with
   `width: 100%`, so it scales with the browser window rather than being a fixed-size image.
+- **Replay tab** (M9, only shown when the report was generated with `--replay`) — an animated combat
+  replay: play/pause, a scrub slider, an `mm:ss`/`mm:ss` time readout, and a 1x/4x/8x speed toggle
+  (4x default) driving an inline SVG "stage" over `replay.tracks[]`. Squad players render as filled,
+  team-colored dots; enemies as hollow (team-colored stroke only, background fill); the commander
+  gets a gold ring; a track pulses with a red ring during its `down_intervals` and fades to 25%
+  opacity during its `dead_intervals`. There's no real map imagery (the zero-network invariant
+  holds) — just an abstract dark field with a subtle grid, sized from `replay.bounds` (padded 5%,
+  height capped so a tall/narrow map's real proportions don't stretch the page vertically — the
+  SVG's own `preserveAspectRatio` letterboxes the rest). Hovering a dot shows its name via a native
+  SVG `<title>` tooltip. All motion is driven by a pure `positionsAt(tracks, t)` function (linear
+  interpolation between a track's downsampled samples, holding-then-fading before its first/after
+  its last sample) called every animation frame — see `report.js`'s "replay (pure)" section and
+  `tests/js/pure_fn_tests.mjs` for the node-tested edge cases (exact-sample hit, between-samples,
+  before-first, after-last, empty track).
 
 All number/date formatting and interactive behavior (sorting, the theme toggle, the boon
-generation-mode toggle, the timeline) runs client-side in `report.js` against the embedded JSON —
-Rust only builds the skeleton and inlines the data, so there's one source of truth for every value
-shown. See `crates/axilog-html/assets/report.js`'s header comment for the project's XSS contract
-(every log-derived string — player/account names, map name, warnings, ... — reaches the DOM via
-`textContent` only, never `innerHTML`), and `crates/axilog-html/tests/golden_html.rs` for the
-structural/size/determinism tests that gate this format in CI.
+generation-mode toggle, the timeline, the replay animation) runs client-side in `report.js` against
+the embedded JSON — Rust only builds the skeleton and inlines the data, so there's one source of
+truth for every value shown. See `crates/axilog-html/assets/report.js`'s header comment for the
+project's XSS contract (every log-derived string — player/account names, map name, warnings, ... —
+reaches the DOM via `textContent` only, never `innerHTML`), and `crates/axilog-html/tests/golden_html.rs`
+for the structural/size/determinism tests that gate this format in CI (replay-enabled reports stay
+under a 600KB budget; the combined raw `report.css`+`report.js` assets stay under 60KB).
 
 ### Anonymize a log for sharing
 
@@ -465,10 +486,25 @@ configured (log-skip otherwise — the Release itself, with every artifact attac
 either way) and on the triggering event being a real tag push, never a `workflow_dispatch` dry
 run. See **Install** above and `RELEASING.md` for the full flow.
 
+**M9 (done):** animated combat replay — `axilog_core::analysis::replay::build_replay` decodes
+`CBTS_POSITION`/`CBTS_VELOCITY`/`CBTS_FACING` packed-float payloads (ordinals/layout verified
+against the arcdps README and GW2EI's `MovementEvent` source) into per-squad-player and
+per-enemy-player-representative position tracks, downsampled to a 300ms grid (matching GW2EI's own
+combat-replay polling) with linear interpolation between bracketing samples, plus down/dead
+intervals from existing event analysis — calibrated to ≥95% of samples within 1.0 map-pixel of
+GW2EI's exported `combatReplayData` on both golden fixtures (in practice 99.77–100%, see
+`crates/axilog-core/tests/replay_golden.rs`); an opt-in `replay: Option<ReplayOut>` schema block
+(`axilog-schema`) wired through `axilog parse --replay` (json/html) and both SDKs
+(`replay`/`replay=False` params, additive/back-compat); the HTML report's animated **Replay tab**
+(see **HTML report** above) — SVG stage, play/pause/scrub/speed controls, pure node-tested
+interpolation (`positionsAt`/`replayViewBox`/`isDownAt`/`isDeadAt`), rendered only when `--replay`
+data is present. Size gates: replay-enabled reports <600KB, combined raw CSS+JS <60KB (raised from
+M7's 50KB — controller-authorized, the animated stage/controls needed the extra headroom).
+
 **Later:** healing/barrier stats, rotation/skill-cast tracking, PvE encounter logic (boss health
 phases, mechanics), actually publishing to the npm/PyPI registries (the pipeline is gated and
 ready — see M8 — but `NPM_TOKEN`/`PYPI_TOKEN` aren't configured yet), HTML report extras
-(tick-rate corner widget, marker-driven combat-replay eye candy — see arcdps-dev-notes),
+(tick-rate corner widget, mounts/glider/capping replay eye candy — see arcdps-dev-notes),
 real-capture calibration of the M4 post-rework code paths once a fixture is available.
 
 ## License

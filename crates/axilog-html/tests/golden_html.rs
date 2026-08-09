@@ -124,6 +124,10 @@ fn contains_all_view_and_timeline_containers() {
         "axilog-timeline-section",
         "axilog-timeline-heading",
         "axilog-timeline-chart",
+        // Replay tab (M9 Task 3) -- present but hidden unless requested,
+        // see contains_replay_tab_and_panel_containers_regardless_of_replay_data.
+        "axilog-tab-replay",
+        "axilog-view-replay",
     ] {
         assert!(html.contains(&format!(r#"id="{id}""#)), "missing container id {id}");
     }
@@ -213,8 +217,34 @@ fn combined_raw_assets_stay_under_budget() {
     let js_len = std::fs::metadata(JS_PATH).expect("report.js present").len();
     let combined = css_len + js_len;
     assert!(
-        combined < 50 * 1024,
+        combined < 60 * 1024,
         "combined raw report.css + report.js is {combined} bytes, must stay under the \
-         50KB budget (controller-relaxed from 25KB in Task 2, see progress.md)"
+         60KB budget (M9 Task 3: controller pre-authorized raising this from 50KB -- the \
+         animated Replay tab's SVG stage/controls/pure interpolation math pushed past the \
+         old ceiling; usage was already ~48KB before this task, per the M9 plan's Global \
+         Constraints -- see progress.md)"
     );
+}
+
+/// M9 Task 3: the Replay tab's containers are always in the skeleton
+/// (`hidden` by default -- `report.js`'s `hasReplay()` gate unhides the tab
+/// button at runtime only when the embedded data actually carries a
+/// non-empty `replay.tracks`), and the client-side Replay code itself must
+/// ship in `report.js` regardless of whether a given report requests
+/// `--replay` (assets are static/inlined; see the plan's Task 3 note that
+/// "non-replay reports WILL contain the new JS"). Mirrors
+/// `contains_all_view_and_timeline_containers` above, extended with the
+/// replay-specific ids.
+#[test]
+fn contains_replay_tab_and_panel_containers_regardless_of_replay_data() {
+    for report in [fixture_report(), fixture_report_with_replay()] {
+        let html = axilog_html::render(&report);
+        for id in ["axilog-tab-replay", "axilog-view-replay"] {
+            assert!(html.contains(&format!(r#"id="{id}""#)), "missing replay container id {id}");
+        }
+        assert!(
+            html.contains(r#"aria-controls="axilog-view-replay" hidden>Replay<"#),
+            "replay tab button must be present but hidden by default in the static skeleton"
+        );
+    }
 }
