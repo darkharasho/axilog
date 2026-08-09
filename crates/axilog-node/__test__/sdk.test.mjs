@@ -162,7 +162,23 @@ test('parseFileEi: axibridge-read key shapes', () => {
   assert.ok(Array.isArray(ei.targets) && ei.targets.length > 0, 'expected targets[]')
   for (const t of ei.targets) {
     assert.equal(typeof t.enemyPlayer, 'boolean')
+    // M11 Task 3: every target is a real (non-aggregate) agent -- axibridge
+    // filters `!t.isFake` everywhere it reads `targets[]`.
+    assert.equal(t.isFake, false, 'every target must be isFake: false')
   }
+
+  // M11 Task 3: `activeTimes`/`combatReplayData` are ALWAYS present (not
+  // gated on a `--replay`-equivalent option -- `parseFileEi` takes none),
+  // with `down`/`dead` arrays of `[start, end]` pairs (positions stay
+  // absent -- see `axilog_ei::to_ei_json`'s module comment).
+  assert.ok(Array.isArray(p0.activeTimes) && p0.activeTimes.length === 1)
+  assert.equal(typeof p0.activeTimes[0], 'number')
+  assert.ok(p0.combatReplayData, 'expected combatReplayData')
+  assert.equal(typeof p0.combatReplayData.start, 'number')
+  assert.equal(typeof p0.combatReplayData.end, 'number')
+  assert.ok(Array.isArray(p0.combatReplayData.down))
+  assert.ok(Array.isArray(p0.combatReplayData.dead))
+  assert.equal(p0.combatReplayData.positions, undefined, 'positions must stay absent (deferred to M15)')
 
   assert.ok(ei.wvWMapData, 'expected wvWMapData')
   for (const key of ['redTeamID', 'blueTeamID', 'greenTeamID']) {

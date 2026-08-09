@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use serde_json::{json, Value};
 use axilog_core::analysis::buffs::BOON_IDS;
+use axilog_core::analysis::replay::{ActivityIntervals, Interval};
 use axilog_schema::Report;
 
 // Representative real WvW team ids per color (Task 2, M2) — one id drawn
@@ -30,7 +31,21 @@ fn detected_team_ids(report: &Report) -> BTreeMap<&str, u64> {
     m
 }
 
-pub fn to_ei_json(report: &Report) -> Value {
+/// Render one interval as EI's own `[start_ms, end_ms]` two-element array
+/// shape (`combatReplayData.down`/`.dead`).
+fn interval_json(iv: &Interval) -> Value {
+    json!([iv.start_ms, iv.end_ms])
+}
+
+/// `activity` (M11 Task 3): per-player down/dead intervals + first/last-
+/// aware bounds from `axilog_core::analysis::replay::build_activity_intervals`
+/// -- ALWAYS computed by every caller (CLI/Node/Python), unlike `--replay`'s
+/// position track, since intervals are cheap (see that function's module
+/// doc). Positionally joined to `report.players` (both built by iterating
+/// `enc.players` in the same order -- see `build_activity_intervals`'s doc
+/// comment); pass an empty slice if unavailable (every field this powers is
+/// then a harmless zero/empty default, not a panic).
+pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
     let detected = detected_team_ids(report);
     let team_id_for = |color: &str| -> u64 {
         detected.get(color).copied().unwrap_or_else(|| representative_team_id(color))
@@ -42,7 +57,8 @@ pub fn to_ei_json(report: &Report) -> Value {
     // divide-by-zero on a degenerate zero-duration log).
     let duration_secs = (report.encounter.duration_ms as f64 / 1000.0).max(1.0);
 
-    let players: Vec<Value> = report.players.iter().map(|p| {
+    let players: Vec<Value> = report.players.iter().enumerate().map(|(player_idx, p)| {
+        let act = activity.get(player_idx);
         // Real EI shape (verified against a real dps.report export,
         // axibridge's `test-fixtures/boon/20260117-181030.json`,
         // `players[0].statsAll[0]`): whole-fight/whole-phase aggregates —
@@ -171,6 +187,52 @@ pub fn to_ei_json(report: &Report) -> Value {
                 })
             }).collect::<Vec<_>>()
         });
+        // `activeTimes`/`combatReplayData` (M11 Task 3): unlike every other
+        // block on this player, these are ALWAYS present -- not gated on
+        // `--replay`/SDK `replay: true` (the module doc on
+        // `axilog_core::analysis::replay::build_activity_intervals` explains
+        // why: down/dead intervals and first/last-aware bounds are cheap,
+        // only the downsampled `positions[]` track is expensive, and that
+        // stays absent here regardless -- a consumer wanting the position
+        // MAP (not just down/dead-derived features) still needs `--replay`'s
+        // native `replay` block, deferred to M15 for ei-json specifically).
+        // `activeTimes` real EI shape: a single-element array (this
+        // project's one-phase-only convention, matching `statsAll`/
+        // `extHealingStats` above) holding
+        // `SingleActor.GetActiveDuration(log, 0, durationMS)` --
+        // `ActivityIntervals::active_ms`'s doc comment has the full GW2EI
+        // source citation and the real-golden verification that down time
+        // is NOT subtracted (only dead time is). `combatReplayData.start`/
+        // `.end` mirror GW2EI's `AgentItem.FirstAware`/`LastAware`;
+        // `.down`/`.dead` are `[[start_ms, end_ms], ...]` arrays verified
+        // byte-exact against the committed EI golden
+        // (`crates/axilog-ei/tests/ei_golden.rs`) -- `.positions`/
+        // `.orientations`/`.iconURL`/`.dc` are real EI fields NOT computed
+        // here, omitted rather than faked (same "don't fake absent data"
+        // convention as `statsTargets`/`support` above).
+        {
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
+            let (active_ms, start_ms, end_ms, down, dead) = match act {
+                Some(a) => (
+                    a.active_ms(),
+                    a.start_ms,
+                    a.end_ms,
+                    a.down_intervals.iter().map(interval_json).collect::<Vec<_>>(),
+                    a.dead_intervals.iter().map(interval_json).collect::<Vec<_>>(),
+                ),
+                None => (0, 0, 0, Vec::new(), Vec::new()),
+            };
+            obj.insert("activeTimes".to_string(), json!([active_ms]));
+            obj.insert(
+                "combatReplayData".to_string(),
+                json!({
+                    "start": start_ms,
+                    "end": end_ms,
+                    "down": down,
+                    "dead": dead
+                }),
+            );
+        }
         // `extHealingStats`/`extBarrierStats` (M10 Task 1): only when this
         // log carries the healing extension at all (`p.healing` is `None`
         // otherwise -- `axilog_schema::PlayerOut.healing`'s doc comment).
@@ -221,9 +283,30 @@ pub fn to_ei_json(report: &Report) -> Value {
     // M10 Task 3: `all_enemies`, not `enemies` -- see the `stats_targets`
     // comment above for why (positional lockstep with `statsTargets[][]`,
     // and EI parity: real EI keeps every enumerated target).
+    //
+    // M11 Task 3: `isFake` -- real EI sets this `true` for its own
+    // synthetic aggregate pseudo-targets (a "sum of every real target"
+    // stand-in row it adds to `targets[]` for certain fight types); every
+    // one of THIS project's `all_enemies` is a real, individually-tracked
+    // agent (never a synthesized aggregate), so `isFake: false` is correct
+    // for every row here, not a faked/guessed value. This field was
+    // previously ABSENT entirely. Verified against axibridge's own source
+    // (read-only reference, `src/renderer/**`): every `targets[]` consumer
+    // found (`ExpandableLogCard.tsx`, `computeCommanderStats.ts`,
+    // `computeFightDiffMode.ts`, `computeFightBreakdown.ts`,
+    // `incrementalAggregation.ts`) reads it via `!t.isFake`/`t?.isFake`
+    // (optional-chained or negated), which already treated an absent field
+    // as falsy/"not fake" the same as an explicit `false` -- so this
+    // specific project never hit a live miscount from the omission. It's
+    // still the correct fix: axibridge's own `dpsReportTypes.ts` declares
+    // `isFake: boolean` as NON-optional (every real dps.report/EI export
+    // always carries it), so an absent field was already a silent
+    // contract violation for any future/less-defensive consumer that reads
+    // `t.isFake` directly rather than through the truthy-check pattern
+    // every current call site happens to use.
     let targets: Vec<Value> = report.all_enemies.iter().map(|e| json!({
         "id": e.id, "name": e.name, "enemyPlayer": e.is_player,
-        "teamID": team_id_for(&e.team)
+        "teamID": team_id_for(&e.team), "isFake": false
     })).collect();
     // `buffMap` (M3 Task 5): a subset covering only the 12 tracked boons,
     // keyed `"b<id>"` per real EI's convention (verified against
@@ -300,7 +383,7 @@ mod tests {
     }
     #[test]
     fn maps_core_ei_fields() {
-        let v = to_ei_json(&sample_report());
+        let v = to_ei_json(&sample_report(), &[]);
         assert_eq!(v["durationMS"], 1000);
         assert_eq!(v["recordedBy"], ":A.1");
         assert_eq!(v["players"][0]["account"], ":A.1");
@@ -386,7 +469,7 @@ mod tests {
 
     #[test]
     fn buff_map_covers_the_12_tracked_boons_with_computed_fields_only() {
-        let v = to_ei_json(&sample_report_with_boons());
+        let v = to_ei_json(&sample_report_with_boons(), &[]);
         let buff_map = v["buffMap"].as_object().expect("buffMap must be an object");
         assert_eq!(buff_map.len(), 12, "exactly the 12 tracked boons");
         // Known value: Might (740) is Intensity-type -> stacking: true.
@@ -399,7 +482,7 @@ mod tests {
 
     #[test]
     fn buff_uptimes_map_intensity_and_duration_boons_to_ei_field_meanings() {
-        let v = to_ei_json(&sample_report_with_boons());
+        let v = to_ei_json(&sample_report_with_boons(), &[]);
         let entries = v["players"][0]["buffUptimes"].as_array().expect("buffUptimes must be an array");
         assert_eq!(entries.len(), 12, "one entry per tracked boon");
         let might = entries.iter().find(|e| e["id"] == 740).expect("Might entry present");
@@ -419,7 +502,7 @@ mod tests {
 
     #[test]
     fn support_block_carries_the_four_new_computed_fields() {
-        let v = to_ei_json(&sample_report_with_boons());
+        let v = to_ei_json(&sample_report_with_boons(), &[]);
         let support = &v["players"][0]["support"][0];
         assert_eq!(support["condiCleanse"], 5);
         assert_eq!(support["condiCleanseSelf"], 2);
@@ -474,7 +557,7 @@ mod tests {
             replay: None,
             missiles: None,
         };
-        let v = to_ei_json(&report);
+        let v = to_ei_json(&report, &[]);
         let healing = &v["players"][0]["extHealingStats"]["outgoingHealing"][0];
         assert_eq!(healing["healing"], 5000);
         assert_eq!(healing["downedHealing"], 500);
@@ -493,5 +576,63 @@ mod tests {
             "extHealingStats must be absent for a player with no native healing block"
         );
         assert!(v["players"][1].get("extBarrierStats").is_none());
+    }
+
+    /// M11 Task 3: `isFake` -- every target gets `false` (this project
+    /// never emits real EI's synthetic aggregate pseudo-targets); the
+    /// golden-fixture calibration test (`crates/axilog-ei/tests/
+    /// ei_golden.rs`) asserts the same against a real multi-target log.
+    #[test]
+    fn every_target_is_marked_not_fake() {
+        let v = to_ei_json(&sample_report(), &[]);
+        let targets = v["targets"].as_array().expect("targets must be an array");
+        assert_eq!(targets.len(), 2, "sample_report has 2 enemies (see all_enemies above)");
+        for t in targets {
+            assert_eq!(t["isFake"], false, "every real (non-aggregate) target must be isFake: false");
+        }
+    }
+
+    /// M11 Task 3: `activeTimes`/`combatReplayData` are ALWAYS present (not
+    /// gated on `--replay`), with harmless zero/empty defaults when the
+    /// caller passes no `activity` data at all (`&[]`).
+    #[test]
+    fn active_times_and_combat_replay_data_default_to_zero_when_no_activity_supplied() {
+        let v = to_ei_json(&sample_report(), &[]);
+        assert_eq!(v["players"][0]["activeTimes"], json!([0]));
+        assert_eq!(v["players"][0]["combatReplayData"]["start"], 0);
+        assert_eq!(v["players"][0]["combatReplayData"]["end"], 0);
+        assert_eq!(v["players"][0]["combatReplayData"]["down"], json!([]));
+        assert_eq!(v["players"][0]["combatReplayData"]["dead"], json!([]));
+    }
+
+    /// M11 Task 3: real (non-empty) `activity` data flows through to
+    /// `activeTimes`/`combatReplayData`, positionally joined to
+    /// `report.players` by index -- `sample_report()` has 2 players (agent
+    /// addrs 1 and 2, in that order), matching `activity`'s own order here.
+    #[test]
+    fn active_times_and_combat_replay_data_map_real_activity_intervals() {
+        use axilog_core::analysis::replay::Interval;
+        let activity = vec![
+            ActivityIntervals {
+                agent_addr: 1,
+                start_ms: 100,
+                end_ms: 10_100,
+                down_intervals: vec![Interval { start_ms: 2_000, end_ms: 3_000 }],
+                dead_intervals: vec![Interval { start_ms: 5_000, end_ms: 5_500 }],
+            },
+            ActivityIntervals {
+                agent_addr: 2, start_ms: 0, end_ms: 1_000,
+                down_intervals: vec![], dead_intervals: vec![],
+            },
+        ];
+        let v = to_ei_json(&sample_report(), &activity);
+        assert_eq!(v["players"][0]["combatReplayData"]["start"], 100);
+        assert_eq!(v["players"][0]["combatReplayData"]["end"], 10_100);
+        assert_eq!(v["players"][0]["combatReplayData"]["down"], json!([[2_000, 3_000]]));
+        assert_eq!(v["players"][0]["combatReplayData"]["dead"], json!([[5_000, 5_500]]));
+        // active_ms = (10100-100) - 500 dead = 9500; down NOT subtracted.
+        assert_eq!(v["players"][0]["activeTimes"], json!([9_500]));
+        assert_eq!(v["players"][1]["combatReplayData"]["down"], json!([]));
+        assert_eq!(v["players"][1]["activeTimes"], json!([1_000]));
     }
 }

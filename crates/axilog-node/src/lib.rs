@@ -61,6 +61,31 @@ fn build_report_from_bytes(bytes: &[u8], want_replay: bool) -> Result<axilog_sch
     Ok(axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None))
 }
 
+/// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
+/// but additionally returns the M11 Task 3 activity intervals
+/// (`axilog_core::analysis::replay::build_activity_intervals`) the ei-json
+/// adapter needs for `combatReplayData`/`activeTimes` -- computed
+/// unconditionally (cheap, unlike `--replay`'s position track), independent
+/// of `want_replay`.
+fn build_report_and_activity_from_bytes(
+    bytes: &[u8],
+    want_replay: bool,
+) -> Result<(axilog_schema::Report, Vec<axilog_core::analysis::replay::ActivityIntervals>)> {
+    let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
+    let enc = axilog_core::model::resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let replay = want_replay.then(|| {
+        axilog_core::analysis::replay::build_replay(
+            &raw,
+            &enc,
+            axilog_core::analysis::replay::DEFAULT_POLL_MS,
+        )
+    });
+    let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    let report = axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None);
+    Ok((report, activity))
+}
+
 fn report_to_value(report: &axilog_schema::Report) -> Result<Value> {
     serde_json::to_value(report).map_err(napi_err)
 }
@@ -93,8 +118,8 @@ pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
 #[napi]
 pub fn parse_file_ei(path: String) -> Result<Value> {
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let report = build_report_from_bytes(&bytes, false)?;
-    Ok(axilog_ei::to_ei_json(&report))
+    let (report, activity) = build_report_and_activity_from_bytes(&bytes, false)?;
+    Ok(axilog_ei::to_ei_json(&report, &activity))
 }
 
 /// Rewrites every player's character/account name in the `.zevtc` at

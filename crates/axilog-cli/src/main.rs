@@ -119,10 +119,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Task 1) can apply uniformly regardless of `--format`.
             let rendered = match format {
                 Format::Json => format!("{}\n", serde_json::to_string_pretty(&report)?),
-                Format::EiJson => format!(
-                    "{}\n",
-                    serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report))?
-                ),
+                Format::EiJson => {
+                    // M11 Task 3: down/dead intervals + activeTimes are
+                    // cheap (no position decode/downsample), so they're
+                    // computed here unconditionally -- unlike `--replay`'s
+                    // `replay_data` above, which stays opt-in.
+                    let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+                    format!(
+                        "{}\n",
+                        serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report, &activity))?
+                    )
+                }
                 Format::Table => axilog_cli_table(&report, view),
                 Format::Csv => axilog_cli_csv(&report),
                 Format::Html => axilog_html::render(&report),
