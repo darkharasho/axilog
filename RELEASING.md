@@ -38,7 +38,7 @@ Pushing a tag matching `v*` triggers `.github/workflows/release.yml`, which:
    generates a consolidated `SHA256SUMS`, and creates the GitHub Release (`gh release
    create`) with generated release notes and every archive/tarball/wheel/sdist +
    checksum file attached.
-8. **PyPI publish** happens in a SEPARATE workflow, `.github/workflows/pypl-publish.yml`,
+8. **PyPI publish** happens in a SEPARATE workflow, `.github/workflows/pypi-publish.yml`,
    which fires when the GitHub Release is *published*: it downloads the release's wheel +
    sdist assets and uploads them to PyPI via **trusted publishing** (OIDC — no token
    secret). The PyPI trusted-publisher config is bound to that exact filename; do not
@@ -174,10 +174,10 @@ clear error — fix the version, delete the bad tag (`git tag -d vX.Y.Z && git p
   packed tarball (`@axiapps/axilog` + the 5 platform packages) with `--access public`,
   skipping any name@version that is already on the registry (idempotent re-runs).
   Without the secret, the step logs a clear skip message and exits successfully.
-- **PyPI** (`pypl-publish.yml`, separate workflow): fires on the GitHub Release
+- **PyPI** (`pypi-publish.yml`, separate workflow): fires on the GitHub Release
   `published` event and uses **trusted publishing** (OIDC) — no token secret at all.
   The trusted-publisher config on PyPI is bound to the repo + the exact workflow
-  filename `pypl-publish.yml`. `skip-existing: true` makes re-runs idempotent; a
+  filename `pypi-publish.yml`. `skip-existing: true` makes re-runs idempotent; a
   `workflow_dispatch` input allows re-publishing an existing release tag after a
   partial failure.
 

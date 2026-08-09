@@ -30,7 +30,7 @@ on:
 permissions:
   contents: write
   # Required by the release job's "Dispatch PyPI publish" step
-  # (`gh workflow run pypl-publish.yml`).
+  # (`gh workflow run pypi-publish.yml`).
   actions: write
 
 env:
@@ -450,7 +450,7 @@ jobs:
 
   # Python wheel validation gate (MPUB, replacing the M8 token-based
   # publish). Actual PyPI publishing now happens via TRUSTED PUBLISHING
-  # (OIDC, no token) in `.github/workflows/pypl-publish.yml`, which fires on
+  # (OIDC, no token) in `.github/workflows/pypi-publish.yml`, which fires on
   # the GitHub Release `published` event and downloads the wheel/sdist
   # assets this workflow attached to the release. That filename is bound to
   # the PyPI trusted-publisher configuration -- do not rename it.
@@ -621,13 +621,13 @@ jobs:
             --generate-notes
 
       # Explicitly dispatch the PyPI trusted-publishing workflow. The
-      # `release: published` trigger in pypl-publish.yml does NOT fire for
+      # `release: published` trigger in pypi-publish.yml does NOT fire for
       # a release created with this job's GITHUB_TOKEN (GitHub suppresses
       # workflow-triggering events from workflow tokens to prevent
       # recursion), but the workflow_dispatch API is exempt -- so this is
       # the hop that actually reaches PyPI on an automated release. (The
       # `release` trigger still covers releases published by hand.)
-      - name: Dispatch PyPI publish (pypl-publish.yml)
+      - name: Dispatch PyPI publish (pypi-publish.yml)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run pypl-publish.yml --ref "${{ github.ref_name }}" -f tag="${{ github.ref_name }}"
+        run: gh workflow run pypi-publish.yml --ref "${{ github.ref_name }}" -f tag="${{ github.ref_name }}"

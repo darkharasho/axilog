@@ -1,7 +1,7 @@
 # PyPI publish via TRUSTED PUBLISHING (OIDC) -- MPUB.
 #
 # THIS FILENAME IS LOAD-BEARING: the PyPI trusted-publisher configuration
-# for the `axilog` project is bound to `pypl-publish.yml` in this repo. Do
+# for the `axilog` project is bound to `pypi-publish.yml` in this repo. Do
 # not rename this file without updating the publisher config on PyPI first,
 # or every publish will fail with an OIDC claim mismatch.
 #
@@ -21,7 +21,7 @@
 # exact `axilog-<version>.tar.gz` name -- the release also carries CLI
 # binary tarballs (`axilog-<target-triple>.tar.gz`), which must never be
 # handed to PyPI.
-name: pypl-publish
+name: pypi-publish
 
 on:
   release:
