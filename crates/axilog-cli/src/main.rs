@@ -49,23 +49,33 @@ enum Cmd {
         /// per-target) and incoming damage grouped by skill id --
         /// `axilog_core::analysis::skill_damage`. Already computed
         /// unconditionally by `analyze()` regardless of this flag (cheap);
-        /// this only controls whether `--format json` embeds it in each
-        /// `players[].skill_damage` field (every other format ignores it).
-        /// Off by default -- measured on the committed WvW fixture, this
-        /// block alone grows the native JSON output by +249% (see
-        /// `axilog_schema::Report::players`'s `PlayerOut::skill_damage`'s
-        /// doc comment for the numbers), so it's opt-in like `--replay`/
-        /// `--missiles` rather than always-on.
+        /// this only controls whether the `Report` passed to every
+        /// `--format` carries it. `--format json` embeds it in each
+        /// `players[].skill_damage` field; `--format ei-json` (M12 Task 3)
+        /// maps the SAME data into EI's own `totalDamageDist`/
+        /// `targetDamageDist`/`totalDamageTaken` shapes (`axilog_ei::
+        /// to_ei_json` keys off the `Report`'s own `skill_damage` presence,
+        /// not a separate flag -- see that fn's doc comment); every other
+        /// format ignores it. Off by default -- measured on the committed
+        /// WvW fixture, this block alone grows the native JSON output by
+        /// +249% (see `axilog_schema::Report::players`'s `PlayerOut::
+        /// skill_damage`'s doc comment for the numbers), so it's opt-in
+        /// like `--replay`/`--missiles` rather than always-on.
         #[arg(long)]
         skill_damage: bool,
         /// Embed the native per-player per-second series block (M12 Task 2):
         /// cumulative per-second `damage`/`damage_taken`/`per_target`, plus
         /// the per-enemy `dps_targets` summary -- `axilog_core::analysis::
         /// timeseries`. Already computed unconditionally by `analyze()`
-        /// regardless of this flag (cheap); this only controls whether
-        /// `--format json` embeds `players[].per_second` AND `players[].
-        /// dps_targets` (every other format ignores both). Off by default --
-        /// measured on the committed WvW fixture, `per_second` alone grows
+        /// regardless of this flag (cheap); this only controls whether the
+        /// `Report` passed to every `--format` carries it. `--format json`
+        /// embeds `players[].per_second` AND `players[].dps_targets`;
+        /// `--format ei-json` (M12 Task 3) maps the SAME data into EI's own
+        /// `damage1S`/`targetDamage1S`/`damageTaken1S`/`dpsTargets` shapes
+        /// (`axilog_ei::to_ei_json` keys off the `Report`'s own
+        /// `per_second` presence, not a separate flag); every other format
+        /// ignores both. Off by default -- measured on the committed WvW
+        /// fixture, `per_second` alone grows
         /// the native JSON output by +147.7% and `dps_targets` alone by
         /// +36.4% (both individually past the ~30% size-discipline
         /// guideline -- `dps_targets` is NOT small on a real WvW zerg log,

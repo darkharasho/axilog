@@ -344,11 +344,17 @@ pub struct PlayerPerSecondOut {
     pub per_target: Vec<PlayerTargetSeriesOut>,
 }
 /// One enemy's whole-fight dps/damage summary (M12, Task 2) -- mirrors
-/// `axilog_core::analysis::timeseries::DpsTargetEntry` field-for-field
-/// (`dps_milli`'s fixed-point storage unwrapped back to a plain `f64` via
-/// `DpsTargetEntry::dps()`). Always present (not gated behind `per_second`)
-/// -- see `PlayerOut::dps_targets`'s doc comment for the measured size
-/// rationale.
+/// `axilog_core::analysis::timeseries::DpsTargetEntry` field-for-field:
+/// `damage` is that enemy's final cumulative damage total (the same value
+/// `PlayerTargetSeriesOut::damage`'s matching series ends on), and `dps` is
+/// a plain `f64` computed directly as `damage / duration_secs` (no
+/// fixed-point intermediate -- `DpsTargetEntry` carries no `dps_milli`
+/// field or `dps()` method; this doc previously described a design that was
+/// never implemented). Gated behind the SAME `include_timeseries` flag as
+/// `PlayerOut::per_second` (NOT always-on, despite the M12 plan originally
+/// suggesting `dps_targets` could stay always-on since "it's small") -- see
+/// `PlayerOut::dps_targets`'s doc comment for the measured size rationale
+/// that put it behind that flag instead.
 #[derive(Serialize)]
 pub struct DpsTargetOut {
     pub enemy_id: u64,

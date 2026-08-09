@@ -136,3 +136,128 @@ fn ei_json_matches_the_golden_isfake_down_dead_and_active_times() {
         "expected the 1 (of 2) non-empty down/dead row reachable via the real-account join"
     );
 }
+
+/// M12 Task 3: `to_ei_json`'s `totalDamageDist`/`damage1S` mapping,
+/// calibrated against the SAME golden sidecar fields
+/// `skill_damage_golden.rs`/`timeseries_golden.rs` already calibrate the
+/// underlying `axilog_core` metrics against (`fixtures/wvw-small.ei.json`'s
+/// `players[].skillDamage`/`players[].timeSeries`) -- this test's job is
+/// narrower: confirm the ei-json ADAPTER LAYER carries those already-
+/// calibrated numbers through into EI's own array shape correctly, not
+/// re-derive the calibration itself.
+///
+/// - `totalDamageDist[0]`: every shared skill id vs golden's
+///   `skillDamage.outgoing` -- **EXACT** (same "every shared id matches
+///   exactly" bar `skill_damage_golden.rs` established for the underlying
+///   `SkillEntry`s this just re-shapes).
+/// - `damage1S[0].last()` vs golden's `dpsAll[0].damage` scalar --
+///   **EXACT** (the M12 Task 3 brief's specific calibration bar: "damage1S
+///   final == scalar").
+///
+/// Join method: `anon_account(raw agent-table index)`, same as
+/// `skill_damage_golden.rs` (reaches the same ~37/41 real accounts; the
+/// other 4 `Non Squad Player N` placeholder rows have no real account to
+/// join through, same documented limitation).
+#[test]
+fn ei_json_per_skill_and_per_second_blocks_match_the_golden() {
+    use axilog_core::evtc::anon_account;
+    use std::collections::HashMap;
+
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let golden = read_json(GOLDEN_JSON_PATH);
+    let golden_players = golden["players"].as_array().expect("players array");
+    let mut golden_by_account: HashMap<String, &serde_json::Value> = HashMap::new();
+    for p in golden_players {
+        let account = p["account"].as_str().expect("account").to_string();
+        golden_by_account.insert(account, p);
+    }
+
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    // Both opt-in blocks requested -- this test's whole point is
+    // calibrating what `to_ei_json` emits WHEN they're present (the
+    // gate-respecting omission-when-absent behavior is covered by
+    // `axilog-ei`'s own unit tests, not this golden-fixture test).
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true);
+    let ei = axilog_ei::to_ei_json(&report, &[]);
+
+    let mut joined = 0usize;
+    let mut dist_mismatches: Vec<String> = Vec::new();
+    let mut damage1s_mismatches: Vec<String> = Vec::new();
+
+    for (i, agent) in raw.agents.iter().enumerate() {
+        if !agent.is_player() {
+            continue;
+        }
+        let expected_account = anon_account(i);
+        let key = expected_account.trim_start_matches(':').to_string();
+        let Some(golden_p) = golden_by_account.get(&key) else { continue };
+        let Some(sd) = golden_p.get("skillDamage") else { continue };
+        let Some(player_idx) = enc.players.iter().position(|p| {
+            p.agent_addrs.contains(&agent.addr)
+        }) else { continue };
+        joined += 1;
+
+        let our_player = &ei["players"][player_idx];
+        assert_eq!(
+            our_player["account"].as_str().map(|s| s.trim_start_matches(':')),
+            Some(key.as_str()),
+            "positional join sanity: ei-json players[{player_idx}] must be this same account"
+        );
+
+        // -- totalDamageDist[0]: every shared skill id, EXACT. --
+        let golden_outgoing: HashMap<u32, i64> = sd["outgoing"]
+            .as_array()
+            .expect("outgoing array")
+            .iter()
+            .map(|e| (e["id"].as_u64().unwrap() as u32, e["total"].as_i64().unwrap()))
+            .collect();
+        let our_dist = our_player["totalDamageDist"][0]
+            .as_array()
+            .unwrap_or_else(|| panic!("account {key}: totalDamageDist[0] must be an array"));
+        let our_outgoing: HashMap<u32, i64> = our_dist
+            .iter()
+            .map(|e| (e["id"].as_u64().unwrap() as u32, e["totalDamage"].as_i64().unwrap()))
+            .collect();
+        for (&id, &gtotal) in &golden_outgoing {
+            let ours = our_outgoing.get(&id).copied();
+            if ours != Some(gtotal) {
+                dist_mismatches.push(format!("{key} skill {id}: ours={ours:?} golden={gtotal}"));
+            }
+        }
+
+        // -- damage1S[0].last() vs golden's dpsAll[0].damage scalar, EXACT. --
+        let golden_damage = golden_p["damage"].as_i64().expect("damage");
+        let our_damage1s_final = our_player["damage1S"][0]
+            .as_array()
+            .unwrap_or_else(|| panic!("account {key}: damage1S[0] must be an array"))
+            .last()
+            .unwrap_or_else(|| panic!("account {key}: damage1S[0] must be non-empty"))
+            .as_i64()
+            .expect("damage1S[0].last() is numeric");
+        if our_damage1s_final != golden_damage {
+            damage1s_mismatches.push(format!("{key}: damage1S final={our_damage1s_final} golden dpsAll[0].damage={golden_damage}"));
+        }
+    }
+
+    assert!(joined >= 30, "expected at least 30 accounts to join, got {joined}");
+    assert!(
+        dist_mismatches.is_empty(),
+        "{} totalDamageDist shared skill-id mismatch(es):\n{}",
+        dist_mismatches.len(),
+        dist_mismatches.join("\n")
+    );
+    assert!(
+        damage1s_mismatches.is_empty(),
+        "{} damage1S-final mismatch(es):\n{}",
+        damage1s_mismatches.len(),
+        damage1s_mismatches.join("\n")
+    );
+
+    println!(
+        "ei_json_per_skill_and_per_second_blocks_match_the_golden: {joined} accounts joined, \
+         0 totalDamageDist shared-id mismatches, 0 damage1S-final mismatches"
+    );
+}
