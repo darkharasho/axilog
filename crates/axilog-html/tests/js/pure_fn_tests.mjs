@@ -246,4 +246,87 @@ test("buildBoonRows: generation mode toggle swaps self/group/squad values", () =
   assert.equal(squad_.genMight, 40);
 });
 
+// ---- timeline: formatK + buildTimelinePaths -------------------------------
+
+test("formatK: k-format for damage y-axis ticks", () => {
+  assert.equal(AxilogReport.formatK(45000), "45k");
+  assert.equal(AxilogReport.formatK(45231), "45.2k");
+  assert.equal(AxilogReport.formatK(999), "999");
+  assert.equal(AxilogReport.formatK(0), "0");
+  assert.equal(AxilogReport.formatK(-2500), "-2.5k");
+});
+
+test("buildTimelinePaths: empty timeline (Task 3 required case) returns empty paths/markers/ticks", () => {
+  const result = AxilogReport.buildTimelinePaths(
+    { squad_damage: [], cc_applied: [], downs: [] },
+    960,
+    260
+  );
+  assert.equal(result.areaPath, "");
+  assert.equal(result.linePath, "");
+  assert.deepEqual(result.downMarkers, []);
+  assert.deepEqual(result.ccBars, []);
+  assert.deepEqual(result.xTicks, []);
+  assert.deepEqual(result.yTicks, []);
+});
+
+test("buildTimelinePaths: missing per_second is treated the same as empty", () => {
+  const result = AxilogReport.buildTimelinePaths(undefined, 960, 260);
+  assert.equal(result.areaPath, "");
+  assert.deepEqual(result.xTicks, []);
+});
+
+test("buildTimelinePaths: single-bucket timeline (Task 3 required case) centers the point", () => {
+  const result = AxilogReport.buildTimelinePaths(
+    { squad_damage: [5000], cc_applied: [2], downs: [1] },
+    960,
+    260
+  );
+  // A lone point has no line segment to draw (no "L" in the path) but the
+  // area still closes into a (degenerate, zero-width) polygon.
+  assert.ok(result.linePath.startsWith("M"));
+  assert.ok(!result.linePath.includes("L"));
+  assert.ok(result.areaPath.endsWith("Z"));
+  assert.equal(result.xTicks.length, 1);
+  assert.equal(result.xTicks[0].label, "00:00");
+  assert.equal(result.downMarkers.length, 1);
+  assert.equal(result.downMarkers[0].second, 0);
+  assert.equal(result.ccBars.length, 1);
+  assert.equal(result.ccBars[0].second, 0);
+});
+
+test("buildTimelinePaths: multi-bucket timeline builds one line segment per second + down/cc markers", () => {
+  const squad = [0, 1000, 5000, 2000, 8000, 3000, 100, 500];
+  const cc = [0, 1, 0, 3, 0, 0, 2, 0];
+  const downs = [0, 0, 1, 0, 0, 2, 0, 0];
+  const result = AxilogReport.buildTimelinePaths(
+    { squad_damage: squad, cc_applied: cc, downs: downs },
+    960,
+    260
+  );
+  assert.equal((result.linePath.match(/L/g) || []).length, squad.length - 1);
+  assert.equal(result.downMarkers.length, 2);
+  assert.deepEqual(result.downMarkers.map((mrk) => mrk.second), [2, 5]);
+  assert.equal(result.ccBars.length, 3);
+  assert.deepEqual(result.ccBars.map((bar) => bar.second), [1, 3, 6]);
+  assert.ok(result.xTicks.length > 0 && result.xTicks.length <= 6);
+  assert.equal(result.yTicks.length, 5);
+  assert.equal(result.yTicks[0].label, "0");
+  assert.equal(result.yTicks[4].label, "8k"); // yMax (8000) k-formatted
+});
+
+test("buildTimelinePaths: down markers sit ON the damage line (same y as that second's damage point)", () => {
+  const squad = [1000, 9000, 500];
+  const result = AxilogReport.buildTimelinePaths(
+    { squad_damage: squad, cc_applied: [0, 0, 0], downs: [0, 1, 0] },
+    960,
+    260
+  );
+  assert.equal(result.downMarkers.length, 1);
+  const lineYAtSecond1 = result.linePath
+    .split("L")[1] // "M x0,y0" then "L x1,y1" ...
+    .split(",")[1];
+  assert.equal(result.downMarkers[0].y, Number(lineYAtSecond1));
+});
+
 console.log(`ok - ${ran} pure-function tests passed`);

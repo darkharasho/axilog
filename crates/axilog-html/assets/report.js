@@ -93,6 +93,23 @@
     return n < 10 ? "0" + n : String(n);
   }
 
+  /** k-format a number for compact axis labels, e.g. formatK(45000) ->
+   * "45k", formatK(45231) -> "45.2k" (one decimal only when the value
+   * isn't a whole number of thousands), formatK(999) -> "999". */
+  function formatK(n) {
+    var num = Math.round(Number(n) || 0);
+    var neg = num < 0;
+    var abs = Math.abs(num);
+    var out;
+    if (abs >= 1000) {
+      var rounded = Math.round((abs / 1000) * 10) / 10;
+      out = (Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)) + "k";
+    } else {
+      out = String(abs);
+    }
+    return (neg ? "-" : "") + out;
+  }
+
   // ---- sorting (pure) ---------------------------------------------------
 
   /**
@@ -425,6 +442,126 @@
     return f;
   })();
 
+  // ---- timeline (pure) ----------------------------------------------------
+
+  /** Logical SVG canvas size (viewBox units). The element itself is
+   * responsive (`width: 100%` in CSS over a fixed viewBox, see
+   * `renderTimeline`), so these are just the coordinate space `
+   * buildTimelinePaths` computes pixel positions in -- not real pixels. */
+  var TIMELINE_WIDTH = 960;
+  var TIMELINE_HEIGHT = 260;
+  var TIMELINE_MARGIN = { top: 12, right: 16, bottom: 28, left: 48 };
+
+  /**
+   * Derive every plottable coordinate for the damage timeline from
+   * `timeline.per_second` (`{squad_damage[], cc_applied[], downs[]}`, one
+   * entry per second, all three arrays the same length) plus a target
+   * `w`/`h` (SVG viewBox size). Pure -- no DOM, so it's directly node-
+   * testable (see tests/js/pure_fn_tests.mjs).
+   *
+   * Returns `{areaPath, linePath, downMarkers, ccBars, xTicks, yTicks}`:
+   * - `areaPath`/`linePath`: SVG `<path d>` strings for the squad-damage
+   *   area (filled, primary series) and its outline, one point per second,
+   *   x evenly spaced across the plot width, y linear-scaled 0..max(squad
+   *   damage) against the plot height.
+   * - `downMarkers`: `{x, y, second, count}` per second with >=1 down --
+   *   placed ON the damage line (y = that second's damage y-position, not
+   *   a separate scale), per the design brief ("downs as circular markers
+   *   on the line at their second").
+   * - `ccBars`: `{x, y, width, height, second, value}` per second with
+   *   cc_applied > 0. DESIGN CHOICE: normalized to cc_applied's OWN max
+   *   (not a shared/secondary y-axis against damage) -- CC-applied and
+   *   damage are different units on very different scales, so sharing one
+   *   linear axis would flatten the (usually much smaller) CC series to
+   *   near-invisible slivers. Rendered as a translucent bar overlay behind
+   *   the damage area so both series stay legible at a glance without a
+   *   second axis to read.
+   * - `xTicks`: `{x, second, label}`, label is `mm:ss` (one index == one
+   *   second, matching the `per_second` field name), a sensible fixed
+   *   count (<=6, less if there are fewer seconds than that).
+   * - `yTicks`: `{y, value, label}`, 5 evenly-spaced ticks from 0 to
+   *   max(squad damage), label k-formatted (see `formatK`).
+   *
+   * Degenerate inputs are handled explicitly rather than left to produce
+   * NaN/Infinity: zero seconds -> every array empty, both path strings
+   * empty. Exactly one second -> the single point is centered in the plot
+   * width (an x-scale needs >=2 points to have a "span"); the line path
+   * is a lone `M` moveto (no `L` segment -- there's nothing to connect).
+   */
+  function buildTimelinePaths(perSecond, w, h) {
+    var squad = (perSecond && perSecond.squad_damage) || [];
+    var cc = (perSecond && perSecond.cc_applied) || [];
+    var downs = (perSecond && perSecond.downs) || [];
+    var n = squad.length;
+
+    var m = TIMELINE_MARGIN;
+    var plotW = Math.max(0, w - m.left - m.right);
+    var plotH = Math.max(0, h - m.top - m.bottom);
+    var baseline = m.top + plotH;
+
+    if (n === 0) {
+      return { areaPath: "", linePath: "", downMarkers: [], ccBars: [], xTicks: [], yTicks: [] };
+    }
+
+    var yMax = 0;
+    for (var i = 0; i < n; i++) {
+      if (squad[i] > yMax) yMax = squad[i];
+    }
+    if (yMax <= 0) yMax = 1; // avoid /0 -- an all-zero fight still renders a flat baseline.
+
+    var ccMax = 0;
+    for (var j = 0; j < cc.length; j++) {
+      if (cc[j] > ccMax) ccMax = cc[j];
+    }
+    if (ccMax <= 0) ccMax = 1;
+
+    function xAt(idx) {
+      return n === 1 ? m.left + plotW / 2 : m.left + (idx / (n - 1)) * plotW;
+    }
+    function yAt(value) {
+      return baseline - (value / yMax) * plotH;
+    }
+
+    var linePoints = [];
+    for (var k = 0; k < n; k++) {
+      linePoints.push(xAt(k) + "," + yAt(squad[k]));
+    }
+    var linePath = "M" + linePoints.join("L");
+    var areaPath = linePath + "L" + xAt(n - 1) + "," + baseline + "L" + xAt(0) + "," + baseline + "Z";
+
+    var downMarkers = [];
+    for (var d = 0; d < n; d++) {
+      if (downs[d] > 0) {
+        downMarkers.push({ x: xAt(d), y: yAt(squad[d]), second: d, count: downs[d] });
+      }
+    }
+
+    var barW = n === 1 ? Math.min(24, plotW) : ((plotW / (n - 1)) * 0.6) || 0;
+    var ccBars = [];
+    for (var c = 0; c < n; c++) {
+      if (cc[c] > 0) {
+        var bh = (cc[c] / ccMax) * plotH;
+        ccBars.push({ x: xAt(c) - barW / 2, y: baseline - bh, width: barW, height: bh, second: c, value: cc[c] });
+      }
+    }
+
+    var tickCount = Math.min(6, n);
+    var xTicks = [];
+    for (var t = 0; t < tickCount; t++) {
+      var idx = tickCount === 1 ? 0 : Math.round((t * (n - 1)) / (tickCount - 1));
+      xTicks.push({ x: xAt(idx), second: idx, label: formatDuration(idx * 1000) });
+    }
+
+    var yTickCount = 5;
+    var yTicks = [];
+    for (var y = 0; y < yTickCount; y++) {
+      var value = (yMax * y) / (yTickCount - 1);
+      yTicks.push({ y: yAt(value), value: value, label: formatK(value) });
+    }
+
+    return { areaPath: areaPath, linePath: linePath, downMarkers: downMarkers, ccBars: ccBars, xTicks: xTicks, yTicks: yTicks };
+  }
+
   // ---- DOM glue --------------------------------------------------------
 
   function byId(id) {
@@ -515,12 +652,17 @@
 
     var thead = document.createElement("thead");
     var headRow = document.createElement("tr");
+    // `headerCells` pairs each column's <th> (the ARIA-correct home for
+    // `aria-sort` -- see the WAI-ARIA 1.2 spec's `aria-sort` entry, which
+    // defines the attribute on a columnheader/th, not an inner button)
+    // with its sort button/arrow, so `updateSortIndicators` below doesn't
+    // need a DOM query round-trip per rebuild.
+    var headerCells = [];
     columns.forEach(function (col) {
       var th = document.createElement("th");
       var btn = document.createElement("button");
       btn.type = "button";
       btn.className = "axilog-sort-btn";
-      btn.setAttribute("data-key", col.key);
       var label = document.createElement("span");
       label.textContent = col.label;
       btn.appendChild(label);
@@ -539,6 +681,7 @@
       });
       th.appendChild(btn);
       headRow.appendChild(th);
+      headerCells.push({ key: col.key, th: th, arrow: arrow });
     });
     thead.appendChild(headRow);
     table.appendChild(thead);
@@ -555,19 +698,15 @@
     container.appendChild(table);
 
     function updateSortIndicators() {
-      var buttons = headRow.querySelectorAll(".axilog-sort-btn");
-      for (var i = 0; i < buttons.length; i++) {
-        var btn = buttons[i];
-        var key = btn.getAttribute("data-key");
-        var arrow = btn.querySelector(".axilog-sort-arrow");
-        if (key === sortState.key) {
-          btn.setAttribute("aria-sort", sortState.direction === "asc" ? "ascending" : "descending");
-          arrow.textContent = sortState.direction === "asc" ? "↑" : "↓";
+      headerCells.forEach(function (cell) {
+        if (cell.key === sortState.key) {
+          cell.th.setAttribute("aria-sort", sortState.direction === "asc" ? "ascending" : "descending");
+          cell.arrow.textContent = sortState.direction === "asc" ? "↑" : "↓";
         } else {
-          btn.removeAttribute("aria-sort");
-          arrow.textContent = "";
+          cell.th.removeAttribute("aria-sort");
+          cell.arrow.textContent = "";
         }
-      }
+      });
     }
 
     function rebuild() {
@@ -699,6 +838,130 @@
     rebuildTable();
   }
 
+  var SVG_NS = "http://www.w3.org/2000/svg";
+
+  /** Create a namespaced SVG element with the given presentation
+   * attributes set. Thin DOM glue -- no derivation happens here, only
+   * assignment of values `buildTimelinePaths` already computed. */
+  function svgEl(name, attrs) {
+    var el = document.createElementNS(SVG_NS, name);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (key) {
+        el.setAttribute(key, attrs[key]);
+      });
+    }
+    return el;
+  }
+
+  /**
+   * Render the squad-damage timeline as an inline, responsive SVG (fixed
+   * `TIMELINE_WIDTH`x`TIMELINE_HEIGHT` viewBox, `width: 100%` in CSS so it
+   * scales to the container) into `container`, from
+   * `report.timeline.per_second`. All colors come from CSS custom
+   * properties via class names (see report.css's `.axilog-timeline-*`
+   * rules) so the chart re-themes with the existing dark/light toggle
+   * without any JS involvement.
+   */
+  function renderTimeline(container, report) {
+    container.textContent = "";
+
+    var perSecond = report.timeline && report.timeline.per_second;
+    if (!perSecond || !perSecond.squad_damage || perSecond.squad_damage.length === 0) {
+      var empty = document.createElement("p");
+      empty.className = "axilog-timeline-empty";
+      empty.textContent = "No timeline data for this encounter.";
+      container.appendChild(empty);
+      return;
+    }
+
+    var paths = buildTimelinePaths(perSecond, TIMELINE_WIDTH, TIMELINE_HEIGHT);
+    var m = TIMELINE_MARGIN;
+
+    var svg = svgEl("svg", {
+      viewBox: "0 0 " + TIMELINE_WIDTH + " " + TIMELINE_HEIGHT,
+      width: "100%",
+      height: TIMELINE_HEIGHT,
+      class: "axilog-timeline-svg",
+      role: "img",
+      "aria-label": "Squad damage over time, with downs and CC-applied overlay",
+    });
+
+    // y-axis gridlines + labels (drawn first, furthest back).
+    paths.yTicks.forEach(function (t) {
+      svg.appendChild(
+        svgEl("line", {
+          x1: m.left,
+          x2: TIMELINE_WIDTH - m.right,
+          y1: t.y,
+          y2: t.y,
+          class: "axilog-timeline-gridline",
+        })
+      );
+      var yLabel = svgEl("text", {
+        x: m.left - 8,
+        y: t.y,
+        class: "axilog-timeline-axis-label",
+        "text-anchor": "end",
+        "dominant-baseline": "middle",
+      });
+      yLabel.textContent = t.label;
+      svg.appendChild(yLabel);
+    });
+
+    // cc_applied translucent bar overlay, behind the damage area/line.
+    paths.ccBars.forEach(function (bar) {
+      var rect = svgEl("rect", {
+        x: bar.x,
+        y: bar.y,
+        width: bar.width,
+        height: bar.height,
+        class: "axilog-timeline-cc-bar",
+      });
+      var title = svgEl("title", {});
+      title.textContent =
+        "CC applied at " + formatDuration(bar.second * 1000) + ": " + formatThousands(bar.value);
+      rect.appendChild(title);
+      svg.appendChild(rect);
+    });
+
+    // squad damage: filled area (primary series) + outline.
+    if (paths.areaPath) {
+      svg.appendChild(svgEl("path", { d: paths.areaPath, class: "axilog-timeline-area" }));
+    }
+    if (paths.linePath) {
+      svg.appendChild(svgEl("path", { d: paths.linePath, class: "axilog-timeline-line" }));
+    }
+
+    // downs markers, on top of the line.
+    paths.downMarkers.forEach(function (mk) {
+      var circle = svgEl("circle", {
+        cx: mk.x,
+        cy: mk.y,
+        r: 4,
+        class: "axilog-timeline-down-marker",
+      });
+      var title = svgEl("title", {});
+      title.textContent =
+        "Down at " + formatDuration(mk.second * 1000) + (mk.count > 1 ? " (x" + mk.count + ")" : "");
+      circle.appendChild(title);
+      svg.appendChild(circle);
+    });
+
+    // x-axis labels.
+    paths.xTicks.forEach(function (t) {
+      var xLabel = svgEl("text", {
+        x: t.x,
+        y: TIMELINE_HEIGHT - m.bottom + 16,
+        class: "axilog-timeline-axis-label",
+        "text-anchor": "middle",
+      });
+      xLabel.textContent = t.label;
+      svg.appendChild(xLabel);
+    });
+
+    container.appendChild(svg);
+  }
+
   var TAB_DEFS = [
     { id: "damage", buttonId: "axilog-tab-damage", panelId: "axilog-view-damage", render: renderDamageView },
     { id: "support", buttonId: "axilog-tab-support", panelId: "axilog-view-support", render: renderSupportView },
@@ -771,6 +1034,7 @@
     var report = readEmbeddedReport();
     renderHeader(report);
     initTabs(report);
+    renderTimeline(byId("axilog-timeline-chart"), report);
 
     var toggle = byId("axilog-theme-toggle");
     if (toggle) {
@@ -794,6 +1058,7 @@
     formatStacks: formatStacks,
     formatSecondsFromMs: formatSecondsFromMs,
     formatDuration: formatDuration,
+    formatK: formatK,
     // sorting
     sortRows: sortRows,
     // header / team chips
@@ -819,6 +1084,10 @@
     GENERATION_DEFAULT_MODE: GENERATION_DEFAULT_MODE,
     PRESENCE_BOON_NAMES: PRESENCE_BOON_NAMES,
     GENERATION_BOON_NAMES: GENERATION_BOON_NAMES,
+    // timeline
+    buildTimelinePaths: buildTimelinePaths,
+    TIMELINE_WIDTH: TIMELINE_WIDTH,
+    TIMELINE_HEIGHT: TIMELINE_HEIGHT,
   };
 });
 

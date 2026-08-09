@@ -185,6 +185,20 @@ mod tests {
         assert!(html.matches(r#"role="tabpanel""#).count() == 3);
     }
 
+    /// Task 3: the SVG damage timeline's section/heading/chart-mount
+    /// containers must be present in the skeleton so `report.js`'s
+    /// `renderTimeline` has somewhere to mount the (client-side-built) SVG
+    /// -- structural check, mirrors `contains_view_containers_and_tab_bar`
+    /// above. Full data-driven golden coverage (real fixture, calibrated
+    /// totals) lives in `tests/golden_html.rs`.
+    #[test]
+    fn contains_timeline_containers() {
+        let html = render(&fixture_report());
+        for id in ["axilog-timeline-section", "axilog-timeline-heading", "axilog-timeline-chart"] {
+            assert!(html.contains(&format!(r#"id="{id}""#)), "missing timeline container id {id}");
+        }
+    }
+
     /// Task 2: `report.js` is static, so the column layout for each view
     /// is pinned by asserting the inlined asset text contains every
     /// column's data key / label, per the plan's "tests assert the asset
@@ -221,6 +235,11 @@ mod tests {
             "\"Resistance\"", "\"self\"", "\"group\"", "\"squad\"",
         ] {
             assert!(JS.contains(needle), "report.js missing boons column marker {needle}");
+        }
+        // Timeline (Task 3): the pure path-builder and its DOM-glue
+        // renderer must both ship.
+        for needle in ["buildTimelinePaths", "renderTimeline", "downMarkers", "ccBars", "xTicks", "yTicks"] {
+            assert!(JS.contains(needle), "report.js missing timeline marker {needle}");
         }
     }
 
@@ -259,8 +278,18 @@ mod tests {
     #[test]
     fn no_external_urls() {
         let html = render(&fixture_report());
-        assert!(!html.contains("http://"), "output must not reference external URLs");
-        assert!(!html.contains("https://"), "output must not reference external URLs");
+        // Exempt the SVG namespace URI (Task 3's inline timeline chart uses
+        // `document.createElementNS("http://www.w3.org/2000/svg", ...)`,
+        // required by the DOM spec to create SVG elements). It's a fixed
+        // XML namespace *identifier*, not a network request -- no browser
+        // ever dereferences/fetches it, the same way `xmlns="..."` on a raw
+        // `<svg>` element wouldn't cause a request. Strip it out before
+        // scanning for genuine external-URL references (stylesheet hrefs,
+        // script srcs, image/font URLs, fetch calls, ...), which the rest
+        // of this test still forbids.
+        let scanned = html.replace("http://www.w3.org/2000/svg", "");
+        assert!(!scanned.contains("http://"), "output must not reference external URLs");
+        assert!(!scanned.contains("https://"), "output must not reference external URLs");
     }
 
     /// Regression test for a render-breaking bug: `report.js`/`report.css`

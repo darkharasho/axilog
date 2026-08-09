@@ -93,6 +93,7 @@ dependencies = [
 name = "axilog-html"
 version = "0.1.0"
 dependencies = [
+ "axilog-core",
  "axilog-schema",
  "serde_json",
 ]
