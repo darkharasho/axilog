@@ -8,11 +8,17 @@ name: Release
 # workflow was triggered EXCEPT the two jobs that have externally-visible
 # side effects -- `release` (creates/updates a GitHub Release) and
 # `npm-publish` (publishes to the npm registry) -- which are gated with
-# `if: startsWith(github.ref, 'refs/tags/')` so a manual dispatch off a
-# branch builds, packages, and runs the install-shape validation, but never
-# creates a release or publishes a package. This lets the whole pipeline be
-# exercised on-demand (e.g. to catch a toolchain regression) without
-# needing to cut a real tag.
+# `if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')`.
+# Invariant: publish/release only happens on a tag PUSH event.
+# `startsWith(github.ref, 'refs/tags/')` alone is NOT sufficient -- a
+# workflow_dispatch run can be started against an existing tag ref (e.g.
+# `gh workflow run release.yml --ref v0.1.0`, such as retrying a failed
+# release), which also resolves `github.ref` to `refs/tags/v0.1.0`. Without
+# the `github.event_name == 'push'` conjunct, that dispatch would pass a
+# ref-shape-only gate and publish/release for real. With it,
+# workflow_dispatch ALWAYS dry-runs (build+pack+validate only), regardless
+# of what ref it's pointed at -- only an actual tag push creates a release
+# or publishes to npm.
 #
 # ci.yml (branch push / PR) is untouched and unrelated to this workflow.
 on:
@@ -318,16 +324,22 @@ jobs:
           "
 
   # Gated npm publish (M8 Task 2). Never runs on a workflow_dispatch dry run
-  # (job-level ref gate, same pattern as `release` below); on a real tag
-  # push it still only publishes if the NPM_TOKEN repository secret is
+  # (job-level event+ref gate, same pattern as `release` below); on a real
+  # tag PUSH it still only publishes if the NPM_TOKEN repository secret is
   # configured -- otherwise it logs a clear skip message and exits 0. NEVER
   # requires or embeds real credentials for this to succeed locally/in CI
   # without the secret.
+  #
+  # The gate checks `github.event_name == 'push'` in addition to the ref
+  # shape: `startsWith(github.ref, 'refs/tags/')` alone is satisfied by a
+  # workflow_dispatch run pointed at an existing tag (e.g.
+  # `gh workflow run release.yml --ref v0.1.0`), which would otherwise
+  # publish for real on what's meant to be a dry run.
   npm-publish:
     name: Publish npm packages (gated)
     needs: [npm-pack-main, addon-build, npm-install-shape]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
@@ -364,10 +376,14 @@ jobs:
     name: Create GitHub Release
     needs: [build, npm-pack-main, addon-build, npm-install-shape]
     runs-on: ubuntu-latest
-    # Never runs on a workflow_dispatch dry run -- only a real `v*` tag push
-    # creates/updates a GitHub Release. See the workflow-level comment above
-    # for the full dry-run rationale.
-    if: startsWith(github.ref, 'refs/tags/')
+    # Never runs on a workflow_dispatch dry run -- only a real `v*` tag PUSH
+    # creates/updates a GitHub Release. `github.event_name == 'push'` is
+    # required alongside the ref-shape check: a workflow_dispatch run
+    # started against an existing tag ref also satisfies
+    # `startsWith(github.ref, 'refs/tags/')` on its own, which would
+    # otherwise create a real release on what's meant to be a dry run. See
+    # the workflow-level comment above for the full dry-run rationale.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
 
