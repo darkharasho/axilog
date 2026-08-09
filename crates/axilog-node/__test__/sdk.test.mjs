@@ -205,6 +205,39 @@ test('parseFile: timeseries opt-in (M12 Task 2) -- per_second AND dps_targets bo
   assert.equal(explicitlyOff.players[0].dps_targets, undefined)
 })
 
+test('parseFile: missiles opt-in -- absent by default, present + shaped when requested', () => {
+  const without = sdk.parseFile(FIXTURE)
+  assert.equal(without.missiles, undefined, 'missiles must be absent by default')
+
+  const withIt = sdk.parseFile(FIXTURE, { missiles: true })
+  assert.ok(withIt.missiles, 'expected a missiles block when { missiles: true }')
+  assert.ok(Array.isArray(withIt.missiles.players))
+  assert.ok(withIt.missiles.squad, 'expected a squad missiles rollup')
+  assert.equal(typeof withIt.missiles.squad.fired, 'number')
+  assert.equal(typeof withIt.missiles.squad.hit, 'number')
+  assert.equal(typeof withIt.missiles.squad.denied, 'number')
+  assert.equal(typeof withIt.missiles.squad.incoming_fired, 'number')
+  assert.equal(typeof withIt.missiles.squad.incoming_denied, 'number')
+
+  // opts.missiles: false must behave the same as omitting opts entirely.
+  const explicitlyOff = sdk.parseFile(FIXTURE, { missiles: false })
+  assert.equal(explicitlyOff.missiles, undefined)
+})
+
+test('parseFileEi: accepts the same ParseOptions as parseFile -- skillDamage/timeseries surface totalDamageDist/damage1S; default omits both', () => {
+  const withoutOpts = sdk.parseFileEi(FIXTURE)
+  const p0Without = withoutOpts.players[0]
+  assert.equal(p0Without.totalDamageDist, undefined, 'totalDamageDist must be absent by default (back-compat)')
+  assert.equal(p0Without.damage1S, undefined, 'damage1S must be absent by default (back-compat)')
+
+  const withOpts = sdk.parseFileEi(FIXTURE, { skillDamage: true, timeseries: true })
+  const p0With = withOpts.players.find((p) => Array.isArray(p.totalDamageDist) && p.totalDamageDist[0]?.length > 0)
+  assert.ok(p0With, 'expected at least one player with a non-empty totalDamageDist when { skillDamage: true }')
+  assert.ok(Array.isArray(p0With.totalDamageDist))
+  assert.ok(Array.isArray(p0With.damage1S), 'expected damage1S when { timeseries: true }')
+  assert.ok(p0With.damage1S[0].length > 0, 'expected a non-empty per-second series inside damage1S\'s phase wrapper')
+})
+
 test('parseFileEi: axibridge-read key shapes', () => {
   const ei = sdk.parseFileEi(FIXTURE)
 

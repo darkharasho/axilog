@@ -273,6 +273,70 @@ class TimeseriesOptInTests(unittest.TestCase):
         self.assertIn("dps_targets", bytes_with_it["players"][0])
 
 
+class MissilesOptInTests(unittest.TestCase):
+    """final-review fix wave: `missiles=True` opts into the native
+    top-level missile analytics block; absent by default. Mirrors
+    `crates/axilog-node/__test__/sdk.test.mjs`'s equivalent test."""
+
+    def test_missiles_absent_by_default_present_and_shaped_when_requested(self):
+        without = axilog.parse_file(FIXTURE)
+        self.assertNotIn("missiles", without)
+
+        with_it = axilog.parse_file(FIXTURE, missiles=True)
+        self.assertIn("missiles", with_it)
+        missiles = with_it["missiles"]
+        self.assertIsInstance(missiles["players"], list)
+        self.assertIn("squad", missiles)
+        squad = missiles["squad"]
+        self.assertIsInstance(squad["fired"], int)
+        self.assertIsInstance(squad["hit"], int)
+        self.assertIsInstance(squad["denied"], int)
+        self.assertIsInstance(squad["incoming_fired"], int)
+        self.assertIsInstance(squad["incoming_denied"], int)
+
+        explicitly_off = axilog.parse_file(FIXTURE, missiles=False)
+        self.assertNotIn("missiles", explicitly_off)
+
+
+class ParseFileEiOptInTests(unittest.TestCase):
+    """final-review fix wave: `parse_file_ei` accepts the same
+    replay/skill_damage/timeseries/missiles keyword args `parse_file` does
+    -- `skill_damage=True`/`timeseries=True` are what let
+    `totalDamageDist`/`damage1S` surface in the ei-json output (see
+    `axilog_ei::to_ei_json`, which reads them straight off the native
+    `Report`). Default call (no kwargs) must keep omitting both -- the
+    back-compat requirement. Mirrors `crates/axilog-node/__test__/
+    sdk.test.mjs`'s equivalent test."""
+
+    def test_skill_damage_and_timeseries_surface_only_when_requested(self):
+        without_opts = axilog.parse_file_ei(FIXTURE)
+        p0_without = without_opts["players"][0]
+        self.assertNotIn("totalDamageDist", p0_without)
+        self.assertNotIn("damage1S", p0_without)
+
+        with_opts = axilog.parse_file_ei(FIXTURE, skill_damage=True, timeseries=True)
+        p0_with = next(
+            (
+                p
+                for p in with_opts["players"]
+                if p.get("totalDamageDist") and len(p["totalDamageDist"][0]) > 0
+            ),
+            None,
+        )
+        self.assertIsNotNone(
+            p0_with,
+            "expected at least one player with a non-empty totalDamageDist "
+            "when skill_damage=True",
+        )
+        self.assertIsInstance(p0_with["totalDamageDist"], list)
+        self.assertIn("damage1S", p0_with)
+        self.assertGreater(
+            len(p0_with["damage1S"][0]),
+            0,
+            "expected a non-empty per-second series inside damage1S's phase wrapper",
+        )
+
+
 class ParseBytesTests(unittest.TestCase):
     def test_parse_bytes_matches_parse_file(self):
         from_file = axilog.parse_file(FIXTURE)

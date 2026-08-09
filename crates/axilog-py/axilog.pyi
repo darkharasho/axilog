@@ -395,10 +395,9 @@ class SquadMissilesOut(TypedDict):
     incoming_denied: int
 
 class MissilesOut(TypedDict):
-    """Opt-in missile (projectile) analytics, native-only. Not yet
-    requestable through this Python SDK's `parse_file`/`parse_bytes`
-    (neither has a `missiles` parameter) -- declared here so the type
-    surface matches what `axilog_schema::Report` can produce."""
+    """Opt-in missile (projectile) analytics, native-only. Requestable via
+    `parse_file`/`parse_bytes`'s `missiles=True` keyword arg (final-review
+    fix wave)."""
 
     players: List[PlayerMissilesOut]
     squad: SquadMissilesOut
@@ -416,8 +415,8 @@ class _ReportRequired(TypedDict):
 class Report(_ReportRequired, total=False):
     """`warnings` is omitted (not `[]`) when there are no analysis warnings.
     `replay` is omitted (not `None`) unless requested via `replay=True`.
-    `missiles` is omitted (not `None`) -- always, until this SDK grows a
-    `missiles=True` parameter to request it."""
+    `missiles` (final-review fix wave) is omitted (not `None`) unless
+    requested via `missiles=True` (see `parse_file`/`parse_bytes`)."""
 
     warnings: List[str]
     replay: ReplayOut
@@ -425,7 +424,13 @@ class Report(_ReportRequired, total=False):
 
 # --- module functions -----------------------------------------------------
 
-def parse_file(path: str, replay: bool = False, skill_damage: bool = False, timeseries: bool = False) -> Report:
+def parse_file(
+    path: str,
+    replay: bool = False,
+    skill_damage: bool = False,
+    timeseries: bool = False,
+    missiles: bool = False,
+) -> Report:
     """Parse a `.evtc`/`.zevtc` file at `path` into the native `Report` shape.
 
     `replay` (M9, Task 2) opts into embedding the native combat-replay
@@ -434,28 +439,54 @@ def parse_file(path: str, replay: bool = False, skill_damage: bool = False, time
     `players[]` entry (`PlayerOut["skill_damage"]`). `timeseries` (M12,
     Task 2) opts into embedding the native per-player per-second series
     block AND the per-enemy `dps_targets` summary (`PlayerOut["per_second"]`/
-    `PlayerOut["dps_targets"]`). All three default to `False`.
+    `PlayerOut["dps_targets"]`). `missiles` (final-review fix wave) opts
+    into embedding the native top-level missile analytics block
+    (`Report["missiles"]`), mirroring the CLI's `--missiles` flag. All four
+    default to `False`.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.
     """
     ...
 
-def parse_bytes(data: bytes, replay: bool = False, skill_damage: bool = False, timeseries: bool = False) -> Report:
+def parse_bytes(
+    data: bytes,
+    replay: bool = False,
+    skill_damage: bool = False,
+    timeseries: bool = False,
+    missiles: bool = False,
+) -> Report:
     """Parse an already-read `.evtc`/`.zevtc` buffer into the native `Report` shape.
 
     `replay` (M9, Task 2) opts into embedding the native combat-replay block.
     `skill_damage` (M12, Task 1) opts into embedding the native per-skill
     damage distribution block. `timeseries` (M12, Task 2) opts into
     embedding the native per-player per-second series block AND the
-    per-enemy `dps_targets` summary.
+    per-enemy `dps_targets` summary. `missiles` (final-review fix wave)
+    opts into embedding the native top-level missile analytics block.
 
     Raises `ValueError` if `data` is not a decodable/parseable arcdps log.
     """
     ...
 
-def parse_file_ei(path: str) -> Dict[str, Any]:
+def parse_file_ei(
+    path: str,
+    *,
+    replay: bool = False,
+    skill_damage: bool = False,
+    timeseries: bool = False,
+    missiles: bool = False,
+) -> Dict[str, Any]:
     """Parse a `.evtc`/`.zevtc` file at `path` into Elite Insights-compatibility JSON.
+
+    `skill_damage`/`timeseries` (final-review fix wave, keyword-only) are
+    what actually let `totalDamageDist`/`damage1S`/`dpsTargets`/etc (M12,
+    Task 3's ei-json mapping) surface in the returned JSON -- previously
+    this function always omitted them regardless of caller intent.
+    `replay`/`missiles` are accepted for signature parity with `parse_file`
+    but have no effect on the output (EI's JSON shape has no comparable
+    field for either). All four default to `False`, keeping
+    `parse_file_ei(path)` back-compatible.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.

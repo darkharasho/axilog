@@ -382,9 +382,8 @@ export interface SquadMissilesOut {
 /**
  * Opt-in missile (projectile) analytics (M10, Task 2), native-only --
  * present only when the caller opted in (CLI `--missiles` / SDK
- * `missiles: true`). Not yet exposed via this Node SDK's `ParseOptions`
- * (see that interface's doc comment) -- declared here so the type surface
- * matches the schema `axilog_schema::Report` can actually produce.
+ * `{ missiles: true }`, see `ParseOptions.missiles`, added final-review
+ * fix wave).
  */
 export interface MissilesOut {
   players: PlayerMissilesOut[]
@@ -407,11 +406,9 @@ export interface Report {
   /** Opt-in combat-replay block (M9, Task 2) -- present only when requested via `{ replay: true }`. Omitted entirely (not `null`) otherwise. */
   replay?: ReplayOut
   /**
-   * Opt-in missile (projectile) analytics block (M10, Task 2). Not yet
-   * requestable through this Node SDK (`ParseOptions` has no `missiles`
-   * flag) -- declared `?` here purely so the type surface matches what
-   * `axilog_schema::Report` can produce; always omitted (`undefined`) in
-   * practice until the SDK grows that flag.
+   * Opt-in missile (projectile) analytics block (M10, Task 2) -- present
+   * only when requested via `{ missiles: true }` (`ParseOptions.missiles`,
+   * added final-review fix wave). Omitted entirely (not `null`) otherwise.
    */
   missiles?: MissilesOut
 }
