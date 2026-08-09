@@ -9,7 +9,7 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
 ## Done (merged to main)
 - M1 WvW core · M2 polish · M3 boons/support · M4 post-rework era · M5 Node SDK · M6 Python SDK
 - M7 HTML report · M8 release pipeline · M9 combat replay · M10 healing/missiles/polish
-- v0.1.0 tagged (release pipeline first run)
+- **v0.1.0 RELEASED** — GitHub Release with 22 assets (5 CLI binaries+checksums, 6 npm tarballs, 4 wheels+sdist); publish steps gated no-ops (no tokens)
 - M11 contribution family + axibridge tier-1
 - M12 per-skill (totalDamageDist EXACT vs EI) + per-second (damage1S, --timeseries gate) + dpsTargets + ei-json mapping + SDK ei options
 - CI: x86_64-apple-darwin cross-compiles on arm64 (macos-13 retired); ci concurrency-cancel
