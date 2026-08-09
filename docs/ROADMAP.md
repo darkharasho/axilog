@@ -10,10 +10,10 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
 - M1 WvW core · M2 polish · M3 boons/support · M4 post-rework era · M5 Node SDK · M6 Python SDK
 - M7 HTML report · M8 release pipeline · M9 combat replay · M10 healing/missiles/polish
 - v0.1.0 tagged (release pipeline first run)
+- M11 contribution family (arcdps-methodology down/CC/strip/move-impair, health tracking, schema 0.2) + axibridge tier-1 (isFake, replay down/dead intervals, activeTimes 0.0000%%)
 
 ## In flight
-- M11 contribution family (arcdps-methodology down/CC/strip/move-impair, health tracking, schema
-  0.2) + axibridge tier-1 ei-json (isFake, replay intervals, activeTimes)
+- M12 Per-skill + per-second detail (see Queued)
 
 ## Queued (autonomous — build in order; reorder only for dependency)
 - M12 Per-skill + per-second detail: `totalDamageDist`/`targetDamageDist`/`totalDamageTaken`
