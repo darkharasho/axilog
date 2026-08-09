@@ -1,0 +1,20 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "axilog"
+version = "0.1.0"
+description = "Python bindings (PyO3) for axilog's Rust GW2 arcdps WvW parsing core"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+# The compiled extension module (see src/lib.rs's `#[pymodule] fn axilog`)
+# is the whole package -- no separate Python source tree.
+module-name = "axilog"
+features = ["pyo3/extension-module"]
