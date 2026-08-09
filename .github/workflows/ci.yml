@@ -5,6 +5,15 @@ on:
     branches: [main]
   pull_request:
 
+# Superseded runs (e.g. new commits pushed to an open PR, or a fast-follow
+# push to main) auto-cancel their still-running predecessor rather than
+# competing with it for the shared GitHub-hosted runner pool -- macos
+# runners in particular are frequently backlogged, and letting stale runs
+# pile up there starves the run that actually matters.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     name: build+test (${{ matrix.target }})
@@ -19,7 +28,21 @@ jobs:
             target: x86_64-pc-windows-msvc
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-13
+          # x86_64-apple-darwin is cross-compiled on the same macos-latest
+          # (Apple Silicon / aarch64 host) runner as the leg above, rather
+          # than on a native Intel (macos-13) runner. GitHub is retiring
+          # macos-13 and its runner pool has been severely backlogged, which
+          # left this target's jobs stuck queued indefinitely. Apple's
+          # toolchain (clang/ld64) cross-links x86_64-apple-darwin cleanly
+          # from an arm64 host once the target is installed via rustup (see
+          # `targets: ${{ matrix.target }}` below, which resolves to
+          # `x86_64-apple-darwin` for this specific matrix entry -- the
+          # toolchain step always keeps the host's native target available
+          # in addition to whatever `matrix.target` adds, so no separate
+          # "install both" step is needed). `cargo build --target
+          # x86_64-apple-darwin` below then produces a real x86_64 Mach-O
+          # binary, just built on arm64 hardware instead of x86_64 hardware.
+          - os: macos-latest
             target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4

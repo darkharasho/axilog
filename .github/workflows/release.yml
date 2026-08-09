@@ -79,10 +79,18 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-          # Matches ci.yml's os/target pairing: macos-13 is the last Intel
-          # runner image (native x86_64), macos-latest is Apple Silicon
-          # (native aarch64) -- both targets build natively, no cross needed.
-          - os: macos-13
+          # Matches ci.yml's os/target pairing: both apple-darwin legs run on
+          # macos-latest (Apple Silicon / aarch64 host). macos-13 (the last
+          # Intel runner image) is retired here -- GitHub's macos-13 pool was
+          # severely backlogged and blocked v0.1.0 indefinitely. Apple's
+          # toolchain cross-compiles x86_64-apple-darwin cleanly from an
+          # arm64 host once the target is installed (`targets: ${{
+          # matrix.target }}` below covers each leg's own target; the host's
+          # native aarch64 target is always implicitly available alongside
+          # it), so `cargo build --release -p axilog-cli --target
+          # x86_64-apple-darwin` below produces a real x86_64 Mach-O binary
+          # without needing x86_64 hardware.
+          - os: macos-latest
             target: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -145,12 +153,14 @@ jobs:
   # pure-Rust workspace crates the CLI links (napi/napi-derive/napi-build
   # are pure Rust too; the compiled .node is a plain ELF cdylib, no libnode
   # link requirement on Linux). That combination (native addon build on
-  # linux-x64-gnu, windows-latest, macos-13, macos-latest; bare-toolchain
-  # cross build on linux-arm64-gnu) was only exercised end-to-end locally
-  # for the native linux-x64-gnu leg (see the Task 2 report) -- there is no
-  # aarch64 cross toolchain available in the local dev sandbox this was
-  # authored in, so the cross leg mirrors the CLI job's already-working
-  # recipe rather than being independently re-verified locally.
+  # linux-x64-gnu, windows-latest, macos-latest/aarch64-apple-darwin;
+  # bare-toolchain cross build on linux-arm64-gnu; napi-rs cross build on
+  # macos-latest/x86_64-apple-darwin -- see that matrix entry's comment)
+  # was only exercised end-to-end locally for the native linux-x64-gnu leg
+  # (see the Task 2 report) -- there is no aarch64 cross toolchain available
+  # in the local dev sandbox this was authored in, so the cross legs mirror
+  # the CLI job's already-working recipes rather than being independently
+  # re-verified locally.
   addon-build:
     name: Build npm addon (${{ matrix.platform }})
     needs: version-guard
@@ -168,7 +178,15 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             platform: win32-x64-msvc
-          - os: macos-13
+          # darwin-x64 is cross-compiled on macos-latest (arm64 host) --
+          # macos-13 (Intel) is retired, see the `build` job's matrix comment
+          # above for why. napi-rs's `napi build` cross-compiles to
+          # x86_64-apple-darwin the same way `cargo build` does: given the
+          # rust target installed (`targets: ${{ matrix.target }}` below) and
+          # `--target x86_64-apple-darwin` passed explicitly (see the "Build
+          # addon" step further down), Apple's toolchain links it on the
+          # arm64 host without needing x86_64 hardware.
+          - os: macos-latest
             target: x86_64-apple-darwin
             platform: darwin-x64
           - os: macos-latest
@@ -326,10 +344,12 @@ jobs:
   # Python wheel builds (M8 Task 3). abi3 (pyo3 "abi3-py39" feature, see
   # crates/axilog-py/Cargo.toml) means a single wheel per platform covers
   # every CPython >=3.9 -- no per-Python-minor matrix legs needed, unlike a
-  # non-abi3 extension. Four native legs (no cross-compile target here,
-  # unlike the CLI/addon matrices' aarch64-linux leg): ubuntu-latest/x86_64,
-  # windows-latest/x86_64, macos-13/x86_64 (last Intel runner image),
-  # macos-latest/aarch64 (Apple Silicon). aarch64-unknown-linux-gnu is
+  # non-abi3 extension. Four legs: ubuntu-latest/x86_64 (native),
+  # windows-latest/x86_64 (native), macos-latest/x86_64-apple-darwin
+  # (cross-compiled on the arm64 host via `maturin build --target
+  # x86_64-apple-darwin` -- macos-13, the last Intel runner image, is
+  # retired; see the `build` job's matrix comment above for why), and
+  # macos-latest/aarch64 (native, Apple Silicon). aarch64-unknown-linux-gnu is
   # intentionally NOT built here -- maturin's manylinux compatibility
   # auditing (see below) needs to run ON the target architecture to inspect
   # the produced ELF's actual linked symbol versions, and there is no
@@ -360,7 +380,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
