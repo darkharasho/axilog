@@ -18,7 +18,17 @@ pub struct Player { pub agent_addr: u64, pub account: String, pub character: Str
     /// (Task 7, M2, arcdps-dev guidance item 5). Kept alongside `commander`
     /// above (which stays a plain presence bool for compatibility);
     /// `commander_tag` is the native-only richer form. `None` when the
-    /// player has no commander tag.
+    /// player never held a commander tag anywhere in the log.
+    ///
+    /// M4 post-rework EI-parity fix: prefers a still-open commander-tag
+    /// instance (sharpest "who's commander right now"), but falls back to
+    /// the most recent one ever observed even if since removed with no
+    /// reassignment -- matching GW2EI's own `Player.IsCommander`/
+    /// `hasCommanderTag`, which is "was this player EVER assigned a
+    /// commander-tag marker in the log" rather than "is one still open at
+    /// the log's last event". See `wvw::markers::MarkerResolution::
+    /// ever_commander`'s doc comment for the real-log finding that drove
+    /// this.
     pub commander_tag: Option<CommanderTag>,
     /// Every raw agent addr observed for this account (relogs / build
     /// swaps each get a new addr from arcdps). `agent_addr` above is the

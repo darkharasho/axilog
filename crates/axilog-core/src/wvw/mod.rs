@@ -252,15 +252,49 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         });
     }
 
-    // `enc.enemies` now holds the enemy players just moved in above, plus
-    // every NPC/gadget agent (model::resolve puts them all there
-    // unconditionally). Keep only the hostile ones: agents on a known,
-    // non-friendly team. NPCs/gadgets with no team record at all are
-    // dropped as neutral — they are not foes and would otherwise inflate
-    // squad damage totals.
+    // M4 post-rework real-log calibration finding: objective NPCs (Keep/
+    // Camp/Tower Lords) can emit a SECOND `TEAM_CHANGE` mid-recording when
+    // the objective flips ownership (e.g. the squad captures the keep the
+    // Lord belongs to). `agent_team` above is a static last-write-wins map
+    // (`resolve_teams`), so an agent whose *final* recorded team happens to
+    // equal `friendly_team` reads as "ours" for its ENTIRE presence in the
+    // log — including the damage dealt to it while it was still on a
+    // hostile team, before the flip. Verified against a real post-rework
+    // WvW capture (`fixtures/local/wvw-postrework.zevtc`): its Keep Lord
+    // had `TEAM_CHANGE` to team 433 (hostile) followed ~0.5s later by
+    // `TEAM_CHANGE` to 2767 (the recorder's own team), so the static map
+    // resolved it as friendly and this retain dropped it entirely — even
+    // though arcdps' own per-event `iff` byte tagged every one of the
+    // 7144 combat events targeting it as FOE (`iff == 1`) throughout the
+    // whole ~5m48s fight. That single dropped NPC accounted for ~6.3M of
+    // the ~6.4M squadTotalDamage gap against the EI golden JSON (98%+ of
+    // the miss).
+    //
+    // Fix: for NPC/gadget agents, trust arcdps' own per-event `iff` (Foe)
+    // on combat events squad members dealt to them as an override signal,
+    // the same "iff is more reliable than a static team lookup" precedent
+    // `analysis::damage::accumulate_pet_credit`'s docs already establish
+    // for pet/minion damage attribution. An NPC/gadget that squad members
+    // ever landed an `iff == FOE` hit on is kept as hostile regardless of
+    // what its LAST `TEAM_CHANGE` says; only agents with neither iff
+    // evidence nor a non-friendly static team fall back to the pre-existing
+    // "no team record at all => drop as neutral" rule (still needed so
+    // truly friendly-side untracked NPCs -- our own siege, pets, guards --
+    // don't inflate squad damage totals).
+    let squad_addrs: std::collections::BTreeSet<u64> =
+        enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
+    let iff_confirmed_hostile_npcs: std::collections::BTreeSet<u64> = raw
+        .events
+        .iter()
+        .filter(|e| e.is_statechange == 0 && e.iff == 1 && squad_addrs.contains(&e.src_agent))
+        .map(|e| e.dst_agent)
+        .collect();
     enc.enemies.retain(|en| {
         if en.is_player {
             return true; // already resolved above
+        }
+        if iff_confirmed_hostile_npcs.contains(&en.id) {
+            return true;
         }
         match agent_team.get(&en.id) {
             Some(&t) => friendly_team.map(|ft| t != ft).unwrap_or(true),
@@ -288,7 +322,8 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     let marker_res = markers::resolve_markers(raw);
     for p in &mut enc.players {
         p.marker = markers::final_marker(&marker_res.open, &p.agent_addrs);
-        p.commander_tag = markers::final_commander_tag(&marker_res.open, &p.agent_addrs);
+        p.commander_tag =
+            markers::final_commander_tag(&marker_res.open, &marker_res.ever_commander, &p.agent_addrs);
         p.commander = p.commander_tag.is_some();
     }
     for en in &mut enc.enemies {
@@ -374,6 +409,136 @@ mod tests {
         let mut addrs = enc.players[0].agent_addrs.clone();
         addrs.sort_unstable();
         assert_eq!(addrs, vec![1, 2]);
+    }
+
+    /// Synthetic direct-damage combat event (`is_statechange == 0`),
+    /// mirroring the shape `analysis::damage::accumulate` reads.
+    fn strike(src: u64, dst: u64, iff: u8, value: i32) -> RawEvent {
+        RawEvent { time: 0, src_agent: src, dst_agent: dst, value, buff_dmg: 0,
+            overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
+            src_master_instid: 0, dst_master_instid: 0, iff, buff: 0, result: 0,
+            is_activation: 0, is_buffremove: 0, is_statechange: 0, is_shields: 0, is_offcycle: 0 }
+    }
+
+    /// M4 post-rework real-log finding: an objective NPC (Keep/Camp/Tower
+    /// Lord) whose LAST recorded `TEAM_CHANGE` happens to equal the
+    /// recorder's own team (e.g. the objective flips to the squad's color
+    /// moments after the Lord's own team briefly registered) must still be
+    /// classified as a hostile enemy, since arcdps' own per-event `iff`
+    /// tags squad-sourced hits on it as FOE throughout. The static
+    /// last-write-wins `agent_team` map alone would wrongly drop it as
+    /// "friendly", silently discarding every point of damage dealt to it
+    /// (reproduces the real fixture's ~6.3M/6.4M squadTotalDamage gap at
+    /// unit-test scale). See the long doc comment on the `retain` call this
+    /// guards in `apply` above.
+    #[test]
+    fn npc_with_stale_friendly_team_change_stays_enemy_when_iff_confirms_hostile() {
+        let raw = RawLog {
+            header: RawHeader { build: "20260718".into(), revision: 1, boss_id: 1 },
+            agents: vec![
+                agent(1, 27, b"Alice\0:Alice.1234\05\0"), // squad player
+                agent(2, 0xffff_ffff, b"Keep Lord\0"),     // objective NPC
+            ],
+            skills: vec![],
+            events: vec![
+                point_of_view(1),
+                team_change(1, 100),        // recorder's team
+                team_change(2, 200),        // Lord starts on a hostile team
+                strike(1, 2, 1, 500),        // squad hits it while still hostile (iff=FOE)
+                team_change(2, 100),        // keep flips to the recorder's own color afterward
+            ],
+            guid_map: vec![],
+        };
+        let enc = crate::model::resolve(&raw);
+
+        assert_eq!(enc.enemies.len(), 1, "the Lord must stay classified as an enemy");
+        assert_eq!(enc.enemies[0].id, 2);
+        assert!(!enc.enemies[0].is_player);
+    }
+
+    /// Counterpart: an NPC/gadget that squad members never actually landed
+    /// an `iff == FOE` hit on, and whose last team resolves to the
+    /// recorder's own team, is still correctly dropped as friendly/neutral
+    /// -- the iff-override doesn't just blanket-keep every NPC regardless
+    /// of team.
+    #[test]
+    fn friendly_npc_with_no_hostile_iff_evidence_stays_dropped() {
+        let raw = RawLog {
+            header: RawHeader { build: "20260718".into(), revision: 1, boss_id: 1 },
+            agents: vec![
+                agent(1, 27, b"Alice\0:Alice.1234\05\0"), // squad player
+                agent(2, 0xffff_ffff, b"Friendly Siege\0"), // our own siege
+            ],
+            skills: vec![],
+            events: vec![
+                point_of_view(1),
+                team_change(1, 100),
+                team_change(2, 100), // same team as recorder, never flips
+                // no combat events targeting it at all
+            ],
+            guid_map: vec![],
+        };
+        let enc = crate::model::resolve(&raw);
+        assert_eq!(enc.enemies.len(), 0, "friendly-team NPC with no hostile iff evidence must not appear as an enemy");
+    }
+
+    /// Synthetic `CBTS_MARKER` event (`sc::MARKER`), mirroring
+    /// `markers::tests::marker_ev`.
+    fn marker(time: u64, src: u64, value: i32, buff: u8) -> RawEvent {
+        RawEvent { time, src_agent: src, dst_agent: 0, value, buff_dmg: 0,
+            overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
+            src_master_instid: 0, dst_master_instid: 0, iff: 0, buff, result: 0,
+            is_activation: 0, is_buffremove: 0, is_statechange: sc::MARKER, is_shields: 0, is_offcycle: 0 }
+    }
+    fn marker_guid(local_id: u32, guid_bytes: [u8; 16]) -> RawEvent {
+        RawEvent {
+            time: 0,
+            src_agent: u64::from_le_bytes(guid_bytes[0..8].try_into().unwrap()),
+            dst_agent: u64::from_le_bytes(guid_bytes[8..16].try_into().unwrap()),
+            value: 0, buff_dmg: 0, overstack: 1, skillid: local_id,
+            src_instid: 0, dst_instid: 0, src_master_instid: 0, dst_master_instid: 0,
+            iff: 0, buff: 0, result: 0, is_activation: 0, is_buffremove: 0,
+            is_statechange: sc::ID_TO_GUID, is_shields: 0, is_offcycle: 0,
+        }
+    }
+
+    /// M4 post-rework real-log calibration finding, end-to-end through
+    /// `model::resolve`: a commander is assigned a recognized commander-tag
+    /// marker near the start of the log, then a removal event with NO
+    /// reassignment for the rest of the (much longer) fight. Before the
+    /// `ever_commander` fallback, this silently produced zero commanders --
+    /// reproduces the real fixture's exact anomaly at unit-test scale (see
+    /// `markers::MarkerResolution::ever_commander`'s doc comment for the
+    /// full real-log finding this guards).
+    #[test]
+    fn commander_detected_after_early_removal_with_no_reassignment_for_rest_of_fight() {
+        // PurpleCommanderTag GUID, same bytes `markers::tests` uses.
+        let guid_bytes: [u8; 16] = [
+            0x19, 0x93, 0xfa, 0xdb, 0x6f, 0xb7, 0x0e, 0x43,
+            0x83, 0xa2, 0x23, 0xa5, 0x4d, 0x31, 0x1f, 0x7d,
+        ];
+        let raw = RawLog {
+            header: RawHeader { build: "20260718".into(), revision: 1, boss_id: 1 },
+            agents: vec![agent(1, 27, b"Alice\0:Alice.1234\05\0")],
+            skills: vec![],
+            events: vec![
+                point_of_view(1),
+                team_change(1, 100),
+                marker_guid(3201, guid_bytes),
+                marker(100, 1, 3201, 1), // commander tag assigned near log start
+                marker(350, 1, 0, 0),    // removed moments later
+                // ... 5+ minutes of fight with no further marker activity ...
+            ],
+            guid_map: vec![],
+        };
+        let mut raw = raw;
+        raw.guid_map = crate::evtc::decode_guid_mappings(&raw.events);
+
+        let enc = crate::model::resolve(&raw);
+        assert_eq!(enc.players.len(), 1);
+        assert!(enc.players[0].commander, "commander must still be detected despite the early, unreciprocated removal");
+        let tag = enc.players[0].commander_tag.as_ref().expect("commander_tag must be Some");
+        assert_eq!(tag.variant, "purple-commander");
     }
 
     /// Task 2b: a CBTS_WVWTEAMS event, when present, resolves team colors
