@@ -76,6 +76,9 @@ __all__ = [
     "PlayerMissilesOut",
     "SquadMissilesOut",
     "MissilesOut",
+    "SkillMapEntryOut",
+    "CastOut",
+    "SkillRotationOut",
 ]
 
 # --- encounter / metadata ---------------------------------------------
@@ -325,6 +328,46 @@ class DefensesOut(TypedDict):
     breakbar_count: int
     breakbar_damage: int
 
+# --- skillMap (M14, Task 2) ------------------------------------------------
+
+class _SkillMapEntryOutRequired(TypedDict):
+    """One referenced skill id's best-effort metadata -- mirrors
+    `axilog_schema::SkillMapEntryOut` / EI's `skillMap` values. `name` is a
+    log-table best-effort (falls back to `"Skill <id>"`); `can_crit` reuses
+    M13's NonCritableSkills; `is_swap` marks weapon/attunement/legend/shroud
+    swap sentinel ids. Names are deliberately log-table-only -- EI's richer
+    embedded DB names + `icon` URLs are a documented, out-of-scope gap."""
+
+    name: str
+    is_swap: bool
+    can_crit: bool
+
+class SkillMapEntryOut(_SkillMapEntryOutRequired, total=False):
+    """`auto_attack` is omitted (not `null`) when unknown -- currently ALWAYS
+    omitted (the heuristic is refused rather than guessed, per
+    `axilog_core::analysis::skill_map`'s doc comment)."""
+
+    auto_attack: bool
+
+# --- rotation / casts (M14, Task 1) ----------------------------------------
+
+class CastOut(TypedDict):
+    """One recorded cast -- mirrors GW2EI's `JsonRotation.JsonSkill`.
+    `cast_time_ms` is relative to log start (may be negative = pre-log cast);
+    `quickness` is the sped/slowed fraction (negative = quickness-hasted)."""
+
+    cast_time_ms: int
+    duration_ms: int
+    time_gained_ms: int
+    quickness: float
+
+class SkillRotationOut(TypedDict):
+    """All recorded casts of one skill id, for one player -- see
+    `PlayerOut["rotation"]`."""
+
+    skill_id: int
+    casts: List[CastOut]
+
 # --- players / enemies -----------------------------------------------------
 
 class _PlayerOutRequired(TypedDict):
@@ -363,7 +406,12 @@ class PlayerOut(_PlayerOutRequired, total=False):
     flag -- omitted unless requested; measured +147.7%/+36.4% native JSON
     size respectively when always-on (a real WvW log can enumerate dozens
     of enemies per player, so `dps_targets` is not small enough to stay
-    always-on the way `boons`/`support` are)."""
+    always-on the way `boons`/`support` are). `rotation` (M14, Task 1) is
+    opt-in like `skill_damage`/`per_second`/`dps_targets` -- omitted unless
+    requested via `rotation=True` (see `parse_file`/`parse_bytes`); measured
+    +66.9% native JSON size on the committed fixture when always-on. The
+    underlying `PlayerMetrics.rotation` is ALWAYS computed (so `--view
+    rotation` works flag-free); only this serialized key is gated."""
 
     marker: str
     commander_tag: CommanderTagOut
@@ -371,6 +419,7 @@ class PlayerOut(_PlayerOutRequired, total=False):
     skill_damage: SkillDamageOut
     per_second: PlayerPerSecondOut
     dps_targets: List[DpsTargetOut]
+    rotation: List[SkillRotationOut]
 
 class _EnemyOutRequired(TypedDict):
     id: int
@@ -476,6 +525,9 @@ class _ReportRequired(TypedDict):
     players: List[PlayerOut]
     enemies: List[EnemyOut]
     timeline: TimelineOut
+    # skillMap (M14, Task 2): always present. Keyed by skill id as a string
+    # (serde object-key stringification of the u32 key), e.g. `"5491"`.
+    skill_map: Dict[str, SkillMapEntryOut]
 
 class Report(_ReportRequired, total=False):
     """`warnings` is omitted (not `[]`) when there are no analysis warnings.
@@ -495,6 +547,7 @@ def parse_file(
     skill_damage: bool = False,
     timeseries: bool = False,
     missiles: bool = False,
+    rotation: bool = False,
 ) -> Report:
     """Parse a `.evtc`/`.zevtc` file at `path` into the native `Report` shape.
 
@@ -506,8 +559,10 @@ def parse_file(
     block AND the per-enemy `dps_targets` summary (`PlayerOut["per_second"]`/
     `PlayerOut["dps_targets"]`). `missiles` (final-review fix wave) opts
     into embedding the native top-level missile analytics block
-    (`Report["missiles"]`), mirroring the CLI's `--missiles` flag. All four
-    default to `False`.
+    (`Report["missiles"]`), mirroring the CLI's `--missiles` flag.
+    `rotation` (M14, Task 1) opts into embedding the native per-player
+    rotation (cast-tracking) block (`PlayerOut["rotation"]`), mirroring the
+    CLI's `--rotation` flag. All five default to `False`.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.
@@ -520,6 +575,7 @@ def parse_bytes(
     skill_damage: bool = False,
     timeseries: bool = False,
     missiles: bool = False,
+    rotation: bool = False,
 ) -> Report:
     """Parse an already-read `.evtc`/`.zevtc` buffer into the native `Report` shape.
 
@@ -529,6 +585,8 @@ def parse_bytes(
     embedding the native per-player per-second series block AND the
     per-enemy `dps_targets` summary. `missiles` (final-review fix wave)
     opts into embedding the native top-level missile analytics block.
+    `rotation` (M14, Task 1) opts into embedding the native per-player
+    rotation (cast-tracking) block.
 
     Raises `ValueError` if `data` is not a decodable/parseable arcdps log.
     """
@@ -541,6 +599,7 @@ def parse_file_ei(
     skill_damage: bool = False,
     timeseries: bool = False,
     missiles: bool = False,
+    rotation: bool = False,
 ) -> Dict[str, Any]:
     """Parse a `.evtc`/`.zevtc` file at `path` into Elite Insights-compatibility JSON.
 
@@ -548,10 +607,11 @@ def parse_file_ei(
     what actually let `totalDamageDist`/`damage1S`/`dpsTargets`/etc (M12,
     Task 3's ei-json mapping) surface in the returned JSON -- previously
     this function always omitted them regardless of caller intent.
-    `replay`/`missiles` are accepted for signature parity with `parse_file`
-    but have no effect on the output (EI's JSON shape has no comparable
-    field for either). All four default to `False`, keeping
-    `parse_file_ei(path)` back-compatible.
+    `rotation` (M14, Task 3, keyword-only) likewise lets the ei-json
+    `rotation[]` per-player block surface. `replay`/`missiles` are accepted
+    for signature parity with `parse_file` but have no effect on the output
+    (EI's JSON shape has no comparable field for either). All five default
+    to `False`, keeping `parse_file_ei(path)` back-compatible.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.
