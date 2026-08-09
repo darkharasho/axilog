@@ -125,7 +125,40 @@ pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
             "killed": p.kills_dealt,
             "downed": p.downs_dealt,
             "appliedCrowdControl": p.cc.applied_total,
-            "appliedCrowdControlDuration": p.cc.applied_duration_ms
+            "appliedCrowdControlDuration": p.cc.applied_duration_ms,
+            // M13 Task 3: outgoing hit-quality fields, mapped from
+            // `p.hit_stats` (`HitStatsOut`, mirrors `axilog_core::
+            // analysis::hit_stats::HitStats` field-for-field -- see that
+            // module's doc comment for the exact per-field EI derivation/
+            // citation, including WHY `criticalRate`/`flankingRate`/
+            // `glanceRate`/`againstMovingRate` are plain COUNTS despite the
+            // "Rate" naming, verbatim from real EI). Field names verified
+            // against a real dps.report export
+            // (`fixtures/wvw-small.ei.json`'s `players[].hitStats` sidecar,
+            // itself a verbatim subset of a real `statsAll[0]`). Always
+            // present (not gated) -- `hit_stats` is unconditionally
+            // computed by `analyze()`, same "always-on" convention as the
+            // down-contribution/CC fields above.
+            "criticalRate": p.hit_stats.crit_count,
+            "criticalDmg": p.hit_stats.crit_damage,
+            "flankingRate": p.hit_stats.flank_count,
+            "glanceRate": p.hit_stats.glance_count,
+            "againstMovingRate": p.hit_stats.moving_count,
+            "connectedDamageCount": p.hit_stats.connected_count,
+            "connectedDmg": p.hit_stats.connected_damage,
+            "connectedDirectDamageCount": p.hit_stats.direct_count,
+            "connectedDirectDmg": p.hit_stats.direct_damage,
+            "connectedConditionCount": p.hit_stats.condition_count,
+            "connectedConditionDamage": p.hit_stats.condition_damage,
+            "critableDirectDamageCount": p.hit_stats.critable_direct_count,
+            "againstDownedCount": p.hit_stats.against_downed_count,
+            "againstDownedDamage": p.hit_stats.against_downed_damage,
+            "connectedLifeLeechCount": p.hit_stats.life_leech_count,
+            "connectedLifeLeechDamage": p.hit_stats.life_leech_damage,
+            "connectedPowerAbove90HPCount": p.hit_stats.above90_power_count,
+            "connectedPowerAbove90HPDamage": p.hit_stats.above90_power_damage,
+            "connectedConditionAbove90HPCount": p.hit_stats.above90_condition_count,
+            "connectedConditionAbove90HPDamage": p.hit_stats.above90_condition_damage
         } ]);
         // Real EI's `statsTargets[targetIndex][phaseIndex]` carries a large
         // per-target breakdown (including its own per-target
@@ -167,7 +200,55 @@ pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
             "defenses": [ {
                 "downCount": p.downs_taken,
                 "deadCount": p.deaths,
-                "damageTaken": p.damage_taken
+                "damageTaken": p.damage_taken,
+                // M13 Task 3: hit-outcome + damage-taken breakdown fields,
+                // mapped from `p.defenses` (`DefensesOut`, mirrors
+                // `axilog_core::analysis::defenses::DefenseStats`
+                // field-for-field -- see that module's doc comment for the
+                // exact per-field EI derivation/citation). Field names
+                // verified against a real dps.report export
+                // (`fixtures/wvw-small.ei.json`'s `players[].defenses`
+                // sidecar, itself a verbatim subset of a real
+                // `defenses[0]`). Always present (not gated), same
+                // always-on convention as `downCount`/`deadCount`/
+                // `damageTaken` above.
+                //
+                // IMPORTANT -- `lifeLeechDamageTakenCount` intentionally
+                // diverges from real EI: this emits OUR correct derived
+                // value (`p.defenses.life_leech_count`), NOT a
+                // reproduction of GW2EI's own real, verified counting bug
+                // (`DefensePerTargetStatistics.cs`'s life-leech branch
+                // increments the SUM field a second time instead of the
+                // COUNT field, so real EI always reports 0 here even on a
+                // fight with substantial nonzero `lifeLeechDamageTaken` --
+                // see `axilog_core::analysis::defenses`'s module doc for
+                // the full source-line citation). An exact-vs-real-EI diff
+                // on this ONE field is therefore an intentional, documented
+                // divergence -- axilog is more correct here, not less.
+                // `crates/axilog-ei/tests/ei_golden.rs` calibrates every
+                // other `defenses[0]` field exactly against the golden
+                // fixture and asserts THIS one against the algebraically
+                // derived TRUE reference instead of the fixture's raw
+                // (buggy) value, mirroring `defenses_golden.rs`'s own
+                // native-layer calibration.
+                "blockedCount": p.defenses.blocked_count,
+                "evadedCount": p.defenses.evaded_count,
+                "dodgeCount": p.defenses.dodge_count,
+                "missedCount": p.defenses.missed_count,
+                "interruptedCount": p.defenses.interrupted_count,
+                "invulnedCount": p.defenses.invulned_count,
+                "strikeDamageTaken": p.defenses.strike_damage,
+                "strikeDamageTakenCount": p.defenses.strike_count,
+                "powerDamageTaken": p.defenses.power_damage,
+                "powerDamageTakenCount": p.defenses.power_count,
+                "conditionDamageTaken": p.defenses.condition_damage,
+                "conditionDamageTakenCount": p.defenses.condition_count,
+                "lifeLeechDamageTaken": p.defenses.life_leech_damage,
+                "lifeLeechDamageTakenCount": p.defenses.life_leech_count,
+                "damageBarrier": p.defenses.barrier_damage,
+                "damageBarrierCount": p.defenses.barrier_count,
+                "breakbarDamageTaken": p.defenses.breakbar_damage,
+                "breakbarDamageTakenCount": p.defenses.breakbar_count
             } ],
             // EI places stun-break stats under `support`, not `defenses` — verified
             // against GW2EI's `SupportAllStatistics` (StunBreakCount /

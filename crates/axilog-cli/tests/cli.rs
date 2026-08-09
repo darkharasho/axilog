@@ -130,6 +130,34 @@ fn table_view_healing_has_header_and_known_row() {
     assert!(row.contains("42827"), "known row missing downed healing 42827: {row}");
 }
 
+/// M13, Task 3: `--view defense` — header token plus a known row value from
+/// the committed anon fixture (`:Anon119.5403`, Guardian, the fixture's top
+/// damage-taker: 24 blocks, 2 evades, 4 dodges, 81974 total damage taken
+/// [79652 strike / 1652 condi], 0 downs -- see
+/// `axilog-core/tests/defenses_golden.rs` for the calibration these numbers
+/// trace back to).
+#[test]
+fn table_view_defense_has_header_and_known_row() {
+    let out = Command::new(env!("CARGO_BIN_EXE_axilog"))
+        .args(["parse", ANON_FIXTURE_PATH, "--format", "table", "--view", "defense"])
+        .output()
+        .expect("run axilog");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("blocks"), "defense view header missing 'blocks'");
+    assert!(s.contains("evades"), "defense view header missing 'evades'");
+    assert!(s.contains("dodges"), "defense view header missing 'dodges'");
+    assert!(s.contains("dmg taken"), "defense view header missing 'dmg taken'");
+    assert!(s.contains("strike"), "defense view header missing 'strike'");
+    assert!(s.contains("condi"), "defense view header missing 'condi'");
+    assert!(s.contains("downs"), "defense view header missing 'downs'");
+    let row = s.lines().find(|l| l.contains(":Anon119.5403")).expect("known player row present");
+    assert!(row.contains("Guardian"), "known row missing profession: {row}");
+    assert!(row.contains("81974"), "known row missing damage taken 81974: {row}");
+    assert!(row.contains("79652"), "known row missing strike damage 79652: {row}");
+    assert!(row.contains("1652"), "known row missing condi damage 1652: {row}");
+}
+
 /// Task 5 (M2): the `anonymize` subcommand itself, exercised against the
 /// already-anonymized committed fixture (always present, so this runs in
 /// CI — running it on an already-`Anon<N>`-named file just re-anonymizes to

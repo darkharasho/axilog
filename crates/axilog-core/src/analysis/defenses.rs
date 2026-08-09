@@ -133,26 +133,73 @@
 //! genuinely different from (and narrower than) "every buff==1 hit", the
 //! SAME simplification gap `hit_stats::condition_count`'s own module doc
 //! already discloses for the outgoing side (this project has no such
-//! skill-id catalog). `strike`/`power`/`life_leech` below reuse the exact
+//! skill-id catalog; a genuinely different buff==1 damage-dealing skill
+//! outside GW2EI's Condition catalog -- a rare arcdps edge case, if any
+//! exists at all -- would be misclassified as "condition" by this
+//! simplification, same as on the outgoing side; documented, not observed
+//! on this fixture). `strike`/`power`/`life_leech` below reuse the exact
 //! same buff==0-direct vs buff==1-non-lifeleech-vs-lifeleech split
 //! `hit_stats` already verified, with `condition` standing in for
 //! "everything buff==1 that isn't life-leech" (same documented divergence,
 //! zero residual observed against this fixture on the outgoing side and,
 //! **derived algebraically below**, also zero on the incoming side).
 //!
-//! **`PowerDamageTaken`/`Count` == `StrikeDamageTaken`/`Count` +
-//! [TRUE] life-leech sum/count, ALWAYS, regardless of the `ConditionDamageBased`
-//! catalog's completeness** -- `PowerDamageTaken += HealthDamage;
-//! PowerDamageTakenCount++` sits OUTSIDE the `is NonDirectHealthDamageEvent`
-//! branch, unconditionally incrementing for every non-condition hit
-//! (buff==0 direct AND buff==1 life-leech alike). This means `power_count`/
-//! `power_damage` below (computed the SAME way, from the SAME buff==0-vs-
-//! life-leech split) reproduce EI's `powerDamageTaken(Count)` EXACTLY, with
-//! NO dependency on the missing condition-skill-id catalog at all -- unlike
-//! the analogous `condition_count`/`condition_damage` fields, which inherit
-//! the same (empirically zero-residual-on-this-fixture, but not formally
-//! guaranteed) simplification gap `hit_stats::condition_count` already
-//! discloses.
+//! **`power_count`/`power_damage` == `strike_count`/`strike_damage` +
+//! `life_leech_count`/`life_leech_damage`, ALWAYS, HOLDS BY AXILOG'S OWN
+//! CONSTRUCTION** -- not a proven property of real GW2EI. This module's
+//! `classify` only ever produces exactly THREE hit kinds (`Strike`,
+//! `Condition`, `LifeLeech` -- see `HitKind` below), with `Condition`
+//! defined as "buff==1 and not life-leech" (the same simplification the
+//! paragraph above discloses); `record`'s `power_count`/`power_damage`
+//! increment for `Strike` and `LifeLeech` alike, never `Condition`, so the
+//! equality is definitionally true of THIS module's own output, by
+//! construction, independent of any GW2EI source citation. Real GW2EI's
+//! ctor snippet above is structured similarly (`PowerDamageTaken +=
+//! HealthDamage; PowerDamageTakenCount++` sits OUTSIDE the `is
+//! NonDirectHealthDamageEvent` branch, incrementing for every
+//! non-condition hit) -- **but** it has a fourth, GENUINELY POSSIBLE bucket
+//! this project's model can't represent: a buff==1 hit that's outside the
+//! `ConditionDamageBased` catalog (so it doesn't hit the `if` branch) AND
+//! isn't life-leech either (so `ndhd.IsLifeLeech` is also false) increments
+//! `PowerDamageTakenCount` (unconditional) but NEITHER
+//! `StrikeDamageTakenCount` (buff==0-only) NOR the (buggy)
+//! `LifeLeechDamageTaken` increment (gated on `IsLifeLeech`) -- breaking the
+//! equality in REAL EI's own output for that row. This project's `classify`
+//! has no such fourth bucket (every buff==1 hit is either life-leech or
+//! "condition", per the same catalog-gap simplification), so `power_count`/
+//! `power_damage` reproduce EI's `powerDamageTaken(Count)` EXACTLY on every
+//! fixture observed so far (zero residual) -- but the golden test's
+//! `powerDamageTaken(Count) - strikeDamageTaken(Count)` derivation (used to
+//! recover the TRUE life-leech reference, unaffected by the count-bug
+//! below) inherits this SAME theoretical gap: a real capture containing that
+//! rare fourth-bucket skill would make the derived reference wrong in a way
+//! this project currently has no way to detect.
+//!
+//! **UPDATE (M13 Task 3, post-era calibration hook): no longer just
+//! theoretical.** The first real post-rework capture + dps.report export
+//! pair (`fixtures/local/wvw-postrework.zevtc`/`.ei.json`, gitignored,
+//! dev-only -- see `crates/axilog-core/tests/defenses_golden.rs`'s
+//! `defenses_calibrated_against_local_postrework_ei_json_when_available`)
+//! confirmed this "fourth bucket" is genuinely populated on a real fight:
+//! roughly two-thirds of joined accounts show a real `power_count`/
+//! `condition_count` divergence from this project's own numbers (up to
+//! ~35% relative on one account), while `strike_count`/`blocked_count`/
+//! `evaded_count`/etc. (every field immune to the buff==1 split) stay
+//! within a tiny tolerance. Hand-verified conserved in total for every
+//! spot-checked account (`ours condition_count + ours life_leech_count ==
+//! golden's conditionDamageTakenCount + [true non-strike power]`, exactly)
+//! -- i.e. a genuine buff==1-hit RECLASSIFICATION between this project's
+//! "condition" bucket and real GW2EI's own catalog bucketing, not a
+//! dropped/extra event. The INCOMING side (this module) shows a
+//! substantially LARGER gap than the OUTGOING side
+//! (`hit_stats::condition_count`'s equivalent real-capture finding, only 2
+//! of 44 accounts affected) on the SAME fight -- plausible, since incoming
+//! attackers span a much wider variety of enemy builds/professions (a real
+//! WvW fight's opposing roster) than the recording squad's own, narrower
+//! skill-set diversity. Because of this, `defenses_golden.rs`'s real-capture
+//! hook downgrades `power_count`/`condition_count`/the derived
+//! `life_leech_count` reference to report-only (not hard-failed) -- see
+//! that test's own doc comment for the full writeup and observed numbers.
 //!
 //! **`LifeLeechDamageTaken`/`LifeLeechDamageTakenCount` are a REAL,
 //! REPRODUCIBLE GW2EI BUG, not modeled here.** Look closely at the ctor
@@ -262,8 +309,11 @@ pub struct DefenseStats {
     pub strike_count: u32,
     pub strike_damage: u64,
     /// `power_count`/`power_damage` == `strike_count`/`strike_damage` +
-    /// `life_leech_count`/`life_leech_damage`, ALWAYS (see module doc) --
-    /// kept as its own field (not a derived accessor) to mirror EI's own
+    /// `life_leech_count`/`life_leech_damage`, ALWAYS BY THIS MODULE'S OWN
+    /// CONSTRUCTION -- see module doc for why this isn't a proven property
+    /// of real GW2EI itself (a rare buff==1-and-outside-the-condition-
+    /// catalog-and-not-life-leech hit could break the equality there).
+    /// Kept as its own field (not a derived accessor) to mirror EI's own
     /// `powerDamageTaken(Count)` fields directly, field-for-field.
     pub power_count: u32,
     pub power_damage: u64,
