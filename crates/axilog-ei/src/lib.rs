@@ -748,33 +748,44 @@ pub fn to_ei_json(
         });
         if e.is_player {
             if let Some(track) = enemy_track.as_mut().and_then(|it| it.next()) {
-                // Audit fix: an enemy player is `NonSquadPlayer`, not
-                // `AgentType.Player` (`WvWLogic.cs:327`,
-                // `axilog_core::analysis::ei_replay`'s `build_world_track`
-                // comment), so GW2EI's `forcePolling` never synthesizes a
-                // sentinel point for one -- an enemy with zero raw position
-                // events polls to a genuinely EMPTY track. GW2EI's own
-                // `HasCombatReplayPositions` (`CombatReplay.cs:192-195`)
-                // gates the WHOLE `combatReplayData` object on that: an
-                // actor with no polled positions is dropped from the
-                // replay entirely, not exported with an empty `positions`
-                // array. Match that here rather than emitting a
-                // `combatReplayData` object no position data backs.
-                if !track.positions.is_empty() {
-                    t.as_object_mut().expect("target is a JSON object").insert(
-                        "combatReplayData".to_string(),
-                        json!({
-                            "start": track.start,
-                            "end": track.end,
-                            "iconURL": axilog_core::icons::UNKNOWN_PROFESSION_ICON,
-                            "positions": ei_positions_json(&track.positions),
-                            "orientations": ei_orientations_json(&track.orientations),
-                            "dead": ei_intervals_json(&track.dead),
-                            "down": ei_intervals_json(&track.down),
-                            "dc": ei_intervals_json(&track.dc),
-                        }),
-                    );
-                }
+                // Correction to the earlier audit fix: `combatReplayData` is
+                // NOT gated on the actor having any polled positions.
+                // GW2EI's `JsonActorBuilder.cs:104-105` builds it
+                // UNCONDITIONALLY (`if (log.CanCombatReplay) jsonActor.
+                // CombatReplayData = Build(...)`, keyed only on whether
+                // replay was requested at all), and
+                // `SingleActorCombatReplayDescription`'s constructor assigns
+                // `Positions`/`Rotations` straight from whatever the actor's
+                // polled lists hold -- an empty list serializes as `[]`, it
+                // does not suppress the object. Verified against the local
+                // reference export: its "Dummy PvP Agent" target (an
+                // `isFake` NPC with `enemyPlayer: false`, no position data
+                // at all) still carries a full `combatReplayData` object
+                // with `positions: []`/`orientations: []` but real
+                // `start`/`end`/`iconURL`/`dead`/`down`/`dc`. (An enemy
+                // player with genuinely zero polled positions here IS,
+                // separately, the real bug this project fixed: GW2EI's
+                // `forcePolling` -- `SingleActor.cs:415` -- only applies to
+                // squad `AgentType.Player` actors, never `NonSquadPlayer`
+                // enemies, so such an actor's `positions` must be `[]`, not
+                // the `(int.MinValue, int.MinValue)` sentinel a squad
+                // player would get. That fix lives in
+                // `axilog_core::analysis::ei_replay::build_world_track`,
+                // not here -- this object's presence is unconditional
+                // either way.)
+                t.as_object_mut().expect("target is a JSON object").insert(
+                    "combatReplayData".to_string(),
+                    json!({
+                        "start": track.start,
+                        "end": track.end,
+                        "iconURL": axilog_core::icons::UNKNOWN_PROFESSION_ICON,
+                        "positions": ei_positions_json(&track.positions),
+                        "orientations": ei_orientations_json(&track.orientations),
+                        "dead": ei_intervals_json(&track.dead),
+                        "down": ei_intervals_json(&track.down),
+                        "dc": ei_intervals_json(&track.dc),
+                    }),
+                );
             }
         }
         t
@@ -1565,17 +1576,24 @@ mod tests {
         assert!(npc.get("combatReplayData").is_none());
     }
 
-    /// Audit fix: an enemy-player track with an EMPTY `positions` list (the
-    /// `NonSquadPlayer`/no-`forcePolling` case -- see
+    /// Corrected audit fix: an enemy-player track with an EMPTY `positions`
+    /// list (the `NonSquadPlayer`/no-`forcePolling` case -- see
     /// `axilog_core::analysis::ei_replay::build_world_track`'s doc comment)
-    /// must omit `combatReplayData` from that target entirely, mirroring
-    /// GW2EI's own `HasCombatReplayPositions` gate
-    /// (`CombatReplay.cs:192-195`), rather than emitting a
-    /// `combatReplayData` object with an empty `positions` array. A squad
-    /// player's `combatReplayData` stays always-on regardless (M11's
-    /// unconditional four fields; this gate is target-only).
+    /// still gets a `combatReplayData` object -- GW2EI's own
+    /// `JsonActorBuilder.cs:104-105` builds it unconditionally whenever
+    /// replay was requested at all (`SingleActorCombatReplayDescription`'s
+    /// ctor assigns `Positions`/`Rotations` straight from whatever the
+    /// actor polled, empty or not); it does NOT gate on
+    /// `HasCombatReplayPositions`. Verified against the local reference
+    /// export's "Dummy PvP Agent" target, which carries a full
+    /// `combatReplayData` with `positions: []`/`orientations: []` but real
+    /// `start`/`end`/`iconURL`/`dead`/`down`/`dc`. What must stay fixed is
+    /// the CONTENT: no `(int.MinValue, int.MinValue)`-derived sentinel
+    /// coordinates for an enemy with zero raw position events (that was the
+    /// actual bug, fixed in `build_world_track`'s `poll` call) -- just a
+    /// real, empty `positions` array, not an omitted object.
     #[test]
-    fn enemy_target_with_no_polled_positions_omits_combat_replay_data() {
+    fn enemy_target_with_no_polled_positions_still_gets_combat_replay_data() {
         use axilog_core::analysis::ei_replay::{EiReplay, EiTrack};
         let report = sample_report();
         let squad_track = |name: &str| EiTrack {
@@ -1583,7 +1601,8 @@ mod tests {
             positions: vec![[1.5, 2.5]], orientations: vec![90.0], dc: vec![], down: vec![], dead: vec![],
         };
         // `sample_report()` has 2 players and 1 enemy PLAYER (id 9); the
-        // enemy's own track has NO polled positions at all.
+        // enemy's own track has NO polled positions at all (correctly, per
+        // the `forcePolling` fix -- not the pre-fix sentinel garbage).
         let replay = EiReplay {
             tracks: vec![
                 squad_track("A"),
@@ -1599,11 +1618,20 @@ mod tests {
         };
         let v = to_ei_json(&report, &[], Some(&replay));
         let enemy = v["targets"].as_array().unwrap().iter().find(|t| t["enemyPlayer"] == true).unwrap();
-        assert!(
-            enemy.get("combatReplayData").is_none(),
-            "an enemy with no polled positions must not carry a combatReplayData object"
-        );
-        // Squad players are unaffected by this gate.
+        let crd = enemy.get("combatReplayData").expect("combatReplayData must always be present when replay is on");
+        assert_eq!(crd["positions"], json!([]), "empty, not omitted");
+        assert_eq!(crd["orientations"], json!([]));
+        assert_eq!(crd["start"], 0);
+        assert_eq!(crd["end"], 600);
+        assert_eq!(crd["dc"], json!([[i64::MIN, 0], [600, i64::MAX]]));
+        assert_eq!(crd["down"], json!([]));
+        assert_eq!(crd["dead"], json!([]));
+        assert_eq!(crd["iconURL"], axilog_core::icons::UNKNOWN_PROFESSION_ICON);
+        // No sentinel garbage: every coordinate must be absent, not just
+        // finite -- this is what the real bug produced (~[-2.6e10, 1.9e10]
+        // pixel coordinates derived from the int.MinValue world sentinel).
+        assert!(crd["positions"].as_array().unwrap().is_empty());
+        // Squad players are unaffected by any of this.
         assert!(v["players"][0]["combatReplayData"]["positions"].as_array().is_some());
     }
 
