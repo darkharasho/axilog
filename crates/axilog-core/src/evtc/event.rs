@@ -403,6 +403,44 @@ pub mod sc {
     /// in `analysis::replay`'s output); documented for completeness per the
     /// Task 1 brief's "verify velocity/facing if adjacent" instruction.
     pub const FACING: u8 = 21;
+    /// Extension-registration/signature marker (M10 Task 1). Verified
+    /// against the live arcdps EVTC reference (`curl
+    /// https://www.deltaconnected.com/arcdps/evtc/README.txt`, 2026-08-08):
+    /// hand-counting `enum cbtstatechange` entries from `CBTS_COMBAT = 0`,
+    /// `CBTS_EXTENSION` is the 41st entry (index 40), immediately after
+    /// `CBTS_STATRESET_DEFUNC` (39) and before `CBTS_APIDELAYED_DEFUNC` (41)
+    /// -- both retired/defunct neighbors independently pin the count.
+    /// Cross-checked against GW2EI's `ArcDPSEnums.StateChange.Extension =
+    /// 40` (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:300`). The arcdps
+    /// reference itself documents no payload beyond "for extension use. not
+    /// managed by arcdps" -- GW2EI's `Extensions/ExtensionHelper.cs` is the
+    /// payload arbiter: a ROW ON THIS EXACT STATECHANGE with `pad == 0`
+    /// (`RawEvent::pad`, the final 4 bytes of the 64-byte event struct,
+    /// undecoded before this task -- see `BUFF_APPLY`'s doc comment, which
+    /// already flagged offset 60 as "pad61") is a one-time REGISTRATION row:
+    /// `src_agent`'s low 32 bits are the extension's signature (e.g. the
+    /// healing extension's `0x9c9b3c99`, `HealingStatsExtensionHandler.
+    /// EXT_HealingStats`), bits 32-55 (`(src_agent & 0x00FFFFFF00000000) >>
+    /// 32`) are its revision (`ExtensionHelper.SigMask`/`RevMask`/
+    /// `RevShift`). Once registered, EVERY SUBSEQUENT row on `EXTENSION`
+    /// (with a NONZERO `pad`) OR on `EXTENSION_COMBAT` (49, see below) whose
+    /// `pad` equals that same signature is a DATA row belonging to that
+    /// extension -- see `crate::evtc::ext_healing`'s module doc for the
+    /// healing extension's own data-row payload shape (which reuses the
+    /// ordinary `CBTS_COMBAT`-shaped value/buff_dmg/is_shields/is_offcycle
+    /// fields, not a bespoke layout).
+    pub const EXTENSION: u8 = 40;
+    /// Extension DATA-row statechange (M10 Task 1) -- the more common shape
+    /// extension addons use for their per-event payloads, alongside
+    /// nonzero-`pad` `EXTENSION` rows (both route through the same `pad ==
+    /// signature` dispatch -- see `EXTENSION`'s doc comment). Verified
+    /// against the live arcdps EVTC reference the same way: hand-counting
+    /// from `CBTS_COMBAT = 0`, `CBTS_EXTENSIONCOMBAT` is the 50th entry
+    /// (index 49), immediately after `CBTS_IDLEEVENT` (48, itself right
+    /// after the already-verified `CBTS_IDTOGUID = 46`/`CBTS_LOGNPCUPDATE =
+    /// 47` pair -- three independently-anchored neighbors). Cross-checked
+    /// against GW2EI's `ArcDPSEnums.StateChange.ExtensionCombat = 49`.
+    pub const EXTENSION_COMBAT: u8 = 49;
 }
 
 /// `is_buffremove` enum values (arcdps `enum cbtbuffremove`). Verified
@@ -487,6 +525,15 @@ pub struct RawEvent {
     /// queued stack -- see `analysis::buffs::events::BuffEventKind::Extend`
     /// and `simulator`'s `Extend` handling.
     pub is_offcycle: u8,
+    /// Final 4 bytes of the 64-byte event struct (offset 60-63) -- arcdps's
+    /// reference calls this a generic "pad" with no fixed meaning of its
+    /// own; GW2EI's `BuffApplyEvent` doc already flagged it as "pad61" (a
+    /// per-stack trackable id, not decoded by this project) for
+    /// `sc::BUFF_APPLY` rows. Decoded starting M10 Task 1 because
+    /// EXTENSION-family statechanges (`sc::EXTENSION`/`sc::
+    /// EXTENSION_COMBAT`) repurpose it as the extension SIGNATURE dispatch
+    /// key -- see `crate::evtc::ext_healing`'s module doc.
+    pub pad: u32,
 }
 
 pub fn decode_events(buf: &[u8], count: usize) -> Result<Vec<RawEvent>, EvtcError> {
@@ -525,6 +572,7 @@ pub fn decode_events(buf: &[u8], count: usize) -> Result<Vec<RawEvent>, EvtcErro
             is_statechange: e[56],
             is_shields: e[58],
             is_offcycle: e[59],
+            pad: u32le(&e[60..64]),
         });
     }
     Ok(out)

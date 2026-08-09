@@ -1,6 +1,6 @@
 {
   "_source": "axibridge test-fixtures/boon/20260117-181030.json (dps.report EI JSON, accounts anonymized)",
-  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index \u2014 the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (`rincka.1608`, would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task). Task 1 (M9): each matched player's `combatReplay` object holds EI's raw `combatReplayData` `{start, count, first, last}` (start = EI's own log-relative start ms; count/first/last = positions.length / positions[0] / positions[-1], EI's map-pixel space) for parity spot-checks, plus a full verbatim `positions` array (EI map-pixel `[x,y]` pairs, one per 300ms poll) for the 3 longest tracks (Anon104.4848/Anon108.4996/Anon122.5514, 165 samples each) for full-track calibration. Source: this log's mapID=95 (Green Alpine Borderlands) `combatReplayMetaData` {inchToPixel:0.009, pollingRate:300, sizes:[523,750]}. Same real-account join method as Tasks 2-4 (M3) (obfuscate(real account) -> raw agent-table index -> `Anon<N>`); 37 of 41 players matched (4 `Non Squad Player N` rows have no real account to join from, same as `generation`). See `crates/axilog-core/tests/replay_golden.rs` for how this is consumed (raw world positions decoded from `wvw-small.anon.zevtc`'s `CBTS_POSITION` events, downsampled via `analysis::replay::build_replay`, then transformed into this same map-pixel space via the Green/Blue Alpine Borderland affine transform derived from GW2EI's `WvWLogic.GetCombatMapInternal`/`CombatReplayMap.GetMapCoordRounded` -- the test file cites the exact formula).",
+  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index \u2014 the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (`rincka.1608`, would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task). Task 1 (M9): each matched player's `combatReplay` object holds EI's raw `combatReplayData` `{start, count, first, last}` (start = EI's own log-relative start ms; count/first/last = positions.length / positions[0] / positions[-1], EI's map-pixel space) for parity spot-checks, plus a full verbatim `positions` array (EI map-pixel `[x,y]` pairs, one per 300ms poll) for the 3 longest tracks (Anon104.4848/Anon108.4996/Anon122.5514, 165 samples each) for full-track calibration. Source: this log's mapID=95 (Green Alpine Borderlands) `combatReplayMetaData` {inchToPixel:0.009, pollingRate:300, sizes:[523,750]}. Same real-account join method as Tasks 2-4 (M3) (obfuscate(real account) -> raw agent-table index -> `Anon<N>`); 37 of 41 players matched (4 `Non Squad Player N` rows have no real account to join from, same as `generation`). See `crates/axilog-core/tests/replay_golden.rs` for how this is consumed (raw world positions decoded from `wvw-small.anon.zevtc`'s `CBTS_POSITION` events, downsampled via `analysis::replay::build_replay`, then transformed into this same map-pixel space via the Green/Blue Alpine Borderland affine transform derived from GW2EI's `WvWLogic.GetCombatMapInternal`/`CombatReplayMap.GetMapCoordRounded` -- the test file cites the exact formula). Task 1 (M10): each player's `healing` object holds the arcdps healing-extension totals for the full fight (single phase, matching this fixture's `phases` length of 1): `healing`/`downedHealing` mirror EI's raw `extHealingStats.outgoingHealing[0]` `{healing, downedHealing}` fields verbatim (target=null, i.e. every friendly-directed heal this player cast, self included); `barrier` mirrors `extBarrierStats.outgoingBarrier[0].barrier` verbatim. `healingSelf` is EI's own `outgoingHealingAllies[selfIndex][0].healing` (selfIndex = this player's own position in EI's `Friendlies`/`players[]` ordering, verified to line up 1:1 with axibridge's `players[]` array index for all 41 rows here -- self healing at that index never exceeds the player's own `healing` total, the sanity check used to confirm the assumption). `healingAllies` is DERIVED (`healing - healingSelf`), NOT a sum of EI's own per-friendly `outgoingHealingAllies[*][0].healing` array -- that array's sum under-counts real ally healing (e.g. Anon-index 21's ally-array sums to 165971 vs its true `healing` total of 205820) because EI's per-friendly breakdown only enumerates real `Friendlies` (players), never non-enumerated friendly targets like pets/minions that legitimately receive `ToFriendly` heals and count toward the scalar total. Same real-account join method as prior tasks (profession + `dpsAll[0].damage` + `statsAll[0].appliedCrowdControl` triple -> unique row, verified unique across all 41 rows with zero collisions), since the healing extension has no separate obfuscated-account reference to join through. `squadHealingTotal`/`squadHealingSelf`/`squadHealingAllies`/`squadDownedHealing`/`squadBarrierTotal` are sums of the same fields over all 41 players (1008414/36563/971851/55681/279498) -- the calibration targets `healing_golden.rs` checks against.",
   "fightName": "World vs World - Green Alpine Borderlands",
   "durationMS": 49285,
   "friendlyPlayerCount": 41,
@@ -155,6 +155,13 @@
           157.709,
           588.288
         ]
+      },
+      "healing": {
+        "healing": 531,
+        "downedHealing": 0,
+        "healingSelf": 531,
+        "healingAllies": 0,
+        "barrier": 0
       }
     },
     {
@@ -298,6 +305,13 @@
           154.877,
           587.781
         ]
+      },
+      "healing": {
+        "healing": 89001,
+        "downedHealing": 0,
+        "healingSelf": 6267,
+        "healingAllies": 82734,
+        "barrier": 0
       }
     },
     {
@@ -441,6 +455,13 @@
           156.506,
           583.235
         ]
+      },
+      "healing": {
+        "healing": 2304,
+        "downedHealing": 2304,
+        "healingSelf": 0,
+        "healingAllies": 2304,
+        "barrier": 0
       }
     },
     {
@@ -584,6 +605,13 @@
           154.752,
           582.205
         ]
+      },
+      "healing": {
+        "healing": 24112,
+        "downedHealing": 7696,
+        "healingSelf": 1794,
+        "healingAllies": 22318,
+        "barrier": 0
       }
     },
     {
@@ -727,6 +755,13 @@
           156.481,
           584.5
         ]
+      },
+      "healing": {
+        "healing": 88290,
+        "downedHealing": 0,
+        "healingSelf": 1877,
+        "healingAllies": 86413,
+        "barrier": 37804
       }
     },
     {
@@ -870,6 +905,13 @@
           155.317,
           585.202
         ]
+      },
+      "healing": {
+        "healing": 770,
+        "downedHealing": 0,
+        "healingSelf": 770,
+        "healingAllies": 0,
+        "barrier": 0
       }
     },
     {
@@ -1675,6 +1717,13 @@
             585.115
           ]
         ]
+      },
+      "healing": {
+        "healing": 28528,
+        "downedHealing": 0,
+        "healingSelf": 321,
+        "healingAllies": 28207,
+        "barrier": 0
       }
     },
     {
@@ -1818,6 +1867,13 @@
           157.373,
           585.106
         ]
+      },
+      "healing": {
+        "healing": 0,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 0,
+        "barrier": 0
       }
     },
     {
@@ -1961,6 +2017,13 @@
           160.082,
           586.351
         ]
+      },
+      "healing": {
+        "healing": 25330,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 25330,
+        "barrier": 16447
       }
     },
     {
@@ -2104,6 +2167,13 @@
           156.063,
           590.417
         ]
+      },
+      "healing": {
+        "healing": 27471,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 27471,
+        "barrier": 0
       }
     },
     {
@@ -2247,6 +2317,13 @@
           154.699,
           589.84
         ]
+      },
+      "healing": {
+        "healing": 0,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 0,
+        "barrier": 0
       }
     },
     {
@@ -2390,6 +2467,13 @@
           158.112,
           585.289
         ]
+      },
+      "healing": {
+        "healing": 27915,
+        "downedHealing": 0,
+        "healingSelf": 4753,
+        "healingAllies": 23162,
+        "barrier": 16586
       }
     },
     {
@@ -3195,6 +3279,13 @@
             584.859
           ]
         ]
+      },
+      "healing": {
+        "healing": 32726,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 32726,
+        "barrier": 0
       }
     },
     {
@@ -3338,6 +3429,13 @@
           155.495,
           586.216
         ]
+      },
+      "healing": {
+        "healing": 0,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 0,
+        "barrier": 0
       }
     },
     {
@@ -3481,6 +3579,13 @@
           156.394,
           585.462
         ]
+      },
+      "healing": {
+        "healing": 11405,
+        "downedHealing": 1841,
+        "healingSelf": 0,
+        "healingAllies": 11405,
+        "barrier": 14052
       }
     },
     {
@@ -3624,6 +3729,13 @@
           157.533,
           585.513
         ]
+      },
+      "healing": {
+        "healing": 0,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 0,
+        "barrier": 0
       }
     },
     {
@@ -3767,6 +3879,13 @@
           155.339,
           589.849
         ]
+      },
+      "healing": {
+        "healing": 16459,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 16459,
+        "barrier": 3651
       }
     },
     {
@@ -3910,6 +4029,13 @@
           156.855,
           583.442
         ]
+      },
+      "healing": {
+        "healing": 87522,
+        "downedHealing": 0,
+        "healingSelf": 553,
+        "healingAllies": 86969,
+        "barrier": 49691
       }
     },
     {
@@ -4053,6 +4179,13 @@
           152.359,
           600.947
         ]
+      },
+      "healing": {
+        "healing": 4052,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 4052,
+        "barrier": 0
       }
     },
     {
@@ -4196,6 +4329,13 @@
           156.038,
           585.31
         ]
+      },
+      "healing": {
+        "healing": 132,
+        "downedHealing": 0,
+        "healingSelf": 132,
+        "healingAllies": 0,
+        "barrier": 0
       }
     },
     {
@@ -5001,6 +5141,13 @@
             580.724
           ]
         ]
+      },
+      "healing": {
+        "healing": 763,
+        "downedHealing": 0,
+        "healingSelf": 763,
+        "healingAllies": 0,
+        "barrier": 3930
       }
     },
     {
@@ -5144,6 +5291,13 @@
           157.45,
           586.871
         ]
+      },
+      "healing": {
+        "healing": 205820,
+        "downedHealing": 42827,
+        "healingSelf": 996,
+        "healingAllies": 204824,
+        "barrier": 0
       }
     },
     {
@@ -5287,6 +5441,13 @@
           159.254,
           583.316
         ]
+      },
+      "healing": {
+        "healing": 3994,
+        "downedHealing": 0,
+        "healingSelf": 16,
+        "healingAllies": 3978,
+        "barrier": 2358
       }
     },
     {
@@ -5430,6 +5591,13 @@
           154.915,
           584.298
         ]
+      },
+      "healing": {
+        "healing": 14253,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 14253,
+        "barrier": 2420
       }
     },
     {
@@ -5573,6 +5741,13 @@
           154.031,
           586.948
         ]
+      },
+      "healing": {
+        "healing": 17986,
+        "downedHealing": 0,
+        "healingSelf": 6024,
+        "healingAllies": 11962,
+        "barrier": 31184
       }
     },
     {
@@ -5716,6 +5891,13 @@
           157.325,
           586.184
         ]
+      },
+      "healing": {
+        "healing": 24064,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 24064,
+        "barrier": 0
       }
     },
     {
@@ -5859,6 +6041,13 @@
           155.159,
           591.953
         ]
+      },
+      "healing": {
+        "healing": 0,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 0,
+        "barrier": 0
       }
     },
     {
@@ -6002,6 +6191,13 @@
           155.627,
           585.963
         ]
+      },
+      "healing": {
+        "healing": 0,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 0,
+        "barrier": 0
       }
     },
     {
@@ -6145,6 +6341,13 @@
           157.812,
           589.449
         ]
+      },
+      "healing": {
+        "healing": 35850,
+        "downedHealing": 1013,
+        "healingSelf": 0,
+        "healingAllies": 35850,
+        "barrier": 0
       }
     },
     {
@@ -6288,6 +6491,13 @@
           154.909,
           584.614
         ]
+      },
+      "healing": {
+        "healing": 710,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 710,
+        "barrier": 0
       }
     },
     {
@@ -6431,6 +6641,13 @@
           156.354,
           583.499
         ]
+      },
+      "healing": {
+        "healing": 46329,
+        "downedHealing": 0,
+        "healingSelf": 9358,
+        "healingAllies": 36971,
+        "barrier": 14690
       }
     },
     {
@@ -6574,6 +6791,13 @@
           157.359,
           588.388
         ]
+      },
+      "healing": {
+        "healing": 13615,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 13615,
+        "barrier": 19805
       }
     },
     {
@@ -6717,6 +6941,13 @@
           155.841,
           585.447
         ]
+      },
+      "healing": {
+        "healing": 0,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 0,
+        "barrier": 0
       }
     },
     {
@@ -6860,6 +7091,13 @@
           155.809,
           585.269
         ]
+      },
+      "healing": {
+        "healing": 96595,
+        "downedHealing": 0,
+        "healingSelf": 22,
+        "healingAllies": 96573,
+        "barrier": 0
       }
     },
     {
@@ -7003,6 +7241,13 @@
           156.292,
           586.432
         ]
+      },
+      "healing": {
+        "healing": 31750,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 31750,
+        "barrier": 23570
       }
     },
     {
@@ -7146,6 +7391,13 @@
           156.191,
           588.1
         ]
+      },
+      "healing": {
+        "healing": 15910,
+        "downedHealing": 0,
+        "healingSelf": 874,
+        "healingAllies": 15036,
+        "barrier": 30443
       }
     },
     {
@@ -7289,6 +7541,13 @@
           155.995,
           588.368
         ]
+      },
+      "healing": {
+        "healing": 1512,
+        "downedHealing": 0,
+        "healingSelf": 1512,
+        "healingAllies": 0,
+        "barrier": 3051
       }
     },
     {
@@ -7358,6 +7617,13 @@
         "condiCleanseSelf": 0,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "healing": {
+        "healing": 25,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 25,
+        "barrier": 0
       }
     },
     {
@@ -7427,6 +7693,13 @@
         "condiCleanseSelf": 0,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "healing": {
+        "healing": 32044,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 32044,
+        "barrier": 0
       }
     },
     {
@@ -7496,6 +7769,13 @@
         "condiCleanseSelf": 0,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "healing": {
+        "healing": 646,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 646,
+        "barrier": 9816
       }
     },
     {
@@ -7565,7 +7845,19 @@
         "condiCleanseSelf": 0,
         "boonStrips": 0,
         "resurrects": 0
+      },
+      "healing": {
+        "healing": 0,
+        "downedHealing": 0,
+        "healingSelf": 0,
+        "healingAllies": 0,
+        "barrier": 0
       }
     }
-  ]
+  ],
+  "squadHealingTotal": 1008414,
+  "squadHealingSelf": 36563,
+  "squadHealingAllies": 971851,
+  "squadDownedHealing": 55681,
+  "squadBarrierTotal": 279498
 }

@@ -18,6 +18,11 @@
 use std::collections::BTreeSet;
 
 /// Duration/damage relative tolerance (M2/M3 `golden.rs` convention): 0.5%.
+/// `#[allow(dead_code)]`: not every `tests/*.rs` file that pulls in this
+/// shared module (each gets its own compiled copy, per Rust's integration-
+/// test model) uses every item in it -- same reasoning as `boon_id_set`
+/// below (M10 Task 1's `healing_golden.rs` only needs `rel_close`).
+#[allow(dead_code)]
 pub const RELATIVE_TOLERANCE: f64 = 0.005;
 
 /// True if `a` and `b` are within `tol` relative of each other, relative to
@@ -33,6 +38,7 @@ pub fn rel_close(a: f64, b: f64, tol: f64) -> bool {
 /// test) when it doesn't exist -- the same skip-gracefully-in-CI pattern
 /// every `tests/*_golden.rs` file's `read_local_fixture_or_skip` already
 /// uses.
+#[allow(dead_code)]
 pub fn read_bytes_or_skip(path: &str, label: &str) -> Option<Vec<u8>> {
     match std::fs::read(path) {
         Ok(b) => Some(b),
@@ -47,6 +53,7 @@ pub fn read_bytes_or_skip(path: &str, label: &str) -> Option<Vec<u8>> {
 /// (also gitignored, local-only) JSON sidecar fixture -- used for the
 /// dps.report EI JSON parity half of the post-rework calibration hook,
 /// which is checked only when present (unlike the required `.zevtc`).
+#[allow(dead_code)]
 pub fn read_json_or_skip(path: &str, label: &str) -> Option<serde_json::Value> {
     let s = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -62,6 +69,7 @@ pub fn read_json_or_skip(path: &str, label: &str) -> Option<serde_json::Value> {
 /// `account` value before joining the two by account text -- every existing
 /// golden test's join site does this inline; centralized here for the one
 /// new caller.
+#[allow(dead_code)]
 pub fn account_key(account: &str) -> &str {
     account.trim_start_matches(':')
 }

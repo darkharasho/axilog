@@ -36,6 +36,12 @@ pub fn to_ei_json(report: &Report) -> Value {
         detected.get(color).copied().unwrap_or_else(|| representative_team_id(color))
     };
 
+    // M10 Task 1: whole-fight seconds for the healing-extension `hps`/`bps`
+    // fields below -- same `(duration_ms / 1000.0).max(1.0)` convention
+    // `axilog_core::analysis::analyze` itself uses for `dps` (avoids a
+    // divide-by-zero on a degenerate zero-duration log).
+    let duration_secs = (report.encounter.duration_ms as f64 / 1000.0).max(1.0);
+
     let players: Vec<Value> = report.players.iter().map(|p| {
         // Real EI shape (verified against a real dps.report export,
         // axibridge's `test-fixtures/boon/20260117-181030.json`,
@@ -75,7 +81,7 @@ pub fn to_ei_json(report: &Report) -> Value {
                 .map(|pe| pe.total).unwrap_or(0);
             json!([ { "totalDmg": dmg } ])
         }).collect();
-        json!({
+        let mut v = json!({
             "account": p.account,
             "character_name": p.character,
             // EI convention: `profession` is the elite-spec name when the
@@ -144,7 +150,53 @@ pub fn to_ei_json(report: &Report) -> Value {
                     } ]
                 })
             }).collect::<Vec<_>>()
-        })
+        });
+        // `extHealingStats`/`extBarrierStats` (M10 Task 1): only when this
+        // log carries the healing extension at all (`p.healing` is `None`
+        // otherwise -- `axilog_schema::PlayerOut.healing`'s doc comment).
+        // Real EI shape (verified against a real dps.report export,
+        // axibridge's `test-fixtures/boon/20260117-181030.json`,
+        // `players[0].extHealingStats.outgoingHealing[0]`/
+        // `extBarrierStats.outgoingBarrier[0]`): both are single-phase
+        // arrays, same "one array standing in for phase 0 == the whole
+        // fight" convention `statsAll` above already uses. Only the exact-
+        // named real EI fields we actually compute are emitted --
+        // `healing`/`downedHealing`/`hps`/`downedHps` (outgoing, target=
+        // null, i.e. every friendly-directed heal including self, per
+        // `axilog_core::analysis::healing`'s module doc) and `barrier`/
+        // `bps`. Real EI's `healingPowerHealing`/`conversionHealing`/
+        // `hybridHealing` (skill-type breakdown), `outgoingHealingAllies`
+        // (per-friendly array), `incomingHealing`, and every `*1S`/`*Dist`
+        // field are NOT computed by this project (native-only
+        // `healing_out_self`/`healing_out_allies` cover the self/ally
+        // split instead -- see the native schema's `players[].healing`,
+        // which has no direct EI-field-name equivalent to reuse here) --
+        // omitted rather than faked, same convention as `statsTargets`/
+        // `support` above.
+        if let Some(h) = &p.healing {
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
+            obj.insert(
+                "extHealingStats".to_string(),
+                json!({
+                    "outgoingHealing": [ {
+                        "healing": h.healing_out_total,
+                        "hps": (h.healing_out_total as f64 / duration_secs).round() as i64,
+                        "downedHealing": h.downed_healing_out,
+                        "downedHps": (h.downed_healing_out as f64 / duration_secs).round() as i64,
+                    } ]
+                }),
+            );
+            obj.insert(
+                "extBarrierStats".to_string(),
+                json!({
+                    "outgoingBarrier": [ {
+                        "barrier": h.barrier_out,
+                        "bps": (h.barrier_out as f64 / duration_secs).round() as i64,
+                    } ]
+                }),
+            );
+        }
+        v
     }).collect();
     let targets: Vec<Value> = report.enemies.iter().map(|e| json!({
         "id": e.id, "name": e.name, "enemyPlayer": e.is_player,
@@ -210,7 +262,8 @@ mod tests {
             downs_dealt:0,kills_dealt:0,down_contribution:0,deaths:1,..Default::default()}],
             timeline:Timeline{resolution_ms:1000,squad_damage:vec![800],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default()};
+            boon_generation: Default::default(), warnings: Default::default(),
+            has_healing_extension: Default::default()};
         axilog_schema::build_report(&enc,&m,"0.1.0", None)
     }
     #[test]
@@ -281,6 +334,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime, boon_generation,
             warnings: Default::default(),
+            has_healing_extension: Default::default(),
         };
         axilog_schema::build_report(&enc,&m,"0.1.0", None)
     }
@@ -328,5 +382,67 @@ mod tests {
         assert_eq!(support["resurrects"], 1);
         // stunBreak fields (already present since M1) are untouched.
         assert_eq!(support["stunBreak"], 0);
+    }
+
+    /// M10 Task 1: `extHealingStats`/`extBarrierStats` are present only for
+    /// a player whose native `healing` block is `Some` (i.e. the log
+    /// carries the healing extension), using EI's exact real field names
+    /// for the subset this project actually computes, and absent entirely
+    /// otherwise (native `healing: None` -- no extension data at all).
+    #[test]
+    fn heals_and_barrier_map_to_ei_field_names_only_when_present() {
+        use axilog_schema::{
+            CcOut, DamageOut, EncounterOut, HealingOut, PlayerOut, SupportOut, TimelineOut,
+            PerSecondOut, Report,
+        };
+        fn base_player(account: &str, healing: Option<HealingOut>) -> PlayerOut {
+            PlayerOut {
+                account: account.to_string(), character: account.to_string(),
+                profession: "Guardian".into(), elite_spec: "".into(), team: "red".into(),
+                subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+                damage: DamageOut { total: 0, dps: 0.0, per_enemy: vec![] },
+                downs_dealt: 0, kills_dealt: 0, down_contribution: 0, downs_taken: 0, deaths: 0,
+                damage_taken: 0,
+                cc: CcOut { applied_total: 0, applied_duration_ms: 0, stun_breaks: 0, removed_stun_duration_ms: 0 },
+                boons: vec![],
+                support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
+                healing,
+            }
+        }
+        let report = Report {
+            schema_version: "0.1", axilog_version: "0.1.0".to_string(),
+            encounter: EncounterOut { kind: "wvw".into(), map: "".into(), duration_ms: 10_000,
+                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None },
+            players: vec![
+                base_player(":A.1", Some(HealingOut {
+                    healing_out_total: 5000, healing_out_allies: 3000, healing_out_self: 2000,
+                    barrier_out: 1000, downed_healing_out: 500,
+                })),
+                base_player(":B.1", None),
+            ],
+            enemies: vec![],
+            timeline: TimelineOut { resolution_ms: 1000, per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![] } },
+            warnings: vec![],
+            replay: None,
+        };
+        let v = to_ei_json(&report);
+        let healing = &v["players"][0]["extHealingStats"]["outgoingHealing"][0];
+        assert_eq!(healing["healing"], 5000);
+        assert_eq!(healing["downedHealing"], 500);
+        assert_eq!(healing["hps"], 500); // 5000 / 10s
+        assert_eq!(healing["downedHps"], 50); // 500 / 10s
+        let barrier = &v["players"][0]["extBarrierStats"]["outgoingBarrier"][0];
+        assert_eq!(barrier["barrier"], 1000);
+        assert_eq!(barrier["bps"], 100); // 1000 / 10s
+        // No native-only self/allies split leaked into the EI-shaped output
+        // under invented field names.
+        assert!(healing.get("healingSelf").is_none());
+        assert!(healing.get("healingAllies").is_none());
+
+        assert!(
+            v["players"][1].get("extHealingStats").is_none(),
+            "extHealingStats must be absent for a player with no native healing block"
+        );
+        assert!(v["players"][1].get("extBarrierStats").is_none());
     }
 }

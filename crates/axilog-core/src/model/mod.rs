@@ -196,13 +196,13 @@ mod tests {
         RawEvent { time:0, src_agent:addr, dst_agent:0, value: team as i32, buff_dmg:0,
             overstack:0, skillid:0, src_instid:0, dst_instid:0,
             src_master_instid:0, dst_master_instid:0, iff:0, buff:0, result:0,
-            is_activation:0, is_buffremove:0, is_statechange: sc::TEAM_CHANGE, is_shields: 0, is_offcycle: 0 }
+            is_activation:0, is_buffremove:0, is_statechange: sc::TEAM_CHANGE, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
     fn point_of_view(addr: u64) -> RawEvent {
         RawEvent { time:0, src_agent:addr, dst_agent:0, value:0, buff_dmg:0,
             overstack:0, skillid:0, src_instid:0, dst_instid:0,
             src_master_instid:0, dst_master_instid:0, iff:0, buff:0, result:0,
-            is_activation:0, is_buffremove:0, is_statechange: sc::POINT_OF_VIEW, is_shields: 0, is_offcycle: 0 }
+            is_activation:0, is_buffremove:0, is_statechange: sc::POINT_OF_VIEW, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
     #[test]
     fn splits_players_from_npcs() {

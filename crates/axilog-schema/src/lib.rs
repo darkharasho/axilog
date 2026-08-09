@@ -188,6 +188,19 @@ pub struct BoonOut {
 /// here -- see the Task 5 brief.
 #[derive(Serialize)]
 pub struct SupportOut { pub cleanses: u32, pub cleanses_self: u32, pub strips: u32, pub resurrects: u32 }
+/// arcdps healing-extension totals (M10, Task 1) -- see
+/// `axilog_core::analysis::healing::HealingMetrics`'s doc comment for the
+/// exact field definitions (mirrors EI's `extHealingStats`/
+/// `extBarrierStats` "outgoing" scalars, `healing_out_allies` derived as
+/// `healing_out_total - healing_out_self` -- see that module's doc for why).
+#[derive(Serialize)]
+pub struct HealingOut {
+    pub healing_out_total: u64,
+    pub healing_out_allies: u64,
+    pub healing_out_self: u64,
+    pub barrier_out: u64,
+    pub downed_healing_out: u64,
+}
 #[derive(Serialize)]
 pub struct PlayerOut { pub account: String, pub character: String, pub profession: String,
     pub elite_spec: String, pub team: String, pub subgroup: u8, pub in_squad: bool,
@@ -209,7 +222,15 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// entry per `buffs::BOON_IDS` id, in that table's order.
     pub boons: Vec<BoonOut>,
     /// Support-stat counts (M3, Task 3).
-    pub support: SupportOut }
+    pub support: SupportOut,
+    /// arcdps healing-extension totals (M10, Task 1). `None` (omitted from
+    /// the JSON entirely, not serialized as `null`) when the log carries no
+    /// healing-extension data at all (`Metrics::has_healing_extension ==
+    /// false`) -- see `HealingOut`'s doc comment and `Metrics::
+    /// has_healing_extension`'s doc comment for why this is a real
+    /// "no data" signal, not "genuinely all zero".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub healing: Option<HealingOut> }
 #[derive(Serialize)]
 pub struct EnemyOut { pub id: u64, pub name: String, pub team: String, pub is_player: bool,
     /// The enemy's current squad marker, mirroring `PlayerOut.marker`
@@ -270,6 +291,18 @@ pub fn build_report(enc: &Encounter, metrics: &Metrics, axilog_version: &str, re
                 cleanses: m.support.cleanses, cleanses_self: m.support.cleanses_self,
                 strips: m.support.strips, resurrects: m.support.resurrects,
             }).unwrap_or(SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 }),
+            healing: if metrics.has_healing_extension {
+                Some(m.map(|m| HealingOut {
+                    healing_out_total: m.healing.healing_out_total,
+                    healing_out_allies: m.healing.healing_out_allies,
+                    healing_out_self: m.healing.healing_out_self,
+                    barrier_out: m.healing.barrier_out,
+                    downed_healing_out: m.healing.downed_healing_out,
+                }).unwrap_or(HealingOut { healing_out_total: 0, healing_out_allies: 0,
+                    healing_out_self: 0, barrier_out: 0, downed_healing_out: 0 }))
+            } else {
+                None
+            },
         }
     }).collect();
     Report {
@@ -310,7 +343,8 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![500],
             cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default() };
+            boon_generation: Default::default(), warnings: Default::default(),
+            has_healing_extension: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.1");
@@ -318,6 +352,53 @@ mod tests {
         assert_eq!(v["players"][0]["damage"]["total"], 500);
         assert_eq!(v["encounter"]["map"], "Eternal Battlegrounds");
         assert!(v.get("replay").is_none(), "replay must be omitted when not requested");
+        assert!(
+            v["players"][0].get("healing").is_none(),
+            "healing must be omitted when has_healing_extension is false"
+        );
+    }
+
+    /// M10 Task 1: `healing` is present (not omitted) once `Metrics::
+    /// has_healing_extension` is true, even for a player whose own
+    /// `HealingMetrics` is all-zero (a real extension log where this
+    /// specific player never healed) -- `has_healing_extension` gates the
+    /// WHOLE block's presence, not each player's own totals.
+    #[test]
+    fn healing_block_present_when_extension_detected() {
+        use axilog_core::analysis::healing::HealingMetrics;
+        let enc = Encounter { kind:"wvw".into(), map:"".into(),
+            duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
+            teams:vec![], players:vec![
+                Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
+                    profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+                Player{agent_addr:2,account:":B.1".into(),character:"B".into(),
+                    profession:"Guardian".into(),elite_spec:"".into(),team:"red".into(),
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![2]},
+            ],
+            enemies:vec![], markers:vec![], tick_rate:None };
+        let m = Metrics { players: vec![
+            PlayerMetrics{agent_addr:1,
+                healing: HealingMetrics { healing_out_total: 500, healing_out_allies: 300,
+                    healing_out_self: 200, barrier_out: 50, downed_healing_out: 10 },
+                ..Default::default()},
+            PlayerMetrics{agent_addr:2, ..Default::default()}, // never healed
+        ],
+            timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
+            boons: Default::default(), boon_uptime: Default::default(),
+            boon_generation: Default::default(), warnings: Default::default(),
+            has_healing_extension: true };
+        let report = build_report(&enc, &m, "0.1.0", None);
+        let v = serde_json::to_value(&report).unwrap();
+        assert_eq!(v["players"][0]["healing"]["healing_out_total"], 500);
+        assert_eq!(v["players"][0]["healing"]["healing_out_allies"], 300);
+        assert_eq!(v["players"][0]["healing"]["healing_out_self"], 200);
+        assert_eq!(v["players"][0]["healing"]["barrier_out"], 50);
+        assert_eq!(v["players"][0]["healing"]["downed_healing_out"], 10);
+        // Second player never healed but the extension IS present overall
+        // -- their `healing` block must still be present, all-zero.
+        assert_eq!(v["players"][1]["healing"]["healing_out_total"], 0);
+        assert!(v["players"][1]["healing"].is_object(), "healing block present even when all-zero, since the extension is present overall");
     }
 
     #[test]
@@ -348,13 +429,14 @@ mod tests {
                 buff_dmg: 0, overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
                 src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
                 is_activation: 0, is_buffremove: 0, is_statechange: sc::POSITION,
-                is_shields: 0, is_offcycle: 0,
+                is_shields: 0, is_offcycle: 0, pad: 0,
             }],
             guid_map: vec![],
         };
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default() };
+            boon_generation: Default::default(), warnings: Default::default(),
+            has_healing_extension: Default::default() };
         let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
         let report = build_report(&enc, &m, "0.1.0", Some(&replay));
         assert!(report.replay.is_some());

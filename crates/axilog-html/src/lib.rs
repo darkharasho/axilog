@@ -101,6 +101,7 @@ mod tests {
                 },
                 boons: vec![],
                 support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
+                healing: None,
             }],
             enemies: vec![],
             timeline: TimelineOut {

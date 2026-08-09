@@ -3,6 +3,9 @@ pub mod downs;
 pub mod cc;
 pub mod buffs;
 pub mod support;
+/// arcdps healing-extension stats (M10 Task 1) -- see `healing::apply`'s
+/// module doc for the wire format / aggregation writeup.
+pub mod healing;
 /// Combat replay position tracks (M9 Task 1) -- standalone from
 /// [`analyze`]; see `replay::build_replay`.
 pub mod replay;
@@ -19,7 +22,14 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     pub stun_breaks: u32, pub removed_stun_duration_ms: u64,
     /// Condition cleanses / boon strips / resurrects (M3, Task 3) -- see
     /// `support::SupportMetrics`.
-    pub support: support::SupportMetrics }
+    pub support: support::SupportMetrics,
+    /// arcdps healing-extension totals (M10 Task 1) -- see
+    /// `healing::HealingMetrics`. All-zero (the `Default`) on a log that
+    /// doesn't carry the extension at all, OR on a real extension log for a
+    /// player who never healed/granted barrier -- `Metrics::
+    /// has_healing_extension` is the flag that distinguishes "genuinely
+    /// zero" from "extension absent", used to gate schema/warning output.
+    pub healing: healing::HealingMetrics }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
@@ -64,7 +74,16 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// top-level `warnings: [...]` array (omitted when empty); the CLI
     /// table view prints it to stderr; `ei-json` has no comparable field so
     /// it's simply not carried over.
-    pub warnings: Vec<String> }
+    pub warnings: Vec<String>,
+    /// Whether the arcdps healing extension (M10 Task 1) was present in
+    /// this log at all (a valid signature+revision registration row was
+    /// found -- see `evtc::ext_healing::healing_extension_present`).
+    /// `false` means every player's `PlayerMetrics::healing` is
+    /// meaningfully "no data", not "genuinely zero healing" -- native
+    /// schema uses this to omit the `healing` block entirely (rather than
+    /// emit a block of misleading zeros) and `warnings` carries a matching
+    /// "healing extension not present" note in that case.
+    pub has_healing_extension: bool }
 
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // A friendly account can own several raw agent addrs (relog / build
@@ -135,6 +154,12 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     downs::apply(&mut players, enc, raw, &squad, &enemies, &addr_to_rep);
     cc::apply_cc(&mut players, raw, &squad, &enemies, &addr_to_rep);
     support::apply(&mut players, raw, enc, &enemies, &addr_to_rep);
+    // M10 Task 1: cheap (a handful of linear scans over `raw.events`), so
+    // computed unconditionally like every other pass above -- returns
+    // whether the extension was present at all (see `Metrics::
+    // has_healing_extension`'s doc comment for why that matters beyond just
+    // "were all totals zero").
+    let has_healing_extension = healing::apply(&mut players, raw, &squad, &addr_to_rep);
     let timeline = cc::timeline(enc, raw, &squad, &enemies);
     // Computed last, after every other pass, per the Task 1 brief -- does
     // not read or alter `players`/`timeline` above.
@@ -178,7 +203,10 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             ));
         }
     }
-    Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings }
+    if !has_healing_extension {
+        warnings.push("healing extension not present in this log".to_string());
+    }
+    Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings, has_healing_extension }
 }
 
 #[cfg(test)]
@@ -191,7 +219,7 @@ mod tests {
         RawEvent { time: 0, src_agent: src, dst_agent: dst, value: dmg, buff_dmg: 0,
             overstack: 0, skillid: 1, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 1, buff: 0, result: 0,
-            is_activation: 0, is_buffremove: 0, is_statechange: 0, is_shields: 0, is_offcycle: 0 }
+            is_activation: 0, is_buffremove: 0, is_statechange: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
 
     fn raw_from(events: Vec<RawEvent>) -> RawLog {
@@ -312,6 +340,12 @@ mod tests {
             "warning should use the M4 Task 3 downgraded message, got {:?}",
             metrics.warnings[0]
         );
+        // M10 Task 1: this synthetic log has no healing-extension
+        // registration row either, so the healing-absent warning is
+        // appended AFTER the buff warning (order: existing warnings first,
+        // healing note last -- `warnings[0]` above stays the buff message).
+        assert_eq!(metrics.warnings.len(), 2, "expected both the buff and healing warnings: {:?}", metrics.warnings);
+        assert!(metrics.warnings[1].contains("healing extension not present"));
     }
 
     /// M4 Task 3: a post-2026-05-01 build that DOES carry extracted buff
@@ -331,20 +365,28 @@ mod tests {
                 overstack: 0, skillid: buffs::MIGHT, src_instid: 0, dst_instid: 0,
                 src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 1, result: 0,
                 is_activation: 0, is_buffremove: 0, is_statechange: sc::BUFF_APPLY,
-                is_shields: 0, is_offcycle: 0,
+                is_shields: 0, is_offcycle: 0, pad: 0,
             }],
             guid_map: vec![],
         };
         let metrics = analyze(&empty_enc(), &raw);
-        assert!(
-            metrics.warnings.is_empty(),
-            "post-rework build with a real extracted buff event must not warn, got {:?}",
+        // M10 Task 1: this synthetic log still has no healing-extension
+        // registration row, so it now warns about that (the buff-events
+        // warning itself correctly stays absent, which is what this test
+        // guards).
+        assert_eq!(
+            metrics.warnings,
+            vec!["healing extension not present in this log".to_string()],
+            "post-rework build with a real extracted buff event must not warn about buffs, \
+             but must still warn about the absent healing extension, got {:?}",
             metrics.warnings
         );
     }
 
-    /// A pre-rework build produces no warnings (the ordinary case for every
-    /// log this project currently supports), even with zero buff events.
+    /// A pre-rework build produces no BUFF warnings (the ordinary case for
+    /// every log this project currently supports), even with zero buff
+    /// events -- it still warns about the absent healing extension (M10
+    /// Task 1), since this synthetic log has no registration row either.
     #[test]
     fn pre_rework_build_no_warnings() {
         let raw = RawLog {
@@ -352,6 +394,6 @@ mod tests {
             agents: vec![], skills: vec![], events: vec![], guid_map: vec![],
         };
         let metrics = analyze(&empty_enc(), &raw);
-        assert!(metrics.warnings.is_empty());
+        assert_eq!(metrics.warnings, vec!["healing extension not present in this log".to_string()]);
     }
 }

@@ -65,6 +65,9 @@ enum View {
     /// Might average stacks + presence % for Quickness/Alacrity/Stability/
     /// Protection.
     Boons,
+    /// arcdps healing-extension totals (M10, Task 1): healing out (total),
+    /// allies, barrier out, downed-ally healing.
+    Healing,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -142,6 +145,7 @@ fn axilog_cli_table(r: &axilog_schema::Report, view: View) -> String {
         View::Default => axilog_cli_table_default(r),
         View::Support => axilog_cli_table_support(r),
         View::Boons => axilog_cli_table_boons(r),
+        View::Healing => axilog_cli_table_healing(r),
     }
 }
 fn axilog_cli_table_default(r: &axilog_schema::Report) -> String {
@@ -194,6 +198,36 @@ fn axilog_cli_table_boons(r: &axilog_schema::Report) -> String {
         let prot = find(axilog_core::analysis::buffs::PROTECTION).map(|b| b.presence_pct).unwrap_or(0.0);
         s.push_str(&format!("{:<24} {:<12} {:>10.2} {:>7.1} {:>7.1} {:>7.1} {:>7.1}\n",
             trunc(&p.account, 24), trunc(&p.profession, 12), might_avg, quick, alac, stab, prot));
+    }
+    s
+}
+/// `--view healing` (M10, Task 1): arcdps healing-extension totals --
+/// account, profession, healing out (total, self+allies), allies (healing
+/// out excluding self), barrier out, downed-ally healing. When the log
+/// carries no healing-extension data at all (`p.healing` is `None` for
+/// every player -- `axilog_schema::PlayerOut.healing`'s doc comment), every
+/// row renders as `-` rather than a misleading `0` (the caller's `main`
+/// already prints the matching "healing extension not present" warning to
+/// stderr for every `--format`, this table just avoids implying real zero
+/// data on top of that).
+fn axilog_cli_table_healing(r: &axilog_schema::Report) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("{:<24} {:<12} {:>12} {:>12} {:>10} {:>10}\n",
+        "account", "profession", "healing out", "allies", "barrier", "downed"));
+    let has_any = r.players.iter().any(|p| p.healing.is_some());
+    let mut players: Vec<_> = r.players.iter().collect();
+    players.sort_by_key(|p| std::cmp::Reverse(p.healing.as_ref().map(|h| h.healing_out_total).unwrap_or(0)));
+    for p in players {
+        match &p.healing {
+            Some(h) => s.push_str(&format!("{:<24} {:<12} {:>12} {:>12} {:>10} {:>10}\n",
+                trunc(&p.account, 24), trunc(&p.profession, 12),
+                h.healing_out_total, h.healing_out_allies, h.barrier_out, h.downed_healing_out)),
+            None => s.push_str(&format!("{:<24} {:<12} {:>12} {:>12} {:>10} {:>10}\n",
+                trunc(&p.account, 24), trunc(&p.profession, 12), "-", "-", "-", "-")),
+        }
+    }
+    if !has_any {
+        s.push_str("(healing extension not present in this log)\n");
     }
     s
 }
