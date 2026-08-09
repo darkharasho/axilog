@@ -43,7 +43,6 @@ jobs:
     # v0.1.1 attempt: our claim had `environment: MISSING`). If the PyPI
     # publisher config's environment field is blank, this line is ignored
     # by the match; if it names something other than `pypi`, update BOTH.
-    environment: pypi
     permissions:
       # Required for the OIDC token exchange with PyPI.
       id-token: write
