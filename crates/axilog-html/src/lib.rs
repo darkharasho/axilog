@@ -53,8 +53,8 @@ fn escape_for_script(json: &str) -> String {
 mod tests {
     use super::*;
     use axilog_schema::{
-        CcOut, ContributionOut, DamageOut, EncounterOut, PlayerOut, Report, SupportOut, TeamOut,
-        TimelineOut, PerSecondOut,
+        CcOut, ContributionOut, DamageOut, EncounterOut, PlayerOut, Report,
+        SupportOut, TeamOut, TimelineOut, PerSecondOut,
     };
 
     fn fixture_report() -> Report {
@@ -103,6 +103,7 @@ mod tests {
                 boons: vec![],
                 support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
                 healing: None,
+                skill_damage: None,
             }],
             enemies: vec![],
             all_enemies: vec![],

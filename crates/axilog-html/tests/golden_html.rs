@@ -30,7 +30,7 @@ fn fixture_report() -> Report {
     let raw = decode_raw(&bytes).expect("fixture decodes");
     let enc = resolve(&raw);
     let metrics = analyze(&enc, &raw);
-    build_report(&enc, &metrics, "0.1.0-test", None, None)
+    build_report(&enc, &metrics, "0.1.0-test", None, None, false)
 }
 
 /// Same pipeline, but with `--replay` (M9, Task 2): computes
@@ -43,7 +43,7 @@ fn fixture_report_with_replay() -> Report {
     let enc = resolve(&raw);
     let metrics = analyze(&enc, &raw);
     let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
-    build_report(&enc, &metrics, "0.1.0-test", Some(&replay), None)
+    build_report(&enc, &metrics, "0.1.0-test", Some(&replay), None, false)
 }
 
 /// Extract the raw text between the `axilog-data` script tags and parse it

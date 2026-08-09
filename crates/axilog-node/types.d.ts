@@ -71,6 +71,45 @@ export interface DamageOut {
   per_enemy: PerEnemyOut[]
 }
 
+/**
+ * One skill id's aggregated hit stats within some grouping (M12, Task 1).
+ * `hits`/`min`/`max` count only CONTRIBUTING (`dmg > 0`) events, matching
+ * this project's established damage predicate -- a deliberate divergence
+ * from GW2EI's own `totalDamageDist[].hits` (which also counts 0-damage
+ * missed/blocked/invulned/evaded attempts). `crit_hits`/`flank_hits` are
+ * hit COUNTS (not damage sums).
+ */
+export interface SkillEntryOut {
+  skill_id: number
+  total: number
+  hits: number
+  min: number
+  max: number
+  crit_hits: number
+  flank_hits: number
+}
+
+/** One enemy's per-skill outgoing breakdown (M12, Task 1) -- explicit `enemy_id`, not positional. */
+export interface PerTargetSkillsOut {
+  enemy_id: number
+  skills: SkillEntryOut[]
+}
+
+/**
+ * Per-skill damage distribution: outgoing (total + per-target) and
+ * incoming, each grouped by skill id (M12, Task 1). `sum(outgoing[*].total)
+ * == DamageOut.total` and `sum(taken[*].total) == PlayerOut.damage_taken`
+ * hold exactly by construction. Pet/minion damage is folded onto the owner
+ * here (using the pet's own skill id), matching `DamageOut.total`'s own
+ * pet-fold -- unlike GW2EI's `totalDamageDist`, which tracks the player
+ * actor only and excludes pet/minion damage entirely.
+ */
+export interface SkillDamageOut {
+  outgoing: SkillEntryOut[]
+  taken: SkillEntryOut[]
+  per_target: PerTargetSkillsOut[]
+}
+
 export interface CcOut {
   applied_total: number
   applied_duration_ms: number
@@ -178,6 +217,15 @@ export interface PlayerOut {
    * player never healed".
    */
   healing?: HealingOut
+  /**
+   * Per-skill damage distribution (M12, Task 1), opt-in like `replay`/
+   * `missiles` -- present only when requested (`{ skillDamage: true }`,
+   * see `ParseOptions.skillDamage` in `index.d.ts`). Omitted entirely
+   * (not `null`) when not requested; measured +249% native JSON size on
+   * the committed fixture when always-on, hence opt-in rather than
+   * always-present like `boons`/`support`.
+   */
+  skill_damage?: SkillDamageOut
 }
 
 export interface EnemyOut {

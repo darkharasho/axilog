@@ -46,9 +46,14 @@ fn value_err(e: impl std::fmt::Display) -> PyErr {
 /// Shared decode -> resolve -> analyze -> build_report pipeline (identical
 /// to `axilog-cli`'s `Cmd::Parse` handler and the Node SDK's
 /// `build_report_from_bytes`) over an already-read byte buffer.
-/// `want_replay` mirrors the `replay` keyword arg (M9, Task 2), defaulted
-/// to `false` by every existing call site.
-fn build_report_from_bytes(bytes: &[u8], want_replay: bool) -> PyResult<axilog_schema::Report> {
+/// `want_replay` mirrors the `replay` keyword arg (M9, Task 2);
+/// `want_skill_damage` mirrors the `skill_damage` keyword arg (M12, Task
+/// 1) -- both defaulted to `false` by every existing call site.
+fn build_report_from_bytes(
+    bytes: &[u8],
+    want_replay: bool,
+    want_skill_damage: bool,
+) -> PyResult<axilog_schema::Report> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(value_err)?;
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
@@ -59,7 +64,9 @@ fn build_report_from_bytes(bytes: &[u8], want_replay: bool) -> PyResult<axilog_s
             axilog_core::analysis::replay::DEFAULT_POLL_MS,
         )
     });
-    Ok(axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None))
+    Ok(axilog_schema::build_report(
+        &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None, want_skill_damage,
+    ))
 }
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
@@ -83,7 +90,9 @@ fn build_report_and_activity_from_bytes(
         )
     });
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
-    let report = axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None);
+    let report = axilog_schema::build_report(
+        &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None, false,
+    );
     Ok((report, activity))
 }
 
@@ -98,23 +107,29 @@ fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
 /// Parses a `.evtc`/`.zevtc` file at `path` and returns the native
 /// `Report` as a plain Python dict (see module docs for the field-name
 /// behavior). `replay=True` (M9, Task 2) opts into embedding the native
-/// combat-replay block; defaults to `False` for back-compat with every
-/// existing positional-only call site.
+/// combat-replay block; `skill_damage=True` (M12, Task 1) opts into
+/// embedding the native per-skill damage distribution block (measured
+/// +249% JSON size on the committed fixture when always-on, see
+/// `axilog_schema::Report::players`'s `PlayerOut::skill_damage` doc
+/// comment -- hence opt-in). Both default to `False` for back-compat with
+/// every existing positional-only call site.
 #[pyfunction]
-#[pyo3(signature = (path, replay=false))]
-fn parse_file(py: Python<'_>, path: &str, replay: bool) -> PyResult<Py<PyAny>> {
+#[pyo3(signature = (path, replay=false, skill_damage=false))]
+fn parse_file(py: Python<'_>, path: &str, replay: bool, skill_damage: bool) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let report = build_report_from_bytes(&bytes, replay)?;
+    let report = build_report_from_bytes(&bytes, replay, skill_damage)?;
     value_to_py(py, &report_to_value(&report)?)
 }
 
 /// Parses an already-read `.evtc`/`.zevtc` buffer (`bytes`/`bytearray`)
 /// and returns the native `Report` as a plain Python dict. `replay=True`
-/// (M9, Task 2) opts into embedding the native combat-replay block.
+/// (M9, Task 2) opts into embedding the native combat-replay block;
+/// `skill_damage=True` (M12, Task 1) opts into embedding the native
+/// per-skill damage distribution block.
 #[pyfunction]
-#[pyo3(signature = (data, replay=false))]
-fn parse_bytes(py: Python<'_>, data: &[u8], replay: bool) -> PyResult<Py<PyAny>> {
-    let report = build_report_from_bytes(data, replay)?;
+#[pyo3(signature = (data, replay=false, skill_damage=false))]
+fn parse_bytes(py: Python<'_>, data: &[u8], replay: bool, skill_damage: bool) -> PyResult<Py<PyAny>> {
+    let report = build_report_from_bytes(data, replay, skill_damage)?;
     value_to_py(py, &report_to_value(&report)?)
 }
 

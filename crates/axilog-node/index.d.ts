@@ -13,7 +13,9 @@ export declare function anonymizeFile(inPath: string, outPath: string): number
 /**
  * Parses an already-read `.evtc`/`.zevtc` buffer and returns the native
  * `Report` as a plain JS object. `opts.replay` (M9, Task 2) opts into
- * embedding the native combat-replay block.
+ * embedding the native combat-replay block; `opts.skill_damage` (M12,
+ * Task 1) opts into embedding the native per-skill damage distribution
+ * block.
  */
 export declare function parseBuffer(buf: Buffer, opts?: ParseOptions | undefined | null): Report
 
@@ -42,7 +44,13 @@ export declare function parseFileEi(path: string): any
  * optional in the generated TypeScript signature) keeps the existing
  * zero-arg call shape's behavior unchanged (no `replay` key in the
  * output, matching `Report.replay`'s serde skip-when-absent).
+ * `skill_damage: true` (M12, Task 1) opts into embedding the native
+ * per-skill damage distribution block (`SkillDamageOut`) on every
+ * `players[]` entry -- see `axilog_schema::Report::players`'s
+ * `PlayerOut::skill_damage` doc comment for why this defaults to opt-in
+ * (measured +249% JSON size on the committed fixture when always-on).
  */
 export interface ParseOptions {
   replay?: boolean
+  skillDamage?: boolean
 }

@@ -44,6 +44,20 @@ enum Cmd {
         /// ignores it (no comparable shape). Off by default.
         #[arg(long)]
         missiles: bool,
+        /// Embed the native per-skill damage distribution block (M12 Task 1):
+        /// per-squad-player outgoing damage grouped by skill id (total and
+        /// per-target) and incoming damage grouped by skill id --
+        /// `axilog_core::analysis::skill_damage`. Already computed
+        /// unconditionally by `analyze()` regardless of this flag (cheap);
+        /// this only controls whether `--format json` embeds it in each
+        /// `players[].skill_damage` field (every other format ignores it).
+        /// Off by default -- measured on the committed WvW fixture, this
+        /// block alone grows the native JSON output by +249% (see
+        /// `axilog_schema::Report::players`'s `PlayerOut::skill_damage`'s
+        /// doc comment for the numbers), so it's opt-in like `--replay`/
+        /// `--missiles` rather than always-on.
+        #[arg(long)]
+        skill_damage: bool,
     },
     /// Rewrite every player's character/account name in a .zevtc to a
     /// deterministic `Anon<N>` placeholder and write the result as a new
@@ -83,7 +97,7 @@ enum View {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Parse { path, format, view, output, replay, missiles } => {
+        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage } => {
             let bytes = std::fs::read(&path)?;
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
@@ -103,6 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 env!("CARGO_PKG_VERSION"),
                 replay_data.as_ref(),
                 missiles_data.as_ref(),
+                skill_damage,
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
             // post-2026-05-01 buff-statechange-rework build producing

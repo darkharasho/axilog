@@ -193,6 +193,40 @@ class ReplayOptInTests(unittest.TestCase):
         self.assertIn("replay", bytes_with_replay)
 
 
+class SkillDamageOptInTests(unittest.TestCase):
+    """M12 Task 1: `skill_damage=True` opts into the native per-skill damage
+    distribution block; absent by default. Mirrors `crates/axilog-node/
+    __test__/sdk.test.mjs`'s equivalent test."""
+
+    def test_skill_damage_absent_by_default_present_and_shaped_when_requested(self):
+        without = axilog.parse_file(FIXTURE)
+        self.assertNotIn("skill_damage", without["players"][0])
+
+        with_it = axilog.parse_file(FIXTURE, skill_damage=True)
+        p0 = next(p for p in with_it["players"] if p["damage"]["total"] > 0)
+        self.assertIn("skill_damage", p0)
+        sd = p0["skill_damage"]
+        self.assertIsInstance(sd["outgoing"], list)
+        self.assertIsInstance(sd["taken"], list)
+        self.assertIsInstance(sd["per_target"], list)
+        self.assertGreater(len(sd["outgoing"]), 0, "expected at least one outgoing skill entry")
+        entry = sd["outgoing"][0]
+        self.assertIsInstance(entry["skill_id"], int)
+        self.assertIsInstance(entry["total"], int)
+        self.assertIsInstance(entry["hits"], int)
+        # sum(outgoing[*]["total"]) == damage["total"] exactly (internal invariant).
+        total = sum(e["total"] for e in sd["outgoing"])
+        self.assertEqual(total, p0["damage"]["total"])
+
+        explicitly_off = axilog.parse_file(FIXTURE, skill_damage=False)
+        self.assertNotIn("skill_damage", explicitly_off["players"][0])
+
+        with open(FIXTURE, "rb") as f:
+            data = f.read()
+        bytes_with_it = axilog.parse_bytes(data, skill_damage=True)
+        self.assertIn("skill_damage", bytes_with_it["players"][0])
+
+
 class ParseBytesTests(unittest.TestCase):
     def test_parse_bytes_matches_parse_file(self):
         from_file = axilog.parse_file(FIXTURE)

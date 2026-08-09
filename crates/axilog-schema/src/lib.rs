@@ -276,6 +276,50 @@ pub struct TeamOut {
 pub struct DamageOut { pub total: u64, pub dps: f64, pub per_enemy: Vec<PerEnemyOut> }
 #[derive(Serialize)]
 pub struct PerEnemyOut { pub enemy_id: u64, pub total: u64 }
+/// One skill id's aggregated hit stats within some grouping (M12, Task 1) --
+/// mirrors `axilog_core::analysis::skill_damage::SkillEntry` field-for-field.
+/// `hits`/`min`/`max` count only CONTRIBUTING (`dmg > 0`) events, matching
+/// this project's established damage predicate (`analysis::damage::
+/// accumulate`'s own `if dmg == 0 { continue; }` skip) -- a deliberate,
+/// documented divergence from GW2EI's own `totalDamageDist[].hits` (which
+/// also counts missed/blocked/invulned/evaded 0-damage attempts, none of
+/// which this schema tracks anywhere else either). `crit_hits`/`flank_hits`
+/// are hit COUNTS (not damage sums), derived from `result::CRIT` and
+/// `is_flanking != 0` respectively -- see `skill_damage`'s module doc for
+/// the full derivation/calibration writeup, including the one documented
+/// systematic gap versus EI (pet/minion damage folded onto the owner here,
+/// excluded entirely from EI's own per-player `totalDamageDist`).
+#[derive(Serialize)]
+pub struct SkillEntryOut {
+    pub skill_id: u32,
+    pub total: u64,
+    pub hits: u32,
+    pub min: u64,
+    pub max: u64,
+    pub crit_hits: u32,
+    pub flank_hits: u32,
+}
+/// One enemy's per-skill outgoing breakdown (M12, Task 1) -- explicit
+/// `enemy_id`, not positional, so a consumer can look this up directly
+/// against `Report.enemies[].id` without depending on array order.
+#[derive(Serialize)]
+pub struct PerTargetSkillsOut {
+    pub enemy_id: u64,
+    pub skills: Vec<SkillEntryOut>,
+}
+/// Per-skill damage distribution: outgoing (total + per-target) and
+/// incoming, each grouped by skill id (M12, Task 1) -- mirrors
+/// `axilog_core::analysis::skill_damage::SkillDamageMetrics` field-for-field.
+/// `sum(outgoing[*].total) == DamageOut.total` and `sum(taken[*].total) ==
+/// PlayerOut.damage_taken` hold exactly by construction (see that module's
+/// doc comment). Always present (not gated like `healing`) -- computed
+/// unconditionally for every player, same as `boons`/`support`.
+#[derive(Serialize)]
+pub struct SkillDamageOut {
+    pub outgoing: Vec<SkillEntryOut>,
+    pub taken: Vec<SkillEntryOut>,
+    pub per_target: Vec<PerTargetSkillsOut>,
+}
 #[derive(Serialize)]
 pub struct CcOut { pub applied_total: u32, pub applied_duration_ms: u64,
     pub stun_breaks: u32, pub removed_stun_duration_ms: u64 }
@@ -373,7 +417,32 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// has_healing_extension`'s doc comment for why this is a real
     /// "no data" signal, not "genuinely all zero".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub healing: Option<HealingOut> }
+    pub healing: Option<HealingOut>,
+    /// Per-skill damage distribution (M12, Task 1), opt-in like `replay`/
+    /// `missiles` -- only present when the caller requested it (CLI
+    /// `--skill-damage` / SDK `skill_damage: true` passed to
+    /// [`build_report`]). Omitted entirely from the JSON (not `null`) when
+    /// not requested, matching `replay`/`missiles`'s own omit-when-absent
+    /// convention.
+    ///
+    /// Measured on the committed WvW fixture (`fixtures/wvw-small.anon.
+    /// zevtc`, 42 players): including this block unconditionally for every
+    /// player grows the serialized native `Report` from 135,526 to 473,438
+    /// bytes (+249%), driven by `per_target`'s combinatorial player x enemy
+    /// x skill breakdown (2,105 per-target skill rows alone, out of ~3,500
+    /// total skill-stat entries, on this one fixture) -- far past the M12
+    /// plan's "~30% growth" size-discipline guideline (stated for Task 2's
+    /// per-second block, but the same principle applies here: a real WvW
+    /// squad log's enemy roster is large enough that eager per-skill
+    /// per-target detail is not something every consumer wants paid for by
+    /// default). Opt-in avoids that regression for the default `json`/`csv`/
+    /// `table`/`html` output while keeping the underlying computation itself
+    /// unconditional and cheap (`axilog_core::analysis::Metrics::players[].
+    /// skill_damage` is always populated by `analyze()` -- see that field's
+    /// doc comment; this flag only gates whether [`build_report`] copies it
+    /// into the schema).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_damage: Option<SkillDamageOut> }
 #[derive(Serialize)]
 pub struct EnemyOut { pub id: u64, pub name: String, pub team: String, pub is_player: bool,
     /// The enemy's current squad marker, mirroring `PlayerOut.marker`
@@ -385,6 +454,17 @@ pub struct TimelineOut { pub resolution_ms: u64, pub per_second: PerSecondOut }
 #[derive(Serialize)]
 pub struct PerSecondOut { pub squad_damage: Vec<u64>, pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
 
+/// Converts one `axilog_core::analysis::skill_damage::SkillEntry` into the
+/// native schema's `SkillEntryOut`, field-for-field. Standalone helper since
+/// `build_report` maps this over three separate lists (`outgoing`, `taken`,
+/// and each `per_target[].skills`).
+fn skill_entry_out(e: &axilog_core::analysis::skill_damage::SkillEntry) -> SkillEntryOut {
+    SkillEntryOut {
+        skill_id: e.skill_id, total: e.total, hits: e.hits,
+        min: e.min, max: e.max, crit_hits: e.crit_hits, flank_hits: e.flank_hits,
+    }
+}
+
 /// `replay` (M9, Task 2): pass `Some(&Replay)` (from
 /// `axilog_core::analysis::replay::build_replay`, called separately by the
 /// caller when `--replay`/SDK `replay: true` was requested) to embed the
@@ -393,13 +473,25 @@ pub struct PerSecondOut { pub squad_damage: Vec<u64>, pub cc_applied: Vec<u32>, 
 /// attribute. `missiles` (M10, Task 2) works the same way: pass `Some(&
 /// Missiles)` (from `axilog_core::analysis::missiles::build_missiles`, when
 /// `--missiles`/SDK `missiles: true` was requested) to embed the native
-/// missiles block; `None` omits it entirely.
+/// missiles block; `None` omits it entirely. `include_skill_damage` (M12,
+/// Task 1) is simpler still -- unlike `replay`/`missiles`, the underlying
+/// data is already unconditionally computed on every `Metrics::players[]`
+/// entry (`analyze()` always populates `PlayerMetrics::skill_damage`, cheap:
+/// one grouped scan reusing `analysis::damage`'s predicate), so there's no
+/// separate builder call to make first -- just a `bool` gating whether this
+/// function COPIES that already-computed data into `PlayerOut::
+/// skill_damage`. `false` (every pre-M12 call site, via this crate's own
+/// tests being updated alongside this signature change) omits it entirely;
+/// `true` (CLI `--skill-damage` / SDK `skill_damage: true`) includes it.
+/// See `PlayerOut::skill_damage`'s doc comment for the measured size
+/// rationale behind defaulting this to opt-in rather than always-on.
 pub fn build_report(
     enc: &Encounter,
     metrics: &Metrics,
     axilog_version: &str,
     replay: Option<&Replay>,
     missiles: Option<&Missiles>,
+    include_skill_damage: bool,
 ) -> Report {
     let pm: std::collections::BTreeMap<u64, &axilog_core::analysis::PlayerMetrics> =
         metrics.players.iter().map(|p| (p.agent_addr, p)).collect();
@@ -459,6 +551,18 @@ pub fn build_report(
                     downed_healing_out: m.healing.downed_healing_out,
                 }).unwrap_or(HealingOut { healing_out_total: 0, healing_out_allies: 0,
                     healing_out_self: 0, barrier_out: 0, downed_healing_out: 0 }))
+            } else {
+                None
+            },
+            skill_damage: if include_skill_damage {
+                Some(m.map(|m| SkillDamageOut {
+                    outgoing: m.skill_damage.outgoing.iter().map(skill_entry_out).collect(),
+                    taken: m.skill_damage.taken.iter().map(skill_entry_out).collect(),
+                    per_target: m.skill_damage.per_target.iter().map(|t| PerTargetSkillsOut {
+                        enemy_id: t.enemy_id,
+                        skills: t.skills.iter().map(skill_entry_out).collect(),
+                    }).collect(),
+                }).unwrap_or(SkillDamageOut { outgoing: vec![], taken: vec![], per_target: vec![] }))
             } else {
                 None
             },
@@ -526,7 +630,7 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(),
             combat_participant_enemies: [9u64].into_iter().collect() };
-        let report = build_report(&enc, &m, "0.1.0", None, None);
+        let report = build_report(&enc, &m, "0.1.0", None, None, false);
         assert_eq!(report.enemies.len(), 1, "only the participant enemy stays in the filtered list");
         assert_eq!(report.enemies[0].id, 9);
         assert_eq!(report.all_enemies.len(), 2, "all_enemies keeps the full roster, including the loot bag");
@@ -552,7 +656,7 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
-        let report = build_report(&enc, &m, "0.1.0", None, None);
+        let report = build_report(&enc, &m, "0.1.0", None, None, false);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.2");
         assert_eq!(v["axilog_version"], "0.1.0");
@@ -596,7 +700,7 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: true, combat_participant_enemies: Default::default() };
-        let report = build_report(&enc, &m, "0.1.0", None, None);
+        let report = build_report(&enc, &m, "0.1.0", None, None, false);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["players"][0]["healing"]["healing_out_total"], 500);
         assert_eq!(v["players"][0]["healing"]["healing_out_allies"], 300);
@@ -607,6 +711,52 @@ mod tests {
         // -- their `healing` block must still be present, all-zero.
         assert_eq!(v["players"][1]["healing"]["healing_out_total"], 0);
         assert!(v["players"][1]["healing"].is_object(), "healing block present even when all-zero, since the extension is present overall");
+    }
+
+    /// M12 Task 1: `skill_damage` is opt-in like `replay`/`missiles` --
+    /// omitted entirely (`include_skill_damage: false`, every existing call
+    /// site) even though `PlayerMetrics::skill_damage` is ALWAYS computed
+    /// (unlike `replay`/`missiles`, there's no separate builder call to
+    /// skip); present (and correctly copied field-for-field) only when
+    /// `include_skill_damage: true`.
+    #[test]
+    fn skill_damage_is_opt_in_like_replay_and_missiles() {
+        use axilog_core::analysis::skill_damage::{PerTargetSkills, SkillDamageMetrics, SkillEntry};
+        let enc = Encounter { kind:"wvw".into(), map:"".into(),
+            duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
+            teams:vec![], players:vec![
+                Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
+                    profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+            ],
+            enemies:vec![], markers:vec![], tick_rate:None };
+        let entry = SkillEntry { skill_id: 100, total: 50, hits: 1, min: 50, max: 50, crit_hits: 0, flank_hits: 0 };
+        let m = Metrics { players: vec![
+            PlayerMetrics{agent_addr:1,
+                skill_damage: SkillDamageMetrics {
+                    outgoing: vec![entry.clone()],
+                    taken: vec![entry.clone()],
+                    per_target: vec![PerTargetSkills { enemy_id: 9, skills: vec![entry] }],
+                },
+                ..Default::default()},
+        ],
+            timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
+            boons: Default::default(), boon_uptime: Default::default(),
+            boon_generation: Default::default(), warnings: Default::default(),
+            has_healing_extension: false, combat_participant_enemies: Default::default() };
+
+        let omitted = build_report(&enc, &m, "0.1.0", None, None, false);
+        let v = serde_json::to_value(&omitted).unwrap();
+        assert!(v["players"][0].get("skill_damage").is_none(), "skill_damage must be omitted when not requested");
+
+        let included = build_report(&enc, &m, "0.1.0", None, None, true);
+        let v = serde_json::to_value(&included).unwrap();
+        let sd = &v["players"][0]["skill_damage"];
+        assert_eq!(sd["outgoing"][0]["skill_id"], 100);
+        assert_eq!(sd["outgoing"][0]["total"], 50);
+        assert_eq!(sd["taken"][0]["skill_id"], 100);
+        assert_eq!(sd["per_target"][0]["enemy_id"], 9);
+        assert_eq!(sd["per_target"][0]["skills"][0]["skill_id"], 100);
     }
 
     /// M10 Task 3: a single non-finite (`Infinity`) sample coordinate mixed
@@ -687,7 +837,7 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
         let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
-        let report = build_report(&enc, &m, "0.1.0", Some(&replay), None);
+        let report = build_report(&enc, &m, "0.1.0", Some(&replay), None, false);
         assert!(report.replay.is_some());
         let r = report.replay.unwrap();
         assert_eq!(r.poll_ms, DEFAULT_POLL_MS);
@@ -739,7 +889,7 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
         let missiles = build_missiles(&raw, &enc);
-        let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles));
+        let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles), false);
         assert!(report.missiles.is_some());
         let mo = report.missiles.unwrap();
         assert_eq!(mo.players.len(), 1);

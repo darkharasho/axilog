@@ -37,17 +37,28 @@ fn napi_err(reason: impl std::fmt::Display) -> Error {
 /// optional in the generated TypeScript signature) keeps the existing
 /// zero-arg call shape's behavior unchanged (no `replay` key in the
 /// output, matching `Report.replay`'s serde skip-when-absent).
+/// `skill_damage: true` (M12, Task 1) opts into embedding the native
+/// per-skill damage distribution block (`SkillDamageOut`) on every
+/// `players[]` entry -- see `axilog_schema::Report::players`'s
+/// `PlayerOut::skill_damage` doc comment for why this defaults to opt-in
+/// (measured +249% JSON size on the committed fixture when always-on).
 #[napi(object)]
 #[derive(Default, Clone, Copy)]
 pub struct ParseOptions {
     pub replay: Option<bool>,
+    pub skill_damage: Option<bool>,
 }
 
 /// Shared decode -> resolve -> analyze -> build_report pipeline (identical
 /// to `axilog-cli`'s `Cmd::Parse` handler) over an already-read byte
-/// buffer. `want_replay` mirrors `ParseOptions.replay` (defaulted to
-/// `false` by callers that pass no options at all).
-fn build_report_from_bytes(bytes: &[u8], want_replay: bool) -> Result<axilog_schema::Report> {
+/// buffer. `want_replay` mirrors `ParseOptions.replay`; `want_skill_damage`
+/// mirrors `ParseOptions.skill_damage` (both defaulted to `false` by
+/// callers that pass no options at all).
+fn build_report_from_bytes(
+    bytes: &[u8],
+    want_replay: bool,
+    want_skill_damage: bool,
+) -> Result<axilog_schema::Report> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
@@ -58,7 +69,9 @@ fn build_report_from_bytes(bytes: &[u8], want_replay: bool) -> Result<axilog_sch
             axilog_core::analysis::replay::DEFAULT_POLL_MS,
         )
     });
-    Ok(axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None))
+    Ok(axilog_schema::build_report(
+        &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None, want_skill_damage,
+    ))
 }
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
@@ -82,7 +95,9 @@ fn build_report_and_activity_from_bytes(
         )
     });
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
-    let report = axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None);
+    let report = axilog_schema::build_report(
+        &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None, false,
+    );
     Ok((report, activity))
 }
 
@@ -103,11 +118,14 @@ pub fn parse_file(path: String, opts: Option<ParseOptions>) -> Result<Value> {
 
 /// Parses an already-read `.evtc`/`.zevtc` buffer and returns the native
 /// `Report` as a plain JS object. `opts.replay` (M9, Task 2) opts into
-/// embedding the native combat-replay block.
+/// embedding the native combat-replay block; `opts.skill_damage` (M12,
+/// Task 1) opts into embedding the native per-skill damage distribution
+/// block.
 #[napi]
 pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
     let want_replay = opts.and_then(|o| o.replay).unwrap_or(false);
-    let report = build_report_from_bytes(buf.as_ref(), want_replay)?;
+    let want_skill_damage = opts.and_then(|o| o.skill_damage).unwrap_or(false);
+    let report = build_report_from_bytes(buf.as_ref(), want_replay, want_skill_damage)?;
     report_to_value(&report)
 }
 

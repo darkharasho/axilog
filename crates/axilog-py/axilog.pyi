@@ -140,6 +140,43 @@ class CcOut(TypedDict):
     stun_breaks: int
     removed_stun_duration_ms: int
 
+# --- per-skill damage distribution (M12, Task 1) ---------------------------
+
+class SkillEntryOut(TypedDict):
+    """One skill id's aggregated hit stats within some grouping. `hits`/
+    `min`/`max` count only CONTRIBUTING (`dmg > 0`) events -- a deliberate
+    divergence from GW2EI's own `totalDamageDist[].hits` (which also counts
+    0-damage missed/blocked/invulned/evaded attempts). `crit_hits`/
+    `flank_hits` are hit COUNTS (not damage sums)."""
+
+    skill_id: int
+    total: int
+    hits: int
+    min: int
+    max: int
+    crit_hits: int
+    flank_hits: int
+
+class PerTargetSkillsOut(TypedDict):
+    """One enemy's per-skill outgoing breakdown -- explicit `enemy_id`, not positional."""
+
+    enemy_id: int
+    skills: List[SkillEntryOut]
+
+class SkillDamageOut(TypedDict):
+    """Per-skill damage distribution: outgoing (total + per-target) and
+    incoming, each grouped by skill id. `sum(outgoing[*]["total"])` ==
+    `DamageOut["total"]` and `sum(taken[*]["total"])` ==
+    `PlayerOut["damage_taken"]` hold exactly by construction. Pet/minion
+    damage is folded onto the owner here (using the pet's own skill id),
+    matching `DamageOut["total"]`'s own pet-fold -- unlike GW2EI's
+    `totalDamageDist`, which tracks the player actor only and excludes
+    pet/minion damage entirely."""
+
+    outgoing: List[SkillEntryOut]
+    taken: List[SkillEntryOut]
+    per_target: List[PerTargetSkillsOut]
+
 # --- boons / support ------------------------------------------------------
 
 class GenerationOut(TypedDict):
@@ -224,11 +261,16 @@ class PlayerOut(_PlayerOutRequired, total=False):
     """`marker`/`commander_tag` are omitted (not `null`) when absent.
     `healing` is omitted entirely (not a `null`/all-zero dict) when the log
     carries no healing-extension data at all -- a real "no data" signal, not
-    "the player never healed"."""
+    "the player never healed". `skill_damage` (M12, Task 1) is opt-in like
+    `Report["replay"]`/`Report["missiles"]` -- omitted unless requested via
+    `skill_damage=True` (see `parse_file`/`parse_bytes`); measured +249%
+    native JSON size on the committed fixture when always-on, hence opt-in
+    rather than always-present like `boons`/`support`."""
 
     marker: str
     commander_tag: CommanderTagOut
     healing: HealingOut
+    skill_damage: SkillDamageOut
 
 class _EnemyOutRequired(TypedDict):
     id: int
@@ -348,21 +390,25 @@ class Report(_ReportRequired, total=False):
 
 # --- module functions -----------------------------------------------------
 
-def parse_file(path: str, replay: bool = False) -> Report:
+def parse_file(path: str, replay: bool = False, skill_damage: bool = False) -> Report:
     """Parse a `.evtc`/`.zevtc` file at `path` into the native `Report` shape.
 
     `replay` (M9, Task 2) opts into embedding the native combat-replay
-    block (`Report["replay"]`); defaults to `False`.
+    block (`Report["replay"]`); `skill_damage` (M12, Task 1) opts into
+    embedding the native per-skill damage distribution block on every
+    `players[]` entry (`PlayerOut["skill_damage"]`). Both default to `False`.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.
     """
     ...
 
-def parse_bytes(data: bytes, replay: bool = False) -> Report:
+def parse_bytes(data: bytes, replay: bool = False, skill_damage: bool = False) -> Report:
     """Parse an already-read `.evtc`/`.zevtc` buffer into the native `Report` shape.
 
     `replay` (M9, Task 2) opts into embedding the native combat-replay block.
+    `skill_damage` (M12, Task 1) opts into embedding the native per-skill
+    damage distribution block.
 
     Raises `ValueError` if `data` is not a decodable/parseable arcdps log.
     """

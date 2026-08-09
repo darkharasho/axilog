@@ -143,6 +143,31 @@ test('parseFile: replay opt-in (M9 Task 2) -- absent by default, present + shape
   assert.ok(bufWithReplay.replay)
 })
 
+test('parseFile: skillDamage opt-in (M12 Task 1) -- absent by default, present + shaped when requested', () => {
+  const without = sdk.parseFile(FIXTURE)
+  assert.equal(without.players[0].skill_damage, undefined, 'skill_damage must be absent by default')
+
+  const withIt = sdk.parseFile(FIXTURE, { skillDamage: true })
+  const p0 = withIt.players.find((p) => p.damage.total > 0)
+  assert.ok(p0, 'expected at least one player with nonzero damage')
+  assert.ok(p0.skill_damage, 'expected a skill_damage block when { skillDamage: true }')
+  assert.ok(Array.isArray(p0.skill_damage.outgoing))
+  assert.ok(Array.isArray(p0.skill_damage.taken))
+  assert.ok(Array.isArray(p0.skill_damage.per_target))
+  assert.ok(p0.skill_damage.outgoing.length > 0, 'expected at least one outgoing skill entry')
+  const entry = p0.skill_damage.outgoing[0]
+  assert.equal(typeof entry.skill_id, 'number')
+  assert.equal(typeof entry.total, 'number')
+  assert.equal(typeof entry.hits, 'number')
+  // sum(outgoing[*].total) == damage.total exactly (internal invariant).
+  const sum = sumBy(p0.skill_damage.outgoing, (e) => e.total)
+  assert.equal(sum, p0.damage.total, 'sum(outgoing totals) must equal damage.total exactly')
+
+  // opts.skillDamage: false must behave the same as omitting opts entirely.
+  const explicitlyOff = sdk.parseFile(FIXTURE, { skillDamage: false })
+  assert.equal(explicitlyOff.players[0].skill_damage, undefined)
+})
+
 test('parseFileEi: axibridge-read key shapes', () => {
   const ei = sdk.parseFileEi(FIXTURE)
 
