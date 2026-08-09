@@ -39,6 +39,13 @@ jobs:
   pypi-publish:
     name: Publish to PyPI (trusted publishing)
     runs-on: ubuntu-latest
+    # PyPI trusted-publisher configs usually pin a GitHub environment name
+    # (the PyPI UI recommends one); the OIDC claim must carry it or the
+    # token exchange fails with `invalid-publisher` (bit on the first
+    # v0.1.1 attempt: our claim had `environment: MISSING`). If the PyPI
+    # publisher config's environment field is blank, this line is ignored
+    # by the match; if it names something other than `pypi`, update BOTH.
+    environment: pypi
     permissions:
       # Required for the OIDC token exchange with PyPI.
       id-token: write
