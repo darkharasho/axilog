@@ -298,7 +298,7 @@ mod tests {
         let e = registration_event(HEALING_SIGNATURE, 2);
         let r = decode_registration(&e).unwrap();
         assert_ne!(r.signature as u64, r.revision as u64);
-        assert_ne!(r.signature, HEALING_SIGNATURE as u32 >> 8, "must not be a shifted mis-decode");
+        assert_ne!(r.signature, HEALING_SIGNATURE >> 8, "must not be a shifted mis-decode");
     }
 
     #[test]

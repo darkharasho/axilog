@@ -72,10 +72,20 @@ pub struct MissilesOut {
     pub squad: SquadMissilesOut,
 }
 /// One squad player's missile totals -- mirrors
-/// `axilog_core::analysis::missiles::PlayerMissiles` field-for-field.
+/// `axilog_core::analysis::missiles::PlayerMissiles` field-for-field, plus
+/// `account` (final-review fix wave): `PlayerMissiles` itself has no display
+/// fields (it's keyed purely by `agent_addr`, an internal join key not
+/// exposed anywhere else in the native JSON), which left `missiles.players[]`
+/// entries with no way for a consumer to join them back to `players[]`
+/// without also having requested `--replay` (whose tracks DO carry a display
+/// name) or reverse-engineering `agent_addr`. `account` is populated the same
+/// way `PlayerOut.account` is -- straight from `axilog_core::model::Player`
+/// -- by [`build_missiles_out`], which (as of this fix) takes the
+/// `Encounter` roster alongside `Missiles` for exactly this lookup.
 #[derive(Serialize)]
 pub struct PlayerMissilesOut {
     pub agent_addr: u64,
+    pub account: String,
     pub fired: u32,
     pub hit: u32,
     pub denied: u32,
@@ -93,15 +103,22 @@ pub struct SquadMissilesOut {
 }
 
 /// Build the native [`MissilesOut`] schema block from a computed
-/// [`Missiles`] (`axilog_core::analysis::missiles::build_missiles`).
-/// Standalone from [`build_report`], mirroring `build_replay_out`.
-pub fn build_missiles_out(missiles: &Missiles) -> MissilesOut {
+/// [`Missiles`] (`axilog_core::analysis::missiles::build_missiles`) plus the
+/// same `Encounter` roster it was built from. Standalone from
+/// [`build_report`], mirroring `build_replay_out`. `enc` is only used to
+/// look up each `PlayerMissiles::agent_addr`'s `account` (final-review fix
+/// wave) -- see [`PlayerMissilesOut`]'s doc comment for why that join key
+/// was missing.
+pub fn build_missiles_out(missiles: &Missiles, enc: &Encounter) -> MissilesOut {
+    let accounts: std::collections::BTreeMap<u64, &str> =
+        enc.players.iter().map(|p| (p.agent_addr, p.account.as_str())).collect();
     MissilesOut {
         players: missiles
             .players
             .iter()
             .map(|p| PlayerMissilesOut {
                 agent_addr: p.agent_addr,
+                account: accounts.get(&p.agent_addr).copied().unwrap_or("").to_string(),
                 fired: p.fired,
                 hit: p.hit,
                 denied: p.denied,
@@ -442,7 +459,7 @@ pub fn build_report(
                 downs: metrics.timeline.downs.clone() } },
         warnings: metrics.warnings.clone(),
         replay: replay.map(build_replay_out),
-        missiles: missiles.map(build_missiles_out),
+        missiles: missiles.map(|m| build_missiles_out(m, enc)),
     }
 }
 
@@ -693,6 +710,7 @@ mod tests {
         let mo = report.missiles.unwrap();
         assert_eq!(mo.players.len(), 1);
         assert_eq!(mo.players[0].agent_addr, 1);
+        assert_eq!(mo.players[0].account, ":A.1", "account must be populated so missiles.players[] joins to players[] by account");
         assert_eq!(mo.players[0].fired, 1);
         assert_eq!(mo.players[0].hit, 1);
         assert_eq!(mo.squad.fired, 1);

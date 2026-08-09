@@ -108,6 +108,19 @@ export interface SupportOut {
   resurrects: number
 }
 
+/**
+ * arcdps healing-extension totals (M10, Task 1) -- outgoing healing/barrier
+ * scalars, mirroring EI's `extHealingStats`/`extBarrierStats`.
+ * `healing_out_allies` is `healing_out_total - healing_out_self`.
+ */
+export interface HealingOut {
+  healing_out_total: number
+  healing_out_allies: number
+  healing_out_self: number
+  barrier_out: number
+  downed_healing_out: number
+}
+
 export interface PlayerOut {
   account: string
   character: string
@@ -132,6 +145,13 @@ export interface PlayerOut {
   /** One entry per tracked boon id, in `axilog_core::analysis::buffs::BOON_IDS` order. */
   boons: BoonOut[]
   support: SupportOut
+  /**
+   * arcdps healing-extension totals (M10, Task 1). Omitted entirely (not
+   * present as a `null`/all-zero object) when the log carries no
+   * healing-extension data at all -- a real "no data" signal, not "the
+   * player never healed".
+   */
+  healing?: HealingOut
 }
 
 export interface EnemyOut {
@@ -207,6 +227,53 @@ export interface ReplayOut {
 }
 
 /**
+ * One squad player's missile totals (M10, Task 2), account-folded across
+ * relog/build-swap addrs like every other per-player metric. `account`
+ * (final-review fix wave) is the join key back to `Report.players[]` --
+ * `agent_addr` alone isn't exposed anywhere else in the native JSON. See
+ * `axilog_core::analysis::missiles`'s module doc for exactly what `fired`/
+ * `hit`/`denied`/`reflected_at_self` are (and are NOT) attributable to --
+ * notably `denied` deliberately does not distinguish blocked/reflected/
+ * destroyed/expired outcomes, and `reflected_at_self` is an explicitly
+ * labeled heuristic (GW2EI's own "Maybe"-prefixed signal), not a certainty.
+ */
+export interface PlayerMissilesOut {
+  agent_addr: number
+  account: string
+  fired: number
+  hit: number
+  denied: number
+  reflected_at_self: number
+}
+
+/**
+ * Squad-wide missile totals (M10, Task 2) -- the sum of every
+ * `PlayerMissilesOut` entry, plus the aggregate, unattributed "incoming,
+ * denied" defensive rollup (`incoming_fired`/`incoming_denied`: no
+ * per-player credit exists for who denied an incoming missile, per the
+ * `axilog_core::analysis::missiles` module doc).
+ */
+export interface SquadMissilesOut {
+  fired: number
+  hit: number
+  denied: number
+  incoming_fired: number
+  incoming_denied: number
+}
+
+/**
+ * Opt-in missile (projectile) analytics (M10, Task 2), native-only --
+ * present only when the caller opted in (CLI `--missiles` / SDK
+ * `missiles: true`). Not yet exposed via this Node SDK's `ParseOptions`
+ * (see that interface's doc comment) -- declared here so the type surface
+ * matches the schema `axilog_schema::Report` can actually produce.
+ */
+export interface MissilesOut {
+  players: PlayerMissilesOut[]
+  squad: SquadMissilesOut
+}
+
+/**
  * axilog's native report shape (`axilog_schema::Report`), as returned by
  * `parseFile`/`parseBuffer`. `schema_version` is currently always `"0.1"`.
  */
@@ -221,4 +288,12 @@ export interface Report {
   warnings?: string[]
   /** Opt-in combat-replay block (M9, Task 2) -- present only when requested via `{ replay: true }`. Omitted entirely (not `null`) otherwise. */
   replay?: ReplayOut
+  /**
+   * Opt-in missile (projectile) analytics block (M10, Task 2). Not yet
+   * requestable through this Node SDK (`ParseOptions` has no `missiles`
+   * flag) -- declared `?` here purely so the type surface matches what
+   * `axilog_schema::Report` can produce; always omitted (`undefined`) in
+   * practice until the SDK grows that flag.
+   */
+  missiles?: MissilesOut
 }
