@@ -111,7 +111,7 @@
 //! `isSwap` field shape for any FUTURE caller that widens the referenced
 //! scope (e.g. if a later milestone decodes `WeaponSwapEvent` casts too).
 //!
-//! ## Documented gap: real EI's `isSwap` is BROADER than just the sentinel
+//! ## Extended non-sentinel `is_swap` ids (M14, Task 3, Ruling B)
 //!
 //! Discovered empirically by this module's own golden spot-check
 //! (`skill_map_golden.rs`, against `fixtures/local/wvw-postrework.ei.json`,
@@ -132,23 +132,58 @@
 //!     || RitualistHelper.IsRitualistShroudTransform(ID);
 //! ```
 //! -- i.e. "swap" covers not just the literal weapon-swap pseudo id but
-//! EVERY profession's own "change stance" mechanic: elementalist attunement
-//! swaps (e.g. id `5492` `FireAttunementSkill` -- which is ALSO one of
-//! `hit_stats::NON_CRITABLE_SKILLS`'s 20 entries, a real, confirmed
-//! `is_swap`/`can_crit` divergence on the same id), revenant legend swaps
-//! (across 5 elite specs), and necromancer/harbinger/ritualist shroud
-//! transforms. Each of those helper methods is itself another small,
-//! hardcoded per-profession id table in GW2EI source -- reproducible in
-//! principle (unlike `auto_attack`, none of this needs the external GW2
-//! API), but out of scope for this task: 7+ additional profession-specific
-//! tables to individually source-verify is a substantially larger lift than
-//! the single, already-established `WeaponSwap` sentinel this task's own
-//! plan brief named ("is_swap: weapon-swap skill ids ... WeaponSwap =
-//! skill id ~-2"). `skill_map_golden.rs`'s local spot-check documents (does
-//! NOT hard-fail on) every `is_swap` divergence this narrower
-//! implementation produces against a real capture, the same "measure and
-//! document, don't silently under-cite" discipline `analysis::rotation`'s
-//! own `InstantCastEvent` gap already established for this milestone.
+//! EVERY profession's own "change stance" mechanic. Per the M14 Task 3 plan
+//! brief (Ruling B of the review), this module now ALSO reproduces the
+//! three NAMED, curated categories the brief called out -- each verified
+//! directly against the same `/tmp/gw2ei` checkout of `baaron4/
+//! GW2-Elite-Insights-Parser`, `master`, 2026-08-09:
+//!
+//! - **Elementalist attunement swaps** (`ElementalistHelper.
+//!   IsAttunementSwap`, `GW2EIEvtcParser/EIData/ProfHelpers/Elementalist/
+//!   ElementalistHelper.cs`): the base 4 core-Elementalist attunement-swap
+//!   skill ids, from `GW2EIEvtcParser/ParserHelpers/IDs/SkillIDs.cs`:
+//!   `FireAttunementSkill=5492`, `WaterAttunementSkill=5493`,
+//!   `AirAttunementSkill=5494`, `EarthAttunementSkill=5495` -- id `5492` is
+//!   ALSO one of `hit_stats::NON_CRITABLE_SKILLS`'s 20 entries, a real,
+//!   confirmed `is_swap`/`can_crit` divergence on the same id (both flags
+//!   are independently correct: `5492` is both a swap AND non-critable).
+//! - **Revenant legend swaps, 5 variants** (`RevenantHelper.IsLegendSwap`
+//!   plus each elite spec's own override, `GW2EIEvtcParser/EIData/
+//!   ProfHelpers/Revenant/{RevenantHelper,HeraldHelper,RenegadeHelper,
+//!   VindicatorHelper,ConduitHelper}.cs`): base Revenant's 4
+//!   `LegendaryAssassinStanceSkill=28134`, `LegendaryDemonStanceSkill=
+//!   28494`, `LegendaryDwarfStanceSkill=28419`,
+//!   `LegendaryCentaurStanceSkill=28195`; Herald's `LegendaryDragonStanceSkill
+//!   =28085`; Renegade's `LegendaryRenegadeStanceSkill=41858`; Vindicator's
+//!   `LegendaryAllianceStanceSkill=62749`; Conduit's
+//!   `LegendaryEntityStanceSkill=76610` (all 8 ids from the same
+//!   `SkillIDs.cs`).
+//! - **Necromancer shroud transforms, 3 variants**
+//!   (`NecromancerHelper.IsDeathShroudTransform`/`HarbingerHelper.
+//!   IsHarbingerShroudTransform`/`RitualistHelper.
+//!   IsRitualistShroudTransform`, same `ProfHelpers/Necromancer/` dir --
+//!   deliberately NOT `ReaperHelper.IsReaperShroudTransform`, which reuses
+//!   base Death Shroud's own enter/exit ids rather than defining its own,
+//!   matching real EI's `IsSwap` itself never calling that 4th helper):
+//!   Necromancer's `EnterDeathShroud=10574`/`ExitDeathShroud=10585`;
+//!   Harbinger's `EnterHarbingerShroud=62567`/`ExitHarbingerShroud=62540`;
+//!   Ritualist's `EnterRitualistsShroud=77238`/`ExitRitualistsShroud=76933`
+//!   (all 6 ids from the same `SkillIDs.cs`).
+//!
+//! [`is_swap`] implements exactly these 3 categories (18 hardcoded ids
+//! total) plus the pre-existing [`WEAPON_SWAP_SKILL_ID`] sentinel.
+//! **Deliberately still excluded**: `WeaverHelper.IsAttunementSwap` (a
+//! SEPARATE, much larger 16-entry table of Weaver's own dual-attunement
+//! combo skill ids, `GW2EIEvtcParser/EIData/ProfHelpers/Elementalist/
+//! WeaverHelper.cs`) -- the plan brief's own curated category list names
+//! "elementalist attunement swaps" (singular category, the base 4 above),
+//! not Weaver's separate combo table, so this remains a documented,
+//! narrower-than-real-EI gap on Weaver logs specifically.
+//! `skill_map_golden.rs`'s local spot-check documents (does NOT hard-fail
+//! on) any remaining `is_swap` divergence this implementation produces
+//! against a real capture, the same "measure and document, don't silently
+//! under-cite" discipline `analysis::rotation`'s own `InstantCastEvent` gap
+//! already established for this milestone.
 //!
 //! # `can_crit`: reused verbatim from M13
 //!
@@ -210,6 +245,58 @@ use std::collections::{BTreeMap, BTreeSet};
 /// this module's own referenced scope, but implemented anyway" writeup.
 pub const WEAPON_SWAP_SKILL_ID: u32 = (-2i32) as u32;
 
+/// Elementalist attunement-swap skill ids (`ElementalistHelper.
+/// IsAttunementSwap`'s base-4, NOT Weaver's separate 16-combo table) -- see
+/// this module's doc comment's "Extended non-sentinel `is_swap` ids"
+/// section for the full citation.
+const ATTUNEMENT_SWAP_SKILL_IDS: [u32; 4] = [
+    5492, // FireAttunementSkill
+    5493, // WaterAttunementSkill
+    5494, // AirAttunementSkill
+    5495, // EarthAttunementSkill
+];
+
+/// Revenant legend-swap skill ids, all 5 variants (base Revenant + Herald +
+/// Renegade + Vindicator + Conduit) -- see this module's doc comment's
+/// "Extended non-sentinel `is_swap` ids" section for the full citation.
+const LEGEND_SWAP_SKILL_IDS: [u32; 8] = [
+    28134, // LegendaryAssassinStanceSkill (base Revenant)
+    28494, // LegendaryDemonStanceSkill (base Revenant)
+    28419, // LegendaryDwarfStanceSkill (base Revenant)
+    28195, // LegendaryCentaurStanceSkill (base Revenant)
+    28085, // LegendaryDragonStanceSkill (Herald)
+    41858, // LegendaryRenegadeStanceSkill (Renegade)
+    62749, // LegendaryAllianceStanceSkill (Vindicator)
+    76610, // LegendaryEntityStanceSkill (Conduit)
+];
+
+/// Necromancer shroud-transform skill ids, all 3 variants (base
+/// Necromancer/Harbinger/Ritualist -- deliberately NOT Reaper, which reuses
+/// base Death Shroud's own ids) -- see this module's doc comment's
+/// "Extended non-sentinel `is_swap` ids" section for the full citation.
+const SHROUD_TRANSFORM_SKILL_IDS: [u32; 6] = [
+    10574, // EnterDeathShroud (Necromancer)
+    10585, // ExitDeathShroud (Necromancer)
+    62567, // EnterHarbingerShroud (Harbinger)
+    62540, // ExitHarbingerShroud (Harbinger)
+    77238, // EnterRitualistsShroud (Ritualist)
+    76933, // ExitRitualistsShroud (Ritualist)
+];
+
+/// Whether `id` is one of GW2EI's `SkillItem.IsSwap` ids -- the weapon-swap
+/// sentinel plus the 3 curated non-sentinel categories (M14, Task 3, Ruling
+/// B): elementalist attunement swaps, revenant legend swaps (5 variants),
+/// necromancer shroud transforms (3 variants). See this module's doc
+/// comment's "Extended non-sentinel `is_swap` ids" section for the full
+/// per-id citation, and its "still excluded" note for the one remaining
+/// documented gap (Weaver's separate 16-combo attunement table).
+pub fn is_swap(id: u32) -> bool {
+    id == WEAPON_SWAP_SKILL_ID
+        || ATTUNEMENT_SWAP_SKILL_IDS.contains(&id)
+        || LEGEND_SWAP_SKILL_IDS.contains(&id)
+        || SHROUD_TRANSFORM_SKILL_IDS.contains(&id)
+}
+
 /// One skill's best-effort entry -- mirrors the native/ei-json schema shape
 /// `{ name, auto_attack?, is_swap, can_crit }` (M14, Task 2). See this
 /// module's doc comment for exactly what each field is (and is NOT)
@@ -224,12 +311,12 @@ pub struct SkillMapEntry {
     /// module's doc comment's "`auto_attack`: OMITTED, not guessed"
     /// section for the full citation.
     pub auto_attack: Option<bool>,
-    /// `true` only for [`WEAPON_SWAP_SKILL_ID`] -- a NARROWER check than
-    /// real EI's own `isSwap` (which also covers attunement/legend/shroud
-    /// swaps -- see this module's doc comment's "Documented gap: real EI's
-    /// `isSwap` is BROADER" section). On this module's own referenced
-    /// scope the sentinel itself can never actually fire, on the current
-    /// supported feature set (same doc section).
+    /// `true` for [`WEAPON_SWAP_SKILL_ID`] plus the 3 curated non-sentinel
+    /// categories [`is_swap`] checks (elementalist attunement swaps,
+    /// revenant legend swaps, necromancer shroud transforms) -- still a
+    /// NARROWER check than real EI's own `isSwap` (which also covers
+    /// Weaver's separate combo-attunement table). See this module's doc
+    /// comment's "Extended non-sentinel `is_swap` ids" section.
     pub is_swap: bool,
     /// Reused verbatim from `hit_stats::can_crit` (M13's `NonCritableSkills`
     /// table).
@@ -302,7 +389,7 @@ pub fn build(raw: &RawLog, players: &[PlayerMetrics]) -> SkillMap {
             let entry = SkillMapEntry {
                 name: resolve_name(id, names.get(&id).copied()),
                 auto_attack: None,
-                is_swap: id == WEAPON_SWAP_SKILL_ID,
+                is_swap: is_swap(id),
                 can_crit: hit_stats::can_crit(id),
             };
             (id, entry)
@@ -411,6 +498,34 @@ mod tests {
         let players = vec![player_referencing(&[5005], &[], &[], &[])];
         let map = build(&raw, &players);
         assert!(!map[&5005].is_swap);
+    }
+
+    #[test]
+    fn fire_attunement_swap_is_flagged_is_swap_and_independently_non_critable() {
+        // M14 Task 3, Ruling B: 5492 (FireAttunementSkill) is a real,
+        // confirmed divergence-of-independence case -- it's BOTH a swap
+        // (elementalist attunement swap, the extended non-sentinel
+        // is_swap category) AND non-critable (M13's NonCritableSkills
+        // table, `hit_stats::NON_CRITABLE_SKILLS`), and the two flags must
+        // both land correctly, independently of each other.
+        let raw = raw_with_skills(vec![]);
+        let players = vec![player_referencing(&[5492], &[], &[], &[])];
+        let map = build(&raw, &players);
+        assert!(map[&5492].is_swap, "5492 (FireAttunementSkill) must be flagged is_swap");
+        assert!(!map[&5492].can_crit, "5492 (FireAttunementSkill) must remain non-critable");
+    }
+
+    #[test]
+    fn revenant_legend_swap_and_necro_shroud_transform_are_flagged_is_swap() {
+        // Spot-check one id per remaining curated category (Herald's own
+        // legend-swap override, and Harbinger's shroud transform) so the
+        // per-category id tables are each exercised, not just the base
+        // Revenant/Necromancer entries.
+        let raw = raw_with_skills(vec![]);
+        let players = vec![player_referencing(&[28085, 62567], &[], &[], &[])];
+        let map = build(&raw, &players);
+        assert!(map[&28085].is_swap, "28085 (Herald's LegendaryDragonStanceSkill) must be flagged is_swap");
+        assert!(map[&62567].is_swap, "62567 (EnterHarbingerShroud) must be flagged is_swap");
     }
 
     #[test]

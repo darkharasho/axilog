@@ -8,8 +8,12 @@
 //! this suite calibrates a numeric metric exactly (or within a documented
 //! tolerance) against EI: `name` comes from a genuinely different data
 //! source (this log's own skill table vs EI's bundled/API-backed skill DB),
-//! and `is_swap` is a deliberately NARROWER check than EI's own (see that
-//! module's "Documented gap" doc section). `can_crit` alone (reused
+//! and `is_swap` is a deliberately NARROWER check than EI's own -- as of
+//! M14 Task 3 it covers the `WeaponSwap` sentinel PLUS 3 curated
+//! non-sentinel categories (elementalist attunement swaps, revenant legend
+//! swaps, necromancer shroud transforms), but still excludes Weaver's own
+//! separate combo-attunement table (see that module's "Extended
+//! non-sentinel `is_swap` ids" doc section). `can_crit` alone (reused
 //! verbatim from M13's already-calibrated `NonCritableSkills` table) is
 //! asserted EXACT on every overlapping id.
 
@@ -121,9 +125,10 @@ fn skill_map_scoped_to_referenced_ids_on_committed_fixture() {
 /// - `can_crit` (M13's already-calibrated `NonCritableSkills` table): must
 ///   match EI's `canCrit` EXACTLY on every overlapping id -- a real
 ///   assertion, not just a print.
-/// - `is_swap`: divergences are EXPECTED (this module's narrower
-///   `WeaponSwap`-sentinel-only check vs EI's broader attunement/legend/
-///   shroud-swap-inclusive one) -- counted and printed, not asserted.
+/// - `is_swap`: divergences are EXPECTED (this module's narrower check --
+///   `WeaponSwap` sentinel + the 3 curated non-sentinel categories -- still
+///   excludes Weaver's separate combo-attunement table, which real EI's
+///   own `isSwap` includes) -- counted and printed, not asserted.
 /// - `name`: divergences are EXPECTED (different data sources) -- up to 10
 ///   real examples printed side-by-side, not asserted.
 #[test]
@@ -186,9 +191,8 @@ fn skill_map_spot_check_against_real_ei_skillmap_when_available() {
     println!(
         "skill_map_spot_check: {overlap} overlapping ids, 0 can_crit mismatches (asserted exact), \
          {} name matches / {} name divergences (NOT asserted -- different data sources), \
-         {} is_swap divergences (NOT asserted -- this module's narrower WeaponSwap-sentinel-only \
-         check vs real EI's attunement/legend/shroud-swap-inclusive one, see analysis::skill_map's \
-         module doc)",
+         {} is_swap divergences (NOT asserted -- this module's narrower check still excludes \
+         Weaver's separate combo-attunement table, see analysis::skill_map's module doc)",
         name_matches, name_divergences.len(), is_swap_divergences.len()
     );
     if !is_swap_divergences.is_empty() {

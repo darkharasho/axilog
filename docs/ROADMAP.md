@@ -23,13 +23,18 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   incoming side, see `analysis::defenses`'s module doc.
 - CI: x86_64-apple-darwin cross-compiles on arm64 (macos-13 retired); ci concurrency-cancel
 - M13 hit-quality (statsAll, 20 fields EXACT) + defenses (SURPASSES EI: true life-leech count EI's own bug zeroes) + --view defense
+- M14 Rotation + skillMap: per-player cast tracking (`AnimatedCastEvent`-pipeline subset, opt-in
+  `--rotation`, cast COUNT exact vs EI) + best-effort skillMap (log-table names, always-on,
+  scoped to referenced skill ids only) + extended `is_swap` (WeaponSwap sentinel + elementalist
+  attunement swaps + revenant legend swaps [5 variants] + necro shroud transforms [3 variants],
+  Weaver's own combo-attunement table still out of scope) + ei-json mapping (`rotation[]`/
+  `skillMap`, gate-respecting) + `--view rotation` (cast count + APM). Closes the last
+  axibridge-flagged Tier-1 analysis gap — see README's EI-JSON parity section.
 
 ## In flight
 (none)
 
 ## Queued (autonomous — build in order; reorder only for dependency)
-- M14 Rotation + skillMap: cast/rotation event tracking, skill name/icon map (IDTOGUID SKILL
-  mappings already decoded). Unblocks Skill Usage / APM.
 - M15 Combat-replay positions in EI shape: resample sparse tracks → EI fixed-rate grid;
   inchToPixel map-scale table (per-map). Unblocks axibridge replay map / heatmap / positioning.
 - MCONDCAT Condition-skill-id classification catalog: EMPIRICALLY-CONFIRMED gap (M13 post-era: up to 35%% divergence on condition/power/life-leech buff==1 split; immune fields exact). Pull GW2EI Buff Classification==Condition catalog (like M3's cleanse set, complete). Unblocks exact condition/power split on post-era logs.
