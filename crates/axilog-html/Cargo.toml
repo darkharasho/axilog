@@ -1,0 +1,10 @@
+[package]
+name = "axilog-html"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+axilog-schema = { path = "../axilog-schema" }
+serde_json.workspace = true

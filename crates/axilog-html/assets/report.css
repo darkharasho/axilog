@@ -1,0 +1,218 @@
+/* axilog WvW report — dark-first "WvW night" theme.
+ *
+ * Theming: every color lives in a CSS custom property on `:root` (dark,
+ * the default) with overrides under `html[data-theme="light"]`. The
+ * in-page toggle button (#axilog-theme-toggle, wired in report.js) only
+ * ever flips the `data-theme` attribute — it never touches these values
+ * directly, so the two palettes stay the single source of truth.
+ */
+
+:root {
+  --bg: #0b0e15;
+  --bg-raised: #121623;
+  --bg-inset: #0e1119;
+  --border: #232a3d;
+  --border-soft: #1a2032;
+  --text: #e7e9f2;
+  --text-muted: #8d94ac;
+  --text-faint: #5b6280;
+  --accent: #d9a441;
+  --accent-soft: #d9a44133;
+  --danger: #e0555f;
+  --danger-soft: #e0555f22;
+  --team-red: #e0555f;
+  --team-blue: #4f8fe0;
+  --team-green: #57c278;
+  --team-unknown: #8d94ac;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
+    monospace;
+  --radius: 6px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+html[data-theme="light"] {
+  --bg: #f4f5f8;
+  --bg-raised: #ffffff;
+  --bg-inset: #eceef3;
+  --border: #d7dae2;
+  --border-soft: #e4e6ed;
+  --text: #1a1d29;
+  --text-muted: #565c72;
+  --text-faint: #8890a4;
+  --accent: #a9711a;
+  --accent-soft: #a9711a22;
+  --danger: #c93b45;
+  --danger-soft: #c93b4522;
+  --team-red: #c93b45;
+  --team-blue: #2f6fc4;
+  --team-green: #2f9a5c;
+  --team-unknown: #6b7286;
+  --shadow: 0 1px 2px rgba(20, 22, 30, 0.08), 0 4px 16px rgba(20, 22, 30, 0.06);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- header ------------------------------------------------------- */
+
+#axilog-header {
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 28px 16px;
+}
+
+#axilog-header-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#axilog-map {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+#axilog-theme-toggle {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-size: 15px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+#axilog-theme-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+#axilog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.axilog-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.axilog-stat[hidden] {
+  display: none;
+}
+
+.axilog-stat strong,
+.axilog-stat .axilog-stat-value {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+#axilog-warnings {
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 8px 12px;
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+#axilog-warnings[hidden] {
+  display: none;
+}
+
+#axilog-warnings ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+#axilog-teams {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.axilog-team-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-soft);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.axilog-team-chip::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--team-dot, var(--team-unknown));
+}
+
+.axilog-team-chip.team-red {
+  --team-dot: var(--team-red);
+  color: var(--team-red);
+  border-color: color-mix(in srgb, var(--team-red) 45%, var(--border-soft));
+}
+
+.axilog-team-chip.team-blue {
+  --team-dot: var(--team-blue);
+  color: var(--team-blue);
+  border-color: color-mix(in srgb, var(--team-blue) 45%, var(--border-soft));
+}
+
+.axilog-team-chip.team-green {
+  --team-dot: var(--team-green);
+  color: var(--team-green);
+  border-color: color-mix(in srgb, var(--team-green) 45%, var(--border-soft));
+}
+
+.axilog-team-chip.team-unknown {
+  --team-dot: var(--team-unknown);
+  color: var(--team-muted);
+}
+
+/* ---- main / views (populated in later milestone tasks) ------------ */
+
+#axilog-main {
+  padding: 20px 28px 40px;
+}

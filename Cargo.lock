@@ -64,6 +64,7 @@ version = "0.1.0"
 dependencies = [
  "axilog-core",
  "axilog-ei",
+ "axilog-html",
  "axilog-schema",
  "clap",
  "serde_json",
@@ -84,6 +85,14 @@ name = "axilog-ei"
 version = "0.1.0"
 dependencies = [
  "axilog-core",
+ "axilog-schema",
+ "serde_json",
+]
+
+[[package]]
+name = "axilog-html"
+version = "0.1.0"
+dependencies = [
  "axilog-schema",
  "serde_json",
 ]
