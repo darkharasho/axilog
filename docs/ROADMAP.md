@@ -32,11 +32,24 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   axibridge-flagged Tier-1 analysis gap — see README's EI-JSON parity section.
   Follow-up: py `.pyi` stub synced to the M14 surface (rotation/skillMap TypedDicts + params).
 
+- MPERF Performance milestone (merged 1b5eb5b, reviewed SHIP): criterion bench harness + CI job;
+  InstidRegistry built once (11 full-log builds → 1); shared BoonInputs; contribution
+  time-ordered index; flat-Vec registry; healing gate hoist. Fixture pipeline 50.5→28.9ms;
+  real 583k-event log 325.5→174.5ms (analyze 2.63×). Output verified byte-identical to
+  pre-MPERF main across 30/30 surfaces. docs/BENCHMARKS.md has the full applied/declined record.
+- **v0.1.1 RELEASED + npm LIVE**: packages renamed to the @axiapps scope and published —
+  `npm install @axiapps/axilog` works from the public registry (install-smoke verified).
+  M8-parked publish hardening landed (index.js version-literal guard in check-versions.sh,
+  pypi-validate wheel install-smoke gate, npm/PyPI publish idempotency).
+
 ## In flight
-- MPERF Performance milestone: criterion bench harness (baseline first), then a
-  shared-scan/registry-dispatch refactor to collapse the ~15–18 unconditional full passes over
-  `raw.events` that `analyze()` currently runs. Flagged rising by the M12 + M14 whole-branch
-  reviews. Regression gate + accuracy-preservation (all calibration stays EXACT) are the bars.
+- MPUB (remainder, USER-BLOCKED): PyPI trusted publishing. Workflow `pypl-publish.yml` is wired
+  (OIDC, skip-existing, dispatched by release.yml post-release) but PyPI rejects the token
+  exchange with `invalid-publisher` for every tested claim combination (workflow
+  pypl-publish.yml/pypi-publish.yml × environment absent/`pypi`). The publisher config on PyPI
+  must be aligned to: owner `darkharasho`, repo `axilog`, workflow `pypl-publish.yml`,
+  environment `pypi` (or cleared), project `axilog`, on pypi.org (not TestPyPI). Then re-dispatch:
+  `gh workflow run pypl-publish.yml -f tag=v0.1.1`.
 
 ## Queued (autonomous — build in order; reorder only for dependency)
 - M15 Combat-replay positions in EI shape: resample sparse tracks → EI fixed-rate grid;
