@@ -1,0 +1,149 @@
+name: Release
+
+# Tag-triggered only (M8 Task 1). ci.yml (branch push / PR) is untouched and
+# unrelated to this workflow. Pushing a `vX.Y.Z` tag builds axilog CLI
+# binaries for every target below, packages them, and publishes a GitHub
+# Release. No npm/PyPI publishing happens here (see M8 Tasks 2-3).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Fail fast, before spending matrix build minutes, if the tag doesn't
+  # match the version actually in Cargo.toml.
+  version-guard:
+    name: Verify tag matches workspace version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag == [workspace.package].version
+        run: scripts/check-tag-version.sh "${{ github.ref_name }}"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: version-guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          # No hosted native ARM Linux runner exists for aarch64-unknown-
+          # linux-gnu, so this leg cross-compiles on the x86_64 ubuntu-latest
+          # runner. Chosen approach: apt-install gcc-aarch64-linux-gnu and
+          # point cargo's target linker at it, rather than `cross` (the
+          # cross-rs tool). Why: `cross` runs the build inside a Docker
+          # container (Docker-in-Docker on the hosted runner), which pulls a
+          # multi-hundred-MB image and adds real minutes to every release for
+          # a target that is build-only here (no test execution, so we don't
+          # need cross's qemu-based "run tests under emulation" feature --
+          # its main advantage over a bare linker). A plain apt package plus
+          # two env vars is faster, has no extra moving parts, and is exactly
+          # as reliable for "produce an aarch64 ELF binary that links
+          # successfully" as long as the crate has no aarch64-specific native
+          # deps (axilog-cli doesn't: it's pure Rust + the workspace's other
+          # pure-Rust crates).
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          # Matches ci.yml's os/target pairing: macos-13 is the last Intel
+          # runner image (native x86_64), macos-latest is Apple Silicon
+          # (native aarch64) -- both targets build natively, no cross needed.
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install aarch64 cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure aarch64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build axilog (release)
+        run: cargo build --release -p axilog-cli --target ${{ matrix.target }}
+
+      - name: Strip binary (native unix targets)
+        if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-gnu'
+        run: strip target/${{ matrix.target }}/release/axilog
+
+      - name: Strip binary (aarch64 cross target)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: aarch64-linux-gnu-strip target/${{ matrix.target }}/release/axilog
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/axilog"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            BIN="${BIN}.exe"
+          fi
+          VERSION="$(scripts/workspace-version.sh)"
+          mkdir -p dist
+          scripts/package-release.sh "$BIN" "$VERSION" "${{ matrix.target }}" dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axilog-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Re-check post-build: cheap, and guarantees the release step never
+      # runs against a mismatched tag even if the guard job's result was
+      # somehow bypassed (e.g. a future workflow_dispatch re-run of just
+      # this job).
+      - name: Check tag == [workspace.package].version
+        run: scripts/check-tag-version.sh "${{ github.ref_name }}"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Consolidate artifacts + generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) \
+            -exec cp {} release/ \;
+          cd release
+          sha256sum -- *.tar.gz *.zip > SHA256SUMS
+          echo "Release contents:"
+          ls -la
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" release/* \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
