@@ -274,6 +274,22 @@ pub fn apply(
 /// pet_credit_cc_events`/`buffs::events::resolve_agent` already use
 /// (`self` when `master_instid == 0`, i.e. "no master" -- credit lands on
 /// the contributor itself).
+///
+/// **addr-0 guard (review fix round 1)**: `addr == 0` is never a real,
+/// creditable contributor -- arcdps never assigns a live agent address `0`
+/// (it's the wire's own "no agent" sentinel, e.g. a ground-targeted skill's
+/// unset `dst_agent`). Without this guard, a synthetic/degenerate
+/// all-zero-fields row (`addr == instid == master_instid == 0`) would
+/// resolve to `Some(0)` (the trivial "no instid, no master -> self" path
+/// falls straight through) -- harmless for the OUTGOING direction (an addr
+/// of `0` can never be a squad player's `agent_addr`, so the later `idx`
+/// lookup silently drops it), but a real footgun for INCOMING: that
+/// direction aggregates every surviving credit in the window onto the
+/// victim's `downed_by` unconditionally, with no equivalent per-contributor
+/// identity lookup to filter it back out (see `apply`'s `Direction::
+/// Incoming` arm). Dropping `addr == 0` here, once, before either the guard
+/// or the fold runs, closes that gap for every credit type and both
+/// directions uniformly.
 fn resolve_contributor(
     registry: &InstidRegistry,
     addr: u64,
@@ -281,6 +297,9 @@ fn resolve_contributor(
     master_instid: u16,
     time: u64,
 ) -> Option<u64> {
+    if addr == 0 {
+        return None;
+    }
     if instid != 0 {
         match registry.resolve_at(instid, time) {
             Some(resolved) if resolved == addr => {}
@@ -693,6 +712,25 @@ mod tests {
         let players = run(events, vec![1, 2], vec![]);
         let victim = players.iter().find(|p| p.agent_addr == 1).unwrap();
         assert_eq!(victim.downed_by.damage, 0, "a same-side contributor must never be credited into downed_by");
+    }
+
+    /// Review fix round 1: an all-zero-fields contributor (`addr == instid
+    /// == master_instid == 0`, e.g. a degenerate/synthetic row) must be
+    /// dropped by `resolve_contributor`'s addr-0 guard, not mis-credited.
+    /// This specifically exercises the INCOMING direction (`downed_by`),
+    /// which -- unlike outgoing -- has no per-contributor `idx` lookup to
+    /// catch an addr-0 credit after the fact; it aggregates every surviving
+    /// credit in the window unconditionally.
+    #[test]
+    fn addr_zero_contributor_is_dropped_not_credited() {
+        let mut zero_strip = base_event(1000, 1, 0); // owner=target(1), remover addr=0
+        zero_strip.is_buffremove = buff_remove::ALL;
+        zero_strip.skillid = STABILITY;
+        zero_strip.result = 2; // stacks removed > 1 -- would count if not for the addr-0 guard
+        let events = vec![zero_strip, down(5000, 9, 1)]; // squad member 1 downed
+        let players = run(events, vec![1], vec![]);
+        let victim = players.iter().find(|p| p.agent_addr == 1).unwrap();
+        assert_eq!(victim.downed_by.strips, 0, "an all-zero-fields contributor must be dropped, not inflate downed_by.strips");
     }
 
     /// Window clamp at log start: when `anchor - 2000` (or the `None`
