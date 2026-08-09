@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::BTreeMap;
 use axilog_core::model::Encounter;
 use axilog_core::analysis::{buffs, Metrics};
 use axilog_core::analysis::replay::Replay;
@@ -59,6 +60,29 @@ pub struct Report {
     /// `replay`'s same opt-in/omit-when-absent convention.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub missiles: Option<MissilesOut>,
+    /// Best-effort skillMap (M14, Task 2) -- see
+    /// `axilog_core::analysis::skill_map`'s module doc for the full
+    /// name-gap-vs-EI honesty writeup. ALWAYS present (not opt-in, unlike
+    /// `replay`/`missiles`) -- `axilog_core::analysis::Metrics::skill_map`
+    /// is always computed, and measured modest in size (a small object per
+    /// REFERENCED skill id, not a dump of the whole log skill table -- see
+    /// that module's doc comment's "Scope of referenced ids" section).
+    /// Keyed by skill id as a string (plain `serde_json` object-key
+    /// stringification of the `u32` key), e.g. `"5491"`.
+    pub skill_map: BTreeMap<u32, SkillMapEntryOut>,
+}
+/// One skill's best-effort entry (M14, Task 2) -- mirrors
+/// `axilog_core::analysis::skill_map::SkillMapEntry` field-for-field.
+/// `auto_attack` is omitted from the JSON entirely (not serialized as
+/// `null`) when `None` -- currently ALWAYS the case, see that module's doc
+/// comment's "`auto_attack`: OMITTED, not guessed" section for why.
+#[derive(Serialize)]
+pub struct SkillMapEntryOut {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_attack: Option<bool>,
+    pub is_swap: bool,
+    pub can_crit: bool,
 }
 /// Native-only opt-in missile analytics (M10, Task 2) -- see
 /// `axilog_core::analysis::missiles`'s module doc for exactly what each
@@ -881,6 +905,16 @@ pub fn build_report(
         warnings: metrics.warnings.clone(),
         replay: replay.map(build_replay_out),
         missiles: missiles.map(|m| build_missiles_out(m, enc)),
+        // M14 Task 2: straight copy of `Metrics::skill_map` -- already
+        // fully computed by `analyze()`, no gating flag needed (see
+        // `Report::skill_map`'s doc comment for why this stays always-on).
+        skill_map: metrics
+            .skill_map
+            .iter()
+            .map(|(&id, e)| {
+                (id, SkillMapEntryOut { name: e.name.clone(), auto_attack: e.auto_attack, is_swap: e.is_swap, can_crit: e.can_crit })
+            })
+            .collect(),
     }
 }
 
@@ -912,7 +946,7 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(),
-            combat_participant_enemies: [9u64].into_iter().collect() };
+            combat_participant_enemies: [9u64].into_iter().collect(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
         assert_eq!(report.enemies.len(), 1, "only the participant enemy stays in the filtered list");
         assert_eq!(report.enemies[0].id, 9);
@@ -938,7 +972,7 @@ mod tests {
             cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.2");
@@ -982,7 +1016,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: true, combat_participant_enemies: Default::default() };
+            has_healing_extension: true, combat_participant_enemies: Default::default(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["players"][0]["healing"]["healing_out_total"], 500);
@@ -1026,7 +1060,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: false, combat_participant_enemies: Default::default() };
+            has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
         let v = serde_json::to_value(&omitted).unwrap();
@@ -1075,7 +1109,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0,0],cc_applied:vec![0,0],downs:vec![0,0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: false, combat_participant_enemies: Default::default() };
+            has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
         let v = serde_json::to_value(&omitted).unwrap();
@@ -1122,7 +1156,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: false, combat_participant_enemies: Default::default() };
+            has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
         let v = serde_json::to_value(&omitted).unwrap();
@@ -1214,7 +1248,7 @@ mod tests {
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
         let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
         let report = build_report(&enc, &m, "0.1.0", Some(&replay), None, false, false, false);
         assert!(report.replay.is_some());
@@ -1266,7 +1300,7 @@ mod tests {
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
         let missiles = build_missiles(&raw, &enc);
         let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles), false, false, false);
         assert!(report.missiles.is_some());

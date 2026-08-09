@@ -598,7 +598,7 @@ mod tests {
             // `to_ei_json` reads `report.all_enemies` (unfiltered) though,
             // so this doesn't change `maps_core_ei_fields`'s `targets[]`
             // assertions below -- it's set for realism, not correctness.
-            combat_participant_enemies: [9u64].into_iter().collect()};
+            combat_participant_enemies: [9u64].into_iter().collect(), skill_map: Default::default()};
         axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false)
     }
     #[test]
@@ -683,6 +683,7 @@ mod tests {
             warnings: Default::default(),
             has_healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
+            skill_map: Default::default(),
         };
         axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false)
     }
@@ -782,6 +783,7 @@ mod tests {
             warnings: vec![],
             replay: None,
             missiles: None,
+            skill_map: Default::default(),
         };
         let v = to_ei_json(&report, &[]);
         let healing = &v["players"][0]["extHealingStats"]["outgoingHealing"][0];
@@ -908,6 +910,7 @@ mod tests {
             warnings: vec![],
             replay: None,
             missiles: None,
+            skill_map: Default::default(),
         }
     }
 

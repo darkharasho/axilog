@@ -70,6 +70,17 @@ pub mod defenses;
 /// `CombatEventFactory.CreateCastEvents`/`AnimatedCastEvent` citation trail
 /// and the documented `InstantCastEvent`-machinery scope gap.
 pub mod rotation;
+/// Best-effort `skillMap` built from the log's own skill table (M14, Task 2)
+/// -- like `hit_stats`/`defenses` above, wired into [`analyze`] below
+/// (`Metrics::skill_map`), computed ONCE after every per-player pass
+/// (`skill_damage`/`rotation`) has finished, since it's scoped to whatever
+/// skill ids those passes actually referenced (not a per-player metric
+/// itself, so it lives on `Metrics` directly, alongside
+/// `combat_participant_enemies` -- same "derived from already-finished
+/// per-player data" placement). See `skill_map`'s module doc for the full
+/// name-gap-vs-EI honesty writeup and the `is_swap`/`can_crit`/`auto_attack`
+/// citation trail.
+pub mod skill_map;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -207,7 +218,13 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// (unfiltered, EI-adapter-only) preserves that faithfulness while
     /// `Report::enemies` (native output + HTML chips) uses this set. See
     /// `build_report`'s doc comment for the full design-choice writeup.
-    pub combat_participant_enemies: BTreeSet<u64> }
+    pub combat_participant_enemies: BTreeSet<u64>,
+    /// Best-effort skillMap (M14, Task 2) -- see `skill_map`'s module doc.
+    /// Scoped to only the skill ids squad players' `skill_damage`/
+    /// `rotation`/tracked-boons actually reference, not a dump of the whole
+    /// log skill table. Always computed (not opt-in) -- see that module's
+    /// doc for the measured-modest-size reasoning.
+    pub skill_map: skill_map::SkillMap }
 
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // A friendly account can own several raw agent addrs (relog / build
@@ -420,8 +437,13 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     if !has_healing_extension {
         warnings.push("healing extension not present in this log".to_string());
     }
+    // M14 Task 2: best-effort skillMap, scoped to whatever `skill_damage`/
+    // `rotation` (both already populated on `players` above) actually
+    // referenced, plus the always-tracked boon ids -- see `skill_map`'s
+    // module doc.
+    let skill_map = skill_map::build(raw, &players);
     Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings, has_healing_extension,
-        combat_participant_enemies }
+        combat_participant_enemies, skill_map }
 }
 
 #[cfg(test)]

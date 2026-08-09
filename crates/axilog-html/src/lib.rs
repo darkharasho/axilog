@@ -119,6 +119,7 @@ mod tests {
             warnings: vec![],
             replay: None,
             missiles: None,
+            skill_map: Default::default(),
         }
     }
 
