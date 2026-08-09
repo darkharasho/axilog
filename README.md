@@ -113,17 +113,17 @@ Calibrated against a real dps.report EI export for one WvW log (Green Alpine Bor
 | Team colors / team IDs | Exact | prefers the log's own `CBTS_WVWTEAMS` event when present (recent arcdps builds); falls back to a static id→color table (sourced from axibridge, itself reconciled from two community EVTC tools) for older logs without it |
 | Friendly player count | Approximate | within ±2 of EI's count (one known relog straggler with a blank account, contributes 0 to every metric) |
 | Down contribution | Approximate | our own algorithm: damage from squad → that enemy in the 10s window before its down event, excluding CC-only events; not calibrated against EI's own (undocumented) down-contribution algorithm, only unit-tested |
-| CC detection (`is_cc` predicate) | Approximate, build-dependent | tuned against a pre-"ResultEnumRework" arcdps build (< 20260501); a post-rework capture may need the predicate extended (`buff == 1` events can carry real CC post-rework) — see `TODO(post-rework)` in `crates/axilog-core/src/analysis/cc.rs` |
+| CC detection (`is_cc` predicate) | Approximate, era-gated | exact vs. EI on a pre-`ResultEnumRework` arcdps build (< 20260501; `34`/`50460`ms, see the CC row above); post-era (≥ 20260501) now also accepts genuine `buff == 1` CC rows, era-gated off `RawHeader::is_post_buff_rework` (M4 Task 2, verified against GW2EI's post-`ResultEnumRework` source — no real post-rework capture to calibrate the post-era branch's numbers against yet), see "Supported log eras" below |
 | Per-second timeline (squad damage / CC applied / downs) | Native-only | EI's JSON doesn't expose a comparable per-second series; ours does (`timeline.per_second`) |
 | Down-contribution timeline (per-window breakdown) | Native-only, not yet exposed | the down-contribution algorithm already works in time windows internally; a windowed *timeline* (vs. today's single per-player total) is a planned native-only extension |
 | Squad markers (incl. commander-tag colour/variant), tick-rate telemetry | Native-only, implemented | `CBTS_MARKER`/`CBTS_TICK` decode: per-player/enemy `marker`, commander player `commander_tag { variant, guid }`, `encounter.markers[]` assignment timeline, `encounter.tick_rate { avg, min, per_second[] }`; EI's JSON can't express any of this, so the EI adapter is unaffected — see `docs/arcdps-dev-notes.md` |
-| Boon uptime — duration-type boons (Fury, Regeneration, Vigor, Swiftness, Protection, Aegis, Resolution, Quickness, Resistance, Alacrity) | Exact, build-dependent | `presence_pct` (our field) == EI's `buffUptimes[].buffData[0].uptime`; 0/370 cells (10 boons × 37 joined players) over the 2pp tolerance — calibrated only against a pre-"BuffAppliesAndRemovesAsStateChanges" build (< 20260501); see "Supported log eras" below |
-| Boon uptime — intensity-type boons (Might, Stability) presence % | Exact, build-dependent | 0/74 cells over 2pp — pre-rework builds only (< 20260501); see "Supported log eras" below |
-| Boon uptime — intensity-type boons (Might, Stability) average stacks | Approximate, build-dependent | 67/74 cells exact-tolerance (≤5% relative); 7 cells (all Stability) allowlisted — GW2EI types Stability `BuffStackType.StackingConditionalLoss` (loses a stack instead of being CC'd) vs. Might's plain `Stacking`, but GW2EI's own current simulator source has no `StackingConditionalLoss`-specific branching either; the affected players show legitimate multi-stack Stability grants with zero `CROWD_CONTROL` events, so the divergence is a genuine GW2EI-internal nuance not reverse-engineerable from the raw EVTC stream with confidence — allowlisted rather than guessed, see `INTENSITY_STACK_ALLOWLIST` in `crates/axilog-core/tests/boons_golden.rs`; also pre-rework builds only (< 20260501), see "Supported log eras" below |
-| Boon generation (self/group/squad attribution) — squad-average % for Might/Quickness/Alacrity/Stability | Exact, build-dependent | 148 cells (4 boons × 37 players) checked, worst delta 0.097pp, 0 over the 2pp tolerance, no allowlist needed — pre-rework builds only (< 20260501); see "Supported log eras" below |
-| Support: condi cleanses (squad total / self total) | Exact, build-dependent | `801` / `97`, matches EI's `condiCleanse`/`condiCleanseSelf` sums, per-player exact (no allowlist) — pre-rework builds only (< 20260501); see "Supported log eras" below |
-| Support: boon strips (squad total) | Exact, build-dependent | `437`, matches EI's `boonStrips` sum, per-player exact — pre-rework builds only (< 20260501); see "Supported log eras" below |
-| Support: resurrect casts (squad total) | Exact | `6`, matches EI's `resurrects` sum, per-player exact — resurrect-cast detection reads plain `is_activation` cast-start events, unaffected by the buff-statechange rework (see "Supported log eras" below) |
+| Boon uptime — duration-type boons (Fury, Regeneration, Vigor, Swiftness, Protection, Aegis, Resolution, Quickness, Resistance, Alacrity) | Exact, era-gated | `presence_pct` (our field) == EI's `buffUptimes[].buffData[0].uptime`; 0/370 cells (10 boons × 37 joined players) over the 2pp tolerance — calibrated only against a pre-"BuffAppliesAndRemovesAsStateChanges" build (< 20260501); post-era (≥ 20260501) extraction is implemented and era-gated (M4 Tasks 1-2) but not yet calibrated against a real capture, see "Supported log eras" below |
+| Boon uptime — intensity-type boons (Might, Stability) presence % | Exact, era-gated | 0/74 cells over 2pp on the pre-rework fixture (< 20260501); post-era (≥ 20260501) extraction implemented and era-gated, calibration pending a real capture, see "Supported log eras" below |
+| Boon uptime — intensity-type boons (Might, Stability) average stacks | Approximate, era-gated | 67/74 cells exact-tolerance (≤5% relative) on the pre-rework fixture; 7 cells (all Stability) allowlisted — GW2EI types Stability `BuffStackType.StackingConditionalLoss` (loses a stack instead of being CC'd) vs. Might's plain `Stacking`, but GW2EI's own current simulator source has no `StackingConditionalLoss`-specific branching either; the affected players show legitimate multi-stack Stability grants with zero `CROWD_CONTROL` events, so the divergence is a genuine GW2EI-internal nuance not reverse-engineerable from the raw EVTC stream with confidence — allowlisted rather than guessed, see `INTENSITY_STACK_ALLOWLIST` in `crates/axilog-core/tests/boons_golden.rs`; post-era (≥ 20260501) extraction implemented and era-gated, calibration pending a real capture, see "Supported log eras" below |
+| Boon generation (self/group/squad attribution) — squad-average % for Might/Quickness/Alacrity/Stability | Exact, era-gated | 148 cells (4 boons × 37 players) checked on the pre-rework fixture, worst delta 0.097pp, 0 over the 2pp tolerance, no allowlist needed; post-era (≥ 20260501) extraction implemented and era-gated, calibration pending a real capture, see "Supported log eras" below |
+| Support: condi cleanses (squad total / self total) | Exact, era-gated | `801` / `97` on the pre-rework fixture, matches EI's `condiCleanse`/`condiCleanseSelf` sums, per-player exact (no allowlist); post-era (≥ 20260501) extraction implemented and era-gated (M4 Task 2's `apply_post_era`), calibration pending a real capture, see "Supported log eras" below |
+| Support: boon strips (squad total) | Exact, era-gated | `437` on the pre-rework fixture, matches EI's `boonStrips` sum, per-player exact; post-era (≥ 20260501) extraction implemented and era-gated, calibration pending a real capture, see "Supported log eras" below |
+| Support: resurrect casts (squad total) | Exact, era-gated | `6` on the pre-rework fixture, matches EI's `resurrects` sum, per-player exact; pre-era reads plain `is_activation` cast-start events, post-era (≥ 20260501) reads the dedicated `ANIMATION_START` statechange instead (a *different*, earlier threshold than the buff rework — GW2EI's `AnimationAsStateChanges = 20260430` — see "Supported log eras" below for the resulting narrow gap) |
 | `buffMap` / `buffUptimes[]` / `support[0]` condi-cleanse/boon-strip/resurrect fields (`ei-json`) | Implemented | subset covering only the 12 tracked boons and the fields we actually compute — see **EI-JSON parity** note below |
 
 The `ei-json` output only emits fields backed by a real computed metric. Where real EI has a field
@@ -133,23 +133,64 @@ and rotation detail), it's simply omitted — never faked — and the omission i
 
 ### Supported log eras
 
-Every calibration above is against a **pre-`BuffAppliesAndRemovesAsStateChanges`** arcdps build
-(build string < `20260501`, GW2EI's `ArcDPSBuilds` threshold), which reports boon
-apply/remove/initial rows as ordinary `is_statechange == 0` combat events. On builds on/after that
-threshold, arcdps instead reports them as dedicated statechange event kinds — a shape this
-project's buff extractor (`analysis/buffs/events.rs`, `analysis/support.rs`) doesn't decode yet.
-The practical effect: on a post-rework log, every boon-uptime/boon-generation/support (condi
-cleanses, boon strips, resurrects unaffected — see the resurrect row above) field silently reads
-zero rather than erroring. Everything else in this document (damage, downs/kills/deaths/down
-contribution, CC, timeline, markers/tick-rate) reads the header/agent/skill/plain-combat-event
-blocks, which are unaffected by this rework and work on both build eras.
+arcdps has two wire shapes for boon apply/remove/initial rows, split by GW2EI's
+`ArcDPSBuilds.BuffAppliesAndRemovesAsStateChanges`/`ResultEnumRework` threshold (build string
+`20260501`): **pre**-threshold builds report them as ordinary `is_statechange == 0` combat events;
+**post**-threshold builds report dedicated statechange event kinds instead (`BUFF_APPLY`/
+`BUFF_CHANGE`/`BUFF_REMOVE_SINGLE`/`BUFF_REMOVE_ALL`), and also move CC detection (`buff == 1` rows
+can carry real CC) and resurrect-cast detection (via the separate, one-day-earlier
+`AnimationAsStateChanges = 20260430` threshold, `ANIMATION_START`) onto their own dedicated
+statechanges.
 
-To make the zero-reading case visible rather than silent, `analyze` detects it (post-rework build,
-per `RawHeader::is_post_buff_rework`, **and** zero buff events actually extracted) and records a
-warning in `Metrics::warnings`. The native JSON schema surfaces this as a top-level
-`warnings: [...]` array (omitted when empty); the CLI's `--format table` prints each warning to
-stderr; `ei-json` has no comparable field and doesn't carry it. Supporting the post-rework wire
-shape itself is tracked as future work, not yet implemented.
+- **Pre-`20260501` (fully calibrated):** every metric in the parity table above is calibrated
+  exact-to-near-exact against a real dps.report EI export for a pre-rework WvW log — this is what
+  every "Exact"/"Approximate" status above without further qualification means.
+- **`≥ 20260501` (supported, calibration pending):** this project's buff/support/CC extraction is
+  **era-gated** (`RawHeader::is_post_buff_rework`) and decodes the post-rework wire shape too
+  (M4 Tasks 1-2) — boon uptimes, boon generation, condi cleanses, boon strips, resurrects, and CC
+  detection all work on a post-rework log, not just pre-rework ones. This was verified by
+  construction: every post-era code path was checked line-by-line against the current GW2EI
+  parser source (`GW2EIEvtcParser`, the arbiter for ambiguous field roles) and exercised by
+  synthetic **era-equivalence tests** (`analysis/buffs/events.rs`, `analysis/support.rs`,
+  `analysis/cc.rs` — each has a post-era twin of its pre-era test producing the identical output).
+  What's still missing is calibration against a *real* post-rework capture, since none existed at
+  implementation time — `crates/axilog-core/tests/postrework_golden.rs` is the hook that closes
+  this gap the moment one is available (see below).
+- **Known narrow gap, `[20260430, 20260501)`:** this project has only the single
+  `is_post_buff_rework` (`20260501`) header flag, not a separate `AnimationAsStateChanges`
+  (`20260430`) one. A log built in that one-day-to-one-month window (`AnimationAsStateChanges` has
+  landed but `BuffAppliesAndRemovesAsStateChanges`/`ResultEnumRework` hasn't yet) would be
+  classified pre-era and scanned with the pre-era shape throughout — including resurrect
+  detection, which is actually gated on the *earlier* threshold. Flagged honestly rather than
+  silently mishandled; considered out of scope to fix without adding a header field this project
+  otherwise has no use for (see `sc::ANIMATION_START`'s doc comment and the M4 Task 2 report for
+  the full analysis).
+
+To make the "genuinely zero buff data" case visible rather than silent, `analyze` detects it
+(post-rework build, per `RawHeader::is_post_buff_rework`, **and** zero buff events actually
+extracted — e.g. a truncated/filtered log) and records a warning in `Metrics::warnings`. This does
+**not** fire just because a log is post-era; it fires only when post-era extraction genuinely finds
+nothing to extract. The native JSON schema surfaces this as a top-level `warnings: [...]` array
+(omitted when empty); the CLI's `--format table` prints each warning to stderr; `ei-json` has no
+comparable field and doesn't carry it.
+
+#### How to provide a post-rework fixture
+
+The one thing this project can't do without a real log: **calibrate** the post-era code paths
+against real dps.report numbers, the same way the pre-era paths are calibrated in the parity table
+above. To help with that:
+
+1. Capture a WvW fight with a current (post-`20260501`) arcdps build.
+2. Drop the raw `.zevtc` at `fixtures/local/wvw-postrework.zevtc` (gitignored — see "Fixture
+   policy" below; never commit a raw log).
+3. Optionally, run it through dps.report's `getJson` endpoint and drop that JSON alongside at
+   `fixtures/local/wvw-postrework.ei.json` for full EI-parity assertions (duration/damage within
+   0.5%, support sums exact).
+4. Run `cargo test -p axilog-core --test postrework_golden` — no code changes needed. The tests
+   pick the fixture(s) up automatically, assert the post-era metrics are non-zero and warning-free
+   (and, if the EI JSON is present, that they match it), and print a compact summary table
+   (players, duration, squad damage, Might average stacks, Quickness %, cleanses, strips,
+   resurrects) so the first real capture's numbers are immediately visible.
 
 ## Fixture policy
 
@@ -189,9 +230,19 @@ allowlist); exposed in the native schema (`players[].boons[]`, `players[].suppor
 (`buffMap`, `buffUptimes[]`, extended `support[0]`), and two new CLI table views (`--view
 support`/`--view boons`).
 
+**M4 (done):** post-`20260501` (buff-statechange-rework) log support — era-gated boon/support/CC
+extraction (dedicated `BUFF_APPLY`/`BUFF_CHANGE`/`BUFF_REMOVE_SINGLE`/`BUFF_REMOVE_ALL`
+statechanges, `ANIMATION_START`-gated resurrect detection, `buff == 1` CC rows), verified by
+construction against GW2EI source + synthetic era-equivalence tests (no real post-rework capture
+existed yet); downgraded the M3-era unconditional post-rework warning to fire only on genuinely
+zero extracted buff events; added `tests/postrework_golden.rs`, a real-capture calibration hook
+that activates automatically the moment a `fixtures/local/wvw-postrework.zevtc` fixture exists —
+see "Supported log eras" above.
+
 **Later:** healing/barrier stats, rotation/skill-cast tracking, PvE encounter logic (boss health
 phases, mechanics), Python/Node SDKs over the Rust core, HTML report output (incl. the tick-rate
-corner widget and marker-driven combat-replay eye candy — see arcdps-dev-notes).
+corner widget and marker-driven combat-replay eye candy — see arcdps-dev-notes), real-capture
+calibration of the M4 post-rework code paths once a fixture is available.
 
 ## License
 

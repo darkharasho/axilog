@@ -41,20 +41,23 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// pre-existing metric.
     pub boon_generation: BTreeMap<(u64, u32), buffs::GenerationStats>,
     /// Structured, user-facing warnings about this analysis run (final-review
-    /// fix wave). Currently populated with exactly one case: the log's
+    /// fix wave; downgraded M4 Task 3 once post-rework extraction landed --
+    /// see below). Currently populated with exactly one case: the log's
     /// arcdps build is on/after the post-2026-05-01 buff-statechange rework
     /// (`crate::evtc::RawHeader::is_post_buff_rework`) AND zero buff apply/
-    /// remove/initial events were extracted for the tracked boons -- see
-    /// `events::extract_buff_events`'s module doc for why this project's
-    /// current extractor only understands the OLDER (pre-rework)
-    /// `is_statechange == 0` combat-event shape, so a genuinely post-rework
-    /// log silently reads all-zero boon/support metrics without this
-    /// warning. Empty on every other log (including a post-rework build
-    /// that still happens to carry zero tracked-boon events for a
-    /// legitimate reason, e.g. no boons cast at all -- indistinguishable
-    /// from the silent-zero case from data alone, so the build-era check is
-    /// the only reliable signal; a false positive here is a harmless
-    /// heads-up, not a wrong metric). Native schema surfaces this as a
+    /// remove/initial events were extracted for the tracked boons. As of M4
+    /// Tasks 1-2, `events::extract_buff_events`/`support::apply` era-dispatch
+    /// internally and DO understand the post-rework wire shape (dedicated
+    /// `BUFF_APPLY`/`BUFF_CHANGE`/`BUFF_REMOVE_SINGLE`/`BUFF_REMOVE_ALL`
+    /// statechanges, plus the `ANIMATION_START` resurrect-cast gate) -- so
+    /// this warning no longer means "unsupported era". It fires only when a
+    /// post-era log genuinely yields zero extracted buff events (e.g. a
+    /// truncated/filtered log, or one legitimately carrying no boon
+    /// activity), which is indistinguishable from a real extraction gap
+    /// from data alone -- the build-era check plus zero-events is the
+    /// signal; a false positive here is a harmless heads-up, not a wrong
+    /// metric. Empty on every other log, including a post-era log that
+    /// extracted at least one buff event. Native schema surfaces this as a
     /// top-level `warnings: [...]` array (omitted when empty); the CLI
     /// table view prints it to stderr; `ei-json` has no comparable field so
     /// it's simply not carried over.
@@ -152,20 +155,22 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // source's stack is held).
     let target_gen = buffs::generation::simulate_boon_generation_ms(raw, enc);
     let boon_generation = buffs::generation::rollup(&target_gen, enc, log_start_ms, log_end_ms);
-    // Final-review fix wave: on a post-2026-05-01 (buff-statechange-rework)
-    // build, this project's `events::extract_buff_events`/`support::apply`
-    // only understand the OLDER pre-rework wire shape (see `Metrics::
-    // warnings`'s doc comment) -- if that build era produced zero extracted
-    // buff events, warn rather than silently emitting all-zero boon/support
-    // metrics. Re-extracts (cheap: a single linear scan over the boon skill
-    // ids) rather than threading a count out of `boons::simulate_boons`,
-    // which already discards per-owner squad-membership before this point.
+    // M4 Task 3 (downgraded from the final-review fix wave's unconditional
+    // warning): post-era extraction now works (M4 Tasks 1-2 era-gated
+    // `events::extract_buff_events`/`support::apply` -- see `Metrics::
+    // warnings`'s doc comment), so only warn when a post-2026-05-01 build
+    // genuinely yields zero extracted buff events -- a truncated/filtered
+    // log, or a legitimate no-boon-activity fight, rather than a
+    // known-unsupported era. Re-extracts (cheap: a single linear scan over
+    // the boon skill ids) rather than threading a count out of `boons::
+    // simulate_boons`, which already discards per-owner squad-membership
+    // before this point.
     let mut warnings = Vec::new();
     if raw.header.is_post_buff_rework() {
         let boon_id_set: BTreeSet<u32> = buffs::BOON_IDS.iter().map(|&(id, _, _)| id).collect();
         if buffs::events::extract_buff_events(raw, &boon_id_set).is_empty() {
             warnings.push(format!(
-                "log build {} uses post-2026-05-01 buff statechange events; boon/support metrics are not yet supported for this era and will read zero",
+                "no buff events found in this post-2026-05-01 log (build {}); boon/support metrics will read zero",
                 raw.header.build
             ));
         }
@@ -285,11 +290,11 @@ mod tests {
             markers: vec![], tick_rate: None }
     }
 
-    /// Final-review fix wave: a log whose arcdps build is on/after the
-    /// post-2026-05-01 buff-statechange rework, with zero extracted buff
-    /// events (this project's extractor only understands the older
-    /// pre-rework wire shape -- see `Metrics::warnings`'s doc comment), must
-    /// surface a non-empty `warnings` list naming the build.
+    /// Final-review fix wave (downgraded M4 Task 3): a log whose arcdps
+    /// build is on/after the post-2026-05-01 buff-statechange rework, with
+    /// ZERO extracted buff events (genuinely absent buff data -- e.g. a
+    /// truncated/filtered log; there are no boon skillids in the event list
+    /// below), must surface a non-empty `warnings` list naming the build.
     #[test]
     fn post_rework_build_with_no_buff_events_warns() {
         let raw = RawLog {
@@ -299,6 +304,40 @@ mod tests {
         let metrics = analyze(&empty_enc(), &raw);
         assert!(!metrics.warnings.is_empty(), "post-rework build with zero buff events must warn");
         assert!(metrics.warnings[0].contains("20260601"), "warning should name the offending build");
+        assert!(
+            metrics.warnings[0].contains("no buff events found"),
+            "warning should use the M4 Task 3 downgraded message, got {:?}",
+            metrics.warnings[0]
+        );
+    }
+
+    /// M4 Task 3: a post-2026-05-01 build that DOES carry extracted buff
+    /// events (a real `sc::BUFF_APPLY` statechange for a tracked boon, era-
+    /// dispatched by `events::extract_buff_events_post_era` -- M4 Task 1)
+    /// must NOT warn -- post-era extraction works, so this is the ordinary
+    /// case for a real post-rework capture, not the genuinely-absent-data
+    /// case the warning exists for.
+    #[test]
+    fn post_rework_build_with_buff_events_does_not_warn() {
+        use crate::evtc::sc;
+        let raw = RawLog {
+            header: RawHeader { build: "20260601".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![],
+            events: vec![RawEvent {
+                time: 0, src_agent: 1, dst_agent: 2, value: 5000, buff_dmg: 0,
+                overstack: 0, skillid: buffs::MIGHT, src_instid: 0, dst_instid: 0,
+                src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 1, result: 0,
+                is_activation: 0, is_buffremove: 0, is_statechange: sc::BUFF_APPLY,
+                is_shields: 0, is_offcycle: 0,
+            }],
+            guid_map: vec![],
+        };
+        let metrics = analyze(&empty_enc(), &raw);
+        assert!(
+            metrics.warnings.is_empty(),
+            "post-rework build with a real extracted buff event must not warn, got {:?}",
+            metrics.warnings
+        );
     }
 
     /// A pre-rework build produces no warnings (the ordinary case for every

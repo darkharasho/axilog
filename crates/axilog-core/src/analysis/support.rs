@@ -224,6 +224,15 @@ pub struct SupportMetrics {
 /// nonzero "Non Squad Player" rows themselves, credited correctly as
 /// REMOVER), and the squad-wide sums match golden's 801/97/437/6 exactly --
 /// see `tests/support_golden.rs`.
+/// Era dispatch (M4 Task 2): on arcdps builds `>= 20260501`
+/// (`raw.header.is_post_buff_rework()`), routes both the cleanse/strip
+/// removal scan AND the resurrect-cast scan to their post-era siblings
+/// below -- mirrors `events::extract_buff_events`'s dispatch (M4 Task 1).
+/// The PRE-ERA BODY BELOW IS BYTE-IDENTICAL TO BEFORE M4 (calibrated; do not
+/// edit its logic) -- `apply_post_era` is a fully separate function that
+/// reproduces the identical `SupportMetrics` credit for a post-era log
+/// carrying the same logical removal/resurrect-cast sequence (see the
+/// `era_equivalence` tests at the bottom of this module).
 pub fn apply(
     players: &mut [PlayerMetrics],
     raw: &RawLog,
@@ -231,6 +240,10 @@ pub fn apply(
     enemies: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
 ) {
+    if raw.header.is_post_buff_rework() {
+        return apply_post_era(players, raw, enc, enemies, addr_to_rep);
+    }
+
     let idx: BTreeMap<u64, usize> =
         players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
     let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
@@ -318,6 +331,115 @@ pub fn apply(
             && e.skillid == RESURRECT_SKILL_ID
             && ACTIVATION_START.contains(&e.is_activation)
         {
+            if let Some(&i) = idx.get(&rep(e.src_agent)) {
+                players[i].support.resurrects += 1;
+            }
+        }
+    }
+}
+
+/// Post-era (arcdps `>= 20260501`) twin of `apply`'s pre-era body above --
+/// dispatches the cleanse/strip removal scan on the dedicated
+/// `sc::BUFF_REMOVE_ALL` statechange instead of the `is_statechange == 0
+/// && is_buffremove == ALL` combat-event shape, and the resurrect-cast scan
+/// on `sc::ANIMATION_START` instead of `is_activation`. Every OTHER
+/// decision -- role assignment, pet-exclusion (by construction: still reads
+/// RAW, unresolved agents), self-cleanse/cross-cleanse/strip eligibility,
+/// `real_players` recipient restriction -- is IDENTICAL to the pre-era body
+/// (see the `era_equivalence` tests below for the same-output assertion).
+///
+/// **Removal sourcing (verified against `sc::BUFF_REMOVE_ALL`'s doc
+/// comment, `crate::evtc::event`)**: post-era, `BuffRemoveAllEvent`
+/// construction is UNCONDITIONAL on this statechange (no `is_buffremove`
+/// check -- unlike `BUFF_REMOVE_SINGLE`, which still disambiguates Single
+/// vs Manual by that byte post-era) and reuses the SAME
+/// `AbstractBuffRemoveEvent(CombatItem evtcItem, ...)` ctor as the pre-era
+/// shape (`By = agentData.GetAgent(evtcItem.DstAgent, ...)`, `To =
+/// agentData.GetAgent(evtcItem.SrcAgent, ...)`, no `.GetFinalMaster()`
+/// resolution at all) -- so `owner = src_agent`/`remover = dst_agent`, BOTH
+/// READ RAW (un-resolved), is exactly the same deliberate deviation this
+/// module's own doc comment above already establishes for the pre-era
+/// shape (GW2EI groups `BuffRemoveAllEvent`s by the raw, unresolved `.By`
+/// AgentItem, not `CreditedBy`/pet-master-resolved) -- confirmed by
+/// `events::extract_buff_events_post_era`'s OWN post-era `RemoveAll` branch
+/// using the identical `owner: e.src_agent` / raw `e.dst_agent` field
+/// reads (M4 Task 1), which this function's removal scan mirrors minus
+/// that function's `agent` field's master-resolution (this module never
+/// wanted that -- see the big pet-exclusion doc comment above `apply`).
+///
+/// **Resurrect sourcing (verified against `sc::ANIMATION_START`'s doc
+/// comment)**: post-era cast-start detection moves to the DEDICATED
+/// `AnimationStart` statechange (GW2EI's `CombatItem.IsStartCastEvent()`,
+/// gated on the EARLIER `ArcDPSBuilds.AnimationAsStateChanges = 20260430`
+/// threshold -- subsumed by this project's single `is_post_buff_rework`
+/// `20260501` gate, see `sc::ANIMATION_START`'s doc comment for the full
+/// version-split explanation and its one known gap). `src_agent` stays the
+/// caster (GW2EI groups cast events by the raw `combatItem.SrcAgent`,
+/// unchanged from the pre-era shape), so the credit logic (raw `src_agent`,
+/// no master resolution -- a squad player's own resurrect-cast, never
+/// pet-credited, matching GW2EI: `AnimatedCastEvent`s are never folded into
+/// an owner the way damage/CC are) is identical, only the SELECTION
+/// predicate changes.
+fn apply_post_era(
+    players: &mut [PlayerMetrics],
+    raw: &RawLog,
+    enc: &Encounter,
+    enemies: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) {
+    let idx: BTreeMap<u64, usize> =
+        players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
+    let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
+
+    let boon_id_set: BTreeSet<u32> = BOON_IDS.iter().map(|&(id, _, _)| id).collect();
+    let condition_id_set: BTreeSet<u32> = CONDITION_IDS.iter().copied().collect();
+
+    let real_players: BTreeSet<u64> = enc
+        .players
+        .iter()
+        .filter(|p| p.subgroup != 0)
+        .flat_map(|p| p.agent_addrs.iter().copied())
+        .collect();
+
+    for e in &raw.events {
+        // Post-era removal predicate: the dedicated `sc::BUFF_REMOVE_ALL`
+        // statechange, unconditional (no `is_buffremove`/`is_activation`
+        // gate -- see this fn's doc comment).
+        if e.is_statechange != crate::evtc::sc::BUFF_REMOVE_ALL {
+            continue;
+        }
+        let is_condition = condition_id_set.contains(&e.skillid);
+        let is_boon = boon_id_set.contains(&e.skillid);
+        if !is_condition && !is_boon {
+            continue;
+        }
+        // Role inversion (identical to pre-era, see this fn's doc comment):
+        // owner = src_agent, remover = dst_agent, BOTH RAW.
+        let owner = e.src_agent;
+        let remover = e.dst_agent;
+        let Some(&i) = idx.get(&rep(remover)) else { continue };
+        if is_condition {
+            if rep(owner) == rep(remover) {
+                players[i].support.cleanses_self += 1;
+            } else {
+                if !real_players.contains(&owner) {
+                    continue;
+                }
+                players[i].support.cleanses += 1;
+            }
+        } else {
+            if !enemies.contains(&owner) {
+                continue;
+            }
+            players[i].support.strips += 1;
+        }
+    }
+
+    // Resurrects (post-era): `sc::ANIMATION_START` cast-start rows for the
+    // Resurrect skill, credited by raw `src_agent` (see this fn's doc
+    // comment).
+    for e in &raw.events {
+        if e.is_statechange == crate::evtc::sc::ANIMATION_START && e.skillid == RESURRECT_SKILL_ID {
             if let Some(&i) = idx.get(&rep(e.src_agent)) {
                 players[i].support.resurrects += 1;
             }
@@ -693,5 +815,284 @@ mod tests {
         let addr_to_rep: BTreeMap<u64, u64> = [(1, 1)].into_iter().collect();
         apply(&mut players, &raw, &enc, &enemies, &addr_to_rep);
         assert_eq!(players[0].support.resurrects, 0);
+    }
+}
+
+/// M4 Task 2 core deliverable: for the simulator-relevant scenarios the
+/// pre-era tests above cover, build a POST-era synthetic twin (same logical
+/// event, decoded from `sc::BUFF_REMOVE_ALL`/`sc::ANIMATION_START` instead
+/// of the `is_statechange == 0` combat-event shape) and assert `apply`
+/// produces IDENTICAL `SupportMetrics` regardless of era. Mirrors
+/// `buffs::events::era_equivalence`'s structure (M4 Task 1).
+#[cfg(test)]
+mod era_equivalence {
+    use super::*;
+    use crate::evtc::{buff_remove, sc, RawEvent, RawHeader, RawLog};
+    use crate::model::{Encounter, Player};
+
+    fn base_event() -> RawEvent {
+        RawEvent {
+            time: 0, src_agent: 0, dst_agent: 0, value: 0, buff_dmg: 0, overstack: 0,
+            skillid: 0, src_instid: 0, dst_instid: 0, src_master_instid: 0,
+            dst_master_instid: 0, iff: 0, buff: 0, result: 0, is_activation: 0,
+            is_buffremove: 0, is_statechange: 0, is_shields: 0, is_offcycle: 0,
+        }
+    }
+
+    fn raw_pre(events: Vec<RawEvent>) -> RawLog {
+        RawLog {
+            header: RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![], events, guid_map: vec![],
+        }
+    }
+
+    fn raw_post(events: Vec<RawEvent>) -> RawLog {
+        RawLog {
+            header: RawHeader { build: "20260501".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![], events, guid_map: vec![],
+        }
+    }
+
+    fn player(addr: u64) -> PlayerMetrics {
+        PlayerMetrics { agent_addr: addr, ..Default::default() }
+    }
+
+    fn enc_player(addr: u64) -> Player {
+        Player {
+            agent_addr: addr, account: format!(":P{addr}.0001"), character: format!("P{addr}"),
+            profession: "Thief".into(), elite_spec: "".into(), team: "red".into(), subgroup: 1,
+            in_squad: true, commander: false, marker: None, commander_tag: None,
+            agent_addrs: vec![addr],
+        }
+    }
+
+    fn enc_from(players: Vec<Player>) -> Encounter {
+        Encounter {
+            kind: "wvw".into(), map: "".into(), duration_ms: 20_000, build: "".into(),
+            revision: 1, recorded_by: None, teams: vec![], players, enemies: vec![],
+            markers: vec![], tick_rate: None,
+        }
+    }
+
+    /// Scenario: cross-cleanse (condition removed by one squad player from
+    /// another). Pre-era: `is_buffremove == ALL` combat event. Post-era:
+    /// dedicated `sc::BUFF_REMOVE_ALL` statechange (unconditional -- see
+    /// `apply_post_era`'s doc comment). Same owner=src_agent/remover=dst_agent
+    /// roles (both RAW, not master-resolved) in both eras.
+    #[test]
+    fn cross_cleanse_is_era_equivalent() {
+        let mut pre = base_event();
+        pre.skillid = BLEEDING;
+        pre.is_buffremove = buff_remove::ALL;
+        pre.src_agent = 2; // owner
+        pre.dst_agent = 1; // remover
+
+        let mut post = base_event();
+        post.skillid = BLEEDING;
+        post.is_statechange = sc::BUFF_REMOVE_ALL;
+        post.src_agent = 2;
+        post.dst_agent = 1;
+
+        let enc = enc_from(vec![enc_player(1), enc_player(2)]);
+        let enemies: BTreeSet<u64> = BTreeSet::new();
+        let addr_to_rep: BTreeMap<u64, u64> = [(1, 1), (2, 2)].into_iter().collect();
+
+        let mut pre_players = vec![player(1), player(2)];
+        apply(&mut pre_players, &raw_pre(vec![pre]), &enc, &enemies, &addr_to_rep);
+        let mut post_players = vec![player(1), player(2)];
+        apply(&mut post_players, &raw_post(vec![post]), &enc, &enemies, &addr_to_rep);
+
+        assert_eq!(pre_players[0].support, post_players[0].support);
+        assert_eq!(pre_players[0].support.cleanses, 1);
+        assert_eq!(pre_players[0].support.cleanses_self, 0);
+    }
+
+    /// Scenario: self-cleanse (owner == remover, same account). Same era
+    /// pairing as above.
+    #[test]
+    fn self_cleanse_is_era_equivalent() {
+        let mut pre = base_event();
+        pre.skillid = POISON;
+        pre.is_buffremove = buff_remove::ALL;
+        pre.src_agent = 1;
+        pre.dst_agent = 1;
+
+        let mut post = base_event();
+        post.skillid = POISON;
+        post.is_statechange = sc::BUFF_REMOVE_ALL;
+        post.src_agent = 1;
+        post.dst_agent = 1;
+
+        let enc = enc_from(vec![enc_player(1)]);
+        let enemies: BTreeSet<u64> = BTreeSet::new();
+        let addr_to_rep: BTreeMap<u64, u64> = [(1, 1)].into_iter().collect();
+
+        let mut pre_players = vec![player(1)];
+        apply(&mut pre_players, &raw_pre(vec![pre]), &enc, &enemies, &addr_to_rep);
+        let mut post_players = vec![player(1)];
+        apply(&mut post_players, &raw_post(vec![post]), &enc, &enemies, &addr_to_rep);
+
+        assert_eq!(pre_players[0].support, post_players[0].support);
+        assert_eq!(post_players[0].support.cleanses_self, 1);
+    }
+
+    /// Scenario: boon strip from an enemy. Same era pairing.
+    #[test]
+    fn strip_is_era_equivalent() {
+        let mut pre = base_event();
+        pre.skillid = crate::analysis::buffs::MIGHT;
+        pre.is_buffremove = buff_remove::ALL;
+        pre.src_agent = 9; // enemy owner
+        pre.dst_agent = 1; // squad remover
+
+        let mut post = base_event();
+        post.skillid = crate::analysis::buffs::MIGHT;
+        post.is_statechange = sc::BUFF_REMOVE_ALL;
+        post.src_agent = 9;
+        post.dst_agent = 1;
+
+        let enc = enc_from(vec![enc_player(1)]);
+        let enemies: BTreeSet<u64> = [9].into_iter().collect();
+        let addr_to_rep: BTreeMap<u64, u64> = [(1, 1)].into_iter().collect();
+
+        let mut pre_players = vec![player(1)];
+        apply(&mut pre_players, &raw_pre(vec![pre]), &enc, &enemies, &addr_to_rep);
+        let mut post_players = vec![player(1)];
+        apply(&mut post_players, &raw_post(vec![post]), &enc, &enemies, &addr_to_rep);
+
+        assert_eq!(pre_players[0].support, post_players[0].support);
+        assert_eq!(post_players[0].support.strips, 1);
+    }
+
+    /// Scenario: a SINGLE removal must NOT feed cleanse/strip credit in
+    /// either era -- pre-era: `is_buffremove == SINGLE` on an ordinary
+    /// combat event; post-era: the SAME `sc::BUFF_REMOVE_SINGLE`
+    /// statechange (with `is_buffremove == SINGLE`) that `sc::
+    /// BUFF_REMOVE_ALL`'s sibling ordinal carries -- `apply_post_era` only
+    /// ever matches `sc::BUFF_REMOVE_ALL`, so this must produce zero credit
+    /// regardless of the `is_buffremove` byte's value on that different
+    /// statechange.
+    #[test]
+    fn single_removal_not_era_equivalent_counted() {
+        let mut pre = base_event();
+        pre.skillid = BLEEDING;
+        pre.is_buffremove = buff_remove::SINGLE;
+        pre.value = 500;
+        pre.src_agent = 2;
+        pre.dst_agent = 1;
+
+        let mut post = base_event();
+        post.skillid = BLEEDING;
+        post.is_statechange = sc::BUFF_REMOVE_SINGLE;
+        post.is_buffremove = buff_remove::SINGLE;
+        post.value = 500;
+        post.src_agent = 2;
+        post.dst_agent = 1;
+
+        let enc = enc_from(vec![enc_player(1), enc_player(2)]);
+        let enemies: BTreeSet<u64> = BTreeSet::new();
+        let addr_to_rep: BTreeMap<u64, u64> = [(1, 1), (2, 2)].into_iter().collect();
+
+        let mut pre_players = vec![player(1), player(2)];
+        apply(&mut pre_players, &raw_pre(vec![pre]), &enc, &enemies, &addr_to_rep);
+        let mut post_players = vec![player(1), player(2)];
+        apply(&mut post_players, &raw_post(vec![post]), &enc, &enemies, &addr_to_rep);
+
+        assert_eq!(pre_players[0].support, post_players[0].support);
+        assert_eq!(post_players[0].support.cleanses, 0);
+        assert_eq!(post_players[0].support.strips, 0);
+    }
+
+    /// Scenario: resurrect start-cast. Pre-era: `is_activation == Normal`
+    /// on an ordinary combat event. Post-era: dedicated
+    /// `sc::ANIMATION_START` statechange (see `sc::ANIMATION_START`'s doc
+    /// comment for the version-threshold finding this reproduces -- this
+    /// project's single `is_post_buff_rework` gate is what routes here).
+    /// Same `src_agent` (raw, no master resolution) role in both eras.
+    #[test]
+    fn resurrect_start_cast_is_era_equivalent() {
+        let mut pre = base_event();
+        pre.skillid = RESURRECT_SKILL_ID;
+        pre.is_activation = 1; // Normal
+        pre.src_agent = 1;
+        pre.value = 700;
+        pre.buff_dmg = 800;
+
+        let mut post = base_event();
+        post.skillid = RESURRECT_SKILL_ID;
+        post.is_statechange = sc::ANIMATION_START;
+        post.src_agent = 1;
+        post.value = 700;
+        post.buff_dmg = 800;
+
+        let enc = enc_from(vec![enc_player(1)]);
+        let enemies: BTreeSet<u64> = BTreeSet::new();
+        let addr_to_rep: BTreeMap<u64, u64> = [(1, 1)].into_iter().collect();
+
+        let mut pre_players = vec![player(1)];
+        apply(&mut pre_players, &raw_pre(vec![pre]), &enc, &enemies, &addr_to_rep);
+        let mut post_players = vec![player(1)];
+        apply(&mut post_players, &raw_post(vec![post]), &enc, &enemies, &addr_to_rep);
+
+        assert_eq!(pre_players[0].support, post_players[0].support);
+        assert_eq!(post_players[0].support.resurrects, 1);
+    }
+
+    /// Regression check for the version-threshold finding documented on
+    /// `sc::ANIMATION_START`: a post-era log's resurrect-start row must NOT
+    /// be missed by (incorrectly) still scanning for the pre-era
+    /// `is_activation`-on-`is_statechange==0` shape -- i.e. a post-era log
+    /// containing ONLY the dedicated-statechange row (no legacy-shaped row
+    /// at all, which is what a real `>= 20260501` capture would emit) must
+    /// still count the resurrect. This is the exact bug this task fixes:
+    /// before this change, `apply` only ever recognized the pre-era shape,
+    /// so this scenario silently produced zero resurrects.
+    #[test]
+    fn post_era_resurrect_not_silently_dropped() {
+        let mut post = base_event();
+        post.skillid = RESURRECT_SKILL_ID;
+        post.is_statechange = sc::ANIMATION_START;
+        post.src_agent = 1;
+        post.value = 700;
+        post.buff_dmg = 800;
+        // No `is_activation` set at all (post-era rows don't carry it for
+        // cast-start purposes) -- if `apply` still gated on `is_activation`,
+        // this would wrongly produce zero.
+
+        let enc = enc_from(vec![enc_player(1)]);
+        let enemies: BTreeSet<u64> = BTreeSet::new();
+        let addr_to_rep: BTreeMap<u64, u64> = [(1, 1)].into_iter().collect();
+        let mut players = vec![player(1)];
+        apply(&mut players, &raw_post(vec![post]), &enc, &enemies, &addr_to_rep);
+        assert_eq!(players[0].support.resurrects, 1, "post-era resurrect-cast row must not be silently dropped");
+    }
+
+    /// A post-era `sc::ANIMATION_STOP` (68) row for the Resurrect skill id
+    /// -- the paired end-cast statechange, one ordinal after
+    /// `ANIMATION_START` -- must NOT be double-counted (mirrors the pre-era
+    /// `resurrect_end_cast_not_double_counted` test, using the post-era
+    /// wire shape instead).
+    #[test]
+    fn post_era_resurrect_end_cast_not_double_counted() {
+        let mut start = base_event();
+        start.time = 0;
+        start.skillid = RESURRECT_SKILL_ID;
+        start.is_statechange = sc::ANIMATION_START;
+        start.src_agent = 1;
+        start.value = 700;
+        start.buff_dmg = 800;
+        let mut end = base_event();
+        end.time = 1000;
+        end.skillid = RESURRECT_SKILL_ID;
+        end.is_statechange = 68; // CBTS_ANIMATIONSTOP -- one ordinal after ANIMATION_START
+        end.src_agent = 1;
+        end.value = 1000;
+
+        let enc = enc_from(vec![enc_player(1)]);
+        let enemies: BTreeSet<u64> = BTreeSet::new();
+        let addr_to_rep: BTreeMap<u64, u64> = [(1, 1)].into_iter().collect();
+        let mut players = vec![player(1)];
+        apply(&mut players, &raw_post(vec![start, end]), &enc, &enemies, &addr_to_rep);
+        assert_eq!(players[0].support.resurrects, 1);
     }
 }

@@ -15,6 +15,10 @@ pub fn timeline(
     let mut cc_applied = vec![0u32; buckets];
     let mut downs = vec![0u32; buckets];
     let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+    // M4 Task 2: era-gate `is_cc` (see its doc comment) -- post-rework logs
+    // route genuine CC through `buff == 1` rows too, via the shared
+    // `DamageResult` enum.
+    let post_era = raw.header.is_post_buff_rework();
 
     // WvW: fold friendly pet/minion damage into the same per-second buckets
     // as direct squad damage, matching how `analysis::analyze` credits it
@@ -44,7 +48,19 @@ pub fn timeline(
             // Crowd-control application events reuse value/buff_dmg to
             // carry CC duration ms, not damage — exclude them so the
             // timeline matches `damage::accumulate`'s predicate exactly
-            // (Finding #4).
+            // (Finding #4). Unlike `is_cc` below, this exclusion is NOT
+            // conditioned on `buff` at all -- it already drops every
+            // `result == CROWD_CONTROL` row regardless of the buff flag
+            // (M4 Task 2, verified against GW2EI's `AddDirectDamageEvent`/
+            // `AddBuffDamageDamageEvent`: both branches route
+            // `DamageResult.CrowdControl` to a `CrowdControlEvent`, never a
+            // `HealthDamageEvent`, on EVERY era -- pre-rework, a buff==1 row
+            // with raw result byte 12 decodes as the OLD `ConditionResult`
+            // enum instead, which has no value 12 at all and maps to
+            // `Unknown` -- i.e. "not health damage" either, so this
+            // unconditional exclusion was already correct pre-era too, just
+            // for a different underlying reason). So this predicate needs
+            // NO era dispatch, unlike `is_cc`/`pet_credit_cc_events` below.
             && e.result != crate::evtc::result::CROWD_CONTROL
             && squad.contains(&e.src_agent)
             && enemies.contains(&e.dst_agent)
@@ -62,42 +78,73 @@ pub fn timeline(
         {
             downs[b] += 1;
         }
-        if is_cc(e) && squad.contains(&e.src_agent) && enemies.contains(&e.dst_agent) {
+        if is_cc(e, post_era) && squad.contains(&e.src_agent) && enemies.contains(&e.dst_agent) {
             cc_applied[b] += 1;
         }
     }
     Timeline { resolution_ms: res, squad_damage, cc_applied, downs }
 }
 
-/// CC application predicate (Task 3, M2): a non-statechange, non-buff
-/// combat event whose `result` is `CROWD_CONTROL` — `value` carries the CC
-/// duration in ms (see `result::CROWD_CONTROL` docs). Replaces the earlier
+/// CC application predicate (Task 3, M2; era-gated M4 Task 2): a
+/// non-statechange combat event whose `result` is `CROWD_CONTROL` —
+/// `value` carries the CC duration in ms (see `result::CROWD_CONTROL`
+/// docs, and `CrowdControlEvent.cs`: `Duration = evtcItem.Value`,
+/// unaffected by the buff flag or era). Replaces the earlier
 /// overstack-based heuristic (Task 11).
 ///
-/// The `buff == 0` check matters: arcdps only ever synthesizes *real* CC as
-/// a non-buff event, under generic pseudo-skills (e.g. "Generic Knockback
-/// and Pull", "Generic Launch", "Generic Control Effect From Buff" — see
-/// `result::CROWD_CONTROL` docs), so genuine CC always arrives with
-/// `buff == 0`. On pre-ResultEnumRework arcdps builds (< 20260501; see
-/// GW2EI's `CombatEventFactory` and `ArcDPSEnums`, where `ConditionResult`
-/// is the buff-event result namespace and is marked retired as of that
-/// build), buff-type events are decoded through that separate, now-retired
-/// enum — so byte value 12 there means something else entirely, and
-/// spuriously collides with `CROWD_CONTROL`. Debugged against the golden WvW
-/// fixture (build 20260114, i.e. pre-rework): without `buff == 0`, this
-/// collision surfaces on ordinary boon-stack application events
-/// (Might/Stability/Fury/Vulnerability/Resolution), producing nonsensical
-/// multi-minute "CC durations" — those are a different field entirely, not
-/// CC. Calibrated against the golden fixture: this predicate (combined with
-/// pet-credit in `apply_cc`) reproduces EI's `appliedCrowdControl`/
-/// `appliedCrowdControlDuration` squad totals within tolerance.
+/// **Pre-era (`post_era == false`), the `buff == 0` check matters**: on
+/// pre-`ResultEnumRework` arcdps builds (< 20260501), `CombatItem.
+/// IsBuffDamageEvent`'s dispatch (`GW2EIEvtcParser/CombatItem.cs`) routes
+/// `buff == 1` rows through `CombatEventFactory.AddBuffDamageDamageEvent`'s
+/// PRE-`ResultEnumRework` branch, which decodes the result byte as the
+/// separate, now-retired `ConditionResult` enum (`ArcDPSEnums.cs`:
+/// `ExpectedToHit=0..InvulByPlayerSkill3=4, Unknown=5+`) — this enum has NO
+/// value 12 at all, so byte value 12 there means "`Unknown`" (i.e. "not
+/// health damage", but also NOT a `CrowdControlEvent` — GW2EI creates
+/// nothing for it), spuriously colliding with `DamageResult.CrowdControl`
+/// (`= 12`) if this predicate didn't guard on `buff == 0`. Debugged against
+/// the golden WvW fixture (build 20260114, i.e. pre-rework): without
+/// `buff == 0`, this collision surfaces on ordinary boon-stack application
+/// events (Might/Stability/Fury/Vulnerability/Resolution), producing
+/// nonsensical multi-minute "CC durations" — those are a different field
+/// entirely, not CC.
 ///
-/// TODO(post-rework): re-calibrate against an arcdps >= 20260501 capture;
-/// if post-rework buff events can carry real CC (buff==1,
-/// result==CrowdControl, routed through the shared/reworked `DamageResult`
-/// enum), extend this predicate to cover that case too.
-fn is_cc(e: &crate::evtc::RawEvent) -> bool {
-    e.is_statechange == 0 && e.buff == 0 && e.result == crate::evtc::result::CROWD_CONTROL
+/// **Post-era (`post_era == true`, arcdps `>= 20260501`), genuine CC CAN
+/// arrive as `buff == 1`**: verified against GW2EI's post-`ResultEnumRework`
+/// branch of `AddBuffDamageDamageEvent` (`CombatEventFactory.cs:857-881`),
+/// which — unlike the pre-era branch above — decodes the result byte
+/// through the SAME shared `DamageResult` enum `AddDirectDamageEvent`
+/// (`buff == 0`) already uses, and routes `DamageResult.CrowdControl` to
+/// `AddNonDamageDamageEvent` → a genuine `CrowdControlEvent`, exactly like a
+/// `buff == 0` CC row (`CombatItem.IsBuffDamageEvent`'s own post-era branch,
+/// `CombatItem.cs:226-238`, also drops the pre-era `Value == 0` guard, so a
+/// buff-shaped row's `result` byte alone decides its fate post-era). This
+/// resolves the M3 TODO this doc comment previously carried. So post-era,
+/// this predicate must NOT require `buff == 0` — any `is_statechange == 0`
+/// row with `result == CROWD_CONTROL` is real CC, regardless of the buff
+/// flag.
+///
+/// **Damage-leak safety, verified**: post-era buff==1 CC rows must NOT also
+/// leak into condi-damage accounting. Every damage/timeline/down-contribution
+/// predicate in this codebase (`damage::accumulate`, `damage::
+/// pet_credit_events`/`accumulate_pet_credit`, `damage::
+/// accumulate_damage_taken`, `cc::timeline`'s own `squad_damage` loop above,
+/// `downs::apply`'s down-contribution window) already excludes
+/// `result == CROWD_CONTROL` UNCONDITIONALLY (never gated on `buff` at all)
+/// — so they were already era-safe before this task with no code changes
+/// needed; see `timeline`'s `squad_damage` loop doc comment above for the
+/// full citation trail. Only THIS predicate (CC recognition, not damage
+/// exclusion) needed era-gating.
+///
+/// Calibrated against the golden (pre-era) fixture: this predicate (combined
+/// with pet-credit in `apply_cc`) reproduces EI's `appliedCrowdControl`/
+/// `appliedCrowdControlDuration` squad totals within tolerance (34 /
+/// 50460ms). `post_era` comes from `RawHeader::is_post_buff_rework` at each
+/// call site.
+fn is_cc(e: &crate::evtc::RawEvent, post_era: bool) -> bool {
+    e.is_statechange == 0
+        && (post_era || e.buff == 0)
+        && e.result == crate::evtc::result::CROWD_CONTROL
 }
 
 /// Pet/minion-sourced CC application events credited to the owning squad
@@ -130,10 +177,11 @@ fn pet_credit_cc_events(
     friendly_team: Option<u16>,
     agent_team: &std::collections::BTreeMap<u64, u16>,
 ) -> Vec<(u64, u64, u64)> {
+    let post_era = raw.header.is_post_buff_rework();
     let registry = crate::analysis::damage::InstidRegistry::build(raw);
     let mut out = Vec::new();
     for e in &raw.events {
-        if !is_cc(e) { continue; }
+        if !is_cc(e, post_era) { continue; }
         if !enemies.contains(&e.dst_agent) { continue; } // must be a real, known enemy
         if e.iff == 0 { continue; } // FRIEND: not CC applied to an enemy
         if squad.contains(&e.src_agent) { continue; } // real players: handled directly below
@@ -158,10 +206,11 @@ pub fn apply_cc(
     let idx: BTreeMap<u64, usize> =
         players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
     let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
+    let post_era = raw.header.is_post_buff_rework();
 
     // Direct (player-sourced) CC applied to an enemy.
     for e in &raw.events {
-        if is_cc(e) && squad.contains(&e.src_agent) && enemies.contains(&e.dst_agent) {
+        if is_cc(e, post_era) && squad.contains(&e.src_agent) && enemies.contains(&e.dst_agent) {
             if let Some(&i) = idx.get(&rep(e.src_agent)) {
                 players[i].cc_applied += 1;
                 players[i].cc_duration_ms += e.value.max(0) as u64;
@@ -346,5 +395,129 @@ mod tests {
         apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep);
         assert_eq!(players[0].stun_breaks, 2);
         assert_eq!(players[0].removed_stun_duration_ms, 1000);
+    }
+
+    fn raw_post(events: Vec<RawEvent>) -> RawLog {
+        RawLog {
+            header: RawHeader { build: "20260501".into(), revision: 1, boss_id: 1 },
+            agents: vec![],
+            skills: vec![],
+            events,
+            guid_map: vec![],
+        }
+    }
+
+    /// M4 Task 2: a `buff == 1` CC-shaped row (result == CROWD_CONTROL) must
+    /// NOT be counted under a pre-era header -- see `is_cc`'s doc comment
+    /// (pre-era, `buff == 1` rows decode through the retired `ConditionResult`
+    /// enum, where byte 12 is meaningless, not genuine CC).
+    #[test]
+    fn buff_flagged_cc_row_not_counted_pre_era() {
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let mut e = cc_ev(100, 1, 9, 1500);
+        e.buff = 1;
+        let raw = raw_from(vec![e]); // pre-era header (empty build)
+        let mut players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
+        let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
+        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep);
+        assert_eq!(players[0].cc_applied, 0, "pre-era buff==1 CC-shaped row must not be counted");
+        assert_eq!(players[0].cc_duration_ms, 0);
+    }
+
+    /// M4 Task 2 core deliverable: the SAME `buff == 1` CC-shaped row IS
+    /// counted under a post-era (>= 20260501) header -- verified against
+    /// GW2EI's post-`ResultEnumRework` `AddBuffDamageDamageEvent` branch
+    /// (`CombatEventFactory.cs:857-881`), which routes `DamageResult.
+    /// CrowdControl` to a genuine `CrowdControlEvent` regardless of the buff
+    /// flag. This is the era-equivalence pairing with the pre-era test
+    /// above: pre-era rejects it, post-era accepts it, same event otherwise.
+    #[test]
+    fn buff_flagged_cc_row_counted_post_era() {
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let mut e = cc_ev(100, 1, 9, 1500);
+        e.buff = 1;
+        let raw = raw_post(vec![e]);
+        let mut players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
+        let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
+        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep);
+        assert_eq!(players[0].cc_applied, 1, "post-era buff==1 CC-shaped row must be counted");
+        assert_eq!(players[0].cc_duration_ms, 1500);
+    }
+
+    /// Post-era, an ordinary `buff == 0` CC row must still count exactly the
+    /// same as pre-era (era-equivalence for the already-working case, not
+    /// just the new buff==1 case).
+    #[test]
+    fn buff_zero_cc_row_is_era_equivalent() {
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let pre = raw_from(vec![cc_ev(100, 1, 9, 1500)]);
+        let post = raw_post(vec![cc_ev(100, 1, 9, 1500)]);
+        let mut pre_players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
+        let mut post_players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
+        let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
+        apply_cc(&mut pre_players, &pre, &squad, &enemies, &addr_to_rep);
+        apply_cc(&mut post_players, &post, &squad, &enemies, &addr_to_rep);
+        assert_eq!(pre_players[0].cc_applied, post_players[0].cc_applied);
+        assert_eq!(pre_players[0].cc_duration_ms, post_players[0].cc_duration_ms);
+        assert_eq!(post_players[0].cc_applied, 1);
+        assert_eq!(post_players[0].cc_duration_ms, 1500);
+    }
+
+    /// A post-era `buff == 1` CC row must not alter `timeline`'s
+    /// `squad_damage` bucket (it must be excluded from damage regardless of
+    /// buff, per the `squad_damage` loop's doc comment) while still landing
+    /// in the `cc_applied` bucket.
+    #[test]
+    fn timeline_post_era_buff_cc_excluded_from_damage_but_counted_as_cc() {
+        let enc = Encounter {
+            kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
+            revision: 1, recorded_by: None, teams: vec![], players: vec![], enemies: vec![],
+            markers: vec![], tick_rate: None,
+        };
+        let mut e = cc_ev(100, 1, 9, 5000); // would look like 5000 damage if not excluded
+        e.buff = 1;
+        e.buff_dmg = 5000; // buff-damage field also populated -- must still be ignored
+        let raw = raw_post(vec![e]);
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let tl = timeline(&enc, &raw, &squad, &enemies);
+        assert_eq!(tl.squad_damage[0], 0, "CC row must not leak into squad_damage even when buff==1 post-era");
+        assert_eq!(tl.cc_applied[0], 1, "post-era buff==1 CC row must still be counted as CC");
+    }
+
+    /// M4 Task 2: pet/minion-sourced CC via a `buff == 1` row must also be
+    /// credited to the owner post-era (era-gating applies uniformly through
+    /// the shared `is_cc` predicate `pet_credit_cc_events` calls).
+    #[test]
+    fn pet_credit_cc_counts_buff_flagged_row_post_era_only() {
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let mut seed = dmg(50, 1, 9, 10);
+        seed.src_instid = 11;
+        let mut pet_cc = cc_ev(100, 2, 9, 800);
+        pet_cc.src_instid = 22;
+        pet_cc.src_master_instid = 11;
+        pet_cc.buff = 1;
+        let events = vec![
+            team_change(1, 10),
+            team_change(2, 10),
+            team_change(9, 20),
+            pov(1),
+            seed,
+            pet_cc,
+        ];
+
+        let mut pre_players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
+        let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
+        apply_cc(&mut pre_players, &raw_from(events.clone()), &squad, &enemies, &addr_to_rep);
+        assert_eq!(pre_players[0].cc_applied, 0, "pre-era buff==1 pet CC must not be credited");
+
+        let mut post_players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
+        apply_cc(&mut post_players, &raw_post(events), &squad, &enemies, &addr_to_rep);
+        assert_eq!(post_players[0].cc_applied, 1, "post-era buff==1 pet CC must be credited to owner");
+        assert_eq!(post_players[0].cc_duration_ms, 800);
     }
 }
