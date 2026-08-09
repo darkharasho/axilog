@@ -1,0 +1,19 @@
+{
+  "name": "@axi/axilog-darwin-x64",
+  "version": "0.1.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "axilog.darwin-x64.node",
+  "files": [
+    "axilog.darwin-x64.node"
+  ],
+  "description": "Node bindings (napi-rs) for axilog's Rust GW2 arcdps WvW parsing core",
+  "license": "MIT",
+  "engines": {
+    "node": ">= 18"
+  },
+  "os": [
+    "darwin"
+  ]
+}

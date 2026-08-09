@@ -12,7 +12,59 @@ tied to a single OS.
 Current focus is WvW logs (M1/M2/M3). PvE encounter logic, healing, and rotation/skill-cast
 tracking are not implemented yet (see Milestones below).
 
-## Install / build
+## Install
+
+Every option below is produced by the same tag-triggered release pipeline
+(`.github/workflows/release.yml` — see `RELEASING.md`) and attached to one GitHub Release per
+version, alongside a consolidated `SHA256SUMS`.
+
+### CLI binary (GitHub Release)
+
+Download the archive for your platform from the
+[Releases page](https://github.com/darkharasho/axilog/releases) — e.g.
+`axilog-X.Y.Z-x86_64-unknown-linux-gnu.tar.gz` (`.zip` on Windows) — then verify its checksum
+against the release's `SHA256SUMS` before extracting:
+
+```sh
+sha256sum -c axilog-X.Y.Z-<target>.tar.gz.sha256
+tar xzf axilog-X.Y.Z-<target>.tar.gz
+./axilog parse <log.zevtc> --format table
+```
+
+Targets published per release: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+`x86_64-pc-windows-msvc`, `x86_64-apple-darwin`, `aarch64-apple-darwin`.
+
+### Node SDK (npm tarball)
+
+`@axi/axilog` is not yet published to the npm registry (see **SDKs** below) — until then, install
+the tarballs attached to a GitHub Release directly:
+
+```sh
+# main package + the platform package matching your OS/arch, e.g. linux-x64-gnu
+npm install ./axi-axilog-X.Y.Z.tgz ./axi-axilog-linux-x64-gnu-X.Y.Z.tgz
+```
+
+```js
+const { parseFile } = require('@axi/axilog')
+console.log(parseFile('./fight.zevtc').players.length)
+```
+
+### Python SDK (pip wheel)
+
+`axilog` is not yet published to PyPI (see **SDKs** below) — until then, install the wheel
+attached to a GitHub Release directly for your platform (`cp39-abi3` — one wheel per platform
+covers every CPython ≥3.9):
+
+```sh
+pip install ./axilog-X.Y.Z-cp39-abi3-<platform_tag>.whl
+```
+
+```python
+import axilog
+print(len(axilog.parse_file("./fight.zevtc")["players"]))
+```
+
+### Building from source
 
 Requires a Rust toolchain (see `rust-toolchain.toml`).
 
@@ -26,6 +78,9 @@ Or run directly via cargo during development:
 ```sh
 cargo run -p axilog-cli -- parse <log.zevtc> --format table
 ```
+
+See **SDKs** below for building the Node/Python bindings from source instead of a packaged
+release artifact.
 
 ## Usage
 
@@ -179,9 +234,10 @@ See [`crates/axilog-node/README.md`](crates/axilog-node/README.md) for the full 
 (`parseFile`/`parseBuffer`/`parseFileEi`/`anonymizeFile`), build/test instructions, and how the
 TypeScript types are generated/patched.
 
-**Not yet on npm.** The package builds and tests cleanly (CI: linux build + `npm test`; the addon
-also builds on Windows/macOS every run) but publishing to the npm registry is deferred to a later
-milestone — for now, consume it from a local build or a git dependency.
+**Not yet on the npm registry.** The package builds and tests cleanly (CI: linux build + `npm
+test`; the addon also builds on Windows/macOS every run), and every tagged release publishes
+installable tarballs to its GitHub Release (see **Install** above) — but `npm publish` to the
+registry itself is gated on the `NPM_TOKEN` repository secret, which isn't configured yet.
 
 ### Python
 
@@ -216,10 +272,11 @@ See [`crates/axilog-py/README.md`](crates/axilog-py/README.md) for the full API
 (`parse_file`/`parse_bytes`/`parse_file_ei`/`anonymize_file`), build/test instructions, and the
 `axilog.pyi` typed-stub layout.
 
-**Not yet on PyPI.** The extension builds and tests cleanly (CI: linux `maturin develop` + the
-stdlib `unittest` suite; the wheel also builds on Windows/macOS every run via `maturin build`) but
-publishing to the PyPI registry is deferred to a later milestone — for now, consume it from a local
-`maturin develop`/`maturin build` or a git dependency.
+**Not yet on the PyPI registry.** The extension builds and tests cleanly (CI: linux `maturin
+develop` + the stdlib `unittest` suite; the wheel also builds on Windows/macOS every run via
+`maturin build`), and every tagged release publishes installable wheels + an sdist to its GitHub
+Release (see **Install** above) — but `twine upload` to the registry itself is gated on the
+`PYPI_TOKEN` repository secret, which isn't configured yet.
 
 ## EI-JSON parity
 
@@ -397,9 +454,21 @@ containers, byte-for-byte determinism, size budgets: <250KB total report, <50KB 
 `-o/--output FILE` (any `--format`, not just html) added to the CLI alongside it. See **HTML
 report** above.
 
+**M8 (done):** tag-triggered release pipeline (`.github/workflows/release.yml`, `v*` tags) — CLI
+binaries for all 5 targets, `@axi/axilog` npm main + platform packages (all 5), and `axilog`
+Python wheels (abi3, 4 platforms) + sdist, all attached to one GitHub Release with a consolidated
+`SHA256SUMS`; a version single-source guard (`scripts/check-versions.sh`, wired into `ci.yml`)
+keeps `Cargo.toml`/`package.json`/npm platform packages/`pyproject.toml` from drifting apart, plus
+a tag==Cargo-version guard (`scripts/check-tag-version.sh`) before every release; `npm publish`/
+`twine upload` are wired in but gated on `NPM_TOKEN`/`PYPI_TOKEN` repository secrets being
+configured (log-skip otherwise — the Release itself, with every artifact attached, is created
+either way) and on the triggering event being a real tag push, never a `workflow_dispatch` dry
+run. See **Install** above and `RELEASING.md` for the full flow.
+
 **Later:** healing/barrier stats, rotation/skill-cast tracking, PvE encounter logic (boss health
-phases, mechanics), npm publishing for `@axi/axilog`, PyPI publishing for `axilog`, HTML report
-extras (tick-rate corner widget, marker-driven combat-replay eye candy — see arcdps-dev-notes),
+phases, mechanics), actually publishing to the npm/PyPI registries (the pipeline is gated and
+ready — see M8 — but `NPM_TOKEN`/`PYPI_TOKEN` aren't configured yet), HTML report extras
+(tick-rate corner widget, marker-driven combat-replay eye candy — see arcdps-dev-notes),
 real-capture calibration of the M4 post-rework code paths once a fixture is available.
 
 ## License

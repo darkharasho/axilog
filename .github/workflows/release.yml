@@ -1,0 +1,570 @@
+name: Release
+
+# Tag-triggered (v* tags): full pipeline -- CLI binaries + npm platform
+# packages, packaged, validated, and published to a GitHub Release.
+#
+# workflow_dispatch (M8 Task 2): manual "dry run" trigger. Every job in this
+# workflow runs the same build/pack/validate steps regardless of how the
+# workflow was triggered EXCEPT the two jobs that have externally-visible
+# side effects -- `release` (creates/updates a GitHub Release) and
+# `npm-publish` (publishes to the npm registry) -- which are gated with
+# `if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')`.
+# Invariant: publish/release only happens on a tag PUSH event.
+# `startsWith(github.ref, 'refs/tags/')` alone is NOT sufficient -- a
+# workflow_dispatch run can be started against an existing tag ref (e.g.
+# `gh workflow run release.yml --ref v0.1.0`, such as retrying a failed
+# release), which also resolves `github.ref` to `refs/tags/v0.1.0`. Without
+# the `github.event_name == 'push'` conjunct, that dispatch would pass a
+# ref-shape-only gate and publish/release for real. With it,
+# workflow_dispatch ALWAYS dry-runs (build+pack+validate only), regardless
+# of what ref it's pointed at -- only an actual tag push creates a release
+# or publishes to npm.
+#
+# ci.yml (branch push / PR) is untouched and unrelated to this workflow.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Fail fast, before spending matrix build minutes, if the tag doesn't
+  # match the version actually in Cargo.toml. On a workflow_dispatch dry
+  # run (no tag ref), there is no tag to compare against, so the check is
+  # skipped with a log message instead of failing the whole dry run.
+  version-guard:
+    name: Verify tag matches workspace version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag == [workspace.package].version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: scripts/check-tag-version.sh "${{ github.ref_name }}"
+      - name: Skip tag/version check (workflow_dispatch dry run, no tag ref)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: echo "Not running on a 'refs/tags/*' ref (this is a workflow_dispatch dry run) -- skipping the tag==Cargo-version guard. Release creation and npm publish are separately gated off later in this workflow."
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: version-guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          # No hosted native ARM Linux runner exists for aarch64-unknown-
+          # linux-gnu, so this leg cross-compiles on the x86_64 ubuntu-latest
+          # runner. Chosen approach: apt-install gcc-aarch64-linux-gnu and
+          # point cargo's target linker at it, rather than `cross` (the
+          # cross-rs tool). Why: `cross` runs the build inside a Docker
+          # container (Docker-in-Docker on the hosted runner), which pulls a
+          # multi-hundred-MB image and adds real minutes to every release for
+          # a target that is build-only here (no test execution, so we don't
+          # need cross's qemu-based "run tests under emulation" feature --
+          # its main advantage over a bare linker). A plain apt package plus
+          # two env vars is faster, has no extra moving parts, and is exactly
+          # as reliable for "produce an aarch64 ELF binary that links
+          # successfully" as long as the crate has no aarch64-specific native
+          # deps (axilog-cli doesn't: it's pure Rust + the workspace's other
+          # pure-Rust crates).
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          # Matches ci.yml's os/target pairing: macos-13 is the last Intel
+          # runner image (native x86_64), macos-latest is Apple Silicon
+          # (native aarch64) -- both targets build natively, no cross needed.
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install aarch64 cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure aarch64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build axilog (release)
+        run: cargo build --release -p axilog-cli --target ${{ matrix.target }}
+
+      - name: Strip binary (native unix targets)
+        if: runner.os != 'Windows' && matrix.target != 'aarch64-unknown-linux-gnu'
+        run: strip target/${{ matrix.target }}/release/axilog
+
+      - name: Strip binary (aarch64 cross target)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: aarch64-linux-gnu-strip target/${{ matrix.target }}/release/axilog
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/axilog"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            BIN="${BIN}.exe"
+          fi
+          VERSION="$(scripts/workspace-version.sh)"
+          mkdir -p dist
+          scripts/package-release.sh "$BIN" "$VERSION" "${{ matrix.target }}" dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axilog-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # npm platform addon builds (M8 Task 2). Reuses the exact same 5
+  # (os, target) pairs as the `build` job above -- napi-rs's Node addon
+  # build has no toolchain requirement beyond "a working Rust target for
+  # this triple", which every leg here already has, so no target needs to
+  # be dropped from the CLI matrix. The aarch64-unknown-linux-gnu leg reuses
+  # the identical bare gcc-aarch64-linux-gnu cross-toolchain approach as the
+  # CLI build above -- axilog-node has no native deps beyond the same
+  # pure-Rust workspace crates the CLI links (napi/napi-derive/napi-build
+  # are pure Rust too; the compiled .node is a plain ELF cdylib, no libnode
+  # link requirement on Linux). That combination (native addon build on
+  # linux-x64-gnu, windows-latest, macos-13, macos-latest; bare-toolchain
+  # cross build on linux-arm64-gnu) was only exercised end-to-end locally
+  # for the native linux-x64-gnu leg (see the Task 2 report) -- there is no
+  # aarch64 cross toolchain available in the local dev sandbox this was
+  # authored in, so the cross leg mirrors the CLI job's already-working
+  # recipe rather than being independently re-verified locally.
+  addon-build:
+    name: Build npm addon (${{ matrix.platform }})
+    needs: version-guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            platform: linux-arm64-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: win32-x64-msvc
+          - os: macos-13
+            target: x86_64-apple-darwin
+            platform: darwin-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: crates/axilog-node/package-lock.json
+
+      - name: Install aarch64 cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure aarch64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Node SDK - install
+        working-directory: crates/axilog-node
+        run: npm ci
+
+      - name: Build addon (${{ matrix.platform }})
+        working-directory: crates/axilog-node
+        run: npx napi build --platform --release --target ${{ matrix.target }}
+
+      - name: Stage compiled addon into its platform package
+        working-directory: crates/axilog-node
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_FILE="axilog.${{ matrix.platform }}.node"
+          if [ ! -f "$NODE_FILE" ]; then
+            echo "error: expected $NODE_FILE after napi build, not found. Files present:" >&2
+            ls -la
+            exit 1
+          fi
+          cp "$NODE_FILE" "npm/${{ matrix.platform }}/$NODE_FILE"
+
+      - name: npm pack platform package
+        working-directory: crates/axilog-node
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../../dist-npm
+          npm pack --pack-destination ../../dist-npm "./npm/${{ matrix.platform }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-platform-${{ matrix.platform }}
+          path: dist-npm/*.tgz
+          if-no-files-found: error
+
+  npm-pack-main:
+    name: npm pack (main package)
+    needs: version-guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: crates/axilog-node/package-lock.json
+
+      - name: Node SDK - install
+        working-directory: crates/axilog-node
+        run: npm ci
+
+      # The main package's .npmignore excludes *.node (see
+      # crates/axilog-node/.npmignore), so this tarball never contains a
+      # native addon -- it relies entirely on the optionalDependencies
+      # platform packages (or a local dev build) at install time. That
+      # shape is exactly what npm-install-shape below verifies end to end.
+      - name: npm pack main package
+        working-directory: crates/axilog-node
+        run: |
+          mkdir -p ../../dist-npm
+          npm pack --pack-destination ../../dist-npm .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-main
+          path: dist-npm/*.tgz
+          if-no-files-found: error
+
+  # Install-shape validation (M8 Task 2). Installs the packed main package
+  # together with the packed linux-x64-gnu platform package (the only
+  # platform package with a real .node available on an ubuntu-latest
+  # runner) into a throwaway project, exactly as an end user's
+  # `npm install @axi/axilog` would resolve on Linux/x64, then requires it
+  # and parses the committed PII-safe fixture. This is the same check run
+  # locally during Task 2 authoring (see the Task 2 report for that run's
+  # output) -- it's wired in here so a regression in the loader's
+  # optionalDependencies fallback path is caught on every dry run and
+  # release, not just when someone remembers to run it by hand.
+  npm-install-shape:
+    name: Validate npm install shape (main + linux-x64-gnu)
+    needs: [npm-pack-main, addon-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-main
+          path: tarballs
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-platform-linux-x64-gnu
+          path: tarballs
+
+      - name: Install packed tarballs into a clean project + parse fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKDIR="$(mktemp -d)"
+          cp tarballs/*.tgz "$WORKDIR/"
+          FIXTURE="$(pwd)/fixtures/wvw-small.anon.zevtc"
+          cd "$WORKDIR"
+          npm init -y >/dev/null
+          npm install ./*.tgz
+          node -e "
+            const sdk = require('@axi/axilog');
+            const report = sdk.parseFile('$FIXTURE');
+            if (report.players.length !== 42) {
+              throw new Error('expected 42 players, got ' + report.players.length);
+            }
+            const total = report.players.reduce((acc, p) => acc + p.damage.total, 0);
+            if (total !== 2138414) {
+              throw new Error('expected squad damage total 2138414, got ' + total);
+            }
+            console.log('install-shape validation OK: 42 players, squad damage total ' + total);
+          "
+
+  # Python wheel builds (M8 Task 3). abi3 (pyo3 "abi3-py39" feature, see
+  # crates/axilog-py/Cargo.toml) means a single wheel per platform covers
+  # every CPython >=3.9 -- no per-Python-minor matrix legs needed, unlike a
+  # non-abi3 extension. Four native legs (no cross-compile target here,
+  # unlike the CLI/addon matrices' aarch64-linux leg): ubuntu-latest/x86_64,
+  # windows-latest/x86_64, macos-13/x86_64 (last Intel runner image),
+  # macos-latest/aarch64 (Apple Silicon). aarch64-unknown-linux-gnu is
+  # intentionally NOT built here -- maturin's manylinux compatibility
+  # auditing (see below) needs to run ON the target architecture to inspect
+  # the produced ELF's actual linked symbol versions, and there is no
+  # hosted aarch64 Linux runner to do that natively; cross-compiling a
+  # wheel and asserting its manylinux tag without ever running it on
+  # aarch64 hardware is out of scope for this task (the CLI/addon aarch64
+  # legs are build-only with no such platform-tag correctness requirement).
+  #
+  # manylinux tagging: plain `maturin build --release` (no docker, no
+  # `--manylinux` flag, no `maturin-action`) was verified locally on this
+  # sandbox's ubuntu host -- maturin's built-in auditwheel-equivalent ELF
+  # analysis auto-tagged the wheel `manylinux_2_34_x86_64` (PEP 600
+  # perennial tag, computed from the actual glibc symbol versions the
+  # compiled `.so` links against) with zero extra configuration. This
+  # crate has no non-libc native dependencies (pyo3 abi3-py39 +
+  # extension-module links only against libc/libpython's stable ABI), so
+  # the same auto-tagging is expected to hold on ubuntu-latest in CI. See
+  # the Task 3 report for the exact local wheel filename this produced.
+  wheel-build:
+    name: Build Python wheel (${{ matrix.target }})
+    needs: version-guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: crates/axilog-py/pyproject.toml
+
+      # Pinned to the same range crates/axilog-py/pyproject.toml's
+      # [build-system].requires declares (">=1.5,<2.0"), so the version
+      # that builds the released wheel here is never silently newer/older
+      # than the range the package itself documents as its build backend.
+      - name: Install maturin
+        run: python -m pip install --upgrade pip "maturin>=1.5,<2.0"
+
+      - name: Build wheel (abi3, release)
+        working-directory: crates/axilog-py
+        run: maturin build --release --target ${{ matrix.target }} --out ../../dist-wheel
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target }}
+          path: dist-wheel/*.whl
+          if-no-files-found: error
+
+  # sdist (M8 Task 3): source distribution, platform-independent, built once
+  # on ubuntu. Lets `pip install axilog` fall back to a source build (needs
+  # a Rust toolchain + maturin on the installing machine) on any platform
+  # the wheel matrix above doesn't cover, and is the artifact PyPI expects
+  # alongside wheels for a "real" package release.
+  sdist-build:
+    name: Build Python sdist
+    needs: version-guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: crates/axilog-py/pyproject.toml
+
+      - name: Install maturin
+        run: python -m pip install --upgrade pip "maturin>=1.5,<2.0"
+
+      - name: Build sdist
+        working-directory: crates/axilog-py
+        run: maturin sdist --out ../../dist-wheel
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-sdist
+          path: dist-wheel/*.tar.gz
+          if-no-files-found: error
+
+  # Gated PyPI publish (M8 Task 3). Same event+ref gate as `npm-publish`/
+  # `release` below (github.event_name == 'push' && startsWith(github.ref,
+  # 'refs/tags/')) -- a workflow_dispatch run pointed at an existing tag ref
+  # must never publish for real, only build+validate. Independently gated
+  # on the PYPI_TOKEN repository secret being present, with a clear
+  # log-skip message when it's absent -- mirrors npm-publish's NPM_TOKEN
+  # pattern exactly. NEVER requires or embeds real credentials for this job
+  # to succeed locally/in CI without the secret.
+  pypi-publish:
+    name: Publish to PyPI (gated)
+    needs: [wheel-build, sdist-build]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    env:
+      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist-wheel
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-sdist
+          path: dist-wheel
+          merge-multiple: true
+
+      - name: Install twine
+        if: env.PYPI_TOKEN != ''
+        run: python -m pip install --upgrade pip twine
+
+      - name: Publish to PyPI
+        if: env.PYPI_TOKEN != ''
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: twine upload dist-wheel/*.whl dist-wheel/*.tar.gz
+
+      - name: Skip PyPI publish (PYPI_TOKEN not set)
+        if: env.PYPI_TOKEN == ''
+        run: echo "PYPI_TOKEN repository secret is not set -- skipping PyPI publish. Set PYPI_TOKEN to enable publishing on future tag pushes."
+
+  # Gated npm publish (M8 Task 2). Never runs on a workflow_dispatch dry run
+  # (job-level event+ref gate, same pattern as `release` below); on a real
+  # tag PUSH it still only publishes if the NPM_TOKEN repository secret is
+  # configured -- otherwise it logs a clear skip message and exits 0. NEVER
+  # requires or embeds real credentials for this to succeed locally/in CI
+  # without the secret.
+  #
+  # The gate checks `github.event_name == 'push'` in addition to the ref
+  # shape: `startsWith(github.ref, 'refs/tags/')` alone is satisfied by a
+  # workflow_dispatch run pointed at an existing tag (e.g.
+  # `gh workflow run release.yml --ref v0.1.0`), which would otherwise
+  # publish for real on what's meant to be a dry run.
+  npm-publish:
+    name: Publish npm packages (gated)
+    needs: [npm-pack-main, addon-build, npm-install-shape]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: tarballs
+          merge-multiple: true
+
+      - name: Publish to npm
+        if: env.NPM_TOKEN != ''
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for tgz in tarballs/*.tgz; do
+            echo "Publishing $tgz"
+            npm publish "$tgz" --access public
+          done
+
+      - name: Skip npm publish (NPM_TOKEN not set)
+        if: env.NPM_TOKEN == ''
+        run: echo "NPM_TOKEN repository secret is not set -- skipping npm publish. Set NPM_TOKEN to enable publishing on future tag pushes."
+
+  release:
+    name: Create GitHub Release
+    needs: [build, npm-pack-main, addon-build, npm-install-shape, wheel-build, sdist-build]
+    runs-on: ubuntu-latest
+    # Never runs on a workflow_dispatch dry run -- only a real `v*` tag PUSH
+    # creates/updates a GitHub Release. `github.event_name == 'push'` is
+    # required alongside the ref-shape check: a workflow_dispatch run
+    # started against an existing tag ref also satisfies
+    # `startsWith(github.ref, 'refs/tags/')` on its own, which would
+    # otherwise create a real release on what's meant to be a dry run. See
+    # the workflow-level comment above for the full dry-run rationale.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      # Re-check post-build: cheap, and guarantees the release step never
+      # runs against a mismatched tag even if the guard job's result was
+      # somehow bypassed (e.g. a future workflow_dispatch re-run of just
+      # this job).
+      - name: Check tag == [workspace.package].version
+        run: scripts/check-tag-version.sh "${{ github.ref_name }}"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Consolidate artifacts + generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name '*.tgz' -o -name '*.whl' \) \
+            -exec cp {} release/ \;
+          cd release
+          sha256sum -- *.tar.gz *.zip *.tgz *.whl > SHA256SUMS
+          echo "Release contents:"
+          ls -la
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" release/* \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
