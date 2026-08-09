@@ -1,6 +1,7 @@
 use serde::Serialize;
 use axilog_core::model::Encounter;
 use axilog_core::analysis::{buffs, Metrics};
+use axilog_core::analysis::replay::Replay;
 
 #[derive(Serialize)]
 pub struct Report {
@@ -17,6 +18,108 @@ pub struct Report {
     /// other optional/empty-by-default fields (e.g. `TickRateOut`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Combat-replay position tracks (M9, Task 2), opt-in -- only present
+    /// when the caller (CLI `--replay` / SDK `replay: true`) requested it
+    /// by passing `Some(&Replay)` to [`build_report`]. Omitted entirely
+    /// from the JSON (not serialized as `null`) rather than emitted as
+    /// `None`, matching this schema's existing omit-when-absent convention
+    /// for other opt-in/optional fields (e.g. `TickRateOut`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay: Option<ReplayOut>,
+}
+/// Native-only combat-replay block (M9, Task 2) -- see
+/// `axilog_core::analysis::replay` for how `poll_ms`/`tracks`/intervals are
+/// computed. `bounds` is the min/max `x`/`y` observed across every track's
+/// samples, letting an HTML/JS consumer size a viewBox without a second
+/// pass over `tracks`.
+#[derive(Serialize)]
+pub struct ReplayOut {
+    pub poll_ms: u64,
+    pub bounds: ReplayBoundsOut,
+    pub tracks: Vec<ReplayTrackOut>,
+}
+#[derive(Serialize)]
+pub struct ReplayBoundsOut {
+    pub min_x: f64,
+    pub min_y: f64,
+    pub max_x: f64,
+    pub max_y: f64,
+}
+/// One tracked agent's replay data. `name`/`team`/`commander`/`is_squad`
+/// mirror `axilog_core::analysis::replay::Track`'s own fields verbatim
+/// (already the right display-field precedence -- `Player::character` for
+/// squad players, `Enemy::name` for enemy-player representatives -- per
+/// that module's doc comment). `samples` are `[t_ms, x, y]` triples, `x`/`y`
+/// rounded to 1 decimal place to keep the embedded JSON small; `t_ms` is
+/// left exact (already an integer grid position, not a lossy float).
+/// `down_intervals`/`dead_intervals` are `[start_ms, end_ms]` pairs.
+#[derive(Serialize)]
+pub struct ReplayTrackOut {
+    pub name: String,
+    pub team: String,
+    pub commander: bool,
+    pub is_squad: bool,
+    pub samples: Vec<(u64, f64, f64)>,
+    pub down_intervals: Vec<(u64, u64)>,
+    pub dead_intervals: Vec<(u64, u64)>,
+}
+
+/// Round to 1 decimal place -- keeps `ReplayTrackOut.samples`' JSON
+/// representation compact (per the M9 Task 2 brief) without materially
+/// affecting on-screen replay accuracy (sub-pixel at any sane map zoom).
+fn round1(v: f32) -> f64 {
+    (v as f64 * 10.0).round() / 10.0
+}
+
+/// Build the native [`ReplayOut`] schema block from a computed [`Replay`]
+/// (`axilog_core::analysis::replay::build_replay`). Standalone from
+/// [`build_report`] rather than folded into it directly, so a caller that
+/// only wants the replay block (or wants to build it once and reuse it)
+/// doesn't have to re-thread it through the whole report-building path;
+/// [`build_report`] itself takes an already-built `Option<&Replay>` and
+/// calls this internally when `Some`.
+pub fn build_replay_out(replay: &Replay) -> ReplayOut {
+    let tracks: Vec<ReplayTrackOut> = replay
+        .tracks
+        .iter()
+        .map(|t| ReplayTrackOut {
+            name: t.name.clone(),
+            team: t.team.clone(),
+            commander: t.commander,
+            is_squad: t.is_squad,
+            samples: t.samples.iter().map(|s| (s.t_ms, round1(s.x), round1(s.y))).collect(),
+            down_intervals: t.down_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
+            dead_intervals: t.dead_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
+        })
+        .collect();
+
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for t in &tracks {
+        for &(_, x, y) in &t.samples {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    // No samples anywhere (e.g. a log with no position telemetry at all) --
+    // fall back to a degenerate zero-sized bounds rather than emit
+    // infinities.
+    if !min_x.is_finite() {
+        min_x = 0.0;
+        min_y = 0.0;
+        max_x = 0.0;
+        max_y = 0.0;
+    }
+
+    ReplayOut {
+        poll_ms: replay.poll_ms,
+        bounds: ReplayBoundsOut { min_x, min_y, max_x, max_y },
+        tracks,
+    }
 }
 #[derive(Serialize)]
 pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u64,
@@ -118,7 +221,13 @@ pub struct TimelineOut { pub resolution_ms: u64, pub per_second: PerSecondOut }
 #[derive(Serialize)]
 pub struct PerSecondOut { pub squad_damage: Vec<u64>, pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
 
-pub fn build_report(enc: &Encounter, metrics: &Metrics, axilog_version: &str) -> Report {
+/// `replay` (M9, Task 2): pass `Some(&Replay)` (from
+/// `axilog_core::analysis::replay::build_replay`, called separately by the
+/// caller when `--replay`/SDK `replay: true` was requested) to embed the
+/// native replay block; `None` (the default for every existing call site)
+/// omits it entirely, matching `ReplayOut`'s skip-when-absent serde
+/// attribute.
+pub fn build_report(enc: &Encounter, metrics: &Metrics, axilog_version: &str, replay: Option<&Replay>) -> Report {
     let pm: std::collections::BTreeMap<u64, &axilog_core::analysis::PlayerMetrics> =
         metrics.players.iter().map(|p| (p.agent_addr, p)).collect();
     let players = enc.players.iter().map(|p| {
@@ -179,6 +288,7 @@ pub fn build_report(enc: &Encounter, metrics: &Metrics, axilog_version: &str) ->
                 cc_applied: metrics.timeline.cc_applied.clone(),
                 downs: metrics.timeline.downs.clone() } },
         warnings: metrics.warnings.clone(),
+        replay: replay.map(build_replay_out),
     }
 }
 
@@ -201,11 +311,57 @@ mod tests {
             cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default() };
-        let report = build_report(&enc, &m, "0.1.0");
+        let report = build_report(&enc, &m, "0.1.0", None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.1");
         assert_eq!(v["axilog_version"], "0.1.0");
         assert_eq!(v["players"][0]["damage"]["total"], 500);
         assert_eq!(v["encounter"]["map"], "Eternal Battlegrounds");
+        assert!(v.get("replay").is_none(), "replay must be omitted when not requested");
+    }
+
+    #[test]
+    fn replay_block_present_and_rounded_when_requested() {
+        use axilog_core::analysis::replay::{build_replay, DEFAULT_POLL_MS};
+        use axilog_core::evtc::{sc, RawEvent, RawHeader, RawLog};
+        use axilog_core::model::Player;
+
+        let player = Player {
+            agent_addr: 1, account: ":A.1".into(), character: "Alice".into(),
+            profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
+            subgroup: 1, in_squad: true, commander: true, marker: None, commander_tag: None,
+            agent_addrs: vec![1],
+        };
+        let enc = Encounter {
+            kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
+            revision: 1, recorded_by: None, teams: vec![], players: vec![player],
+            enemies: vec![], markers: vec![], tick_rate: None,
+        };
+        let mut dst = [0u8; 8];
+        dst[0..4].copy_from_slice(&123.456f32.to_le_bytes());
+        dst[4..8].copy_from_slice(&(-9.87f32).to_le_bytes());
+        let raw = RawLog {
+            header: RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![],
+            events: vec![RawEvent {
+                time: 0, src_agent: 1, dst_agent: u64::from_le_bytes(dst), value: 0,
+                buff_dmg: 0, overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
+                src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
+                is_activation: 0, is_buffremove: 0, is_statechange: sc::POSITION,
+                is_shields: 0, is_offcycle: 0,
+            }],
+            guid_map: vec![],
+        };
+        let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
+            boons: Default::default(), boon_uptime: Default::default(),
+            boon_generation: Default::default(), warnings: Default::default() };
+        let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
+        let report = build_report(&enc, &m, "0.1.0", Some(&replay));
+        assert!(report.replay.is_some());
+        let r = report.replay.unwrap();
+        assert_eq!(r.poll_ms, DEFAULT_POLL_MS);
+        assert_eq!(r.tracks.len(), 1);
+        assert_eq!(r.tracks[0].name, "Alice");
+        assert_eq!(r.tracks[0].samples[0], (0, 123.5, -9.9), "x/y rounded to 1dp");
     }
 }

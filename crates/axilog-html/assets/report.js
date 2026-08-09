@@ -562,6 +562,95 @@
     return { areaPath: areaPath, linePath: linePath, downMarkers: downMarkers, ccBars: ccBars, xTicks: xTicks, yTicks: yTicks };
   }
 
+  // ---- replay (pure; see pure_fn_tests.mjs) -----------------------------
+
+  /** Gate: the Replay tab appears only when `data.replay` is present. */
+  function hasReplay(report) {
+    return !!(report && report.replay && report.replay.tracks && report.replay.tracks.length > 0);
+  }
+
+  /** How long (ms) a dot fades after its track's last sample. */
+  var REPLAY_FADE_MS = 3000;
+
+  /** Pad `bounds` 5% into a viewBox `{x,y,width,height}`; degenerate
+   * (width/height <= 0) bounds fall back to a 1x1 span first. */
+  function replayViewBox(bounds) {
+    var b = bounds || { min_x: 0, min_y: 0, max_x: 0, max_y: 0 };
+    var w = b.max_x - b.min_x;
+    var h = b.max_y - b.min_y;
+    if (!(w > 0)) w = 1;
+    if (!(h > 0)) h = 1;
+    var padX = w * 0.05;
+    var padY = h * 0.05;
+    return { x: b.min_x - padX, y: b.min_y - padY, width: w + padX * 2, height: h + padY * 2 };
+  }
+
+  /** Opacity holding `lastT`'s position once `t` passes it: 1 up to
+   * `lastT`, linear fade to 0 over `REPLAY_FADE_MS`. */
+  function replayFadeOpacity(t, lastT) {
+    if (t <= lastT) return 1;
+    var elapsed = t - lastT;
+    if (elapsed >= REPLAY_FADE_MS) return 0;
+    return 1 - elapsed / REPLAY_FADE_MS;
+  }
+
+  /** Position (+ opacity) for a track at `t` (ms): interpolates between
+   * bracketing `[t_ms,x,y]` samples; `null` for an empty track; holds+
+   * fades before-first/after-last (see `replayFadeOpacity`). */
+  function replayPositionAt(track, t) {
+    var samples = (track && track.samples) || [];
+    var n = samples.length;
+    if (n === 0) return null;
+    var first = samples[0];
+    if (t <= first[0]) return { x: first[1], y: first[2], opacity: 1 };
+    var last = samples[n - 1];
+    if (t >= last[0]) {
+      return { x: last[1], y: last[2], opacity: replayFadeOpacity(t, last[0]) };
+    }
+    for (var i = 0; i < n - 1; i++) {
+      var a = samples[i];
+      var b = samples[i + 1];
+      if (t >= a[0] && t <= b[0]) {
+        var span = b[0] - a[0];
+        var frac = span === 0 ? 0 : (t - a[0]) / span;
+        return { x: a[1] + (b[1] - a[1]) * frac, y: a[2] + (b[2] - a[2]) * frac, opacity: 1 };
+      }
+    }
+    return { x: last[1], y: last[2], opacity: replayFadeOpacity(t, last[0]) }; // unreachable
+  }
+
+  /** `replayPositionAt` mapped over every track; called every frame. */
+  function positionsAt(tracks, t) {
+    return (tracks || []).map(function (track) {
+      return replayPositionAt(track, t);
+    });
+  }
+
+  /** `t` in `[start_ms,end_ms)` of any pair -- half-open, matching Rust's
+   * `Interval` (== GW2EI): a down->dead transition sharing one ms reads
+   * dead, not down. */
+  function withinAnyReplayInterval(intervals, t) {
+    return (intervals || []).some(function (iv) {
+      return t >= iv[0] && t < iv[1];
+    });
+  }
+
+  function isDownAt(track, t) {
+    return withinAnyReplayInterval(track && track.down_intervals, t);
+  }
+
+  function isDeadAt(track, t) {
+    return withinAnyReplayInterval(track && track.dead_intervals, t);
+  }
+
+  /** False once paused or past the fight's end -- stops the rAF loop. */
+  function shouldScheduleNextTick(playing, currentMs, durationMs) {
+    return !!playing && currentMs < durationMs;
+  }
+
+  var REPLAY_SPEEDS = [1, 4, 8];
+  var REPLAY_DEFAULT_SPEED = 4;
+
   // ---- DOM glue --------------------------------------------------------
 
   function byId(id) {
@@ -962,13 +1051,224 @@
     container.appendChild(svg);
   }
 
-  var TAB_DEFS = [
+  /** `team-<color>` (+ `is-enemy`) class for a dot; reuses `teamCssClass`. */
+  function replayMarkerClass(track) {
+    return "axilog-replay-marker team-" + teamCssClass(track.team) + (track.is_squad ? "" : " is-enemy");
+  }
+
+  /** Animated Replay tab: controls + SVG stage over `positionsAt`; thin,
+   * lazily-built (once) DOM glue -- see the "replay (pure)" section. */
+  function renderReplayView(container, report) {
+    container.textContent = "";
+
+    var replay = report.replay;
+    if (!replay || !replay.tracks || replay.tracks.length === 0) {
+      var empty = document.createElement("p");
+      empty.className = "axilog-timeline-empty";
+      empty.textContent = "No replay data for this encounter.";
+      container.appendChild(empty);
+      return;
+    }
+
+    var tracks = replay.tracks, durationMs = report.encounter.duration_ms, vb = replayViewBox(replay.bounds);
+
+    var controls = document.createElement("div");
+    controls.className = "axilog-replay-controls";
+    var playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = "axilog-replay-btn";
+    playBtn.textContent = "Play";
+    var scrub = document.createElement("input");
+    scrub.type = "range";
+    scrub.className = "axilog-replay-scrub";
+    scrub.min = "0";
+    scrub.max = String(Math.max(0, durationMs));
+    scrub.step = "100";
+    scrub.value = "0";
+    scrub.setAttribute("aria-label", "Replay scrub position");
+    var timeLabel = document.createElement("span");
+    timeLabel.className = "axilog-replay-time";
+    var speedWrap = document.createElement("div");
+    speedWrap.className = "axilog-segmented";
+    speedWrap.setAttribute("role", "group");
+    speedWrap.setAttribute("aria-label", "Playback speed");
+    controls.appendChild(playBtn);
+    controls.appendChild(scrub);
+    controls.appendChild(timeLabel);
+    controls.appendChild(speedWrap);
+
+    var stage = document.createElement("div");
+    stage.className = "axilog-replay-stage";
+    var svg = svgEl("svg", {
+      viewBox: vb.x + " " + vb.y + " " + vb.width + " " + vb.height,
+      width: "100%",
+      class: "axilog-timeline-svg",
+      role: "img",
+      "aria-label": "Combat replay position stage",
+    });
+
+    var gridCols = 8, gridRows = 6;
+    for (var gx = 1; gx < gridCols; gx++) {
+      var lx = vb.x + (vb.width * gx) / gridCols;
+      svg.appendChild(svgEl("line", { x1: lx, x2: lx, y1: vb.y, y2: vb.y + vb.height, class: "axilog-timeline-gridline" }));
+    }
+    for (var gy = 1; gy < gridRows; gy++) {
+      var ly = vb.y + (vb.height * gy) / gridRows;
+      svg.appendChild(svgEl("line", { x1: vb.x, x2: vb.x + vb.width, y1: ly, y2: ly, class: "axilog-timeline-gridline" }));
+    }
+
+    var markerRadius = Math.max(vb.width, vb.height) * 0.012;
+    var dots = tracks.map(function (track) {
+      var g = svgEl("g", { class: "axilog-replay-dot" });
+      var commanderRing = null;
+      if (track.commander) {
+        commanderRing = svgEl("circle", { class: "axilog-replay-commander-ring", r: markerRadius * 1.9 });
+        g.appendChild(commanderRing);
+      }
+      var downRing = svgEl("circle", { class: "axilog-replay-down-ring", r: markerRadius * 1.6 });
+      downRing.hidden = true;
+      g.appendChild(downRing);
+      var marker = svgEl("circle", { class: replayMarkerClass(track), r: markerRadius });
+      var title = svgEl("title", {});
+      title.textContent = track.name;
+      marker.appendChild(title);
+      g.appendChild(marker);
+
+      svg.appendChild(g);
+      return { group: g, marker: marker, downRing: downRing, commanderRing: commanderRing };
+    });
+
+    stage.appendChild(svg);
+    container.appendChild(controls);
+    container.appendChild(stage);
+
+    var playing = false, speed = REPLAY_DEFAULT_SPEED, currentMs = 0, lastWallTs = null, rafId = null;
+
+    REPLAY_SPEEDS.forEach(function (s) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "axilog-segmented-btn" + (s === speed ? " is-active" : "");
+      btn.textContent = s + "x";
+      btn.setAttribute("aria-pressed", s === speed ? "true" : "false");
+      btn.addEventListener("click", function () {
+        speed = s;
+        var buttons = speedWrap.querySelectorAll(".axilog-segmented-btn");
+        for (var i = 0; i < buttons.length; i++) {
+          buttons[i].classList.remove("is-active");
+          buttons[i].setAttribute("aria-pressed", "false");
+        }
+        btn.classList.add("is-active");
+        btn.setAttribute("aria-pressed", "true");
+      });
+      speedWrap.appendChild(btn);
+    });
+
+    function applyPositions(ms) {
+      var positions = positionsAt(tracks, ms);
+      for (var i = 0; i < tracks.length; i++) {
+        var track = tracks[i];
+        var pos = positions[i];
+        var dot = dots[i];
+        if (!pos) {
+          dot.group.hidden = true;
+          continue;
+        }
+        dot.group.hidden = false;
+        dot.marker.setAttribute("cx", pos.x);
+        dot.marker.setAttribute("cy", pos.y);
+        dot.downRing.setAttribute("cx", pos.x);
+        dot.downRing.setAttribute("cy", pos.y);
+        if (dot.commanderRing) {
+          dot.commanderRing.setAttribute("cx", pos.x);
+          dot.commanderRing.setAttribute("cy", pos.y);
+        }
+        dot.group.style.opacity = isDeadAt(track, ms) ? "0.25" : String(pos.opacity);
+        dot.downRing.hidden = !isDownAt(track, ms);
+      }
+    }
+
+    function setCurrentTime(ms) {
+      currentMs = Math.max(0, Math.min(durationMs, ms));
+      scrub.value = String(currentMs);
+      timeLabel.textContent = formatDuration(currentMs) + " / " + formatDuration(durationMs);
+      applyPositions(currentMs);
+    }
+
+    function updatePlayButton() {
+      playBtn.textContent = playing ? "Pause" : "Play";
+    }
+
+    function tick(ts) {
+      if (!playing) return;
+      if (lastWallTs !== null) {
+        setCurrentTime(currentMs + (ts - lastWallTs) * speed);
+      }
+      lastWallTs = ts;
+      if (!shouldScheduleNextTick(playing, currentMs, durationMs)) {
+        playing = false;
+        lastWallTs = null;
+        rafId = null;
+        updatePlayButton();
+        return;
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function play() {
+      if (playing) return;
+      if (currentMs >= durationMs) setCurrentTime(0);
+      playing = true;
+      lastWallTs = null;
+      updatePlayButton();
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function pause() {
+      playing = false;
+      lastWallTs = null;
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+      updatePlayButton();
+    }
+
+    playBtn.addEventListener("click", function () {
+      if (playing) pause();
+      else play();
+    });
+
+    scrub.addEventListener("input", function () {
+      pause();
+      setCurrentTime(Number(scrub.value));
+    });
+
+    // Stop the rAF loop once not visible (tab switch, or tab backgrounded).
+    container.axilogOnHide = pause;
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) pause();
+    });
+
+    setCurrentTime(0);
+  }
+
+  var BASE_TAB_DEFS = [
     { id: "damage", buttonId: "axilog-tab-damage", panelId: "axilog-view-damage", render: renderDamageView },
     { id: "support", buttonId: "axilog-tab-support", panelId: "axilog-view-support", render: renderSupportView },
     { id: "boons", buttonId: "axilog-tab-boons", panelId: "axilog-view-boons", render: renderBoonsView },
   ];
 
+  var REPLAY_TAB_DEF = { id: "replay", buttonId: "axilog-tab-replay", panelId: "axilog-view-replay", render: renderReplayView };
+
+  /** Appended only when `hasReplay` is true; the button is always in the
+   * skeleton, `hidden` by default -- `initTabs` unhides it. */
+  function tabDefsFor(report) {
+    return hasReplay(report) ? BASE_TAB_DEFS.concat([REPLAY_TAB_DEF]) : BASE_TAB_DEFS;
+  }
+
   function initTabs(report) {
+    var TAB_DEFS = tabDefsFor(report);
+    if (hasReplay(report)) {
+      byId("axilog-tab-replay").hidden = false;
+    }
+
     var rendered = {};
     var buttons = TAB_DEFS.map(function (def) {
       return byId(def.buttonId);
@@ -979,6 +1279,7 @@
         var btn = byId(def.buttonId);
         var panel = byId(def.panelId);
         var active = i === index;
+        if (!active && panel.axilogOnHide) panel.axilogOnHide(); // e.g. pause replay
         panel.hidden = !active;
         btn.setAttribute("aria-selected", active ? "true" : "false");
         btn.tabIndex = active ? 0 : -1;
@@ -1088,6 +1389,16 @@
     buildTimelinePaths: buildTimelinePaths,
     TIMELINE_WIDTH: TIMELINE_WIDTH,
     TIMELINE_HEIGHT: TIMELINE_HEIGHT,
+    // replay
+    hasReplay: hasReplay,
+    replayViewBox: replayViewBox,
+    positionsAt: positionsAt,
+    isDownAt: isDownAt,
+    isDeadAt: isDeadAt,
+    shouldScheduleNextTick: shouldScheduleNextTick,
+    REPLAY_FADE_MS: REPLAY_FADE_MS,
+    REPLAY_SPEEDS: REPLAY_SPEEDS,
+    REPLAY_DEFAULT_SPEED: REPLAY_DEFAULT_SPEED,
   };
 });
 

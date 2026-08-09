@@ -24,6 +24,16 @@ enum Cmd {
         /// `--format` (M7, Task 1).
         #[arg(short = 'o', long = "output", value_name = "FILE")]
         output: Option<PathBuf>,
+        /// Compute and embed the native combat-replay block (M9, Task 2):
+        /// per-squad-player and per-enemy-player-representative position
+        /// tracks, downsampled to
+        /// `axilog_core::analysis::replay::DEFAULT_POLL_MS`. `--format json`
+        /// embeds it in the top-level `replay` field; `--format html` passes
+        /// it through to the report data the client-side Replay tab reads
+        /// (M9 Task 3). Every other format ignores it (no comparable
+        /// shape). Off by default.
+        #[arg(long)]
+        replay: bool,
     },
     /// Rewrite every player's character/account name in a .zevtc to a
     /// deterministic `Anon<N>` placeholder and write the result as a new
@@ -60,12 +70,24 @@ enum View {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Parse { path, format, view, output } => {
+        Cmd::Parse { path, format, view, output, replay } => {
             let bytes = std::fs::read(&path)?;
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
             let metrics = axilog_core::analysis::analyze(&enc, &raw);
-            let report = axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"));
+            let replay_data = replay.then(|| {
+                axilog_core::analysis::replay::build_replay(
+                    &raw,
+                    &enc,
+                    axilog_core::analysis::replay::DEFAULT_POLL_MS,
+                )
+            });
+            let report = axilog_schema::build_report(
+                &enc,
+                &metrics,
+                env!("CARGO_PKG_VERSION"),
+                replay_data.as_ref(),
+            );
             // Final-review fix wave: surface analysis warnings (e.g. a
             // post-2026-05-01 buff-statechange-rework build producing
             // all-zero boon/support metrics) on stderr for every output

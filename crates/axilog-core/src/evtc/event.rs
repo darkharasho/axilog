@@ -5,6 +5,19 @@ pub mod sc {
     pub const NONE: u8 = 0;
     pub const ENTER_COMBAT: u8 = 1;
     pub const EXIT_COMBAT: u8 = 2;
+    /// Agent is alive at time of event -- the counterpart to `CHANGE_DOWN`/
+    /// `CHANGE_DEAD` that closes a down or (via respawn) a dead interval
+    /// (M9 Task 1, `analysis::replay`). Verified against the arcdps EVTC
+    /// reference by hand-counting `enum cbtstatechange` from `CBTS_COMBAT =
+    /// 0`: `CBTS_CHANGEUP` is the 4th entry (index 3), immediately before
+    /// `CBTS_CHANGEDEAD` (4, already used by this project as `CHANGE_DEAD`)
+    /// and `CBTS_CHANGEDOWN` (5, `CHANGE_DOWN`) -- a strong internal
+    /// cross-check, since those two ordinals were already independently
+    /// verified. Cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.ChangeUp = 3`
+    /// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs`). Payload, per the
+    /// arcdps reference: `src_agent`: relates to agent.
+    pub const CHANGE_UP: u8 = 3;
     pub const CHANGE_DEAD: u8 = 4;
     pub const CHANGE_DOWN: u8 = 5;
     pub const LOG_START: u8 = 9;
@@ -323,6 +336,73 @@ pub mod sc {
     /// fields (same as the pre-era decode), so `value`/`buff_dmg` are not
     /// extracted here either.
     pub const BUFF_REMOVE_ALL: u8 = 72;
+    /// Agent position changed (M9 Task 1, `analysis::replay`). Verified
+    /// against the live arcdps EVTC reference (`curl
+    /// https://www.deltaconnected.com/arcdps/evtc/README.txt`, 2026-08-08):
+    /// hand-counting `enum cbtstatechange` entries from `CBTS_COMBAT = 0`,
+    /// `CBTS_POSITION` is the 20th entry (index 19). Cross-checked against
+    /// GW2EI's `ArcDPSEnums.StateChange.Position = 19`
+    /// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:279`). Independently
+    /// corroborated by event-count fingerprint on this project's real
+    /// post-rework local fixture (`fixtures/local/wvw-postrework.zevtc`):
+    /// statechange 19/20/21 carry 61336/57333/50182 events respectively
+    /// (position updates most frequent, facing least -- movement-shaped
+    /// counts, not a coincidence), matching `POSITION`/`VELOCITY`/`FACING`
+    /// in that order.
+    ///
+    /// Payload, per the arcdps reference (`CBTS_POSITION` block):
+    /// `src_agent`: relates to agent; `dst_agent`: "`(float*)&dst_agent` is
+    /// `float[3]`, x/y/z" -- i.e. `dst_agent`'s 8 raw bytes hold TWO
+    /// packed f32s (x at bytes 0-3, y at bytes 4-7), and the THIRD float
+    /// (z) does NOT fit in `dst_agent` alone; GW2EI's `MovementEvent` (the
+    /// shared base for `PositionEvent`/`VelocityEvent`/`RotationEvent`,
+    /// `GW2EIEvtcParser/ParsedData/CombatEvents/StatusEvents/MovementEvents/
+    /// MovementEvent.cs`) is the arbiter for where z lives, since the
+    /// arcdps reference text doesn't spell it out: `PackMovementData(x, y,
+    /// z)` packs `x`/`y` into a `ulong` (`dst_agent`) via
+    /// `BitConverter.ToUInt64([...xBytes, ...yBytes])` (little-endian x
+    /// then y) and z separately via `BitConverter.SingleToInt32Bits(z)`
+    /// into the SAME event's `value` (i32) field --
+    /// `UnpackMovementData(ulong packedXY, int intZ)` reverses this:
+    /// `x = *(float*)&packedXY`, `y = *((float*)&packedXY + 1)`, `z =
+    /// *(float*)&intZ`. So: `x = f32::from_le_bytes(dst_agent[0..4])`,
+    /// `y = f32::from_le_bytes(dst_agent[4..8])` (both from the SAME
+    /// little-endian `dst_agent` u64, low/high halves), `z =
+    /// f32::from_bits(value as u32)` (bit-reinterpret, not a numeric
+    /// conversion). Confirmed by decode probe against the real post-rework
+    /// fixture: consecutive squad members' positions cluster within a few
+    /// hundred units of each other and z sits in the plausible in-game
+    /// height range (~-2900..-2700 for the sampled cluster) -- a wrong
+    /// offset (e.g. reading z from `overstack` or failing to bit-reinterpret)
+    /// produces nonsense (huge/NaN/garbage) values instead, which the unit
+    /// tests below assert against.
+    pub const POSITION: u8 = 19;
+    /// Agent velocity changed -- same packed-float payload shape as
+    /// `POSITION` (M9 Task 1), one ordinal later. Verified the same way:
+    /// `CBTS_VELOCITY` is the 21st entry (index 20). Cross-checked against
+    /// GW2EI's `ArcDPSEnums.StateChange.Velocity = 20`. Not decoded into
+    /// `analysis::replay::build_replay`'s output (position + down/dead
+    /// intervals only, per the Task 1 brief); documented for completeness
+    /// and because GW2EI's own polling algorithm
+    /// (`CombatReplay.HandlePosition`) consults velocity events to decide
+    /// whether to hold-last vs interpolate across a large position gap --
+    /// out of scope here, see `analysis::replay`'s module doc for the
+    /// simplification this project makes instead.
+    pub const VELOCITY: u8 = 20;
+    /// Agent facing direction changed (GW2EI calls this `Rotation`).
+    /// Verified the same way: `CBTS_FACING` is the 22nd entry (index 21).
+    /// Cross-checked against GW2EI's `ArcDPSEnums.StateChange.Rotation =
+    /// 21`. IMPORTANT difference from `POSITION`/`VELOCITY`: the arcdps
+    /// reference documents `dst_agent` here as `float[2]` (x/y direction
+    /// components only, no z) -- but GW2EI's `RotationEvent` still derives
+    /// from the same `MovementEvent` base and calls the same
+    /// `GetParametricPoint3D()` 3-float unpack, so the `value` field's bits
+    /// get reinterpreted as a "z" that has no documented meaning for a 2D
+    /// facing vector (GW2EI's own callers only ever read the XY of a
+    /// rotation). Not decoded by this project (no facing/orientation field
+    /// in `analysis::replay`'s output); documented for completeness per the
+    /// Task 1 brief's "verify velocity/facing if adjacent" instruction.
+    pub const FACING: u8 = 21;
 }
 
 /// `is_buffremove` enum values (arcdps `enum cbtbuffremove`). Verified

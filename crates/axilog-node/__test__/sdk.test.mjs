@@ -116,6 +116,33 @@ test('parseBuffer produces the same Report as parseFile', () => {
   assert.deepStrictEqual(fromBuffer, fromFile)
 })
 
+test('parseFile: replay opt-in (M9 Task 2) -- absent by default, present + shaped when requested', () => {
+  const withoutReplay = sdk.parseFile(FIXTURE)
+  assert.equal(withoutReplay.replay, undefined, 'replay must be absent by default')
+
+  const withReplay = sdk.parseFile(FIXTURE, { replay: true })
+  assert.ok(withReplay.replay, 'expected a replay block when { replay: true }')
+  assert.equal(typeof withReplay.replay.poll_ms, 'number')
+  assert.ok(withReplay.replay.tracks.length > 0, 'expected at least one replay track')
+  const track = withReplay.replay.tracks[0]
+  assert.equal(typeof track.name, 'string')
+  assert.equal(typeof track.team, 'string')
+  assert.equal(typeof track.is_squad, 'boolean')
+  assert.ok(Array.isArray(track.samples))
+  if (track.samples.length > 0) {
+    assert.equal(track.samples[0].length, 3, 'each sample is a [t, x, y] triple')
+  }
+
+  // opts.replay: false must behave the same as omitting opts entirely.
+  const explicitlyOff = sdk.parseFile(FIXTURE, { replay: false })
+  assert.equal(explicitlyOff.replay, undefined)
+
+  // parseBuffer accepts the same opts shape.
+  const buf = readFileSync(FIXTURE)
+  const bufWithReplay = sdk.parseBuffer(buf, { replay: true })
+  assert.ok(bufWithReplay.replay)
+})
+
 test('parseFileEi: axibridge-read key shapes', () => {
   const ei = sdk.parseFileEi(FIXTURE)
 

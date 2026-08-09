@@ -46,11 +46,20 @@ fn value_err(e: impl std::fmt::Display) -> PyErr {
 /// Shared decode -> resolve -> analyze -> build_report pipeline (identical
 /// to `axilog-cli`'s `Cmd::Parse` handler and the Node SDK's
 /// `build_report_from_bytes`) over an already-read byte buffer.
-fn build_report_from_bytes(bytes: &[u8]) -> PyResult<axilog_schema::Report> {
+/// `want_replay` mirrors the `replay` keyword arg (M9, Task 2), defaulted
+/// to `false` by every existing call site.
+fn build_report_from_bytes(bytes: &[u8], want_replay: bool) -> PyResult<axilog_schema::Report> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(value_err)?;
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
-    Ok(axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION")))
+    let replay = want_replay.then(|| {
+        axilog_core::analysis::replay::build_replay(
+            &raw,
+            &enc,
+            axilog_core::analysis::replay::DEFAULT_POLL_MS,
+        )
+    });
+    Ok(axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref()))
 }
 
 fn report_to_value(report: &axilog_schema::Report) -> PyResult<Value> {
@@ -63,19 +72,24 @@ fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
 
 /// Parses a `.evtc`/`.zevtc` file at `path` and returns the native
 /// `Report` as a plain Python dict (see module docs for the field-name
-/// behavior).
+/// behavior). `replay=True` (M9, Task 2) opts into embedding the native
+/// combat-replay block; defaults to `False` for back-compat with every
+/// existing positional-only call site.
 #[pyfunction]
-fn parse_file(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
+#[pyo3(signature = (path, replay=false))]
+fn parse_file(py: Python<'_>, path: &str, replay: bool) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let report = build_report_from_bytes(&bytes)?;
+    let report = build_report_from_bytes(&bytes, replay)?;
     value_to_py(py, &report_to_value(&report)?)
 }
 
 /// Parses an already-read `.evtc`/`.zevtc` buffer (`bytes`/`bytearray`)
-/// and returns the native `Report` as a plain Python dict.
+/// and returns the native `Report` as a plain Python dict. `replay=True`
+/// (M9, Task 2) opts into embedding the native combat-replay block.
 #[pyfunction]
-fn parse_bytes(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyAny>> {
-    let report = build_report_from_bytes(data)?;
+#[pyo3(signature = (data, replay=false))]
+fn parse_bytes(py: Python<'_>, data: &[u8], replay: bool) -> PyResult<Py<PyAny>> {
+    let report = build_report_from_bytes(data, replay)?;
     value_to_py(py, &report_to_value(&report)?)
 }
 
@@ -85,7 +99,7 @@ fn parse_bytes(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyAny>> {
 #[pyfunction]
 fn parse_file_ei(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let report = build_report_from_bytes(&bytes)?;
+    let report = build_report_from_bytes(&bytes, false)?;
     let ei = axilog_ei::to_ei_json(&report);
     value_to_py(py, &ei)
 }

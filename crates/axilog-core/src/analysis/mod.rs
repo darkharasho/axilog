@@ -3,6 +3,9 @@ pub mod downs;
 pub mod cc;
 pub mod buffs;
 pub mod support;
+/// Combat replay position tracks (M9 Task 1) -- standalone from
+/// [`analyze`]; see `replay::build_replay`.
+pub mod replay;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
