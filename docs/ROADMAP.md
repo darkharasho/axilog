@@ -52,9 +52,15 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   release; npm = NPM_TOKEN secret in release.yml. Both idempotent. Future releases publish to
   both registries automatically on tag push.
 
+- M15 Combat-replay positions in EI shape (merged 549a518, reviewed SHIP): EI fixed-rate
+  engine (positions/orientations/dc/start/end, 100% f32-TEXT-exact both eras — 37/37 + 44/44
+  players, 50,999 samples); unified 5-map geometry table + 45-icon table (GW2EI machine-diffed
+  exact); ei-json combatReplayData/combatReplayMetaData gated --replay; M11 always-on surface
+  byte-identical. Fix waves: PlayerActor CR-trim, dst-side awareness, forcePolling squad-only,
+  always-emit combatReplayData, PII scrub (incl. pre-existing _note names). wvWMapData
+  (objective capture) = documented gap. Follow-up seed: to_ei_json options struct before a 4th arg.
+
 ## Queued (autonomous — build in order; reorder only for dependency)
-- M15 Combat-replay positions in EI shape: resample sparse tracks → EI fixed-rate grid;
-  inchToPixel map-scale table (per-map). Unblocks axibridge replay map / heatmap / positioning.
 - MCONDCAT Condition-skill-id classification catalog: EMPIRICALLY-CONFIRMED gap (M13 post-era: up to 35%% divergence on condition/power/life-leech buff==1 split; immune fields exact). Pull GW2EI Buff Classification==Condition catalog (like M3's cleanse set, complete). Unblocks exact condition/power split on post-era logs.
 - M16 Damage modifiers: trait/sigil/food/rune modifier attribution engine
   (`damageModifiers`/`incomingDamageModifiers` + maps). Largest; GW2EI DamageModifier defs +
