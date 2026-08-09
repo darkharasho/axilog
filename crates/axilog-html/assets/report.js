@@ -573,6 +573,25 @@
     return !!(report && report.replay && report.replay.tracks && report.replay.tracks.length > 0);
   }
 
+  /** M10 Task 3: whether `replay` actually carries any position samples at
+   * all. `hasReplay` above only checks that the `tracks[]` array is
+   * non-empty -- but every squad/enemy-player representative always gets a
+   * track entry (`analysis::replay::build_replay`), even one with a
+   * completely empty `samples` array, for a log with no `CBTS_POSITION`
+   * telemetry at all (a build/log that never emitted it, or a fight too
+   * short to sample). In that case `hasReplay` is still true (so the tab
+   * button shows), but drawing the stage would just be a blank dark
+   * rectangle with no dots ever appearing -- this distinguishes that case
+   * so `renderReplayView` can show an explanatory message instead. */
+  function replayHasSamples(replay) {
+    if (!replay || !replay.tracks) return false;
+    for (var i = 0; i < replay.tracks.length; i++) {
+      var t = replay.tracks[i];
+      if (t && t.samples && t.samples.length > 0) return true;
+    }
+    return false;
+  }
+
   /** How long (ms) a dot fades after its track's last sample. */
   var REPLAY_FADE_MS = 3000;
 
@@ -1071,6 +1090,19 @@
       return;
     }
 
+    // M10 Task 3: `tracks[]` is non-empty (every squad/enemy-player
+    // representative always gets an entry), but if NONE of them carry any
+    // position samples (no CBTS_POSITION telemetry in this log at all),
+    // show an explanatory message instead of an empty dark stage with no
+    // dots that will ever move.
+    if (!replayHasSamples(replay)) {
+      var noPos = document.createElement("p");
+      noPos.className = "axilog-timeline-empty";
+      noPos.textContent = "No position data in this log.";
+      container.appendChild(noPos);
+      return;
+    }
+
     var tracks = replay.tracks, durationMs = report.encounter.duration_ms, vb = replayViewBox(replay.bounds);
 
     var controls = document.createElement("div");
@@ -1392,6 +1424,7 @@
     TIMELINE_HEIGHT: TIMELINE_HEIGHT,
     // replay
     hasReplay: hasReplay,
+    replayHasSamples: replayHasSamples,
     replayViewBox: replayViewBox,
     positionsAt: positionsAt,
     isDownAt: isDownAt,

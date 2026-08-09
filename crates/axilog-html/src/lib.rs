@@ -101,14 +101,17 @@ mod tests {
                 },
                 boons: vec![],
                 support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
+                healing: None,
             }],
             enemies: vec![],
+            all_enemies: vec![],
             timeline: TimelineOut {
                 resolution_ms: 1000,
                 per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             },
             warnings: vec![],
             replay: None,
+            missiles: None,
         }
     }
 

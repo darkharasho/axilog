@@ -2,6 +2,9 @@ pub mod agent;
 pub mod anonymize;
 pub mod container;
 pub mod event;
+/// arcdps healing-extension wire-format decode (M10 Task 1) -- see this
+/// module's own doc comment for the signature/dispatch mechanism.
+pub mod ext_healing;
 pub mod guid;
 pub mod header;
 pub mod skill;
@@ -10,6 +13,10 @@ pub use agent::{decode_agents, RawAgent};
 pub use anonymize::{anon_account, anon_character, anonymize_raw_evtc, zip_deflate, zip_stored};
 pub use container::{decode_raw, inflate_zevtc};
 pub use event::{buff_remove, decode_events, result, sc, RawEvent};
+pub use ext_healing::{
+    decode_data_event, decode_registration, healing_extension_present, RawExtHealEvent,
+    Registration, HEALING_SIGNATURE,
+};
 pub use guid::{decode_guid_mappings, ContentType, GuidMapping};
 pub use header::{decode_header, is_post_buff_rework, RawHeader};
 pub use skill::{decode_skills, RawSkill};

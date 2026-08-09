@@ -9,8 +9,8 @@ closely than EI in a few places — notably down
 contribution, CC-over-time, and full per-second timeline support. Unlike the original EI, it isn't
 tied to a single OS.
 
-Current focus is WvW logs (M1/M2/M3). PvE encounter logic, healing, and rotation/skill-cast
-tracking are not implemented yet (see Milestones below).
+Current focus is WvW logs. PvE encounter logic and rotation/skill-cast tracking are not
+implemented yet (see Milestones below).
 
 ## Install
 
@@ -87,7 +87,7 @@ release artifact.
 ### Parse a log
 
 ```sh
-axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons] [-o FILE] [--replay]
+axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons|healing] [-o FILE] [--replay] [--missiles]
 ```
 
 - `json` (default) — axilog's own native schema (`axilog_schema::Report`): encounter info, teams,
@@ -110,12 +110,23 @@ per-enemy-player-representative position tracks, downsampled to 300ms, plus down
 tab (see **HTML report** below). Every other `--format` ignores it. Off by default (adds
 meaningfully to output size — see **HTML report**'s size-budget notes).
 
-`--view` (M3) selects the `table` format's column layout — ignored for every other `--format`:
+`--missiles` (M10) computes and embeds a native-only, opt-in missile (projectile) analytics
+block — per-squad-player `fired`/`hit`/`denied`/`reflected_at_self` counts plus a squad-wide
+`incoming_fired`/`incoming_denied` defensive rollup. `--format json` embeds it as a top-level
+`missiles` field; every other format ignores it (no comparable shape). Off by default. See
+`axilog_core::analysis::missiles`'s module doc for exactly what's attributable — the arcdps wire
+format has no blocked/reflected/destroyed reason code, so `denied` is deliberately undifferentiated
+and there is no per-player "who denied this" credit anywhere.
+
+`--view` (M3/M10) selects the `table` format's column layout — ignored for every other `--format`:
 
 - `default` (default) — damage/DPS/downs/kills/deaths, sorted by damage.
 - `support` — condi cleanses, boon strips, resurrects, stun breaks, sorted by cleanses.
 - `boons` — Might average stacks plus presence % for Quickness/Alacrity/Stability/Protection,
   sorted by account.
+- `healing` (M10) — arcdps healing-extension totals: healing out (total), allies, barrier out,
+  downed-ally healing. Renders `-` per row (not misleading zeros) when the log carries no
+  healing-extension data at all.
 
 Example `table --view default` output (anonymized account names, from the committed golden fixture):
 
@@ -501,10 +512,35 @@ interpolation (`positionsAt`/`replayViewBox`/`isDownAt`/`isDeadAt`), rendered on
 data is present. Size gates: replay-enabled reports <600KB, combined raw CSS+JS <60KB (raised from
 M7's 50KB — controller-authorized, the animated stage/controls needed the extra headroom).
 
-**Later:** healing/barrier stats, rotation/skill-cast tracking, PvE encounter logic (boss health
-phases, mechanics), actually publishing to the npm/PyPI registries (the pipeline is gated and
-ready — see M8 — but `NPM_TOKEN`/`PYPI_TOKEN` aren't configured yet), HTML report extras
-(tick-rate corner widget, mounts/glider/capping replay eye candy — see arcdps-dev-notes),
+**M10 (done):** arcdps healing-extension stats (`players[].healing`: `healing_out_total`/
+`healing_out_allies`/`healing_out_self`/`barrier_out`/`downed_healing_out`), calibrated exact
+(`healing_out_self`/`downed_healing_out`, 41/41 accounts) to near-exact (`healing_out_total`/
+`healing_out_allies` within 0.68%/0.71% squad-wide) against EI — except `barrier_out`, held to an
+explicitly authorized wider 8.0% squad-wide tolerance (a single repeating-skill peer-report
+cluster this project's byte-level replication of GW2EI's `SanitizeForSrc` rule can't perfectly
+reconstruct without also replicating GW2EI's internal per-agent-lifetime identity tracking — see
+`axilog_core::analysis::healing`'s module doc for the full trace); omitted entirely (not a
+`null`/all-zero block) when the log carries no healing-extension data, a real "no data" signal
+surfaced via a `Report.warnings` entry; new CLI `--view healing`. Opt-in missile (projectile)
+analytics (`--missiles`, native-only): per-squad-player `fired`/`hit`/`denied`/
+`reflected_at_self` plus a squad-wide `incoming_fired`/`incoming_denied` defensive rollup —
+deliberately honest about its scope: the arcdps wire format carries no blocked/reflected/
+destroyed reason code, so `denied` is one undifferentiated bucket, and there is no per-player
+"who denied this" credit anywhere (only the aggregate `squad.incoming_denied`); `missiles.
+players[]` entries carry `account` so they join back to `players[]` without needing `--replay`
+too. A combat-participant enemy filter (`Report.enemies`, and the HTML team chips that read it)
+now excludes NPC/gadget agents the squad never interacted with (no damage/CC either direction) —
+a real WvW log enumerates every nearby lootable/tactivator/chest as an "enemy", most of which are
+never actually part of the fight; `ei-json`'s `targets[]`/`statsTargets[]` are unaffected (kept
+against the full, unfiltered roster, matching real EI's own behavior). Team ids
+(`TeamOut.team_id` and the model/analysis layers feeding it) widened `u16` → `u32`, removing a
+truncating cast on dynamic `CBTS_WVWTEAMS` ids (future-proofing; no real fixture currently has an
+id large enough for the truncation to have mattered).
+
+**Later:** rotation/skill-cast tracking, PvE encounter logic (boss health phases, mechanics),
+actually publishing to the npm/PyPI registries (the pipeline is gated and ready — see M8 — but
+`NPM_TOKEN`/`PYPI_TOKEN` aren't configured yet), HTML report extras (tick-rate corner widget,
+mounts/glider/capping replay eye candy, a healing tab, missile analytics — see arcdps-dev-notes),
 real-capture calibration of the M4 post-rework code paths once a fixture is available.
 
 ## License

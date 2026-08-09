@@ -107,6 +107,29 @@ fn table_view_boons_has_header_and_known_row() {
     assert!(row.contains("37.4"), "known row missing Alacrity presence 37.4%: {row}");
 }
 
+/// M10, Task 1: `--view healing` — header token plus a known row value from
+/// the committed anon fixture (`:Anon125.5625`, Ranger, the fixture's top
+/// healer at 208414 total healing out / 42827 downed healing -- see
+/// `axilog-core/tests/healing_golden.rs` for the calibration this number
+/// traces back to).
+#[test]
+fn table_view_healing_has_header_and_known_row() {
+    let out = Command::new(env!("CARGO_BIN_EXE_axilog"))
+        .args(["parse", ANON_FIXTURE_PATH, "--format", "table", "--view", "healing"])
+        .output()
+        .expect("run axilog");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("healing out"), "healing view header missing 'healing out'");
+    assert!(s.contains("allies"), "healing view header missing 'allies'");
+    assert!(s.contains("barrier"), "healing view header missing 'barrier'");
+    assert!(s.contains("downed"), "healing view header missing 'downed'");
+    let row = s.lines().find(|l| l.contains(":Anon125.5625")).expect("known player row present");
+    assert!(row.contains("Ranger"), "known row missing profession: {row}");
+    assert!(row.contains("208414"), "known row missing healing out total 208414: {row}");
+    assert!(row.contains("42827"), "known row missing downed healing 42827: {row}");
+}
+
 /// Task 5 (M2): the `anonymize` subcommand itself, exercised against the
 /// already-anonymized committed fixture (always present, so this runs in
 /// CI — running it on an already-`Anon<N>`-named file just re-anonymizes to

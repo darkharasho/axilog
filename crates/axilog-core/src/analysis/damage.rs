@@ -1,4 +1,4 @@
-use crate::evtc::{result, RawEvent, RawLog};
+use crate::evtc::{result, sc, RawEvent, RawLog};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Time-aware `instid -> owning agent addr` resolution (Task 4, M2).
@@ -20,6 +20,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Shared by `pet_credit_events` (damage) and `cc::pet_credit_cc_events` (CC)
 /// so both stay consistent with each other, mirroring how they already share
 /// the `pet_credit_events` records themselves (see that fn's docs).
+///
+/// **M10 Task 1 fix**: rows on `sc::EXTENSION`/`sc::EXTENSION_COMBAT` do NOT
+/// contribute registrations (see `build`'s doc comment for why) -- but they
+/// ARE still resolvable via `resolve_at` against whatever ordinary-event
+/// registration was in effect at their own time, which is exactly what
+/// `analysis::healing` needs (extension data rows carry real `src_instid`/
+/// `dst_instid` but untrustworthy `src_agent`/`dst_agent` -- see
+/// `evtc::ext_healing`'s module doc).
 pub struct InstidRegistry {
     by_instid: BTreeMap<u16, Vec<(u64, u64)>>,
 }
@@ -28,9 +36,33 @@ impl InstidRegistry {
     /// Build the registry by scanning every event's src/dst instid + addr
     /// pair, in event order (i.e. the order they appear in the log, which is
     /// chronological).
+    ///
+    /// **Excludes** `sc::EXTENSION`/`sc::EXTENSION_COMBAT` rows from
+    /// contributing registrations (M10 Task 1 fix, found while wiring up
+    /// healing-extension decode): GW2EI's own `HealingStatsExtensionHandler.
+    /// AdjustCombatEvent` explicitly does NOT trust `src_agent`/`dst_agent`
+    /// on these rows (it overrides both via instid lookup instead -- "Prefer
+    /// instid fetch for healing events") -- and empirically, real captures
+    /// (this project's own local post-rework fixture) carry these rows with
+    /// small, plausible-looking-but-WRONG `src_agent`/`dst_agent` values
+    /// that are NOT the true owner of that `src_instid` at that time
+    /// (verified directly: a synthetic extension-shaped row with an unset
+    /// `src_agent` of `0` was, before this fix, silently accepted as a
+    /// registration and corrupted a subsequent `resolve_at` query for the
+    /// SAME instid at the SAME row's own time). Without this exclusion, ANY
+    /// log carrying the healing extension (which, per this project's own
+    /// fixtures, both a Jan-2026 and a Jul-2026 real WvW capture do) risks
+    /// silently corrupting pet/minion damage and CC credit for whichever
+    /// instids the extension happens to reuse -- this fix closes that gap
+    /// for every registry consumer (`pet_credit_events`, `cc::
+    /// pet_credit_cc_events`, and the new `analysis::healing`), not just the
+    /// new one.
     pub fn build(raw: &RawLog) -> Self {
         let mut by_instid: BTreeMap<u16, Vec<(u64, u64)>> = BTreeMap::new();
         for e in &raw.events {
+            if e.is_statechange == sc::EXTENSION || e.is_statechange == sc::EXTENSION_COMBAT {
+                continue;
+            }
             if e.src_instid != 0 {
                 Self::register(&mut by_instid, e.src_instid, e.time, e.src_agent);
             }
@@ -114,8 +146,8 @@ pub fn accumulate(
 pub fn accumulate_pet_credit(
     raw: &RawLog,
     squad: &BTreeSet<u64>,
-    friendly_team: Option<u16>,
-    agent_team: &BTreeMap<u64, u16>,
+    friendly_team: Option<u32>,
+    agent_team: &BTreeMap<u64, u32>,
 ) -> BTreeMap<u64, (u64, BTreeMap<u64, u64>)> {
     let mut out: BTreeMap<u64, (u64, BTreeMap<u64, u64>)> = BTreeMap::new();
     for (_time, owner, dst, dmg) in pet_credit_events(raw, squad, friendly_team, agent_team) {
@@ -135,8 +167,8 @@ pub fn accumulate_pet_credit(
 pub fn pet_credit_events(
     raw: &RawLog,
     squad: &BTreeSet<u64>,
-    friendly_team: Option<u16>,
-    agent_team: &BTreeMap<u64, u16>,
+    friendly_team: Option<u32>,
+    agent_team: &BTreeMap<u64, u32>,
 ) -> Vec<(u64, u64, u64, u64)> {
     let registry = InstidRegistry::build(raw);
 
@@ -188,7 +220,7 @@ mod tests {
         RawEvent { time:0, src_agent:src, dst_agent:dst, value:dmg, buff_dmg:0,
             overstack:0, skillid:1, src_instid:0, dst_instid:0,
             src_master_instid:0, dst_master_instid:0, iff:1, buff:0, result:0,
-            is_activation:0, is_buffremove:0, is_statechange: 0, is_shields: 0, is_offcycle: 0 }
+            is_activation:0, is_buffremove:0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
     #[test]
     fn sums_physical_damage_to_enemy() {
@@ -222,15 +254,15 @@ mod tests {
     #[test]
     fn pet_credit_resolves_instid_reuse_by_era() {
         let squad: BTreeSet<u64> = [1u64, 2u64].into_iter().collect();
-        let friendly_team = Some(10u16);
-        let agent_team: BTreeMap<u64, u16> =
-            [(1u64, 10u16), (2u64, 10u16), (300u64, 10u16)].into_iter().collect();
+        let friendly_team = Some(10u32);
+        let agent_team: BTreeMap<u64, u32> =
+            [(1u64, 10u32), (2u64, 10u32), (300u64, 10u32)].into_iter().collect();
 
         fn ev(time: u64, src: u64, src_instid: u16, master: u16, dst: u64, v: i32) -> RawEvent {
             RawEvent { time, src_agent: src, dst_agent: dst, value: v, buff_dmg: 0,
                 overstack: 0, skillid: 1, src_instid, dst_instid: 0,
                 src_master_instid: master, dst_master_instid: 0, iff: 1, buff: 0, result: 0,
-                is_activation: 0, is_buffremove: 0, is_statechange: 0, is_shields: 0, is_offcycle: 0 }
+                is_activation: 0, is_buffremove: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
         }
 
         let raw = RawLog {

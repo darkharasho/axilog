@@ -701,3 +701,54 @@ fn boons_smoke_nonempty_might_on_multiple_players_local_raw_when_present() {
     let Some(bytes) = read_local_fixture_or_skip("boons_smoke_nonempty_might_on_multiple_players") else { return };
     check_boons_smoke_nonempty_might_on_multiple_players(&bytes);
 }
+
+/// M10 Task 3 GATE: the combat-participant enemy filter must actually
+/// shrink the real fixture's enemy roster (the "unknown · 391 enemies was
+/// mostly Bags of Loot" bug report against a real log), while keeping every
+/// enemy player untouched -- and it must not be reachable at all through
+/// `enc.enemies` itself, which stays the full/unfiltered list `wvw::apply`
+/// always produced (only the schema/HTML output layer filters -- see
+/// `axilog_schema::Report::enemies`'s doc comment).
+fn check_combat_participant_filter_shrinks_junk_npcs_on_real_fixture(bytes: &[u8]) {
+    let raw = decode_raw(bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = analyze(&enc, &raw);
+
+    let full_count = enc.enemies.len();
+    let participant_count = metrics.combat_participant_enemies.len();
+    let player_count = enc.enemies.iter().filter(|e| e.is_player).count();
+
+    assert!(
+        participant_count < full_count,
+        "expected the combat-participant filter to drop at least one junk enemy on the real \
+         fixture, got {participant_count} participants out of {full_count} total enemies"
+    );
+    assert!(
+        participant_count >= player_count,
+        "every enemy player must be kept regardless of interaction: {player_count} players, \
+         only {participant_count} participants"
+    );
+    for e in enc.enemies.iter().filter(|e| e.is_player) {
+        assert!(
+            metrics.combat_participant_enemies.contains(&e.id),
+            "enemy player {} (id {}) must always be a combat participant",
+            e.name,
+            e.id
+        );
+    }
+    println!(
+        "combat_participant_filter: {full_count} total enemies ({player_count} players) -> \
+         {participant_count} combat participants"
+    );
+}
+
+#[test]
+fn combat_participant_filter_shrinks_junk_npcs_on_real_fixture() {
+    check_combat_participant_filter_shrinks_junk_npcs_on_real_fixture(&read_anon_fixture());
+}
+
+#[test]
+fn combat_participant_filter_shrinks_junk_npcs_on_real_fixture_local_raw_when_present() {
+    let Some(bytes) = read_local_fixture_or_skip("combat_participant_filter_shrinks_junk_npcs_on_real_fixture") else { return };
+    check_combat_participant_filter_shrinks_junk_npcs_on_real_fixture(&bytes);
+}

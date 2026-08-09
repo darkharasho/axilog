@@ -432,7 +432,7 @@ mod tests {
             time: 0, src_agent: 0, dst_agent: 0, value: 0, buff_dmg: 0, overstack: 0,
             skillid: MIGHT, src_instid: 0, dst_instid: 0, src_master_instid: 0,
             dst_master_instid: 0, iff: 0, buff: 0, result: 0, is_activation: 0,
-            is_buffremove: 0, is_statechange: 0, is_shields: 0, is_offcycle: 0,
+            is_buffremove: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
         }
     }
 
@@ -686,7 +686,7 @@ mod era_equivalence {
             time: 0, src_agent: 0, dst_agent: 0, value: 0, buff_dmg: 0, overstack: 0,
             skillid: MIGHT, src_instid: 0, dst_instid: 0, src_master_instid: 0,
             dst_master_instid: 0, iff: 0, buff: 0, result: 0, is_activation: 0,
-            is_buffremove: 0, is_statechange: 0, is_shields: 0, is_offcycle: 0,
+            is_buffremove: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
         }
     }
 

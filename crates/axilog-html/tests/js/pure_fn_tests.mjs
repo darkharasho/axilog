@@ -338,6 +338,30 @@ test("hasReplay: false for absent/empty, true for at least one track", () => {
   assert.equal(AxilogReport.hasReplay({ replay: { tracks: [{}] } }), true);
 });
 
+// M10 Task 3: `replayHasSamples` distinguishes "tracks[] is non-empty" (what
+// `hasReplay` checks -- gates the tab button) from "at least one track
+// actually carries position samples" (what decides whether the Replay tab
+// shows the animated stage or a "no position data" message).
+test("replayHasSamples: false for absent/empty tracks, and for tracks with zero samples each", () => {
+  assert.equal(AxilogReport.replayHasSamples(null), false);
+  assert.equal(AxilogReport.replayHasSamples({}), false);
+  assert.equal(AxilogReport.replayHasSamples({ tracks: [] }), false);
+  // Every track present (as `build_replay` always produces one per squad/
+  // enemy-player representative) but none carry any samples -- a log with
+  // no CBTS_POSITION telemetry at all.
+  assert.equal(
+    AxilogReport.replayHasSamples({ tracks: [{ samples: [] }, { samples: [] }] }),
+    false
+  );
+});
+
+test("replayHasSamples: true when at least one track has a nonzero samples array", () => {
+  assert.equal(
+    AxilogReport.replayHasSamples({ tracks: [{ samples: [] }, { samples: [[0, 1, 2]] }] }),
+    true
+  );
+});
+
 test("replayViewBox: pads bounds 5% on every side", () => {
   const vb = AxilogReport.replayViewBox({ min_x: 0, min_y: 0, max_x: 100, max_y: 50 });
   assert.deepEqual(vb, { x: -5, y: -2.5, width: 110, height: 55 });

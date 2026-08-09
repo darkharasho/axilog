@@ -3,9 +3,15 @@ pub mod downs;
 pub mod cc;
 pub mod buffs;
 pub mod support;
+/// arcdps healing-extension stats (M10 Task 1) -- see `healing::apply`'s
+/// module doc for the wire format / aggregation writeup.
+pub mod healing;
 /// Combat replay position tracks (M9 Task 1) -- standalone from
 /// [`analyze`]; see `replay::build_replay`.
 pub mod replay;
+/// Opt-in missile (projectile) analytics (M10 Task 2) -- standalone from
+/// [`analyze`]; see `missiles::build_missiles`.
+pub mod missiles;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -19,7 +25,14 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     pub stun_breaks: u32, pub removed_stun_duration_ms: u64,
     /// Condition cleanses / boon strips / resurrects (M3, Task 3) -- see
     /// `support::SupportMetrics`.
-    pub support: support::SupportMetrics }
+    pub support: support::SupportMetrics,
+    /// arcdps healing-extension totals (M10 Task 1) -- see
+    /// `healing::HealingMetrics`. All-zero (the `Default`) on a log that
+    /// doesn't carry the extension at all, OR on a real extension log for a
+    /// player who never healed/granted barrier -- `Metrics::
+    /// has_healing_extension` is the flag that distinguishes "genuinely
+    /// zero" from "extension absent", used to gate schema/warning output.
+    pub healing: healing::HealingMetrics }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
@@ -64,7 +77,46 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// top-level `warnings: [...]` array (omitted when empty); the CLI
     /// table view prints it to stderr; `ei-json` has no comparable field so
     /// it's simply not carried over.
-    pub warnings: Vec<String> }
+    pub warnings: Vec<String>,
+    /// Whether the arcdps healing extension (M10 Task 1) was present in
+    /// this log at all (a valid signature+revision registration row was
+    /// found -- see `evtc::ext_healing::healing_extension_present`).
+    /// `false` means every player's `PlayerMetrics::healing` is
+    /// meaningfully "no data", not "genuinely zero healing" -- native
+    /// schema uses this to omit the `healing` block entirely (rather than
+    /// emit a block of misleading zeros) and `warnings` carries a matching
+    /// "healing extension not present" note in that case.
+    pub has_healing_extension: bool,
+    /// Combat-participant enemy ids (M10 Task 3), keyed by `Enemy::id`
+    /// (representative addr) -- the subset of `enc.enemies` that actually
+    /// interacted with the squad in some way. Real WvW logs enumerate every
+    /// nearby lootable/tactivator/chest as an "enemy" NPC even though
+    /// nothing in the fight ever targets them (a user report against a real
+    /// log: "unknown · 391 enemies" was mostly Bags of Loot) -- this is the
+    /// data the native `enemies[]` output and HTML team chips filter down
+    /// to, so that count reflects real combat participants instead.
+    ///
+    /// An id is included when the corresponding enemy: (a) is a player
+    /// (always kept -- a real opponent this recording just never landed a
+    /// hit on is still real, unlike an untouched loot bag), (b) received
+    /// nonzero damage from the squad (read directly off `dmg_by_rep` below,
+    /// which already folds in squad-pet/minion credit -- so an enemy that
+    /// only ever took pet damage still counts, with zero risk of a dangling
+    /// `PerEnemyOut.enemy_id` reference, since this is literally the same
+    /// data `per_enemy` serializes), (c) dealt nonzero damage to the squad
+    /// (e.g. an enemy catapult/siege that hit squad members), or (d)
+    /// received CC from the squad. (c) and (d) are cheap direct scans over
+    /// `raw.events` purely for list-membership purposes -- they don't feed
+    /// any calibrated sum, so they can't move a golden metric.
+    ///
+    /// Deliberately does NOT touch `enc.enemies` itself, and the EI adapter
+    /// (`axilog_ei::to_ei_json`) deliberately does NOT filter by this set --
+    /// real EI's own `targets[]` keeps every enumerated target regardless of
+    /// interaction, so `axilog_schema::build_report`'s `Report::all_enemies`
+    /// (unfiltered, EI-adapter-only) preserves that faithfulness while
+    /// `Report::enemies` (native output + HTML chips) uses this set. See
+    /// `build_report`'s doc comment for the full design-choice writeup.
+    pub combat_participant_enemies: BTreeSet<u64> }
 
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // A friendly account can own several raw agent addrs (relog / build
@@ -118,6 +170,43 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             *entry.1.entry(dst_rep).or_default() += d;
         }
     }
+    // M10 Task 3: combat-participant enemy filter -- see `Metrics::
+    // combat_participant_enemies`'s doc comment for the full design
+    // writeup. Built from `dmg_by_rep` (already-folded, pet-credit-inclusive
+    // "received damage") plus two cheap list-membership-only raw scans
+    // ("dealt damage"/"received CC") that don't feed any calibrated sum.
+    let mut combat_participant_enemies: BTreeSet<u64> = enc.enemies.iter()
+        .filter(|e| e.is_player)
+        .map(|e| e.id)
+        .collect();
+    for (_total, per) in dmg_by_rep.values() {
+        for (&dst_rep, &total) in per {
+            if total > 0 {
+                combat_participant_enemies.insert(dst_rep);
+            }
+        }
+    }
+    for e in &raw.events {
+        if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }
+        if e.result == crate::evtc::result::CROWD_CONTROL {
+            // Received CC: squad -> enemy.
+            if squad.contains(&e.src_agent) {
+                if let Some(&rep) = enemy_addr_to_rep.get(&e.dst_agent) {
+                    combat_participant_enemies.insert(rep);
+                }
+            }
+            continue;
+        }
+        let d = if e.buff == 1 { e.buff_dmg.max(0) } else { e.value.max(0) };
+        if d == 0 { continue; }
+        // Dealt damage: enemy -> squad.
+        if squad.contains(&e.dst_agent) {
+            if let Some(&rep) = enemy_addr_to_rep.get(&e.src_agent) {
+                combat_participant_enemies.insert(rep);
+            }
+        }
+    }
+
     let damage_taken = damage::accumulate_damage_taken(&raw.events, &squad);
     let mut taken_by_rep: BTreeMap<u64, u64> = BTreeMap::new();
     for (addr, total) in damage_taken {
@@ -135,6 +224,12 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     downs::apply(&mut players, enc, raw, &squad, &enemies, &addr_to_rep);
     cc::apply_cc(&mut players, raw, &squad, &enemies, &addr_to_rep);
     support::apply(&mut players, raw, enc, &enemies, &addr_to_rep);
+    // M10 Task 1: cheap (a handful of linear scans over `raw.events`), so
+    // computed unconditionally like every other pass above -- returns
+    // whether the extension was present at all (see `Metrics::
+    // has_healing_extension`'s doc comment for why that matters beyond just
+    // "were all totals zero").
+    let has_healing_extension = healing::apply(&mut players, raw, &squad, &addr_to_rep);
     let timeline = cc::timeline(enc, raw, &squad, &enemies);
     // Computed last, after every other pass, per the Task 1 brief -- does
     // not read or alter `players`/`timeline` above.
@@ -178,7 +273,11 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             ));
         }
     }
-    Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings }
+    if !has_healing_extension {
+        warnings.push("healing extension not present in this log".to_string());
+    }
+    Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings, has_healing_extension,
+        combat_participant_enemies }
 }
 
 #[cfg(test)]
@@ -191,7 +290,7 @@ mod tests {
         RawEvent { time: 0, src_agent: src, dst_agent: dst, value: dmg, buff_dmg: 0,
             overstack: 0, skillid: 1, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 1, buff: 0, result: 0,
-            is_activation: 0, is_buffremove: 0, is_statechange: 0, is_shields: 0, is_offcycle: 0 }
+            is_activation: 0, is_buffremove: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
 
     fn raw_from(events: Vec<RawEvent>) -> RawLog {
@@ -287,6 +386,64 @@ mod tests {
         assert_eq!(metrics.players[0].per_enemy[0], (9, 350), "keyed by the representative enemy id");
     }
 
+    /// M10 Task 3: `Metrics::combat_participant_enemies` keeps every enemy
+    /// that interacted with the squad in any of the three documented ways
+    /// (received damage, dealt damage, received CC), keeps enemy players
+    /// unconditionally, and drops a zero-interaction NPC/gadget (the
+    /// "unknown · 391 enemies was mostly Bags of Loot" bug this task
+    /// fixes). Five enemies, one per case (plus the always-kept player).
+    #[test]
+    fn combat_participant_enemies_keeps_only_interacting_npcs_and_all_players() {
+        use crate::evtc::result;
+        let player = Player {
+            agent_addr: 1, account: ":A.1".into(), character: "A".into(),
+            profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            agent_addrs: vec![1],
+        };
+        let enc = Encounter {
+            kind: "wvw".into(), map: "".into(), duration_ms: 2000,
+            build: "".into(), revision: 1, recorded_by: None, teams: vec![],
+            players: vec![player],
+            enemies: vec![
+                // Received damage from the squad.
+                Enemy { id: 9, instid: 0, name: "TookDamage".into(), team: "blue".into(),
+                    is_player: false, marker: None, agent_addrs: vec![9] },
+                // Dealt damage to the squad (e.g. an enemy catapult).
+                Enemy { id: 10, instid: 0, name: "DealtDamage".into(), team: "blue".into(),
+                    is_player: false, marker: None, agent_addrs: vec![10] },
+                // Received CC from the squad, no damage either direction.
+                Enemy { id: 11, instid: 0, name: "TookCc".into(), team: "blue".into(),
+                    is_player: false, marker: None, agent_addrs: vec![11] },
+                // Zero interaction -- the loot-bag/tactivator/chest case.
+                Enemy { id: 12, instid: 0, name: "LootBag".into(), team: "blue".into(),
+                    is_player: false, marker: None, agent_addrs: vec![12] },
+                // Zero interaction, but a real enemy PLAYER -- always kept.
+                Enemy { id: 13, instid: 0, name: "UntouchedFoe".into(), team: "blue".into(),
+                    is_player: true, marker: None, agent_addrs: vec![13] },
+            ],
+            markers: vec![], tick_rate: None,
+        };
+        fn cc_strike(src: u64, dst: u64, duration_ms: i32) -> RawEvent {
+            let mut e = strike(src, dst, duration_ms);
+            e.result = result::CROWD_CONTROL;
+            e
+        }
+        let raw = raw_from(vec![
+            strike(1, 9, 500),   // squad -> enemy 9: received damage
+            strike(10, 1, 300),  // enemy 10 -> squad: dealt damage
+            cc_strike(1, 11, 1500), // squad -> enemy 11: received CC
+        ]);
+        let metrics = analyze(&enc, &raw);
+        let ids = &metrics.combat_participant_enemies;
+        assert!(ids.contains(&9), "received damage must count");
+        assert!(ids.contains(&10), "dealt damage must count");
+        assert!(ids.contains(&11), "received CC must count");
+        assert!(!ids.contains(&12), "zero-interaction NPC must be excluded");
+        assert!(ids.contains(&13), "enemy players are always kept, even at zero interaction");
+        assert_eq!(ids.len(), 4);
+    }
+
     fn empty_enc() -> Encounter {
         Encounter { kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![], enemies: vec![],
@@ -312,6 +469,12 @@ mod tests {
             "warning should use the M4 Task 3 downgraded message, got {:?}",
             metrics.warnings[0]
         );
+        // M10 Task 1: this synthetic log has no healing-extension
+        // registration row either, so the healing-absent warning is
+        // appended AFTER the buff warning (order: existing warnings first,
+        // healing note last -- `warnings[0]` above stays the buff message).
+        assert_eq!(metrics.warnings.len(), 2, "expected both the buff and healing warnings: {:?}", metrics.warnings);
+        assert!(metrics.warnings[1].contains("healing extension not present"));
     }
 
     /// M4 Task 3: a post-2026-05-01 build that DOES carry extracted buff
@@ -331,20 +494,28 @@ mod tests {
                 overstack: 0, skillid: buffs::MIGHT, src_instid: 0, dst_instid: 0,
                 src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 1, result: 0,
                 is_activation: 0, is_buffremove: 0, is_statechange: sc::BUFF_APPLY,
-                is_shields: 0, is_offcycle: 0,
+                is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
             }],
             guid_map: vec![],
         };
         let metrics = analyze(&empty_enc(), &raw);
-        assert!(
-            metrics.warnings.is_empty(),
-            "post-rework build with a real extracted buff event must not warn, got {:?}",
+        // M10 Task 1: this synthetic log still has no healing-extension
+        // registration row, so it now warns about that (the buff-events
+        // warning itself correctly stays absent, which is what this test
+        // guards).
+        assert_eq!(
+            metrics.warnings,
+            vec!["healing extension not present in this log".to_string()],
+            "post-rework build with a real extracted buff event must not warn about buffs, \
+             but must still warn about the absent healing extension, got {:?}",
             metrics.warnings
         );
     }
 
-    /// A pre-rework build produces no warnings (the ordinary case for every
-    /// log this project currently supports), even with zero buff events.
+    /// A pre-rework build produces no BUFF warnings (the ordinary case for
+    /// every log this project currently supports), even with zero buff
+    /// events -- it still warns about the absent healing extension (M10
+    /// Task 1), since this synthetic log has no registration row either.
     #[test]
     fn pre_rework_build_no_warnings() {
         let raw = RawLog {
@@ -352,6 +523,6 @@ mod tests {
             agents: vec![], skills: vec![], events: vec![], guid_map: vec![],
         };
         let metrics = analyze(&empty_enc(), &raw);
-        assert!(metrics.warnings.is_empty());
+        assert_eq!(metrics.warnings, vec!["healing extension not present in this log".to_string()]);
     }
 }

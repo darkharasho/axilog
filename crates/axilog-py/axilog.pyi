@@ -72,6 +72,10 @@ __all__ = [
     "ReplayBoundsOut",
     "ReplayTrackOut",
     "ReplayOut",
+    "HealingOut",
+    "PlayerMissilesOut",
+    "SquadMissilesOut",
+    "MissilesOut",
 ]
 
 # --- encounter / metadata ---------------------------------------------
@@ -164,6 +168,19 @@ class SupportOut(TypedDict):
     strips: int
     resurrects: int
 
+# --- healing (M10, Task 1) -------------------------------------------------
+
+class HealingOut(TypedDict):
+    """arcdps healing-extension totals -- outgoing healing/barrier scalars,
+    mirroring EI's `extHealingStats`/`extBarrierStats`. `healing_out_allies`
+    is `healing_out_total - healing_out_self`."""
+
+    healing_out_total: int
+    healing_out_allies: int
+    healing_out_self: int
+    barrier_out: int
+    downed_healing_out: int
+
 # --- players / enemies -----------------------------------------------------
 
 class _PlayerOutRequired(TypedDict):
@@ -187,10 +204,14 @@ class _PlayerOutRequired(TypedDict):
     support: SupportOut
 
 class PlayerOut(_PlayerOutRequired, total=False):
-    """`marker`/`commander_tag` are omitted (not `null`) when absent."""
+    """`marker`/`commander_tag` are omitted (not `null`) when absent.
+    `healing` is omitted entirely (not a `null`/all-zero dict) when the log
+    carries no healing-extension data at all -- a real "no data" signal, not
+    "the player never healed"."""
 
     marker: str
     commander_tag: CommanderTagOut
+    healing: HealingOut
 
 class _EnemyOutRequired(TypedDict):
     id: int
@@ -247,6 +268,47 @@ class ReplayOut(TypedDict):
     bounds: ReplayBoundsOut
     tracks: List[ReplayTrackOut]
 
+# --- missiles (M10, Task 2) ------------------------------------------------
+
+class PlayerMissilesOut(TypedDict):
+    """One squad player's missile totals, account-folded across
+    relog/build-swap addrs like every other per-player metric. `account`
+    (final-review fix wave) is the join key back to `Report["players"]` --
+    `agent_addr` alone isn't exposed anywhere else in the native JSON. See
+    `axilog_core::analysis::missiles`'s module doc for exactly what
+    `fired`/`hit`/`denied`/`reflected_at_self` are (and are NOT)
+    attributable to -- `denied` deliberately does not distinguish
+    blocked/reflected/destroyed/expired outcomes, and `reflected_at_self`
+    is an explicitly labeled heuristic, not a certainty."""
+
+    agent_addr: int
+    account: str
+    fired: int
+    hit: int
+    denied: int
+    reflected_at_self: int
+
+class SquadMissilesOut(TypedDict):
+    """Squad-wide missile totals -- the sum of every `PlayerMissilesOut`
+    entry, plus the aggregate, unattributed "incoming, denied" defensive
+    rollup (no per-player credit exists for who denied an incoming
+    missile)."""
+
+    fired: int
+    hit: int
+    denied: int
+    incoming_fired: int
+    incoming_denied: int
+
+class MissilesOut(TypedDict):
+    """Opt-in missile (projectile) analytics, native-only. Not yet
+    requestable through this Python SDK's `parse_file`/`parse_bytes`
+    (neither has a `missiles` parameter) -- declared here so the type
+    surface matches what `axilog_schema::Report` can produce."""
+
+    players: List[PlayerMissilesOut]
+    squad: SquadMissilesOut
+
 # --- top-level report -----------------------------------------------------
 
 class _ReportRequired(TypedDict):
@@ -259,10 +321,13 @@ class _ReportRequired(TypedDict):
 
 class Report(_ReportRequired, total=False):
     """`warnings` is omitted (not `[]`) when there are no analysis warnings.
-    `replay` is omitted (not `None`) unless requested via `replay=True`."""
+    `replay` is omitted (not `None`) unless requested via `replay=True`.
+    `missiles` is omitted (not `None`) -- always, until this SDK grows a
+    `missiles=True` parameter to request it."""
 
     warnings: List[str]
     replay: ReplayOut
+    missiles: MissilesOut
 
 # --- module functions -----------------------------------------------------
 

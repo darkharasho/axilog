@@ -30,7 +30,7 @@ fn fixture_report() -> Report {
     let raw = decode_raw(&bytes).expect("fixture decodes");
     let enc = resolve(&raw);
     let metrics = analyze(&enc, &raw);
-    build_report(&enc, &metrics, "0.1.0-test", None)
+    build_report(&enc, &metrics, "0.1.0-test", None, None)
 }
 
 /// Same pipeline, but with `--replay` (M9, Task 2): computes
@@ -43,7 +43,7 @@ fn fixture_report_with_replay() -> Report {
     let enc = resolve(&raw);
     let metrics = analyze(&enc, &raw);
     let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
-    build_report(&enc, &metrics, "0.1.0-test", Some(&replay))
+    build_report(&enc, &metrics, "0.1.0-test", Some(&replay), None)
 }
 
 /// Extract the raw text between the `axilog-data` script tags and parse it
@@ -217,12 +217,14 @@ fn combined_raw_assets_stay_under_budget() {
     let js_len = std::fs::metadata(JS_PATH).expect("report.js present").len();
     let combined = css_len + js_len;
     assert!(
-        combined < 60 * 1024,
+        combined < 65_536,
         "combined raw report.css + report.js is {combined} bytes, must stay under the \
-         60KB budget (M9 Task 3: controller pre-authorized raising this from 50KB -- the \
-         animated Replay tab's SVG stage/controls/pure interpolation math pushed past the \
-         old ceiling; usage was already ~48KB before this task, per the M9 plan's Global \
-         Constraints -- see progress.md)"
+         64KB (65,536B) budget (M10 Task 3: controller pre-authorized raising this from \
+         60KB this milestone -- the polish batch's replay minors (bounds-finiteness doc \
+         comment, the \"no position data\" empty-state message + its pure-fn gate, the \
+         enemy-dot contrast bump) left only ~170 bytes of headroom under the old 60KB \
+         ceiling per the M10 plan's Global Constraints budget note; see the M10 plan \
+         and progress.md)"
     );
 }
 

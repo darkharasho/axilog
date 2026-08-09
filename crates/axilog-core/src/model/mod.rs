@@ -67,7 +67,7 @@ pub struct TickRate { pub avg: f64, pub min: f64, pub per_second: Vec<f64> }
 #[derive(Debug, Clone)]
 pub struct Team {
     pub color: String,
-    pub team_id: u16,
+    pub team_id: u32,
     /// Stable content GUID for this team id, when a `CBTS_IDTOGUID` (TEAM
     /// content type) mapping was present in the log (Task 2b). Lowercase
     /// hex, no dashes. `None` for logs without the event (arcdps builds
@@ -192,17 +192,17 @@ mod tests {
             toughness:0, concentration:0, healing:0, hitbox_width:0,
             condition:0, hitbox_height:0, name_raw: name.to_vec() }
     }
-    fn team_change(addr: u64, team: u16) -> RawEvent {
+    fn team_change(addr: u64, team: u32) -> RawEvent {
         RawEvent { time:0, src_agent:addr, dst_agent:0, value: team as i32, buff_dmg:0,
             overstack:0, skillid:0, src_instid:0, dst_instid:0,
             src_master_instid:0, dst_master_instid:0, iff:0, buff:0, result:0,
-            is_activation:0, is_buffremove:0, is_statechange: sc::TEAM_CHANGE, is_shields: 0, is_offcycle: 0 }
+            is_activation:0, is_buffremove:0, is_statechange: sc::TEAM_CHANGE, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
     fn point_of_view(addr: u64) -> RawEvent {
         RawEvent { time:0, src_agent:addr, dst_agent:0, value:0, buff_dmg:0,
             overstack:0, skillid:0, src_instid:0, dst_instid:0,
             src_master_instid:0, dst_master_instid:0, iff:0, buff:0, result:0,
-            is_activation:0, is_buffremove:0, is_statechange: sc::POINT_OF_VIEW, is_shields: 0, is_offcycle: 0 }
+            is_activation:0, is_buffremove:0, is_statechange: sc::POINT_OF_VIEW, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
     #[test]
     fn splits_players_from_npcs() {
