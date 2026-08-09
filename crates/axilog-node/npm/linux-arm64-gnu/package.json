@@ -1,0 +1,22 @@
+{
+  "name": "@axi/axilog-linux-arm64-gnu",
+  "version": "0.1.0",
+  "cpu": [
+    "arm64"
+  ],
+  "main": "axilog.linux-arm64-gnu.node",
+  "files": [
+    "axilog.linux-arm64-gnu.node"
+  ],
+  "description": "Node bindings (napi-rs) for axilog's Rust GW2 arcdps WvW parsing core",
+  "license": "MIT",
+  "engines": {
+    "node": ">= 18"
+  },
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ]
+}

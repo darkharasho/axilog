@@ -53,6 +53,17 @@ jobs:
           cache: pip
           cache-dependency-path: crates/axilog-py/pyproject.toml
 
+      # Version single-source check (M8 Task 2): fails fast, before any
+      # build minutes are spent, if the workspace Cargo.toml version and its
+      # hand-duplicated copies (Node SDK package.json + its napi-rs platform
+      # package dirs, Python SDK pyproject.toml) have drifted apart.
+      # ubuntu-only: the check is platform-agnostic (pure text parsing, no
+      # compiled artifacts), so running it on every OS in the matrix would
+      # just repeat the same file reads three times over.
+      - name: Check version sync (ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: scripts/check-versions.sh
+
       - name: Build workspace
         run: cargo build --workspace --target ${{ matrix.target }}
 

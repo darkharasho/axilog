@@ -1,13 +1,25 @@
 name: Release
 
-# Tag-triggered only (M8 Task 1). ci.yml (branch push / PR) is untouched and
-# unrelated to this workflow. Pushing a `vX.Y.Z` tag builds axilog CLI
-# binaries for every target below, packages them, and publishes a GitHub
-# Release. No npm/PyPI publishing happens here (see M8 Tasks 2-3).
+# Tag-triggered (v* tags): full pipeline -- CLI binaries + npm platform
+# packages, packaged, validated, and published to a GitHub Release.
+#
+# workflow_dispatch (M8 Task 2): manual "dry run" trigger. Every job in this
+# workflow runs the same build/pack/validate steps regardless of how the
+# workflow was triggered EXCEPT the two jobs that have externally-visible
+# side effects -- `release` (creates/updates a GitHub Release) and
+# `npm-publish` (publishes to the npm registry) -- which are gated with
+# `if: startsWith(github.ref, 'refs/tags/')` so a manual dispatch off a
+# branch builds, packages, and runs the install-shape validation, but never
+# creates a release or publishes a package. This lets the whole pipeline be
+# exercised on-demand (e.g. to catch a toolchain regression) without
+# needing to cut a real tag.
+#
+# ci.yml (branch push / PR) is untouched and unrelated to this workflow.
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -17,14 +29,20 @@ env:
 
 jobs:
   # Fail fast, before spending matrix build minutes, if the tag doesn't
-  # match the version actually in Cargo.toml.
+  # match the version actually in Cargo.toml. On a workflow_dispatch dry
+  # run (no tag ref), there is no tag to compare against, so the check is
+  # skipped with a log message instead of failing the whole dry run.
   version-guard:
     name: Verify tag matches workspace version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Check tag == [workspace.package].version
+        if: startsWith(github.ref, 'refs/tags/')
         run: scripts/check-tag-version.sh "${{ github.ref_name }}"
+      - name: Skip tag/version check (workflow_dispatch dry run, no tag ref)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: echo "Not running on a 'refs/tags/*' ref (this is a workflow_dispatch dry run) -- skipping the tag==Cargo-version guard. Release creation and npm publish are separately gated off later in this workflow."
 
   build:
     name: Build (${{ matrix.target }})
@@ -111,10 +129,245 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # npm platform addon builds (M8 Task 2). Reuses the exact same 5
+  # (os, target) pairs as the `build` job above -- napi-rs's Node addon
+  # build has no toolchain requirement beyond "a working Rust target for
+  # this triple", which every leg here already has, so no target needs to
+  # be dropped from the CLI matrix. The aarch64-unknown-linux-gnu leg reuses
+  # the identical bare gcc-aarch64-linux-gnu cross-toolchain approach as the
+  # CLI build above -- axilog-node has no native deps beyond the same
+  # pure-Rust workspace crates the CLI links (napi/napi-derive/napi-build
+  # are pure Rust too; the compiled .node is a plain ELF cdylib, no libnode
+  # link requirement on Linux). That combination (native addon build on
+  # linux-x64-gnu, windows-latest, macos-13, macos-latest; bare-toolchain
+  # cross build on linux-arm64-gnu) was only exercised end-to-end locally
+  # for the native linux-x64-gnu leg (see the Task 2 report) -- there is no
+  # aarch64 cross toolchain available in the local dev sandbox this was
+  # authored in, so the cross leg mirrors the CLI job's already-working
+  # recipe rather than being independently re-verified locally.
+  addon-build:
+    name: Build npm addon (${{ matrix.platform }})
+    needs: version-guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            platform: linux-arm64-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: win32-x64-msvc
+          - os: macos-13
+            target: x86_64-apple-darwin
+            platform: darwin-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: crates/axilog-node/package-lock.json
+
+      - name: Install aarch64 cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure aarch64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Node SDK - install
+        working-directory: crates/axilog-node
+        run: npm ci
+
+      - name: Build addon (${{ matrix.platform }})
+        working-directory: crates/axilog-node
+        run: npx napi build --platform --release --target ${{ matrix.target }}
+
+      - name: Stage compiled addon into its platform package
+        working-directory: crates/axilog-node
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_FILE="axilog.${{ matrix.platform }}.node"
+          if [ ! -f "$NODE_FILE" ]; then
+            echo "error: expected $NODE_FILE after napi build, not found. Files present:" >&2
+            ls -la
+            exit 1
+          fi
+          cp "$NODE_FILE" "npm/${{ matrix.platform }}/$NODE_FILE"
+
+      - name: npm pack platform package
+        working-directory: crates/axilog-node
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../../dist-npm
+          npm pack --pack-destination ../../dist-npm "./npm/${{ matrix.platform }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-platform-${{ matrix.platform }}
+          path: dist-npm/*.tgz
+          if-no-files-found: error
+
+  npm-pack-main:
+    name: npm pack (main package)
+    needs: version-guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: crates/axilog-node/package-lock.json
+
+      - name: Node SDK - install
+        working-directory: crates/axilog-node
+        run: npm ci
+
+      # The main package's .npmignore excludes *.node (see
+      # crates/axilog-node/.npmignore), so this tarball never contains a
+      # native addon -- it relies entirely on the optionalDependencies
+      # platform packages (or a local dev build) at install time. That
+      # shape is exactly what npm-install-shape below verifies end to end.
+      - name: npm pack main package
+        working-directory: crates/axilog-node
+        run: |
+          mkdir -p ../../dist-npm
+          npm pack --pack-destination ../../dist-npm .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-main
+          path: dist-npm/*.tgz
+          if-no-files-found: error
+
+  # Install-shape validation (M8 Task 2). Installs the packed main package
+  # together with the packed linux-x64-gnu platform package (the only
+  # platform package with a real .node available on an ubuntu-latest
+  # runner) into a throwaway project, exactly as an end user's
+  # `npm install @axi/axilog` would resolve on Linux/x64, then requires it
+  # and parses the committed PII-safe fixture. This is the same check run
+  # locally during Task 2 authoring (see the Task 2 report for that run's
+  # output) -- it's wired in here so a regression in the loader's
+  # optionalDependencies fallback path is caught on every dry run and
+  # release, not just when someone remembers to run it by hand.
+  npm-install-shape:
+    name: Validate npm install shape (main + linux-x64-gnu)
+    needs: [npm-pack-main, addon-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-main
+          path: tarballs
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-platform-linux-x64-gnu
+          path: tarballs
+
+      - name: Install packed tarballs into a clean project + parse fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKDIR="$(mktemp -d)"
+          cp tarballs/*.tgz "$WORKDIR/"
+          FIXTURE="$(pwd)/fixtures/wvw-small.anon.zevtc"
+          cd "$WORKDIR"
+          npm init -y >/dev/null
+          npm install ./*.tgz
+          node -e "
+            const sdk = require('@axi/axilog');
+            const report = sdk.parseFile('$FIXTURE');
+            if (report.players.length !== 42) {
+              throw new Error('expected 42 players, got ' + report.players.length);
+            }
+            const total = report.players.reduce((acc, p) => acc + p.damage.total, 0);
+            if (total !== 2138414) {
+              throw new Error('expected squad damage total 2138414, got ' + total);
+            }
+            console.log('install-shape validation OK: 42 players, squad damage total ' + total);
+          "
+
+  # Gated npm publish (M8 Task 2). Never runs on a workflow_dispatch dry run
+  # (job-level ref gate, same pattern as `release` below); on a real tag
+  # push it still only publishes if the NPM_TOKEN repository secret is
+  # configured -- otherwise it logs a clear skip message and exits 0. NEVER
+  # requires or embeds real credentials for this to succeed locally/in CI
+  # without the secret.
+  npm-publish:
+    name: Publish npm packages (gated)
+    needs: [npm-pack-main, addon-build, npm-install-shape]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: tarballs
+          merge-multiple: true
+
+      - name: Publish to npm
+        if: env.NPM_TOKEN != ''
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for tgz in tarballs/*.tgz; do
+            echo "Publishing $tgz"
+            npm publish "$tgz" --access public
+          done
+
+      - name: Skip npm publish (NPM_TOKEN not set)
+        if: env.NPM_TOKEN == ''
+        run: echo "NPM_TOKEN repository secret is not set -- skipping npm publish. Set NPM_TOKEN to enable publishing on future tag pushes."
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, npm-pack-main, addon-build, npm-install-shape]
     runs-on: ubuntu-latest
+    # Never runs on a workflow_dispatch dry run -- only a real `v*` tag push
+    # creates/updates a GitHub Release. See the workflow-level comment above
+    # for the full dry-run rationale.
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
 
@@ -133,10 +386,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) \
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name '*.tgz' \) \
             -exec cp {} release/ \;
           cd release
-          sha256sum -- *.tar.gz *.zip > SHA256SUMS
+          sha256sum -- *.tar.gz *.zip *.tgz > SHA256SUMS
           echo "Release contents:"
           ls -la
 

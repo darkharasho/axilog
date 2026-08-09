@@ -27,6 +27,13 @@
   "engines": {
     "node": ">= 18"
   },
+  "optionalDependencies": {
+    "@axi/axilog-linux-x64-gnu": "0.1.0",
+    "@axi/axilog-linux-arm64-gnu": "0.1.0",
+    "@axi/axilog-win32-x64-msvc": "0.1.0",
+    "@axi/axilog-darwin-x64": "0.1.0",
+    "@axi/axilog-darwin-arm64": "0.1.0"
+  },
   "scripts": {
     "build": "napi build --platform --release && node scripts/patch-dts.mjs",
     "build:debug": "napi build --platform && node scripts/patch-dts.mjs",
