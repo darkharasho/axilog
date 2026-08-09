@@ -54,7 +54,7 @@
 //! helper, `simulator::find_single_removal_match`) so any future fix to
 //! the count-timeline model doesn't silently diverge from this one.
 
-use super::events::{self, BuffEvent, BuffEventKind};
+use super::events::{BuffEvent, BuffEventKind};
 use super::simulator::{self, find_single_removal_match};
 use super::BOON_IDS;
 use crate::evtc::RawLog;
@@ -327,20 +327,58 @@ pub(crate) fn simulate_boon_generation_ms(
     raw: &RawLog,
     enc: &Encounter,
 ) -> BTreeMap<(u64, u32), BTreeMap<u64, u64>> {
+    simulate_boon_generation_ms_with_registry(
+        raw,
+        &crate::analysis::damage::InstidRegistry::build(raw),
+        enc,
+    )
+}
+
+/// [`simulate_boon_generation_ms`] against a caller-supplied, already-built
+/// [`crate::analysis::damage::InstidRegistry`] (MPERF Task 2) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. The `raw`-only wrapper above stays for test callers.
+pub(crate) fn simulate_boon_generation_ms_with_registry(
+    raw: &RawLog,
+    registry: &crate::analysis::damage::InstidRegistry,
+    enc: &Encounter,
+) -> BTreeMap<(u64, u32), BTreeMap<u64, u64>> {
+    simulate_boon_generation_ms_with_inputs(
+        raw,
+        &super::extract_boon_inputs_with_registry(raw, registry),
+        enc,
+    )
+}
+
+/// [`simulate_boon_generation_ms`] against caller-supplied, already-extracted
+/// [`super::BoonInputs`] (MPERF Task 3) -- see that struct's doc comment for
+/// why sharing the extraction with `super::simulate_boons_with_inputs` is
+/// output-identical (the two *simulations* stay fully independent, as this
+/// module's own doc requires; only their identical raw input is shared). The
+/// `registry`-taking wrapper above stays for callers that have a registry but
+/// no extracted inputs.
+///
+/// `raw` is still needed here for the log's final event time (the absolute
+/// window generation is accumulated over), which is not part of the
+/// extracted inputs.
+pub(crate) fn simulate_boon_generation_ms_with_inputs(
+    raw: &RawLog,
+    inputs: &super::BoonInputs,
+    enc: &Encounter,
+) -> BTreeMap<(u64, u32), BTreeMap<u64, u64>> {
     let addr_to_rep: BTreeMap<u64, u64> = enc
         .players
         .iter()
         .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
         .collect();
-    let boon_ids: BTreeSet<u32> = BOON_IDS.iter().map(|&(id, _, _)| id).collect();
     let intensity_ids: BTreeSet<u32> =
         BOON_IDS.iter().filter(|&&(_, _, is_intensity)| is_intensity).map(|&(id, _, _)| id).collect();
 
-    let raw_events = events::extract_buff_events(raw, &boon_ids);
-    let arcdps_capacities = events::extract_buff_capacities(raw, &boon_ids);
+    let arcdps_capacities = &inputs.capacities;
 
     let mut grouped: BTreeMap<(u64, u32), Vec<BuffEvent>> = BTreeMap::new();
-    for mut e in raw_events {
+    for &(mut e) in &inputs.events {
         let Some(&rep) = addr_to_rep.get(&e.owner) else { continue };
         // Fold a relogged source onto its account representative too, so a
         // player who relogged mid-fight still gets ONE source key instead

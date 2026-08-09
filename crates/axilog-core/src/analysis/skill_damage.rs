@@ -150,11 +150,11 @@ fn accumulate_outgoing_direct(
 /// pet's own `iff` already excludes friend-directed damage).
 fn accumulate_outgoing_pet_credit(
     raw: &RawLog,
+    registry: &InstidRegistry,
     squad: &BTreeSet<u64>,
     friendly_team: Option<u32>,
     agent_team: &BTreeMap<u64, u32>,
 ) -> BTreeMap<u64, (BySkill, ByTargetSkill)> {
-    let registry = InstidRegistry::build(raw);
     let mut out: BTreeMap<u64, (BySkill, ByTargetSkill)> = BTreeMap::new();
     for e in &raw.events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
@@ -290,6 +290,34 @@ pub fn build(
     friendly_team: Option<u32>,
     agent_team: &BTreeMap<u64, u32>,
 ) -> BTreeMap<u64, SkillDamageMetrics> {
+    build_with_registry(
+        raw,
+        &InstidRegistry::build(raw),
+        squad,
+        enemies,
+        addr_to_rep,
+        enemy_addr_to_rep,
+        friendly_team,
+        agent_team,
+    )
+}
+
+/// [`build`] against a caller-supplied, already-built [`InstidRegistry`]
+/// (MPERF Task 2) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. The `raw`-only wrapper above stays for standalone/test callers.
+#[allow(clippy::too_many_arguments)]
+pub fn build_with_registry(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+    enemies: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+    enemy_addr_to_rep: &BTreeMap<u64, u64>,
+    friendly_team: Option<u32>,
+    agent_team: &BTreeMap<u64, u32>,
+) -> BTreeMap<u64, SkillDamageMetrics> {
     // Outgoing: direct + pet-credit, combined by raw src addr first.
     let mut combined: BTreeMap<u64, (BySkill, ByTargetSkill)> = BTreeMap::new();
     for (src, (by_skill, by_target)) in accumulate_outgoing_direct(&raw.events, squad, enemies) {
@@ -298,7 +326,7 @@ pub fn build(
         merge_by_target(&mut entry.1, &by_target);
     }
     for (src, (by_skill, by_target)) in
-        accumulate_outgoing_pet_credit(raw, squad, friendly_team, agent_team)
+        accumulate_outgoing_pet_credit(raw, registry, squad, friendly_team, agent_team)
     {
         let entry = combined.entry(src).or_default();
         merge_by_skill(&mut entry.0, &by_skill);

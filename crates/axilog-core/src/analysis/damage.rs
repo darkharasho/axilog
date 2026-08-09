@@ -29,8 +29,28 @@ use std::collections::{BTreeMap, BTreeSet};
 /// `dst_instid` but untrustworthy `src_agent`/`dst_agent` -- see
 /// `evtc::ext_healing`'s module doc).
 pub struct InstidRegistry {
-    by_instid: BTreeMap<u16, Vec<(u64, u64)>>,
+    /// Registrations per instid, indexed DIRECTLY by the instid (MPERF Task
+    /// 3): `by_instid[instid as usize]` is that instid's own chronological
+    /// `(time, addr)` registration list, empty when it was never registered.
+    ///
+    /// This was a `BTreeMap<u16, Vec<(u64, u64)>>` through MPERF Task 2. The
+    /// key space is a `u16`, so the map is bounded at 65,536 entries no
+    /// matter how large the log is -- a flat `Vec` of exactly that length
+    /// (~1.5 MiB of `Vec` headers, allocated once) replaces an O(log n)
+    /// tree descent with an O(1) index on every `build` registration (two
+    /// per event, i.e. over a million on a real WvW log) and on every
+    /// `resolve_at` query. Nothing outside this type ever sees the backing
+    /// store: `by_instid` is private and is only ever indexed by a known
+    /// instid -- it is never iterated, so no ordering-dependent behaviour
+    /// (and therefore no output) can change. The per-instid `Vec<(u64,
+    /// u64)>` contents, and `resolve_at`'s `partition_point` query over
+    /// them, are untouched.
+    by_instid: Vec<Vec<(u64, u64)>>,
 }
+
+/// Number of distinct arcdps instids -- the full `u16` key space
+/// [`InstidRegistry::by_instid`] is indexed by.
+const INSTID_SPACE: usize = u16::MAX as usize + 1;
 
 impl InstidRegistry {
     /// Build the registry by scanning every event's src/dst instid + addr
@@ -58,7 +78,7 @@ impl InstidRegistry {
     /// pet_credit_cc_events`, and the new `analysis::healing`), not just the
     /// new one.
     pub fn build(raw: &RawLog) -> Self {
-        let mut by_instid: BTreeMap<u16, Vec<(u64, u64)>> = BTreeMap::new();
+        let mut by_instid: Vec<Vec<(u64, u64)>> = vec![Vec::new(); INSTID_SPACE];
         for e in &raw.events {
             if e.is_statechange == sc::EXTENSION || e.is_statechange == sc::EXTENSION_COMBAT {
                 continue;
@@ -73,8 +93,8 @@ impl InstidRegistry {
         InstidRegistry { by_instid }
     }
 
-    fn register(map: &mut BTreeMap<u16, Vec<(u64, u64)>>, instid: u16, time: u64, addr: u64) {
-        let entries = map.entry(instid).or_default();
+    fn register(map: &mut [Vec<(u64, u64)>], instid: u16, time: u64, addr: u64) {
+        let entries = &mut map[instid as usize];
         if let Some(&(last_time, last_addr)) = entries.last() {
             if last_addr == addr {
                 return; // no ownership change; avoid growing the vec pointlessly
@@ -94,9 +114,13 @@ impl InstidRegistry {
     /// registration with `time <= t`. `None` if `instid` had no registration
     /// yet at or before `t` (including "never registered at all").
     pub fn resolve_at(&self, instid: u16, t: u64) -> Option<u64> {
-        let entries = self.by_instid.get(&instid)?;
+        let entries = &self.by_instid[instid as usize];
         let idx = entries.partition_point(|&(time, _)| time <= t);
         if idx == 0 {
+            // Either `instid` was never registered at all (empty list) or its
+            // first registration is later than `t` -- both are "no addr known
+            // at this time", exactly as the old `BTreeMap::get(&instid)?`
+            // miss and this same `idx == 0` check together expressed.
             return None;
         }
         Some(entries[idx - 1].1)
@@ -149,8 +173,36 @@ pub fn accumulate_pet_credit(
     friendly_team: Option<u32>,
     agent_team: &BTreeMap<u64, u32>,
 ) -> BTreeMap<u64, (u64, BTreeMap<u64, u64>)> {
+    accumulate_pet_credit_with_registry(
+        raw,
+        &InstidRegistry::build(raw),
+        squad,
+        friendly_team,
+        agent_team,
+    )
+}
+
+/// [`accumulate_pet_credit`] against a caller-supplied, already-built
+/// [`InstidRegistry`] (MPERF Task 2).
+///
+/// `InstidRegistry::build` is a pure function of `raw` -- a full linear scan
+/// over every event -- so every consumer that built its own was producing a
+/// bit-for-bit identical map. `analysis::analyze` now builds it exactly once
+/// and threads `&InstidRegistry` into each pass, which is provably
+/// output-identical while removing ~9 redundant whole-log scans per parse.
+/// The `raw`-only wrapper above stays for SDK/standalone/test callers that
+/// have no registry in hand.
+pub fn accumulate_pet_credit_with_registry(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+    friendly_team: Option<u32>,
+    agent_team: &BTreeMap<u64, u32>,
+) -> BTreeMap<u64, (u64, BTreeMap<u64, u64>)> {
     let mut out: BTreeMap<u64, (u64, BTreeMap<u64, u64>)> = BTreeMap::new();
-    for (_time, owner, dst, dmg) in pet_credit_events(raw, squad, friendly_team, agent_team) {
+    for (_time, owner, dst, dmg) in
+        pet_credit_events_with_registry(raw, registry, squad, friendly_team, agent_team)
+    {
         let entry = out.entry(owner).or_default();
         entry.0 += dmg;
         *entry.1.entry(dst).or_default() += dmg;
@@ -170,8 +222,26 @@ pub fn pet_credit_events(
     friendly_team: Option<u32>,
     agent_team: &BTreeMap<u64, u32>,
 ) -> Vec<(u64, u64, u64, u64)> {
-    let registry = InstidRegistry::build(raw);
+    pet_credit_events_with_registry(
+        raw,
+        &InstidRegistry::build(raw),
+        squad,
+        friendly_team,
+        agent_team,
+    )
+}
 
+/// [`pet_credit_events`] against a caller-supplied, already-built
+/// [`InstidRegistry`] (MPERF Task 2) -- see
+/// [`accumulate_pet_credit_with_registry`]'s doc comment for why the
+/// registry is threaded rather than rebuilt per consumer.
+pub fn pet_credit_events_with_registry(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+    friendly_team: Option<u32>,
+    agent_team: &BTreeMap<u64, u32>,
+) -> Vec<(u64, u64, u64, u64)> {
     let mut out = Vec::new();
     for e in &raw.events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }

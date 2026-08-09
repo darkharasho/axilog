@@ -1,3 +1,4 @@
+use crate::analysis::damage::InstidRegistry;
 use crate::analysis::{PlayerMetrics, Timeline};
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -6,6 +7,21 @@ use std::collections::BTreeSet;
 pub fn timeline(
     enc: &Encounter,
     raw: &RawLog,
+    squad: &BTreeSet<u64>,
+    enemies: &BTreeSet<u64>,
+) -> Timeline {
+    timeline_with_registry(enc, raw, &InstidRegistry::build(raw), squad, enemies)
+}
+
+/// [`timeline`] against a caller-supplied, already-built [`InstidRegistry`]
+/// (MPERF Task 2) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. The `raw`-only wrapper above stays for standalone/test callers.
+pub fn timeline_with_registry(
+    enc: &Encounter,
+    raw: &RawLog,
+    registry: &InstidRegistry,
     squad: &BTreeSet<u64>,
     enemies: &BTreeSet<u64>,
 ) -> Timeline {
@@ -26,9 +42,13 @@ pub fn timeline(
     // sum(player.damage_total) by the pet-credit share (Finding #4).
     let (agent_team, recorded_by) = crate::wvw::resolve_teams(raw);
     let friendly_team = recorded_by.and_then(|addr| agent_team.get(&addr).copied());
-    for (time, _owner, _dst, dmg) in
-        crate::analysis::damage::pet_credit_events(raw, squad, friendly_team, &agent_team)
-    {
+    for (time, _owner, _dst, dmg) in crate::analysis::damage::pet_credit_events_with_registry(
+        raw,
+        registry,
+        squad,
+        friendly_team,
+        &agent_team,
+    ) {
         let rel = time.saturating_sub(t0);
         let b = (rel / res) as usize;
         if b < buckets {
@@ -172,13 +192,13 @@ pub(crate) fn is_cc(e: &crate::evtc::RawEvent, post_era: bool) -> bool {
 /// exactly (34 / 50460ms, not just within tolerance).
 fn pet_credit_cc_events(
     raw: &RawLog,
+    registry: &InstidRegistry,
     squad: &BTreeSet<u64>,
     enemies: &BTreeSet<u64>,
     friendly_team: Option<u32>,
     agent_team: &std::collections::BTreeMap<u64, u32>,
 ) -> Vec<(u64, u64, u64)> {
     let post_era = raw.header.is_post_buff_rework();
-    let registry = crate::analysis::damage::InstidRegistry::build(raw);
     let mut out = Vec::new();
     for e in &raw.events {
         if !is_cc(e, post_era) { continue; }
@@ -198,6 +218,29 @@ fn pet_credit_cc_events(
 pub fn apply_cc(
     players: &mut [PlayerMetrics],
     raw: &RawLog,
+    squad: &BTreeSet<u64>,
+    enemies: &BTreeSet<u64>,
+    addr_to_rep: &std::collections::BTreeMap<u64, u64>,
+) {
+    apply_cc_with_registry(
+        players,
+        raw,
+        &InstidRegistry::build(raw),
+        squad,
+        enemies,
+        addr_to_rep,
+    );
+}
+
+/// [`apply_cc`] against a caller-supplied, already-built [`InstidRegistry`]
+/// (MPERF Task 2) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. The `raw`-only wrapper above stays for standalone/test callers.
+pub fn apply_cc_with_registry(
+    players: &mut [PlayerMetrics],
+    raw: &RawLog,
+    registry: &InstidRegistry,
     squad: &BTreeSet<u64>,
     enemies: &BTreeSet<u64>,
     addr_to_rep: &std::collections::BTreeMap<u64, u64>,
@@ -223,7 +266,7 @@ pub fn apply_cc(
     let (agent_team, recorded_by) = crate::wvw::resolve_teams(raw);
     let friendly_team = recorded_by.and_then(|addr| agent_team.get(&addr).copied());
     for (owner, _dst, duration_ms) in
-        pet_credit_cc_events(raw, squad, enemies, friendly_team, &agent_team)
+        pet_credit_cc_events(raw, registry, squad, enemies, friendly_team, &agent_team)
     {
         if let Some(&i) = idx.get(&rep(owner)) {
             players[i].cc_applied += 1;

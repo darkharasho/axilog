@@ -98,6 +98,28 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace
 
+      # MPERF Task 1: criterion bench harness (crates/axilog-cli/benches/
+      # pipeline.rs) over the committed fixture -- see docs/BENCHMARKS.md
+      # for the baseline numbers and methodology. ubuntu-only, same
+      # reasoning as the version-sync check above: the harness itself has
+      # no OS-specific branches, so building/smoke-running it three times
+      # would just repeat the same work. Two steps, deliberately not one
+      # hard-timing pass/fail gate (CI runner timing is too noisy for
+      # that): (1) `--no-run` builds every bench target, catching bench-code
+      # rot (e.g. a `build_report` signature change breaking the harness)
+      # as a compile error; (2) `-- --test` is criterion's built-in "run
+      # once, skip statistical sampling" mode -- it exercises the harness
+      # end to end (including the env-gated `AXILOG_BENCH_LOG` real-log arm,
+      # which skips cleanly since that env var is never set here) without
+      # spending CI minutes on full sampling.
+      - name: Build benches (ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo bench -p axilog-cli --no-run
+
+      - name: Bench smoke - fixture, single pass (ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo bench -p axilog-cli --bench pipeline -- --test
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20

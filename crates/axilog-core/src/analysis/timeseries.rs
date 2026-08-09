@@ -153,6 +153,36 @@ pub fn build(
     friendly_team: Option<u32>,
     agent_team: &BTreeMap<u64, u32>,
 ) -> BTreeMap<u64, TimeseriesMetrics> {
+    build_with_registry(
+        enc,
+        raw,
+        &damage::InstidRegistry::build(raw),
+        squad,
+        enemies,
+        addr_to_rep,
+        enemy_addr_to_rep,
+        friendly_team,
+        agent_team,
+    )
+}
+
+/// [`build`] against a caller-supplied, already-built
+/// [`damage::InstidRegistry`] (MPERF Task 2) -- see
+/// [`damage::accumulate_pet_credit_with_registry`]'s doc comment for why the
+/// registry is threaded rather than rebuilt per consumer. The `raw`-only
+/// wrapper above stays for standalone/test callers.
+#[allow(clippy::too_many_arguments)]
+pub fn build_with_registry(
+    enc: &Encounter,
+    raw: &RawLog,
+    registry: &damage::InstidRegistry,
+    squad: &BTreeSet<u64>,
+    enemies: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+    enemy_addr_to_rep: &BTreeMap<u64, u64>,
+    friendly_team: Option<u32>,
+    agent_team: &BTreeMap<u64, u32>,
+) -> BTreeMap<u64, TimeseriesMetrics> {
     let res = 1000u64;
     let buckets = ((enc.duration_ms / res) + 1) as usize;
     let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
@@ -209,7 +239,8 @@ pub fn build(
     // `InstidRegistry` owner resolution `cc::timeline`'s own `squad_damage`
     // loop and `skill_damage`'s pet-credit pass already use), so this
     // module never re-derives pet ownership independently.
-    for (time, owner, dst, dmg) in damage::pet_credit_events(raw, squad, friendly_team, agent_team)
+    for (time, owner, dst, dmg) in
+        damage::pet_credit_events_with_registry(raw, registry, squad, friendly_team, agent_team)
     {
         let Some(b) = bucket_of(time) else { continue };
         dmg_delta.entry(owner).or_insert_with(|| vec![0u64; buckets])[b] += dmg;

@@ -227,6 +227,24 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     pub skill_map: skill_map::SkillMap }
 
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
+    // MPERF Task 2: the ONE `InstidRegistry` for this whole analysis.
+    //
+    // `damage::InstidRegistry::build` is a pure function of `raw` -- a full
+    // linear scan over every event, building a `BTreeMap<u16, Vec<(u64,
+    // u64)>>`. Before this task each consumer built its own, so a single
+    // `analyze()` paid for it ~10 times (pet-credit damage, CC pet-credit,
+    // the CC timeline, contribution, healing, skill_damage, timeseries, and
+    // three buff-event extractions). Since the build depends on nothing but
+    // `raw`, every one of those maps was bit-for-bit identical -- so
+    // building once here and threading `&InstidRegistry` into each pass is
+    // provably output-identical, just without the redundant scans.
+    //
+    // Every pass below keeps a `raw`-only wrapper of its own (`apply` /
+    // `build` / `timeline` / `simulate_boons` / ...) that builds a private
+    // registry, for SDK, standalone (`replay`/`missiles`) and test callers
+    // that have no registry in hand; `analyze()` deliberately calls the
+    // `_with_registry` variants instead.
+    let registry = damage::InstidRegistry::build(raw);
     // A friendly account can own several raw agent addrs (relog / build
     // swap within the same recording — arcdps assigns a new addr per
     // login). `squad` is the union of ALL of an account's addrs so no
@@ -256,7 +274,9 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // pet's own agent) to the owning squad player — see Task 16A.
     let (agent_team, recorded_by) = crate::wvw::resolve_teams(raw);
     let friendly_team = recorded_by.and_then(|addr| agent_team.get(&addr).copied());
-    for (owner, (total, per)) in damage::accumulate_pet_credit(raw, &squad, friendly_team, &agent_team) {
+    for (owner, (total, per)) in
+        damage::accumulate_pet_credit_with_registry(raw, &registry, &squad, friendly_team, &agent_team)
+    {
         let entry = dmg.entry(owner).or_default();
         entry.0 += total;
         for (dst, d) in per {
@@ -330,23 +350,24 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             per_enemy: per.into_iter().collect(), ..Default::default() }
     }).collect();
     downs::apply(&mut players, enc, raw, &squad, &enemies, &addr_to_rep);
-    cc::apply_cc(&mut players, raw, &squad, &enemies, &addr_to_rep);
+    cc::apply_cc_with_registry(&mut players, raw, &registry, &squad, &enemies, &addr_to_rep);
     support::apply(&mut players, raw, enc, &enemies, &addr_to_rep);
     // M11 Task 2: the arcdps-methodology contribution family
     // (downs_contribution/downed_by) -- see `contribution`'s module doc.
-    contribution::apply(&mut players, raw, enc, &squad, &enemies, &addr_to_rep);
+    contribution::apply_with_registry(&mut players, raw, &registry, enc, &squad, &enemies, &addr_to_rep);
     // M10 Task 1: cheap (a handful of linear scans over `raw.events`), so
     // computed unconditionally like every other pass above -- returns
     // whether the extension was present at all (see `Metrics::
     // has_healing_extension`'s doc comment for why that matters beyond just
     // "were all totals zero").
-    let has_healing_extension = healing::apply(&mut players, raw, &squad, &addr_to_rep);
+    let has_healing_extension =
+        healing::apply_with_registry(&mut players, raw, &registry, &squad, &addr_to_rep);
     // M12 Task 1: per-skill damage distribution -- a grouped refinement of
     // the `dmg_by_rep`/`taken_by_rep` totals already computed above (same
     // predicate + `InstidRegistry` pet-fold, just also keyed by `skillid`),
     // not an independent computation -- see `skill_damage`'s module doc.
     let skill_damage_by_rep =
-        skill_damage::build(raw, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep, friendly_team, &agent_team);
+        skill_damage::build_with_registry(raw, &registry, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep, friendly_team, &agent_team);
     for p in &mut players {
         if let Some(sd) = skill_damage_by_rep.get(&p.agent_addr) {
             p.skill_damage = sd.clone();
@@ -355,8 +376,9 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // M12 Task 2: per-player per-second series + dps_targets -- another
     // grouped/bucketed refinement of the same predicate family (see
     // `timeseries`'s module doc), not an independent computation.
-    let timeseries_by_rep = timeseries::build(
-        enc, raw, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep, friendly_team, &agent_team,
+    let timeseries_by_rep = timeseries::build_with_registry(
+        enc, raw, &registry, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep, friendly_team,
+        &agent_team,
     );
     for p in &mut players {
         if let Some(ts) = timeseries_by_rep.get(&p.agent_addr) {
@@ -391,10 +413,24 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             p.rotation = r.clone();
         }
     }
-    let timeline = cc::timeline(enc, raw, &squad, &enemies);
+    let timeline = cc::timeline_with_registry(enc, raw, &registry, &squad, &enemies);
     // Computed last, after every other pass, per the Task 1 brief -- does
     // not read or alter `players`/`timeline` above.
-    let boons = buffs::simulate_boons(raw, enc);
+    // MPERF Task 3: the ONE boon extraction for this whole analysis.
+    //
+    // Both boon simulations below (`simulate_boons` for stack-count
+    // timelines, `generation::simulate_boon_generation_ms` for per-source
+    // attribution) plus the post-rework "zero buff events" warning check
+    // further down all start from the *same* extracted buff-event vector and
+    // the *same* arcdps capacity map -- three identical full scans over
+    // `raw.events` before this task. Extracting once here and lending
+    // `&BoonInputs` to all three is provably output-identical: the two
+    // simulations themselves are untouched and stay independent (see
+    // `buffs::generation`'s module doc for why that independence matters),
+    // they just stop recomputing bit-identical input. See
+    // `buffs::BoonInputs`'s doc comment.
+    let boon_inputs = buffs::extract_boon_inputs_with_registry(raw, &registry);
+    let boons = buffs::simulate_boons_with_inputs(raw, &boon_inputs, enc);
     // M3 Task 2: reduce each timeline to a `BoonUptime` over the same
     // absolute window `simulate_boons` itself ticks against (see
     // `buffs::uptime`'s module docs) -- computed directly from `boons`
@@ -412,7 +448,8 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // module docs) -- re-simulated with per-stack source tracking rather
     // than derived from `boons` (which only tracks stack COUNT, not WHICH
     // source's stack is held).
-    let target_gen = buffs::generation::simulate_boon_generation_ms(raw, enc);
+    let target_gen =
+        buffs::generation::simulate_boon_generation_ms_with_inputs(raw, &boon_inputs, enc);
     let boon_generation = buffs::generation::rollup(&target_gen, enc, log_start_ms, log_end_ms);
     // M4 Task 3 (downgraded from the final-review fix wave's unconditional
     // warning): post-era extraction now works (M4 Tasks 1-2 era-gated
@@ -420,19 +457,19 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // warnings`'s doc comment), so only warn when a post-2026-05-01 build
     // genuinely yields zero extracted buff events -- a truncated/filtered
     // log, or a legitimate no-boon-activity fight, rather than a
-    // known-unsupported era. Re-extracts (cheap: a single linear scan over
-    // the boon skill ids) rather than threading a count out of `boons::
-    // simulate_boons`, which already discards per-owner squad-membership
-    // before this point.
+    // known-unsupported era. Reads the shared `boon_inputs` extraction above
+    // (MPERF Task 3) rather than re-extracting or threading a count out of
+    // `buffs::simulate_boons`, which already discards per-owner
+    // squad-membership before this point: `boon_inputs.events` is literally
+    // the vector the old third `extract_buff_events_with_registry(raw,
+    // &registry, BOON_IDS)` call here produced, so `is_empty()` on it is the
+    // same predicate.
     let mut warnings = Vec::new();
-    if raw.header.is_post_buff_rework() {
-        let boon_id_set: BTreeSet<u32> = buffs::BOON_IDS.iter().map(|&(id, _, _)| id).collect();
-        if buffs::events::extract_buff_events(raw, &boon_id_set).is_empty() {
-            warnings.push(format!(
-                "no buff events found in this post-2026-05-01 log (build {}); boon/support metrics will read zero",
-                raw.header.build
-            ));
-        }
+    if raw.header.is_post_buff_rework() && boon_inputs.events.is_empty() {
+        warnings.push(format!(
+            "no buff events found in this post-2026-05-01 log (build {}); boon/support metrics will read zero",
+            raw.header.build
+        ));
     }
     if !has_healing_extension {
         warnings.push("healing extension not present in this log".to_string());

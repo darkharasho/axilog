@@ -73,6 +73,59 @@ pub const BOON_IDS: [(u32, &str, bool); 12] = [
     (ALACRITY, "Alacrity", false),
 ];
 
+/// The shared, pass-independent inputs both boon simulations need (MPERF
+/// Task 3).
+///
+/// `simulate_boons` (stack-count timelines) and
+/// `generation::simulate_boon_generation_ms` (per-source generation
+/// attribution) are two genuinely different reductions -- the first tracks
+/// only stack COUNT, the second tracks WHICH source owns each stack, and
+/// `generation`'s module doc explains why the two simulators are
+/// deliberately kept independent rather than derived from one another. But
+/// they both start from *bit-identical* raw material: the same
+/// `events::extract_buff_events_with_registry(raw, registry, BOON_IDS)`
+/// vector and the same `events::extract_buff_capacities(raw, BOON_IDS)`
+/// map, both pure functions of `(raw, registry)` and the compile-time
+/// [`BOON_IDS`] table. Before MPERF Task 3 each simulation re-derived both
+/// (two extra full scans over `raw.events` per parse, plus a third
+/// extraction for `analyze()`'s post-rework "zero buff events" warning
+/// check).
+///
+/// Extracting once into this struct and lending it to both simulations is
+/// therefore provably output-identical -- the simulations themselves are
+/// untouched, they just stop recomputing their own identical input. Each
+/// consumer copies the [`events::BuffEvent`]s it keeps out of the shared
+/// slice (`BuffEvent` is `Copy`, and `generation` rewrites `agent` on its
+/// own copies), so lending is safe in both directions.
+#[derive(Debug, Clone, Default)]
+pub struct BoonInputs {
+    /// Every extracted apply/remove/initial event for the [`BOON_IDS`]
+    /// boons, in log order (era-dispatched internally by
+    /// `events::extract_buff_events_with_registry`).
+    pub events: Vec<events::BuffEvent>,
+    /// arcdps's own reported per-buff stack capacity, where the log carries
+    /// `sc::BUFF_INFO` rows for the tracked boons -- preferred over
+    /// `simulator::capacity_for`'s hardcoded table.
+    pub capacities: BTreeMap<u32, u32>,
+}
+
+/// Build the [`BoonInputs`] both boon simulations consume, from a
+/// caller-supplied, already-built [`crate::analysis::damage::InstidRegistry`]
+/// (MPERF Task 3). `analysis::analyze` calls this exactly once per parse and
+/// lends the result to `simulate_boons_with_inputs`,
+/// `generation::simulate_boon_generation_ms_with_inputs`, and its own
+/// post-rework warning check.
+pub fn extract_boon_inputs_with_registry(
+    raw: &RawLog,
+    registry: &crate::analysis::damage::InstidRegistry,
+) -> BoonInputs {
+    let boon_ids: BTreeSet<u32> = BOON_IDS.iter().map(|&(id, _, _)| id).collect();
+    BoonInputs {
+        events: events::extract_buff_events_with_registry(raw, registry, &boon_ids),
+        capacities: events::extract_buff_capacities(raw, &boon_ids),
+    }
+}
+
 /// Simulates every tracked boon's stack-count timeline for every squad
 /// player in `enc`. Keyed by `(agent-representative addr, buff id)` --
 /// agent addrs are folded onto each account's representative
@@ -82,25 +135,54 @@ pub const BOON_IDS: [(u32, &str, bool); 12] = [
 /// account's boon uptime stays on one entry instead of splitting across
 /// addrs.
 pub fn simulate_boons(raw: &RawLog, enc: &Encounter) -> BTreeMap<(u64, u32), BoonTimeline> {
+    simulate_boons_with_registry(raw, &crate::analysis::damage::InstidRegistry::build(raw), enc)
+}
+
+/// [`simulate_boons`] against a caller-supplied, already-built
+/// [`crate::analysis::damage::InstidRegistry`] (MPERF Task 2) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. The `raw`-only wrapper above stays for standalone/test callers.
+pub fn simulate_boons_with_registry(
+    raw: &RawLog,
+    registry: &crate::analysis::damage::InstidRegistry,
+    enc: &Encounter,
+) -> BTreeMap<(u64, u32), BoonTimeline> {
+    simulate_boons_with_inputs(raw, &extract_boon_inputs_with_registry(raw, registry), enc)
+}
+
+/// [`simulate_boons`] against caller-supplied, already-extracted
+/// [`BoonInputs`] (MPERF Task 3) -- see [`BoonInputs`]'s doc comment for why
+/// sharing the extraction with `generation::
+/// simulate_boon_generation_ms_with_inputs` is output-identical. The
+/// `registry`-taking wrapper above stays for callers that have a registry but
+/// no extracted inputs.
+///
+/// `raw` is still needed here for the log's final event time (the absolute
+/// window the simulator ticks stacks against), which is not part of the
+/// extracted inputs.
+pub fn simulate_boons_with_inputs(
+    raw: &RawLog,
+    inputs: &BoonInputs,
+    enc: &Encounter,
+) -> BTreeMap<(u64, u32), BoonTimeline> {
     let addr_to_rep: BTreeMap<u64, u64> = enc
         .players
         .iter()
         .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
         .collect();
-    let boon_ids: BTreeSet<u32> = BOON_IDS.iter().map(|&(id, _, _)| id).collect();
     let intensity_ids: BTreeSet<u32> =
         BOON_IDS.iter().filter(|&&(_, _, is_intensity)| is_intensity).map(|&(id, _, _)| id).collect();
 
-    let raw_events = events::extract_buff_events(raw, &boon_ids);
     // arcdps's own reported per-buff stack capacity (M3 Task 2) --
     // preferred over the hardcoded `simulator::capacity_for` table
     // whenever present, mirroring GW2EI's `Buff.CreateSimulator` (see
     // `sc::BUFF_INFO`'s doc comment for the calibration finding that
     // motivated this: several Queue-type boons in this fixture report a
     // real capacity of 99, far above the hardcoded 5-9 guess).
-    let arcdps_capacities = events::extract_buff_capacities(raw, &boon_ids);
+    let arcdps_capacities = &inputs.capacities;
     let mut grouped: BTreeMap<(u64, u32), Vec<events::BuffEvent>> = BTreeMap::new();
-    for e in raw_events {
+    for &e in &inputs.events {
         // Squad-only scope (see module docs): an event whose owner isn't a
         // known squad addr (enemy/NPC recipient, or an addr we never saw in
         // the agent table) is dropped here.

@@ -141,10 +141,26 @@ pub enum BuffEventKind {
 /// `extract_buff_events_post_era` is a fully separate function producing
 /// the same `BuffEvent` output shape from the post-era wire format.
 pub fn extract_buff_events(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEvent> {
+    extract_buff_events_with_registry(raw, &InstidRegistry::build(raw), boon_ids)
+}
+
+/// [`extract_buff_events`] against a caller-supplied, already-built
+/// [`InstidRegistry`] (MPERF Task 2) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. Both era branches take the same registry: `InstidRegistry::
+/// build` is era-agnostic (it scans `src_instid`/`dst_instid`/`*_agent` on
+/// every non-extension row regardless of `is_statechange`), so the pre- and
+/// post-era extractors were already building bit-identical maps. The
+/// `raw`-only wrapper above stays for standalone/test callers.
+pub fn extract_buff_events_with_registry(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    boon_ids: &BTreeSet<u32>,
+) -> Vec<BuffEvent> {
     if raw.header.is_post_buff_rework() {
-        return extract_buff_events_post_era(raw, boon_ids);
+        return extract_buff_events_post_era(raw, registry, boon_ids);
     }
-    let registry = InstidRegistry::build(raw);
     // Master-resolve a (possibly-pet) source addr via its instid's master
     // instid, mirroring `damage::pet_credit_events`'s owner resolution
     // exactly: `*_master_instid != 0` means the acting agent is a
@@ -266,8 +282,11 @@ pub fn extract_buff_events(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEv
 /// `BUFF_CHANGE` / `BUFF_REMOVE_SINGLE` / `BUFF_REMOVE_ALL` for the full
 /// verified payload/field-role citations this function's branches are
 /// built from.
-fn extract_buff_events_post_era(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEvent> {
-    let registry = InstidRegistry::build(raw);
+fn extract_buff_events_post_era(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    boon_ids: &BTreeSet<u32>,
+) -> Vec<BuffEvent> {
     // Same master-resolution helper as the pre-era loop (see its doc
     // comment above) -- the instid/master-instid byte offsets are
     // unconditional on the wire (decoded for every event regardless of

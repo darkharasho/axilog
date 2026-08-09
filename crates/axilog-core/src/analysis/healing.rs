@@ -158,11 +158,41 @@ pub fn apply(
     squad: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
 ) -> bool {
+    // MPERF Task 3: check the extension gate BEFORE paying for a registry
+    // build. `apply_with_registry` early-returns `false` on a log with no
+    // healing extension, so on that (very common) path the registry would be
+    // built and immediately thrown away -- a full linear scan over every
+    // event for nothing. Hoisting the same gate here keeps the cold path
+    // free. `analyze()` is unaffected either way (it passes its own shared
+    // registry, already built for every other pass); this is purely for the
+    // standalone/SDK/test callers that use this `raw`-only wrapper.
+    if !ext_healing::healing_extension_present(raw) {
+        return false;
+    }
+    apply_with_registry(players, raw, &InstidRegistry::build(raw), squad, addr_to_rep)
+}
+
+/// [`apply`] against a caller-supplied, already-built [`InstidRegistry`]
+/// (MPERF Task 2) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. The `raw`-only wrapper above stays for standalone/test callers.
+///
+/// This pass early-returns on a log with no healing extension, so under
+/// `analyze()` the shared registry may go unused here -- that is free, since
+/// every other pass needs the same registry regardless. (The `raw`-only
+/// wrapper pays for a build it may not use; that path is not hot.)
+pub fn apply_with_registry(
+    players: &mut [PlayerMetrics],
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) -> bool {
     if !ext_healing::healing_extension_present(raw) {
         return false;
     }
 
-    let registry = InstidRegistry::build(raw);
     let idx: BTreeMap<u64, usize> =
         players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
 
