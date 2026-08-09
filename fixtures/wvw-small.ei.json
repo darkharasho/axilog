@@ -1,6 +1,6 @@
 {
   "_source": "axibridge test-fixtures/boon/20260117-181030.json (dps.report EI JSON, accounts anonymized)",
-  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index \u2014 the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (`rincka.1608`, would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task). Task 1 (M9): each matched player's `combatReplay` object holds EI's raw `combatReplayData` `{start, count, first, last}` (start = EI's own log-relative start ms; count/first/last = positions.length / positions[0] / positions[-1], EI's map-pixel space) for parity spot-checks, plus a full verbatim `positions` array (EI map-pixel `[x,y]` pairs, one per 300ms poll) for the 3 longest tracks (Anon104.4848/Anon108.4996/Anon122.5514, 165 samples each) for full-track calibration. Source: this log's mapID=95 (Green Alpine Borderlands) `combatReplayMetaData` {inchToPixel:0.009, pollingRate:300, sizes:[523,750]}. Same real-account join method as Tasks 2-4 (M3) (obfuscate(real account) -> raw agent-table index -> `Anon<N>`); 37 of 41 players matched (4 `Non Squad Player N` rows have no real account to join from, same as `generation`). See `crates/axilog-core/tests/replay_golden.rs` for how this is consumed (raw world positions decoded from `wvw-small.anon.zevtc`'s `CBTS_POSITION` events, downsampled via `analysis::replay::build_replay`, then transformed into this same map-pixel space via the Green/Blue Alpine Borderland affine transform derived from GW2EI's `WvWLogic.GetCombatMapInternal`/`CombatReplayMap.GetMapCoordRounded` -- the test file cites the exact formula). Task 1 (M10): each player's `healing` object holds the arcdps healing-extension totals for the full fight (single phase, matching this fixture's `phases` length of 1): `healing`/`downedHealing` mirror EI's raw `extHealingStats.outgoingHealing[0]` `{healing, downedHealing}` fields verbatim (target=null, i.e. every friendly-directed heal this player cast, self included); `barrier` mirrors `extBarrierStats.outgoingBarrier[0].barrier` verbatim. `healingSelf` is EI's own `outgoingHealingAllies[selfIndex][0].healing` (selfIndex = this player's own position in EI's `Friendlies`/`players[]` ordering, verified to line up 1:1 with axibridge's `players[]` array index for all 41 rows here -- self healing at that index never exceeds the player's own `healing` total, the sanity check used to confirm the assumption). `healingAllies` is DERIVED (`healing - healingSelf`), NOT a sum of EI's own per-friendly `outgoingHealingAllies[*][0].healing` array -- that array's sum under-counts real ally healing (e.g. Anon-index 21's ally-array sums to 165971 vs its true `healing` total of 205820) because EI's per-friendly breakdown only enumerates real `Friendlies` (players), never non-enumerated friendly targets like pets/minions that legitimately receive `ToFriendly` heals and count toward the scalar total. Same real-account join method as prior tasks (profession + `dpsAll[0].damage` + `statsAll[0].appliedCrowdControl` triple -> unique row, verified unique across all 41 rows with zero collisions), since the healing extension has no separate obfuscated-account reference to join through. `squadHealingTotal`/`squadHealingSelf`/`squadHealingAllies`/`squadDownedHealing`/`squadBarrierTotal` are sums of the same fields over all 41 players (1008414/36563/971851/55681/279498) -- the calibration targets `healing_golden.rs` checks against. Task 3 (M11): each player's `activeTimes` (single-element array, matching this fixture's one-phase convention) and `combatReplayData` `{start, end, down, dead}` are EI's raw fields verbatim (real `combatReplayData.positions`/`orientations`/`iconURL`/`dc` are NOT copied here -- not needed by this task's calibration, `positions` in particular stays a deliberately heavier, still-`--replay`-gated concept per M9). Same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, both already cross-checked profession+damage+CC with zero mismatches across all 41 rows). `start`/`end` are GW2EI's own `AgentItem.FirstAware`/`LastAware` (verified: `DaringCanyon.5440`, this fixture's `players[35]`, has `start=1 end=49266` -- exactly `combatReplay.start=1` from the M9 Task 1 addition above, an independent field on the same row, confirming the join). `activeTimes[0]` is GW2EI's `SingleActor.GetActiveDuration(log, 0, durationMS)` (`GW2EIEvtcParser/EIData/Actors/ActorsHelper/SingleActorStatusHelper.cs`): `(end - start) - sum(dead \u2229 [start,end]) - sum(dc \u2229 [start,end])` -- verified NOT to subtract down time (that same row, `players[35]`, has a real 2870ms down interval `combatReplayData.down=[[12642,15512]]` yet `activeTimes[0]=49265` equals `end-start` exactly); every one of this log's 41 players has `dead=[]` (no deaths, only downs), so this fixture alone can't distinguish \"dead subtracted\" from \"dead not subtracted\" -- confirmed from the GW2EI source formula directly, not just this fixture's numbers. Two players (`players[35]`/`DaringCanyon.5440` and `players[40]`/`Non Squad Player 10`) have non-empty `down` arrays -- the only two in the whole log; `crates/axilog-ei/tests/ei_golden.rs` asserts byte-exact `down`/`dead` interval reproduction for the one of the two reachable through its real-account join (`DaringCanyon.5440` -- `Non Squad Player 10` has no real account to join through at all, same limitation the M9/M3 golden tests already document for that row type).",
+  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index \u2014 the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (`rincka.1608`, would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task). Task 1 (M9): each matched player's `combatReplay` object holds EI's raw `combatReplayData` `{start, count, first, last}` (start = EI's own log-relative start ms; count/first/last = positions.length / positions[0] / positions[-1], EI's map-pixel space) for parity spot-checks, plus a full verbatim `positions` array (EI map-pixel `[x,y]` pairs, one per 300ms poll) for the 3 longest tracks (Anon104.4848/Anon108.4996/Anon122.5514, 165 samples each) for full-track calibration. Source: this log's mapID=95 (Green Alpine Borderlands) `combatReplayMetaData` {inchToPixel:0.009, pollingRate:300, sizes:[523,750]}. Same real-account join method as Tasks 2-4 (M3) (obfuscate(real account) -> raw agent-table index -> `Anon<N>`); 37 of 41 players matched (4 `Non Squad Player N` rows have no real account to join from, same as `generation`). See `crates/axilog-core/tests/replay_golden.rs` for how this is consumed (raw world positions decoded from `wvw-small.anon.zevtc`'s `CBTS_POSITION` events, downsampled via `analysis::replay::build_replay`, then transformed into this same map-pixel space via the Green/Blue Alpine Borderland affine transform derived from GW2EI's `WvWLogic.GetCombatMapInternal`/`CombatReplayMap.GetMapCoordRounded` -- the test file cites the exact formula). Task 1 (M10): each player's `healing` object holds the arcdps healing-extension totals for the full fight (single phase, matching this fixture's `phases` length of 1): `healing`/`downedHealing` mirror EI's raw `extHealingStats.outgoingHealing[0]` `{healing, downedHealing}` fields verbatim (target=null, i.e. every friendly-directed heal this player cast, self included); `barrier` mirrors `extBarrierStats.outgoingBarrier[0].barrier` verbatim. `healingSelf` is EI's own `outgoingHealingAllies[selfIndex][0].healing` (selfIndex = this player's own position in EI's `Friendlies`/`players[]` ordering, verified to line up 1:1 with axibridge's `players[]` array index for all 41 rows here -- self healing at that index never exceeds the player's own `healing` total, the sanity check used to confirm the assumption). `healingAllies` is DERIVED (`healing - healingSelf`), NOT a sum of EI's own per-friendly `outgoingHealingAllies[*][0].healing` array -- that array's sum under-counts real ally healing (e.g. Anon-index 21's ally-array sums to 165971 vs its true `healing` total of 205820) because EI's per-friendly breakdown only enumerates real `Friendlies` (players), never non-enumerated friendly targets like pets/minions that legitimately receive `ToFriendly` heals and count toward the scalar total. Same real-account join method as prior tasks (profession + `dpsAll[0].damage` + `statsAll[0].appliedCrowdControl` triple -> unique row, verified unique across all 41 rows with zero collisions), since the healing extension has no separate obfuscated-account reference to join through. `squadHealingTotal`/`squadHealingSelf`/`squadHealingAllies`/`squadDownedHealing`/`squadBarrierTotal` are sums of the same fields over all 41 players (1008414/36563/971851/55681/279498) -- the calibration targets `healing_golden.rs` checks against. Task 3 (M11): each player's `activeTimes` (single-element array, matching this fixture's one-phase convention) and `combatReplayData` `{start, end, down, dead}` are EI's raw fields verbatim (real `combatReplayData.positions`/`orientations`/`iconURL`/`dc` are NOT copied here -- not needed by this task's calibration, `positions` in particular stays a deliberately heavier, still-`--replay`-gated concept per M9). Same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, both already cross-checked profession+damage+CC with zero mismatches across all 41 rows). `start`/`end` are GW2EI's own `AgentItem.FirstAware`/`LastAware` (verified: `DaringCanyon.5440`, this fixture's `players[35]`, has `start=1 end=49266` -- exactly `combatReplay.start=1` from the M9 Task 1 addition above, an independent field on the same row, confirming the join). `activeTimes[0]` is GW2EI's `SingleActor.GetActiveDuration(log, 0, durationMS)` (`GW2EIEvtcParser/EIData/Actors/ActorsHelper/SingleActorStatusHelper.cs`): `(end - start) - sum(dead \u2229 [start,end]) - sum(dc \u2229 [start,end])` -- verified NOT to subtract down time (that same row, `players[35]`, has a real 2870ms down interval `combatReplayData.down=[[12642,15512]]` yet `activeTimes[0]=49265` equals `end-start` exactly); every one of this log's 41 players has `dead=[]` (no deaths, only downs), so this fixture alone can't distinguish \"dead subtracted\" from \"dead not subtracted\" -- confirmed from the GW2EI source formula directly, not just this fixture's numbers. Two players (`players[35]`/`DaringCanyon.5440` and `players[40]`/`Non Squad Player 10`) have non-empty `down` arrays -- the only two in the whole log; `crates/axilog-ei/tests/ei_golden.rs` asserts byte-exact `down`/`dead` interval reproduction for the one of the two reachable through its real-account join (`DaringCanyon.5440` -- `Non Squad Player 10` has no real account to join through at all, same limitation the M9/M3 golden tests already document for that row type). Task 2 (M12): each player's `timeSeries` object holds four scalars extracted from the source EI JSON's per-second series/target fields, for the per-player per-second calibration `crates/axilog-core/tests/timeseries_golden.rs` checks -- NOT full arrays (kept the fixture growth small; only final/summed values are needed to calibrate this project's own cumulative buckets, which are recomputed from raw events every test run, not replayed from a stored series). `damage1SFinal`/`damageTaken1SFinal` are the LAST element of the source's `damage1S[0]`/`damageTaken1S[0]` arrays (phase 0, i.e. the whole-fight cumulative total at the final second) -- verified these equal `dpsAll[0].damage`/`defenses[0].damageTaken` exactly on every one of this fixture's 41 rows, confirming GW2EI's `damage1S`/`damageTaken1S` are CUMULATIVE per-second running totals, not per-second deltas (`GW2EIEvtcParser/EIData/Actors/ActorHelpers/ActorDamageHelper.cs`'s `Get1SDamageList` builds these via `Statistics.GetCastLogsByFilter`-style running sums over `DamageLogs`, matching the same monotonic-non-decreasing shape this project's own `timeseries::build` buckets produce). `targetDamage1SFinal` sums the LAST element of every target's `targetDamage1S[target][0]` array (only one target exists on this non-`detailedWvW` fixture, the synthetic `Enemy Players` aggregate); `dpsTargetsTotalDamage` sums `dpsTargets[0][*].damage` the same way -- the two match each other exactly on every row (as expected, since `dpsTargets[*].damage` IS `targetDamage1S[*][0][-1]` under a different key) but are BOTH systematically smaller than `damage1SFinal` (e.g. player 0: `targetDamage1SFinal=71362` vs `damage1SFinal=96084`, a 24722 gap) -- GW2EI's non-`detailedWvW` `targets[]`/`dpsTargets` only enumerate the one synthetic enemy-PLAYER aggregate, silently excluding damage dealt to non-player-enemy NPCs (siege equipment, dolyaks, guards) that this fixture's WvW log still contains combat events against -- that damage is still counted in the whole-player `damage1SFinal`/`dpsAll[0].damage` scalar, just not attributable to any one `targets[]` entry in this fixture's non-detailed export. This is DIFFERENT from (and larger than) Task 1's separately-documented pet/minion `skillDamage` gap -- see `timeseries_golden.rs`'s module doc for the full writeup, including why this project's own `dps_targets` (built from the `per_enemy` map, which DOES enumerate every NPC enemy the log tracks) can only be checked for INTERNAL consistency (`sum(dps_targets) == damage_total`) against this fixture, not for an exact per-target match against GW2EI's own narrower `dpsTargets`. Joined by a (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) triple key against this fixture's existing `players[]` rows (verified unique across all 41 rows on both sides, zero collisions) rather than the `anon_account` join every prior task used -- this lets all 41 rows join (including the 4 `Non Squad Player N` placeholder rows Tasks 2-4/M3's account-based join couldn't reach), since none of these four scalars are account-identifying on their own.",
   "fightName": "World vs World - Green Alpine Borderlands",
   "durationMS": 49285,
   "friendlyPlayerCount": 41,
@@ -285,6 +285,12 @@
             "total": 25
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 96084,
+        "damageTaken1SFinal": 8993,
+        "targetDamage1SFinal": 71362,
+        "dpsTargetsTotalDamage": 71362
       }
     },
     {
@@ -614,6 +620,12 @@
             "total": 35
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 3154,
+        "damageTaken1SFinal": 63506,
+        "targetDamage1SFinal": 2404,
+        "dpsTargetsTotalDamage": 2404
       }
     },
     {
@@ -811,6 +823,12 @@
             "total": 62
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 100089,
+        "damageTaken1SFinal": 313,
+        "targetDamage1SFinal": 74414,
+        "dpsTargetsTotalDamage": 74414
       }
     },
     {
@@ -1180,6 +1198,12 @@
             "total": 2
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 7250,
+        "damageTaken1SFinal": 21075,
+        "targetDamage1SFinal": 3320,
+        "dpsTargetsTotalDamage": 3320
       }
     },
     {
@@ -1481,6 +1505,12 @@
             "total": 2
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 14011,
+        "damageTaken1SFinal": 13595,
+        "targetDamage1SFinal": 12543,
+        "dpsTargetsTotalDamage": 12543
       }
     },
     {
@@ -1754,6 +1784,12 @@
             "total": 1
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 154899,
+        "damageTaken1SFinal": 30832,
+        "targetDamage1SFinal": 125809,
+        "dpsTargetsTotalDamage": 125809
       }
     },
     {
@@ -2653,6 +2689,12 @@
             "total": 3
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 6848,
+        "damageTaken1SFinal": 2318,
+        "targetDamage1SFinal": 5506,
+        "dpsTargetsTotalDamage": 5506
       }
     },
     {
@@ -3074,6 +3116,12 @@
             "total": 1
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 58282,
+        "damageTaken1SFinal": 55929,
+        "targetDamage1SFinal": 37361,
+        "dpsTargetsTotalDamage": 37361
       }
     },
     {
@@ -3287,6 +3335,12 @@
             "total": 26
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 8665,
+        "damageTaken1SFinal": 623,
+        "targetDamage1SFinal": 6542,
+        "dpsTargetsTotalDamage": 6542
       }
     },
     {
@@ -3600,6 +3654,12 @@
             "total": 19
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 3257,
+        "damageTaken1SFinal": 28687,
+        "targetDamage1SFinal": 2883,
+        "dpsTargetsTotalDamage": 2883
       }
     },
     {
@@ -3885,6 +3945,12 @@
             "total": 46
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 113203,
+        "damageTaken1SFinal": 7080,
+        "targetDamage1SFinal": 66058,
+        "dpsTargetsTotalDamage": 66058
       }
     },
     {
@@ -4354,6 +4420,12 @@
             "total": 3
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 12284,
+        "damageTaken1SFinal": 81973,
+        "targetDamage1SFinal": 9588,
+        "dpsTargetsTotalDamage": 9588
       }
     },
     {
@@ -5285,6 +5357,12 @@
             "total": 32
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 2135,
+        "damageTaken1SFinal": 13983,
+        "targetDamage1SFinal": 1645,
+        "dpsTargetsTotalDamage": 1645
       }
     },
     {
@@ -5566,6 +5644,12 @@
             "total": 17
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 96869,
+        "damageTaken1SFinal": 9287,
+        "targetDamage1SFinal": 63308,
+        "dpsTargetsTotalDamage": 63308
       }
     },
     {
@@ -5823,6 +5907,12 @@
             "total": 4
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 2513,
+        "damageTaken1SFinal": 17535,
+        "targetDamage1SFinal": 1038,
+        "dpsTargetsTotalDamage": 1038
       }
     },
     {
@@ -6236,6 +6326,12 @@
             "total": 34
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 162652,
+        "damageTaken1SFinal": 51760,
+        "targetDamage1SFinal": 107269,
+        "dpsTargetsTotalDamage": 107269
       }
     },
     {
@@ -6625,6 +6721,12 @@
             "total": 4
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 8167,
+        "damageTaken1SFinal": 62921,
+        "targetDamage1SFinal": 4684,
+        "dpsTargetsTotalDamage": 4684
       }
     },
     {
@@ -6874,6 +6976,12 @@
             "total": 18
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 9342,
+        "damageTaken1SFinal": 4466,
+        "targetDamage1SFinal": 5680,
+        "dpsTargetsTotalDamage": 5680
       }
     },
     {
@@ -7195,6 +7303,12 @@
             "total": 5
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 83608,
+        "damageTaken1SFinal": 15865,
+        "targetDamage1SFinal": 57580,
+        "dpsTargetsTotalDamage": 57580
       }
     },
     {
@@ -7548,6 +7662,12 @@
             "total": 15
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 169689,
+        "damageTaken1SFinal": 30831,
+        "targetDamage1SFinal": 109394,
+        "dpsTargetsTotalDamage": 109394
       }
     },
     {
@@ -8531,6 +8651,12 @@
             "total": 1
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 205612,
+        "damageTaken1SFinal": 25518,
+        "targetDamage1SFinal": 115642,
+        "dpsTargetsTotalDamage": 115642
       }
     },
     {
@@ -8804,6 +8930,12 @@
             "total": 1
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 6508,
+        "damageTaken1SFinal": 12143,
+        "targetDamage1SFinal": 5993,
+        "dpsTargetsTotalDamage": 5993
       }
     },
     {
@@ -9173,6 +9305,12 @@
             "total": 6
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 128440,
+        "damageTaken1SFinal": 21168,
+        "targetDamage1SFinal": 79873,
+        "dpsTargetsTotalDamage": 79873
       }
     },
     {
@@ -9574,6 +9712,12 @@
             "total": 5
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 6861,
+        "damageTaken1SFinal": 69438,
+        "targetDamage1SFinal": 3870,
+        "dpsTargetsTotalDamage": 3870
       }
     },
     {
@@ -9879,6 +10023,12 @@
             "total": 45
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 2674,
+        "damageTaken1SFinal": 27821,
+        "targetDamage1SFinal": 2150,
+        "dpsTargetsTotalDamage": 2150
       }
     },
     {
@@ -10108,6 +10258,12 @@
             "total": 6
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 954,
+        "damageTaken1SFinal": 7472,
+        "targetDamage1SFinal": 954,
+        "dpsTargetsTotalDamage": 954
       }
     },
     {
@@ -10401,6 +10557,12 @@
             "total": 25
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 149607,
+        "damageTaken1SFinal": 4315,
+        "targetDamage1SFinal": 113046,
+        "dpsTargetsTotalDamage": 113046
       }
     },
     {
@@ -10766,6 +10928,12 @@
             "total": 4
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 116532,
+        "damageTaken1SFinal": 63912,
+        "targetDamage1SFinal": 72998,
+        "dpsTargetsTotalDamage": 72998
       }
     },
     {
@@ -11023,6 +11191,12 @@
             "total": 1
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 3907,
+        "damageTaken1SFinal": 15334,
+        "targetDamage1SFinal": 2981,
+        "dpsTargetsTotalDamage": 2981
       }
     },
     {
@@ -11372,6 +11546,12 @@
             "total": 4
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 192437,
+        "damageTaken1SFinal": 32366,
+        "targetDamage1SFinal": 114526,
+        "dpsTargetsTotalDamage": 114526
       }
     },
     {
@@ -11781,6 +11961,12 @@
             "total": 5
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 7952,
+        "damageTaken1SFinal": 63116,
+        "targetDamage1SFinal": 5923,
+        "dpsTargetsTotalDamage": 5923
       }
     },
     {
@@ -12034,6 +12220,12 @@
             "total": 16
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 1503,
+        "damageTaken1SFinal": 16330,
+        "targetDamage1SFinal": 816,
+        "dpsTargetsTotalDamage": 816
       }
     },
     {
@@ -12435,6 +12627,12 @@
             "total": 5
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 99454,
+        "damageTaken1SFinal": 49763,
+        "targetDamage1SFinal": 56539,
+        "dpsTargetsTotalDamage": 56539
       }
     },
     {
@@ -12656,6 +12854,12 @@
             "total": 4
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 1055,
+        "damageTaken1SFinal": 4844,
+        "targetDamage1SFinal": 519,
+        "dpsTargetsTotalDamage": 519
       }
     },
     {
@@ -12969,6 +13173,12 @@
             "total": 6
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 4476,
+        "damageTaken1SFinal": 27862,
+        "targetDamage1SFinal": 1759,
+        "dpsTargetsTotalDamage": 1759
       }
     },
     {
@@ -13379,6 +13589,12 @@
             "total": 3
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 13132,
+        "damageTaken1SFinal": 66177,
+        "targetDamage1SFinal": 9982,
+        "dpsTargetsTotalDamage": 9982
       }
     },
     {
@@ -13664,6 +13880,12 @@
             "total": 1
           }
         ]
+      },
+      "timeSeries": {
+        "damage1SFinal": 84309,
+        "damageTaken1SFinal": 27620,
+        "targetDamage1SFinal": 47293,
+        "dpsTargetsTotalDamage": 47293
       }
     },
     {
@@ -13753,6 +13975,12 @@
       "skillDamage": {
         "outgoing": [],
         "taken": []
+      },
+      "timeSeries": {
+        "damage1SFinal": 0,
+        "damageTaken1SFinal": 0,
+        "targetDamage1SFinal": 0,
+        "dpsTargetsTotalDamage": 0
       }
     },
     {
@@ -13842,6 +14070,12 @@
       "skillDamage": {
         "outgoing": [],
         "taken": []
+      },
+      "timeSeries": {
+        "damage1SFinal": 0,
+        "damageTaken1SFinal": 0,
+        "targetDamage1SFinal": 0,
+        "dpsTargetsTotalDamage": 0
       }
     },
     {
@@ -13931,6 +14165,12 @@
       "skillDamage": {
         "outgoing": [],
         "taken": []
+      },
+      "timeSeries": {
+        "damage1SFinal": 0,
+        "damageTaken1SFinal": 0,
+        "targetDamage1SFinal": 0,
+        "dpsTargetsTotalDamage": 0
       }
     },
     {
@@ -14029,6 +14269,12 @@
       "skillDamage": {
         "outgoing": [],
         "taken": []
+      },
+      "timeSeries": {
+        "damage1SFinal": 0,
+        "damageTaken1SFinal": 0,
+        "targetDamage1SFinal": 0,
+        "dpsTargetsTotalDamage": 0
       }
     }
   ],

@@ -168,6 +168,43 @@ test('parseFile: skillDamage opt-in (M12 Task 1) -- absent by default, present +
   assert.equal(explicitlyOff.players[0].skill_damage, undefined)
 })
 
+test('parseFile: timeseries opt-in (M12 Task 2) -- per_second AND dps_targets both absent by default, both present + shaped when requested', () => {
+  const without = sdk.parseFile(FIXTURE)
+  assert.equal(without.players[0].per_second, undefined, 'per_second must be absent by default')
+  assert.equal(without.players[0].dps_targets, undefined, 'dps_targets must be absent by default')
+
+  const withIt = sdk.parseFile(FIXTURE, { timeseries: true })
+  const p0 = withIt.players.find((p) => p.damage.total > 0)
+  assert.ok(p0, 'expected at least one player with nonzero damage')
+  assert.ok(p0.per_second, 'expected a per_second block when { timeseries: true }')
+  assert.ok(Array.isArray(p0.per_second.damage))
+  assert.ok(Array.isArray(p0.per_second.damage_taken))
+  assert.ok(Array.isArray(p0.per_second.per_target))
+  assert.ok(p0.per_second.damage.length > 0, 'expected at least one bucket')
+  // Cumulative: the final bucket equals damage.total exactly (internal invariant).
+  const finalDamage = p0.per_second.damage[p0.per_second.damage.length - 1]
+  assert.equal(finalDamage, p0.damage.total, 'final per_second.damage bucket must equal damage.total exactly')
+  // Monotonic non-decreasing.
+  for (let i = 1; i < p0.per_second.damage.length; i++) {
+    assert.ok(p0.per_second.damage[i] >= p0.per_second.damage[i - 1], 'per_second.damage must be cumulative (monotonic non-decreasing)')
+  }
+
+  assert.ok(Array.isArray(p0.dps_targets), 'expected a dps_targets array when { timeseries: true }')
+  assert.ok(p0.dps_targets.length > 0, 'expected at least one dps_targets entry')
+  const dt = p0.dps_targets[0]
+  assert.equal(typeof dt.enemy_id, 'number')
+  assert.equal(typeof dt.damage, 'number')
+  assert.equal(typeof dt.dps, 'number')
+  // sum(dps_targets[*].damage) == damage.total exactly (internal invariant).
+  const dtSum = sumBy(p0.dps_targets, (d) => d.damage)
+  assert.equal(dtSum, p0.damage.total, 'sum(dps_targets damage) must equal damage.total exactly')
+
+  // opts.timeseries: false must behave the same as omitting opts entirely.
+  const explicitlyOff = sdk.parseFile(FIXTURE, { timeseries: false })
+  assert.equal(explicitlyOff.players[0].per_second, undefined)
+  assert.equal(explicitlyOff.players[0].dps_targets, undefined)
+})
+
 test('parseFileEi: axibridge-read key shapes', () => {
   const ei = sdk.parseFileEi(FIXTURE)
 

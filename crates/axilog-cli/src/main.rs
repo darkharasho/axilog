@@ -58,6 +58,24 @@ enum Cmd {
         /// `--missiles` rather than always-on.
         #[arg(long)]
         skill_damage: bool,
+        /// Embed the native per-player per-second series block (M12 Task 2):
+        /// cumulative per-second `damage`/`damage_taken`/`per_target`, plus
+        /// the per-enemy `dps_targets` summary -- `axilog_core::analysis::
+        /// timeseries`. Already computed unconditionally by `analyze()`
+        /// regardless of this flag (cheap); this only controls whether
+        /// `--format json` embeds `players[].per_second` AND `players[].
+        /// dps_targets` (every other format ignores both). Off by default --
+        /// measured on the committed WvW fixture, `per_second` alone grows
+        /// the native JSON output by +147.7% and `dps_targets` alone by
+        /// +36.4% (both individually past the ~30% size-discipline
+        /// guideline -- `dps_targets` is NOT small on a real WvW zerg log,
+        /// which can enumerate dozens of enemy players/siege/dolyaks/guards
+        /// per player), so BOTH stay gated behind this one flag, same
+        /// opt-in reasoning as `--skill-damage`. See `axilog_schema::
+        /// Report::players`'s `PlayerOut::per_second`/`PlayerOut::
+        /// dps_targets` doc comments for the full numbers.
+        #[arg(long)]
+        timeseries: bool,
     },
     /// Rewrite every player's character/account name in a .zevtc to a
     /// deterministic `Anon<N>` placeholder and write the result as a new
@@ -97,7 +115,7 @@ enum View {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage } => {
+        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage, timeseries } => {
             let bytes = std::fs::read(&path)?;
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
@@ -118,6 +136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 replay_data.as_ref(),
                 missiles_data.as_ref(),
                 skill_damage,
+                timeseries,
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
             // post-2026-05-01 buff-statechange-rework build producing

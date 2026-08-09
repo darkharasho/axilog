@@ -42,11 +42,20 @@ fn napi_err(reason: impl std::fmt::Display) -> Error {
 /// `players[]` entry -- see `axilog_schema::Report::players`'s
 /// `PlayerOut::skill_damage` doc comment for why this defaults to opt-in
 /// (measured +249% JSON size on the committed fixture when always-on).
+/// `timeseries: true` (M12, Task 2) opts into embedding the native
+/// per-player per-second series block (`PlayerPerSecondOut`) AND the
+/// per-enemy `dps_targets` summary on every `players[]` entry -- see
+/// `axilog_schema::Report::players`'s `PlayerOut::per_second`/`PlayerOut::
+/// dps_targets` doc comments (measured +147.7%/+36.4% JSON size
+/// respectively on the committed fixture when always-on -- `dps_targets`
+/// is NOT small on a real WvW log with many enemies, so both stay behind
+/// this one flag).
 #[napi(object)]
 #[derive(Default, Clone, Copy)]
 pub struct ParseOptions {
     pub replay: Option<bool>,
     pub skill_damage: Option<bool>,
+    pub timeseries: Option<bool>,
 }
 
 /// Shared decode -> resolve -> analyze -> build_report pipeline (identical
@@ -58,6 +67,7 @@ fn build_report_from_bytes(
     bytes: &[u8],
     want_replay: bool,
     want_skill_damage: bool,
+    want_timeseries: bool,
 ) -> Result<axilog_schema::Report> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -71,6 +81,7 @@ fn build_report_from_bytes(
     });
     Ok(axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None, want_skill_damage,
+        want_timeseries,
     ))
 }
 
@@ -96,7 +107,7 @@ fn build_report_and_activity_from_bytes(
     });
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(
-        &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None, false,
+        &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None, false, false,
     );
     Ok((report, activity))
 }
@@ -125,7 +136,8 @@ pub fn parse_file(path: String, opts: Option<ParseOptions>) -> Result<Value> {
 pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
     let want_replay = opts.and_then(|o| o.replay).unwrap_or(false);
     let want_skill_damage = opts.and_then(|o| o.skill_damage).unwrap_or(false);
-    let report = build_report_from_bytes(buf.as_ref(), want_replay, want_skill_damage)?;
+    let want_timeseries = opts.and_then(|o| o.timeseries).unwrap_or(false);
+    let report = build_report_from_bytes(buf.as_ref(), want_replay, want_skill_damage, want_timeseries)?;
     report_to_value(&report)
 }
 

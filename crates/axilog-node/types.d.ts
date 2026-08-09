@@ -110,6 +110,33 @@ export interface SkillDamageOut {
   per_target: PerTargetSkillsOut[]
 }
 
+/** One enemy's cumulative per-second outgoing-damage series (M12, Task 2). */
+export interface PlayerTargetSeriesOut {
+  enemy_id: number
+  damage: number[]
+}
+
+/**
+ * A player's per-second detail block (M12, Task 2), opt-in -- see
+ * `PlayerOut.per_second`. `damage`/`damage_taken`/every `per_target[].damage`
+ * are CUMULATIVE running totals, one entry per second, bucketed the same way
+ * `Report.timeline` is (`resolution_ms = 1000`, from the log's first event)
+ * -- mirrors GW2EI's `damage1S`/`damageTaken1S`/`targetDamage1S` cumulative
+ * (not instant-delta) shape.
+ */
+export interface PlayerPerSecondOut {
+  damage: number[]
+  damage_taken: number[]
+  per_target: PlayerTargetSeriesOut[]
+}
+
+/** One enemy's whole-fight dps/damage summary (M12, Task 2) -- see `PlayerOut.dps_targets`. */
+export interface DpsTargetOut {
+  enemy_id: number
+  damage: number
+  dps: number
+}
+
 export interface CcOut {
   applied_total: number
   applied_duration_ms: number
@@ -226,6 +253,23 @@ export interface PlayerOut {
    * always-present like `boons`/`support`.
    */
   skill_damage?: SkillDamageOut
+  /**
+   * Per-second cumulative `damage`/`damage_taken`/`per_target` detail
+   * (M12, Task 2), opt-in like `skill_damage` -- present only when
+   * requested (`{ timeseries: true }`, see `ParseOptions.timeseries` in
+   * `index.d.ts`). Omitted entirely (not `null`) when not requested;
+   * measured +147.7% native JSON size on the committed fixture when
+   * always-on, hence opt-in.
+   */
+  per_second?: PlayerPerSecondOut
+  /**
+   * Per-enemy whole-fight dps/damage summary (M12, Task 2). Gated by the
+   * SAME `{ timeseries: true }` option as `per_second` (NOT always-on --
+   * measured +36.4% native JSON size alone on the committed fixture, a
+   * real WvW log can enumerate dozens of enemies per player). Omitted
+   * entirely (not `[]`) when not requested.
+   */
+  dps_targets?: DpsTargetOut[]
 }
 
 export interface EnemyOut {

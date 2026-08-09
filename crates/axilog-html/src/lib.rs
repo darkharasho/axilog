@@ -104,6 +104,8 @@ mod tests {
                 support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
                 healing: None,
                 skill_damage: None,
+                per_second: None,
+                dps_targets: vec![],
             }],
             enemies: vec![],
             all_enemies: vec![],

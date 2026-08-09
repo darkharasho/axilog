@@ -177,6 +177,34 @@ class SkillDamageOut(TypedDict):
     taken: List[SkillEntryOut]
     per_target: List[PerTargetSkillsOut]
 
+# --- per-player per-second series + dpsTargets (M12, Task 2) ---------------
+
+class PlayerTargetSeriesOut(TypedDict):
+    """One enemy's cumulative per-second outgoing-damage series."""
+
+    enemy_id: int
+    damage: List[int]
+
+class PlayerPerSecondOut(TypedDict):
+    """A player's per-second detail block, opt-in -- see
+    `PlayerOut["per_second"]`. `damage`/`damage_taken`/every
+    `per_target[]["damage"]` are CUMULATIVE running totals, one entry per
+    second, bucketed the same way `Report["timeline"]` is
+    (`resolution_ms = 1000`, from the log's first event) -- mirrors GW2EI's
+    `damage1S`/`damageTaken1S`/`targetDamage1S` cumulative (not
+    instant-delta) shape."""
+
+    damage: List[int]
+    damage_taken: List[int]
+    per_target: List[PlayerTargetSeriesOut]
+
+class DpsTargetOut(TypedDict):
+    """One enemy's whole-fight dps/damage summary -- see `PlayerOut["dps_targets"]`."""
+
+    enemy_id: int
+    damage: int
+    dps: float
+
 # --- boons / support ------------------------------------------------------
 
 class GenerationOut(TypedDict):
@@ -265,12 +293,19 @@ class PlayerOut(_PlayerOutRequired, total=False):
     `Report["replay"]`/`Report["missiles"]` -- omitted unless requested via
     `skill_damage=True` (see `parse_file`/`parse_bytes`); measured +249%
     native JSON size on the committed fixture when always-on, hence opt-in
-    rather than always-present like `boons`/`support`."""
+    rather than always-present like `boons`/`support`. `per_second`/
+    `dps_targets` (M12, Task 2) are BOTH gated by the SAME `timeseries=True`
+    flag -- omitted unless requested; measured +147.7%/+36.4% native JSON
+    size respectively when always-on (a real WvW log can enumerate dozens
+    of enemies per player, so `dps_targets` is not small enough to stay
+    always-on the way `boons`/`support` are)."""
 
     marker: str
     commander_tag: CommanderTagOut
     healing: HealingOut
     skill_damage: SkillDamageOut
+    per_second: PlayerPerSecondOut
+    dps_targets: List[DpsTargetOut]
 
 class _EnemyOutRequired(TypedDict):
     id: int
@@ -390,25 +425,30 @@ class Report(_ReportRequired, total=False):
 
 # --- module functions -----------------------------------------------------
 
-def parse_file(path: str, replay: bool = False, skill_damage: bool = False) -> Report:
+def parse_file(path: str, replay: bool = False, skill_damage: bool = False, timeseries: bool = False) -> Report:
     """Parse a `.evtc`/`.zevtc` file at `path` into the native `Report` shape.
 
     `replay` (M9, Task 2) opts into embedding the native combat-replay
     block (`Report["replay"]`); `skill_damage` (M12, Task 1) opts into
     embedding the native per-skill damage distribution block on every
-    `players[]` entry (`PlayerOut["skill_damage"]`). Both default to `False`.
+    `players[]` entry (`PlayerOut["skill_damage"]`). `timeseries` (M12,
+    Task 2) opts into embedding the native per-player per-second series
+    block AND the per-enemy `dps_targets` summary (`PlayerOut["per_second"]`/
+    `PlayerOut["dps_targets"]`). All three default to `False`.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.
     """
     ...
 
-def parse_bytes(data: bytes, replay: bool = False, skill_damage: bool = False) -> Report:
+def parse_bytes(data: bytes, replay: bool = False, skill_damage: bool = False, timeseries: bool = False) -> Report:
     """Parse an already-read `.evtc`/`.zevtc` buffer into the native `Report` shape.
 
     `replay` (M9, Task 2) opts into embedding the native combat-replay block.
     `skill_damage` (M12, Task 1) opts into embedding the native per-skill
-    damage distribution block.
+    damage distribution block. `timeseries` (M12, Task 2) opts into
+    embedding the native per-player per-second series block AND the
+    per-enemy `dps_targets` summary.
 
     Raises `ValueError` if `data` is not a decodable/parseable arcdps log.
     """

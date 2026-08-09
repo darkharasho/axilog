@@ -44,7 +44,7 @@ fn ei_json_matches_the_golden_isfake_down_dead_and_active_times() {
     let enc = resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
-    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false);
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false);
     let ei = axilog_ei::to_ei_json(&report, &activity);
 
     // -- isFake: every target, no exceptions --

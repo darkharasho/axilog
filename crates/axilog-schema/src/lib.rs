@@ -320,6 +320,41 @@ pub struct SkillDamageOut {
     pub taken: Vec<SkillEntryOut>,
     pub per_target: Vec<PerTargetSkillsOut>,
 }
+/// One enemy's cumulative per-second outgoing-damage series (M12, Task 2) --
+/// mirrors `axilog_core::analysis::timeseries::TargetSeries` field-for-
+/// field. Explicit `enemy_id`, not positional -- same convention
+/// `PerTargetSkillsOut` already uses.
+#[derive(Serialize)]
+pub struct PlayerTargetSeriesOut {
+    pub enemy_id: u64,
+    pub damage: Vec<u64>,
+}
+/// A player's per-second detail block (M12, Task 2), opt-in -- see
+/// `PlayerOut::per_second`'s doc comment for the measured size rationale.
+/// `damage`/`damage_taken`/every `per_target[].damage` are CUMULATIVE
+/// running totals, one entry per second, bucketed the same way
+/// `Report.timeline` is (`resolution_ms = 1000`, from the log's first
+/// event) -- see `axilog_core::analysis::timeseries`'s module doc for the
+/// GW2EI `damage1S`/`damageTaken1S`/`targetDamage1S` cumulative-vs-instant
+/// citation this mirrors.
+#[derive(Serialize)]
+pub struct PlayerPerSecondOut {
+    pub damage: Vec<u64>,
+    pub damage_taken: Vec<u64>,
+    pub per_target: Vec<PlayerTargetSeriesOut>,
+}
+/// One enemy's whole-fight dps/damage summary (M12, Task 2) -- mirrors
+/// `axilog_core::analysis::timeseries::DpsTargetEntry` field-for-field
+/// (`dps_milli`'s fixed-point storage unwrapped back to a plain `f64` via
+/// `DpsTargetEntry::dps()`). Always present (not gated behind `per_second`)
+/// -- see `PlayerOut::dps_targets`'s doc comment for the measured size
+/// rationale.
+#[derive(Serialize)]
+pub struct DpsTargetOut {
+    pub enemy_id: u64,
+    pub damage: u64,
+    pub dps: f64,
+}
 #[derive(Serialize)]
 pub struct CcOut { pub applied_total: u32, pub applied_duration_ms: u64,
     pub stun_breaks: u32, pub removed_stun_duration_ms: u64 }
@@ -442,7 +477,52 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// doc comment; this flag only gates whether [`build_report`] copies it
     /// into the schema).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub skill_damage: Option<SkillDamageOut> }
+    pub skill_damage: Option<SkillDamageOut>,
+    /// Per-second cumulative `damage`/`damage_taken`/`per_target` detail
+    /// (M12, Task 2), opt-in like `skill_damage` -- only present when the
+    /// caller requested it (CLI `--timeseries` / SDK `timeseries: true`
+    /// passed to [`build_report`]). Omitted entirely from the JSON (not
+    /// `null`) when not requested, matching `skill_damage`'s own
+    /// omit-when-absent convention.
+    ///
+    /// Measured on the committed WvW fixture (42 players, ~50 one-second
+    /// buckets, compact `serde_json::to_string`, same method
+    /// `axilog-html/tests/golden_html.rs`'s size-budget tests use):
+    /// baseline (`skill_damage`/`timeseries` both off) is 135,526 bytes.
+    /// Including `per_second` ALONE (with `dps_targets` held back) grows
+    /// that to 335,683 bytes (**+147.7%**) -- driven by `per_target`'s
+    /// player x enemy x per-second breakdown -- far past the M12 plan's
+    /// "~30% growth" size-discipline guideline, so this stays opt-in for
+    /// the default `json`/`csv`/`table`/`html` output, same reasoning as
+    /// `skill_damage`. The underlying computation itself stays
+    /// unconditional and cheap (`axilog_core::analysis::Metrics::
+    /// players[].timeseries` is always populated by `analyze()`); this
+    /// flag only gates whether [`build_report`] copies it into the schema.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_second: Option<PlayerPerSecondOut>,
+    /// Per-enemy whole-fight dps/damage summary (M12, Task 2). The plan's
+    /// brief called for keeping this always-on ("it's small") unless it
+    /// ALSO bloats the default output -- measured (same method/fixture as
+    /// `per_second`'s doc comment above), it does: this fixture has up to
+    /// 40 enemies per player (872 rows total across all 42 players -- a
+    /// real WvW zerg fight enumerates every enemy player/siege/dolyak/
+    /// guard the log tracked, not just a boss's handful of adds), so
+    /// `dps_targets` ALONE (with `per_second` held back) grows the
+    /// baseline from 135,526 to 184,844 bytes (**+36.4%**) -- past the
+    /// M12 plan's "~30% growth" guideline on its own, and this was
+    /// measured directly by first shipping it unconditionally: it grew the
+    /// committed fixture's HTML report from 201,268 to 250,671 bytes,
+    /// BREAKING `axilog-html/tests/golden_html.rs::
+    /// total_report_size_stays_under_budget`'s existing 250,000-byte gate
+    /// even with `per_second`/`skill_damage` both off. So this stays gated
+    /// behind the SAME `include_timeseries` flag as `per_second` (not a
+    /// second, separate flag) -- see [`build_report`]'s doc comment.
+    /// Together, `include_timeseries: true` grows the baseline to 385,001
+    /// bytes (**+184.1%**). Omitted entirely from the JSON (not `[]`) when
+    /// not requested, same convention as every other opt-in block in this
+    /// schema.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dps_targets: Vec<DpsTargetOut> }
 #[derive(Serialize)]
 pub struct EnemyOut { pub id: u64, pub name: String, pub team: String, pub is_player: bool,
     /// The enemy's current squad marker, mirroring `PlayerOut.marker`
@@ -485,6 +565,17 @@ fn skill_entry_out(e: &axilog_core::analysis::skill_damage::SkillEntry) -> Skill
 /// `true` (CLI `--skill-damage` / SDK `skill_damage: true`) includes it.
 /// See `PlayerOut::skill_damage`'s doc comment for the measured size
 /// rationale behind defaulting this to opt-in rather than always-on.
+/// `include_timeseries` (M12, Task 2) works the same way as
+/// `include_skill_damage` -- `PlayerMetrics::timeseries` is always
+/// computed by `analyze()`; this bool gates whether BOTH `PlayerOut::
+/// per_second` AND `PlayerOut::dps_targets` are populated. The plan
+/// suggested `dps_targets` could stay always-on ("it's small"), but
+/// measured on the committed fixture it independently exceeds the same
+/// ~30% size guideline on its own (+36.4%, see `PlayerOut::dps_targets`'s
+/// doc comment) and broke the HTML report's existing 250,000-byte size
+/// budget when shipped unconditionally -- so it's gated behind this SAME
+/// flag rather than a separate one, for one simple on/off switch per
+/// caller.
 pub fn build_report(
     enc: &Encounter,
     metrics: &Metrics,
@@ -492,6 +583,7 @@ pub fn build_report(
     replay: Option<&Replay>,
     missiles: Option<&Missiles>,
     include_skill_damage: bool,
+    include_timeseries: bool,
 ) -> Report {
     let pm: std::collections::BTreeMap<u64, &axilog_core::analysis::PlayerMetrics> =
         metrics.players.iter().map(|p| (p.agent_addr, p)).collect();
@@ -566,6 +658,25 @@ pub fn build_report(
             } else {
                 None
             },
+            per_second: if include_timeseries {
+                Some(m.map(|m| PlayerPerSecondOut {
+                    damage: m.timeseries.damage.clone(),
+                    damage_taken: m.timeseries.damage_taken.clone(),
+                    per_target: m.timeseries.per_target.iter().map(|t| PlayerTargetSeriesOut {
+                        enemy_id: t.enemy_id,
+                        damage: t.damage.clone(),
+                    }).collect(),
+                }).unwrap_or(PlayerPerSecondOut { damage: vec![], damage_taken: vec![], per_target: vec![] }))
+            } else {
+                None
+            },
+            dps_targets: if include_timeseries {
+                m.map(|m| m.timeseries.dps_targets.iter().map(|d| DpsTargetOut {
+                    enemy_id: d.enemy_id, damage: d.damage, dps: d.dps,
+                }).collect()).unwrap_or_default()
+            } else {
+                vec![]
+            },
         }
     }).collect();
     Report {
@@ -630,7 +741,7 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(),
             combat_participant_enemies: [9u64].into_iter().collect() };
-        let report = build_report(&enc, &m, "0.1.0", None, None, false);
+        let report = build_report(&enc, &m, "0.1.0", None, None, false, false);
         assert_eq!(report.enemies.len(), 1, "only the participant enemy stays in the filtered list");
         assert_eq!(report.enemies[0].id, 9);
         assert_eq!(report.all_enemies.len(), 2, "all_enemies keeps the full roster, including the loot bag");
@@ -656,7 +767,7 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
-        let report = build_report(&enc, &m, "0.1.0", None, None, false);
+        let report = build_report(&enc, &m, "0.1.0", None, None, false, false);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.2");
         assert_eq!(v["axilog_version"], "0.1.0");
@@ -700,7 +811,7 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: true, combat_participant_enemies: Default::default() };
-        let report = build_report(&enc, &m, "0.1.0", None, None, false);
+        let report = build_report(&enc, &m, "0.1.0", None, None, false, false);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["players"][0]["healing"]["healing_out_total"], 500);
         assert_eq!(v["players"][0]["healing"]["healing_out_allies"], 300);
@@ -745,11 +856,11 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: false, combat_participant_enemies: Default::default() };
 
-        let omitted = build_report(&enc, &m, "0.1.0", None, None, false);
+        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false);
         let v = serde_json::to_value(&omitted).unwrap();
         assert!(v["players"][0].get("skill_damage").is_none(), "skill_damage must be omitted when not requested");
 
-        let included = build_report(&enc, &m, "0.1.0", None, None, true);
+        let included = build_report(&enc, &m, "0.1.0", None, None, true, false);
         let v = serde_json::to_value(&included).unwrap();
         let sd = &v["players"][0]["skill_damage"];
         assert_eq!(sd["outgoing"][0]["skill_id"], 100);
@@ -757,6 +868,58 @@ mod tests {
         assert_eq!(sd["taken"][0]["skill_id"], 100);
         assert_eq!(sd["per_target"][0]["enemy_id"], 9);
         assert_eq!(sd["per_target"][0]["skills"][0]["skill_id"], 100);
+    }
+
+    /// M12 Task 2: `per_second` AND `dps_targets` are BOTH opt-in, gated by
+    /// the SAME `include_timeseries` bool (independent of `include_skill_
+    /// damage`) -- both omitted entirely when not requested even though
+    /// `PlayerMetrics::timeseries` is ALWAYS computed; both present (and
+    /// correctly copied field-for-field) only when `include_timeseries:
+    /// true`. Unlike `skill_damage`, `dps_targets` is NOT always-on -- see
+    /// `PlayerOut::dps_targets`'s doc comment for the measured size
+    /// rationale (it independently broke the HTML size budget when shipped
+    /// unconditionally).
+    #[test]
+    fn per_second_and_dps_targets_are_both_gated_by_include_timeseries() {
+        use axilog_core::analysis::timeseries::{DpsTargetEntry, TargetSeries, TimeseriesMetrics};
+        let enc = Encounter { kind:"wvw".into(), map:"".into(),
+            duration_ms:2000, build:"20260114".into(), revision:1, recorded_by:None,
+            teams:vec![], players:vec![
+                Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
+                    profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+            ],
+            enemies:vec![], markers:vec![], tick_rate:None };
+        let m = Metrics { players: vec![
+            PlayerMetrics{agent_addr:1,
+                timeseries: TimeseriesMetrics {
+                    damage: vec![50, 80],
+                    damage_taken: vec![10, 10],
+                    per_target: vec![TargetSeries { enemy_id: 9, damage: vec![50, 80] }],
+                    dps_targets: vec![DpsTargetEntry { enemy_id: 9, damage: 80, dps: 40.0 }],
+                },
+                ..Default::default()},
+        ],
+            timeline: Timeline{resolution_ms:1000,squad_damage:vec![0,0],cc_applied:vec![0,0],downs:vec![0,0]},
+            boons: Default::default(), boon_uptime: Default::default(),
+            boon_generation: Default::default(), warnings: Default::default(),
+            has_healing_extension: false, combat_participant_enemies: Default::default() };
+
+        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false);
+        let v = serde_json::to_value(&omitted).unwrap();
+        assert!(v["players"][0].get("per_second").is_none(), "per_second must be omitted when not requested");
+        assert!(v["players"][0].get("dps_targets").is_none(), "dps_targets must be omitted when not requested");
+
+        let included = build_report(&enc, &m, "0.1.0", None, None, false, true);
+        let v = serde_json::to_value(&included).unwrap();
+        let ps = &v["players"][0]["per_second"];
+        assert_eq!(ps["damage"], serde_json::json!([50, 80]));
+        assert_eq!(ps["damage_taken"], serde_json::json!([10, 10]));
+        assert_eq!(ps["per_target"][0]["enemy_id"], 9);
+        assert_eq!(ps["per_target"][0]["damage"], serde_json::json!([50, 80]));
+        assert_eq!(v["players"][0]["dps_targets"][0]["enemy_id"], 9);
+        assert_eq!(v["players"][0]["dps_targets"][0]["damage"], 80);
+        assert_eq!(v["players"][0]["dps_targets"][0]["dps"], 40.0);
     }
 
     /// M10 Task 3: a single non-finite (`Infinity`) sample coordinate mixed
@@ -837,7 +1000,7 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
         let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
-        let report = build_report(&enc, &m, "0.1.0", Some(&replay), None, false);
+        let report = build_report(&enc, &m, "0.1.0", Some(&replay), None, false, false);
         assert!(report.replay.is_some());
         let r = report.replay.unwrap();
         assert_eq!(r.poll_ms, DEFAULT_POLL_MS);
@@ -889,7 +1052,7 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
         let missiles = build_missiles(&raw, &enc);
-        let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles), false);
+        let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles), false, false);
         assert!(report.missiles.is_some());
         let mo = report.missiles.unwrap();
         assert_eq!(mo.players.len(), 1);

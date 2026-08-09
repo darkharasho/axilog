@@ -49,8 +49,17 @@ export declare function parseFileEi(path: string): any
  * `players[]` entry -- see `axilog_schema::Report::players`'s
  * `PlayerOut::skill_damage` doc comment for why this defaults to opt-in
  * (measured +249% JSON size on the committed fixture when always-on).
+ * `timeseries: true` (M12, Task 2) opts into embedding the native
+ * per-player per-second series block (`PlayerPerSecondOut`) AND the
+ * per-enemy `dps_targets` summary on every `players[]` entry -- see
+ * `axilog_schema::Report::players`'s `PlayerOut::per_second`/`PlayerOut::
+ * dps_targets` doc comments (measured +147.7%/+36.4% JSON size
+ * respectively on the committed fixture when always-on -- `dps_targets`
+ * is NOT small on a real WvW log with many enemies, so both stay behind
+ * this one flag).
  */
 export interface ParseOptions {
   replay?: boolean
   skillDamage?: boolean
+  timeseries?: boolean
 }

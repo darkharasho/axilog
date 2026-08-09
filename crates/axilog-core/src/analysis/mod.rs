@@ -34,6 +34,14 @@ pub mod contribution;
 /// while this DOES fold it onto the owner, same as `PlayerMetrics::
 /// damage_total` already does).
 pub mod skill_damage;
+/// Per-player per-second series (`damage`/`damage_taken`/`per_target`,
+/// cumulative) plus `dps_targets` (M12 Task 2) -- like `skill_damage`
+/// above, wired into [`analyze`] below (`PlayerMetrics::timeseries`),
+/// computed unconditionally (cheap: one extra bucketed scan, reusing
+/// `damage`'s predicate and `damage::pet_credit_events`). See
+/// `timeseries`'s module doc for the GW2EI cumulative-vs-instant citation
+/// and the `dps_targets`-vs-EI-`dpsTargets` scope note.
+pub mod timeseries;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -68,7 +76,13 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     /// `skill_damage`'s module doc. `sum(skill_damage.outgoing[*].total) ==
     /// damage_total` and `sum(skill_damage.taken[*].total) == damage_taken`
     /// hold exactly by construction.
-    pub skill_damage: skill_damage::SkillDamageMetrics }
+    pub skill_damage: skill_damage::SkillDamageMetrics,
+    /// Per-second cumulative `damage`/`damage_taken`/`per_target` series
+    /// plus `dps_targets` (M12 Task 2) -- see `timeseries`'s module doc.
+    /// `sum(dps_targets[*].damage)` equals `per_enemy`'s own total, and the
+    /// final element of `damage`/`damage_taken` equals `damage_total`/
+    /// `damage_taken` exactly, both by construction.
+    pub timeseries: timeseries::TimeseriesMetrics }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
@@ -278,6 +292,17 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     for p in &mut players {
         if let Some(sd) = skill_damage_by_rep.get(&p.agent_addr) {
             p.skill_damage = sd.clone();
+        }
+    }
+    // M12 Task 2: per-player per-second series + dps_targets -- another
+    // grouped/bucketed refinement of the same predicate family (see
+    // `timeseries`'s module doc), not an independent computation.
+    let timeseries_by_rep = timeseries::build(
+        enc, raw, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep, friendly_team, &agent_team,
+    );
+    for p in &mut players {
+        if let Some(ts) = timeseries_by_rep.get(&p.agent_addr) {
+            p.timeseries = ts.clone();
         }
     }
     let timeline = cc::timeline(enc, raw, &squad, &enemies);

@@ -53,6 +53,7 @@ fn build_report_from_bytes(
     bytes: &[u8],
     want_replay: bool,
     want_skill_damage: bool,
+    want_timeseries: bool,
 ) -> PyResult<axilog_schema::Report> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(value_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -66,6 +67,7 @@ fn build_report_from_bytes(
     });
     Ok(axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None, want_skill_damage,
+        want_timeseries,
     ))
 }
 
@@ -91,7 +93,7 @@ fn build_report_and_activity_from_bytes(
     });
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(
-        &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None, false,
+        &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None, false, false,
     );
     Ok((report, activity))
 }
@@ -111,13 +113,19 @@ fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
 /// embedding the native per-skill damage distribution block (measured
 /// +249% JSON size on the committed fixture when always-on, see
 /// `axilog_schema::Report::players`'s `PlayerOut::skill_damage` doc
-/// comment -- hence opt-in). Both default to `False` for back-compat with
-/// every existing positional-only call site.
+/// comment -- hence opt-in). `timeseries=True` (M12, Task 2) opts into
+/// embedding the native per-player per-second series block AND the
+/// per-enemy `dps_targets` summary (measured +147.7%/+36.4% JSON size
+/// respectively when always-on, see `PlayerOut::per_second`/`PlayerOut::
+/// dps_targets`'s doc comments -- `dps_targets` is NOT small on a real
+/// WvW log with many enemies, so both stay behind this one flag). All
+/// three default to `False` for back-compat with every existing
+/// positional-only call site.
 #[pyfunction]
-#[pyo3(signature = (path, replay=false, skill_damage=false))]
-fn parse_file(py: Python<'_>, path: &str, replay: bool, skill_damage: bool) -> PyResult<Py<PyAny>> {
+#[pyo3(signature = (path, replay=false, skill_damage=false, timeseries=false))]
+fn parse_file(py: Python<'_>, path: &str, replay: bool, skill_damage: bool, timeseries: bool) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let report = build_report_from_bytes(&bytes, replay, skill_damage)?;
+    let report = build_report_from_bytes(&bytes, replay, skill_damage, timeseries)?;
     value_to_py(py, &report_to_value(&report)?)
 }
 
@@ -125,11 +133,12 @@ fn parse_file(py: Python<'_>, path: &str, replay: bool, skill_damage: bool) -> P
 /// and returns the native `Report` as a plain Python dict. `replay=True`
 /// (M9, Task 2) opts into embedding the native combat-replay block;
 /// `skill_damage=True` (M12, Task 1) opts into embedding the native
-/// per-skill damage distribution block.
+/// per-skill damage distribution block; `timeseries=True` (M12, Task 2)
+/// opts into embedding the native per-player per-second series block.
 #[pyfunction]
-#[pyo3(signature = (data, replay=false, skill_damage=false))]
-fn parse_bytes(py: Python<'_>, data: &[u8], replay: bool, skill_damage: bool) -> PyResult<Py<PyAny>> {
-    let report = build_report_from_bytes(data, replay, skill_damage)?;
+#[pyo3(signature = (data, replay=false, skill_damage=false, timeseries=false))]
+fn parse_bytes(py: Python<'_>, data: &[u8], replay: bool, skill_damage: bool, timeseries: bool) -> PyResult<Py<PyAny>> {
+    let report = build_report_from_bytes(data, replay, skill_damage, timeseries)?;
     value_to_py(py, &report_to_value(&report)?)
 }
 

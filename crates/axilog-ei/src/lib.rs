@@ -379,7 +379,7 @@ mod tests {
             // so this doesn't change `maps_core_ei_fields`'s `targets[]`
             // assertions below -- it's set for realism, not correctness.
             combat_participant_enemies: [9u64].into_iter().collect()};
-        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false)
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false)
     }
     #[test]
     fn maps_core_ei_fields() {
@@ -464,7 +464,7 @@ mod tests {
             has_healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
         };
-        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false)
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false)
     }
 
     #[test]
@@ -538,6 +538,8 @@ mod tests {
                 support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
                 healing,
                 skill_damage: None,
+                per_second: None,
+                dps_targets: vec![],
             }
         }
         let report = Report {
