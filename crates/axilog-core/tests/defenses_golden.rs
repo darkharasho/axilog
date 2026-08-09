@@ -50,15 +50,34 @@ use axilog_core::evtc::{anon_account, decode_raw};
 use axilog_core::model::resolve;
 use std::collections::HashMap;
 
+mod common;
+
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
-const LOCAL_FIXTURE_PATH: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-small.zevtc");
+
 const GOLDEN_JSON_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.ei.json");
-const LOCAL_POSTREWORK_ZEVTC: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-postrework.zevtc");
-const LOCAL_POSTREWORK_EI_JSON: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-postrework.ei.json");
+/// Gitignored, PII-bearing local captures -- resolved through
+/// `common::local_fixture` (M15 Task 1) so `AXILOG_LOCAL_FIXTURES` can point
+/// a `git worktree` at the primary checkout's `fixtures/local/` instead of
+/// requiring the captures to be copied (which would duplicate PII):
+///
+/// ```sh
+/// AXILOG_LOCAL_FIXTURES=/path/to/axilog/fixtures/local \
+///     cargo test -p axilog-core --test defenses_golden -- --nocapture
+/// ```
+///
+/// Unset, these resolve to the in-tree `fixtures/local/` exactly as the
+/// hardcoded `concat!(env!("CARGO_MANIFEST_DIR"), ...)` paths they replaced
+/// did, so CI behaviour (skip-when-absent) is unchanged.
+fn local_fixture_path() -> String {
+    common::local_fixture("wvw-small.zevtc")
+}
+fn local_postrework_zevtc() -> String {
+    common::local_fixture("wvw-postrework.zevtc")
+}
+fn local_postrework_ei_json() -> String {
+    common::local_fixture("wvw-postrework.ei.json")
+}
 
 /// Relative tolerance for damage sums (M13 plan: 0.5%).
 const DAMAGE_REL_TOLERANCE: f64 = 0.005;
@@ -72,10 +91,11 @@ fn read_anon_fixture() -> Vec<u8> {
 }
 
 fn read_local_fixture_or_skip(test_name: &str) -> Option<Vec<u8>> {
-    match std::fs::read(LOCAL_FIXTURE_PATH) {
+    let path = local_fixture_path();
+    match std::fs::read(&path) {
         Ok(b) => Some(b),
         Err(_) => {
-            println!("skip: {LOCAL_FIXTURE_PATH} absent ({test_name} local-only extra check)");
+            println!("skip: {path} absent ({test_name} local-only extra check)");
             None
         }
     }
@@ -181,9 +201,30 @@ fn check_defenses_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
             }
         }
 
-        // `life_leech_count`: derived reference (see module doc's bug
-        // writeup), NOT read from the fixture's buggy
+        // `life_leech_count`/`life_leech_damage`: derived reference (see
+        // module doc's bug writeup), NOT read from the fixture's buggy
         // `lifeLeechDamageTakenCount` (always 0) directly.
+        //
+        // **MCONDCAT Task 1**: the PRIMARY derivation is now the
+        // fourth-bucket-immune bug identity -- GW2EI double-increments the
+        // SUM field, so `golden.lifeLeechDamageTaken == [true sum] + [true
+        // count]`, and both of ours can be checked with one equality.
+        let buggy_life_leech_sum = de["lifeLeechDamageTaken"].as_i64().unwrap_or(0);
+        let ours_encoded = (pm.defenses.life_leech_damage + pm.defenses.life_leech_count as u64) as i64;
+        if ours_encoded != buggy_life_leech_sum {
+            count_mismatches.push(format!(
+                "{key} life_leech: ours life_leech_damage({}) + life_leech_count({}) = {ours_encoded}, \
+                 golden[lifeLeechDamageTaken]={buggy_life_leech_sum} (GW2EI's double-increment bug, \
+                 i.e. `[true sum] + [true count]`)",
+                pm.defenses.life_leech_damage, pm.defenses.life_leech_count
+            ));
+        }
+        // Secondary cross-check with the OLD derivation
+        // (`powerDamageTakenCount - strikeDamageTakenCount`), which equals
+        // `life_leech + fourth_bucket`: on this committed pre-rework
+        // fixture the fourth bucket is empty, so it must still agree. If it
+        // ever stops agreeing, the fixture has grown fourth-bucket rows and
+        // its committed golden numbers need a human review pass.
         let power_count = de["powerDamageTakenCount"].as_i64().unwrap_or(0);
         let strike_count = de["strikeDamageTakenCount"].as_i64().unwrap_or(0);
         let true_life_leech_count = (power_count - strike_count).max(0) as u64;
@@ -191,7 +232,9 @@ fn check_defenses_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
         if ours_llc != true_life_leech_count {
             count_mismatches.push(format!(
                 "{key} life_leech_count: ours={ours_llc} derived_golden={true_life_leech_count} \
-                 (powerDamageTakenCount={power_count} - strikeDamageTakenCount={strike_count})"
+                 (powerDamageTakenCount={power_count} - strikeDamageTakenCount={strike_count}; \
+                 this fixture is expected to be FOURTH-BUCKET-FREE, so the two derivations must \
+                 agree -- see `analysis::condition_catalog`)"
             ));
         }
 
@@ -274,8 +317,9 @@ fn defenses_matches_ei_golden_local_raw_when_present() {
 /// `dodge_count`, both all-zero on the committed golden fixture.
 #[test]
 fn defenses_present_and_sane_on_local_postrework_when_available() {
-    let Some(bytes) = std::fs::read(LOCAL_POSTREWORK_ZEVTC).ok() else {
-        println!("skip: {LOCAL_POSTREWORK_ZEVTC} absent (local-only postrework sanity check)");
+    let postrework_zevtc = local_postrework_zevtc();
+    let Some(bytes) = std::fs::read(&postrework_zevtc).ok() else {
+        println!("skip: {postrework_zevtc} absent (local-only postrework sanity check)");
         return;
     };
     let raw = decode_raw(&bytes).expect("decode postrework fixture");
@@ -284,34 +328,61 @@ fn defenses_present_and_sane_on_local_postrework_when_available() {
     let metrics = analyze(&enc, &raw);
 
     let mut any_strike = false;
+    let mut fourth_bucket_players = 0usize;
+    let mut fourth_bucket_hits = 0u32;
     for p in &metrics.players {
         let d = &p.defenses;
-        // Internal invariant: power == strike + life_leech, always -- this
-        // holds by THIS PROJECT'S OWN construction (`classify` only ever
-        // produces Strike/Condition/LifeLeech, `power` accumulates on
-        // Strike+LifeLeech only -- see `analysis::defenses`'s module doc),
-        // so it's safe to assert unconditionally here even on a real
-        // capture; it is NOT a claim that real GW2EI's own output satisfies
-        // this in general (see that same module doc section for the
-        // documented buff==1-outside-the-condition-catalog-and-not-
-        // life-leech edge case that could break it there).
-        assert_eq!(
-            d.power_count,
-            d.strike_count + d.life_leech_count,
-            "agent {:#x}: power_count must equal strike_count + life_leech_count exactly",
-            p.agent_addr
+        // **MCONDCAT Task 1 reworked this assertion.** It used to be
+        // `power == strike + life_leech` EXACTLY, which held only by this
+        // module's own pre-catalog construction (three hit kinds, power
+        // accumulating on two of them) -- and which real GW2EI's output
+        // does NOT satisfy. With `HitKind::PowerOnly` (the fourth bucket:
+        // buff==1, outside the condition catalog, not life-leech) the
+        // correct invariant is the INEQUALITY, with the slack being exactly
+        // the fourth-bucket population:
+        //
+        //   power_count == strike_count + life_leech_count + fourth_count
+        //
+        // which we can't decompose further from the outside, so assert the
+        // direction and report the slack.
+        let strike_plus_leech = d.strike_count + d.life_leech_count;
+        assert!(
+            d.power_count >= strike_plus_leech,
+            "agent {:#x}: power_count ({}) must be >= strike_count + life_leech_count ({strike_plus_leech}) -- \
+             power accumulates on every non-condition hit, a superset of both",
+            p.agent_addr,
+            d.power_count
         );
-        assert_eq!(
+        assert!(
+            d.power_damage >= d.strike_damage + d.life_leech_damage,
+            "agent {:#x}: power_damage ({}) must be >= strike_damage + life_leech_damage ({})",
+            p.agent_addr,
             d.power_damage,
-            d.strike_damage + d.life_leech_damage,
-            "agent {:#x}: power_damage must equal strike_damage + life_leech_damage exactly",
-            p.agent_addr
+            d.strike_damage + d.life_leech_damage
         );
+        let fourth = d.power_count - strike_plus_leech;
+        if fourth > 0 {
+            fourth_bucket_players += 1;
+            fourth_bucket_hits += fourth;
+        }
         if d.strike_count > 0 {
             any_strike = true;
         }
     }
     assert!(any_strike, "a real WvW squad fight should show nonzero incoming strike hits somewhere");
+    // The fourth bucket is genuinely populated on this real capture -- that
+    // is the whole reason MCONDCAT exists. Assert it is actually exercised
+    // here so this check can never silently degrade back into a
+    // three-bucket-only test.
+    assert!(
+        fourth_bucket_hits > 0,
+        "expected the MCONDCAT fourth bucket (power-only hits) to be populated on this real \
+         post-era capture -- if this ever fires, the catalog probe has stopped doing anything"
+    );
+    println!(
+        "defenses_present_and_sane_on_local_postrework: fourth bucket populated for \
+         {fourth_bucket_players} player(s), {fourth_bucket_hits} hit(s) total"
+    );
 
     println!(
         "defenses_present_and_sane_on_local_postrework: {} players, internal invariants hold on a real post-era log",
@@ -348,7 +419,7 @@ const RELIABLE_COUNT_ABS_TOLERANCE: i64 = 2;
 
 /// M13 Task 3 (post-era calibration hook, cheap win from review): when a
 /// real post-rework EI JSON sidecar (the dps.report `getJson` output for
-/// the SAME log as `LOCAL_POSTREWORK_ZEVTC`) is ALSO present, this
+/// the SAME log as `local_postrework_zevtc()`) is ALSO present, this
 /// calibrates `defenses`'s count fields against real `defenses[0]` numbers
 /// on that capture -- unlike
 /// `defenses_present_and_sane_on_local_postrework_when_available` above
@@ -356,35 +427,25 @@ const RELIABLE_COUNT_ABS_TOLERANCE: i64 = 2;
 /// calibration of the post-era classification path (`defenses::classify`'s
 /// `post_era` branch), the moment a real capture + export pair exists.
 ///
-/// **First real run of this hook (same 48-player capture
-/// `hit_stats_golden.rs`'s equivalent hook documents) empirically CONFIRMED
-/// the theoretical "buff==1-outside-the-condition-catalog-and-not-
-/// life-leech" edge case `analysis::defenses`'s module doc flags for the
-/// `power == strike + life_leech` claim** -- previously "documented, not
-/// observed" (the committed pre-rework fixture showed zero residual). On
-/// this real capture, `power_count`/`condition_count`/the ALGEBRAICALLY
-/// DERIVED `life_leech_count` reference (`powerDamageTakenCount -
-/// strikeDamageTakenCount`) diverge from this project's own numbers on
-/// roughly two-thirds of joined accounts, by up to ~35% relative on one
-/// account -- but hand-verified CONSERVED in total for several accounts
-/// (`ours condition_count + ours life_leech_count == golden's
-/// conditionDamageTakenCount + (golden's powerDamageTakenCount -
-/// strikeDamageTakenCount)`, exactly, e.g. `Tysun.5092`: `52+2 == 40+14 ==
-/// 54`), confirming this is a genuine buff==1-hit RECLASSIFICATION between
-/// this project's "condition" bucket and EI's own `ConditionDamageBased`
-/// skill-id catalog's bucketing, not a dropped/extra event -- exactly the
-/// edge case the module doc describes, now empirically real. It ALSO means
-/// the derived `life_leech_count` reference itself is demonstrably NOT a
-/// reliable ground truth on a real capture (it inherits the same catalog
-/// gap) -- so unlike the committed-fixture test above (where zero residual
-/// was observed and the derivation was trustworthy), `life_leech_count` is
-/// downgraded to report-only here, alongside `power_count`/
-/// `condition_count`. `RELIABLE_COUNT_FIELDS` (immune to this specific
-/// split, see that const's doc comment) are still asserted with a small
-/// tolerance -- hard-failing on a KNOWN, now-empirically-confirmed
-/// simplification gap would make this hook permanently red for every
-/// future real capture with even one uncatalogued buff==1 skill in play,
-/// defeating its own "green signal for real regressions" purpose.
+/// **History: this hook is what proved the "fourth bucket" real, and
+/// MCONDCAT Task 1 is what closed it.** Its first real run (a 48-player WvW
+/// capture, arcdps build 20260718) empirically confirmed the then-theoretical
+/// "buff==1-outside-the-condition-catalog-and-not-life-leech" edge case:
+/// 33 of 44 joined accounts diverged on `power_count`/`condition_count`, by
+/// up to 51% relative on one account, while every field immune to the
+/// buff==1 split stayed within a 2-count tolerance. The divergence was
+/// CONSERVED in total on every account (the `power_count` shortfall equalled
+/// the `condition_count` excess exactly), i.e. a pure RECLASSIFICATION
+/// rather than a dropped or extra event -- the signature of a missing
+/// catalog. Those fields were report-only at the time.
+///
+/// With `analysis::condition_catalog` in place they are **EXACT on all 44
+/// joined accounts** and are hard-asserted again here, along with
+/// `power_damage`/`condition_damage` and a fourth-bucket-immune life-leech
+/// identity (see the inline comments in the loop below for why the old
+/// `powerDamageTakenCount - strikeDamageTakenCount` derivation had to go).
+/// `RELIABLE_COUNT_FIELDS` keep their small tolerance for the unrelated
+/// `dodgeCount` residual documented on that const.
 ///
 /// Joined by RAW account string (real, non-anonymized local capture, same
 /// convention `hit_stats_golden.rs`'s equivalent hook uses). Skip-when-
@@ -392,16 +453,18 @@ const RELIABLE_COUNT_ABS_TOLERANCE: i64 = 2;
 /// local fixture, so this never runs there.
 #[test]
 fn defenses_calibrated_against_local_postrework_ei_json_when_available() {
-    let Some(bytes) = std::fs::read(LOCAL_POSTREWORK_ZEVTC).ok() else {
-        println!("skip: {LOCAL_POSTREWORK_ZEVTC} absent (post-era defenses real calibration)");
+    let postrework_zevtc = local_postrework_zevtc();
+    let postrework_ei_json = local_postrework_ei_json();
+    let Some(bytes) = std::fs::read(&postrework_zevtc).ok() else {
+        println!("skip: {postrework_zevtc} absent (post-era defenses real calibration)");
         return;
     };
-    let Some(golden_s) = std::fs::read_to_string(LOCAL_POSTREWORK_EI_JSON).ok() else {
-        println!("skip: {LOCAL_POSTREWORK_EI_JSON} absent (post-era defenses real calibration)");
+    let Some(golden_s) = std::fs::read_to_string(&postrework_ei_json).ok() else {
+        println!("skip: {postrework_ei_json} absent (post-era defenses real calibration)");
         return;
     };
     let golden: serde_json::Value =
-        serde_json::from_str(&golden_s).unwrap_or_else(|e| panic!("parse {LOCAL_POSTREWORK_EI_JSON}: {e}"));
+        serde_json::from_str(&golden_s).unwrap_or_else(|e| panic!("parse {postrework_ei_json}: {e}"));
 
     let raw = decode_raw(&bytes).expect("decode postrework fixture");
     assert!(
@@ -441,50 +504,64 @@ fn defenses_calibrated_against_local_postrework_ei_json_when_available() {
             }
         }
 
-        // `power_count`/`condition_count`: known catalog-gap fields (see
-        // this test's doc comment) -- reported only.
+        // **MCONDCAT Task 1: these are the fields the catalog fixed, and
+        // they are now asserted EXACT (they were report-only before).**
         let power_count = de["powerDamageTakenCount"].as_i64().unwrap_or(0);
-        let strike_count = de["strikeDamageTakenCount"].as_i64().unwrap_or(0);
         let condition_count_golden = de["conditionDamageTakenCount"].as_i64().unwrap_or(0);
-        let ours_power = pm.defenses.power_count as i64;
-        let ours_condition = pm.defenses.condition_count as i64;
-        if ours_power != power_count {
-            catalog_gap_notes.push(format!(
-                "{key} power_count: ours={ours_power} golden[defenses[0].powerDamageTakenCount]={power_count} \
-                 (diff {}, known catalog-gap field, not hard-failed)",
-                ours_power - power_count
-            ));
-        }
-        if ours_condition != condition_count_golden {
-            catalog_gap_notes.push(format!(
-                "{key} condition_count: ours={ours_condition} golden[defenses[0].conditionDamageTakenCount]={condition_count_golden} \
-                 (diff {}, known catalog-gap field, not hard-failed)",
-                ours_condition - condition_count_golden
-            ));
+        let power_damage = de["powerDamageTaken"].as_i64().unwrap_or(0);
+        let condition_damage_golden = de["conditionDamageTaken"].as_i64().unwrap_or(0);
+        for (label, ours, golden_val) in [
+            ("power_count", pm.defenses.power_count as i64, power_count),
+            ("condition_count", pm.defenses.condition_count as i64, condition_count_golden),
+            ("power_damage", pm.defenses.power_damage as i64, power_damage),
+            ("condition_damage", pm.defenses.condition_damage as i64, condition_damage_golden),
+        ] {
+            if ours != golden_val {
+                mismatches.push(format!(
+                    "{key} {label}: ours={ours} golden[defenses[0]]={golden_val} (diff {})",
+                    ours - golden_val
+                ));
+            }
         }
 
-        // `life_leech_count`: same algebraically-derived reference
-        // (`powerDamageTakenCount - strikeDamageTakenCount`) the
-        // committed-fixture test above uses -- but see this test's doc
-        // comment for why that derivation is demonstrably NOT reliable on
-        // a real capture (it inherits the same catalog gap), so this is
-        // reported only here, not hard-failed like the committed-fixture
-        // check.
-        let true_life_leech_count = (power_count - strike_count).max(0);
-        let ours_llc = pm.defenses.life_leech_count as i64;
-        if ours_llc != true_life_leech_count {
+        // `life_leech_count`/`life_leech_damage`: the committed-fixture
+        // test's `powerDamageTakenCount - strikeDamageTakenCount`
+        // derivation is WRONG post-MCONDCAT (that difference is
+        // `life_leech + fourth_bucket`, not `life_leech`). Use the
+        // bug-exploiting identity instead, which is fourth-bucket-immune:
+        // GW2EI's ctor increments `LifeLeechDamageTaken` twice per
+        // life-leech hit (once by `+= HealthDamage`, once by the
+        // copy-pasted `LifeLeechDamageTaken++` that should have been
+        // `LifeLeechDamageTakenCount++`), so the reported SUM is exactly
+        // `[true sum] + [true count]` and nothing else touches it.
+        let buggy_life_leech_sum = de["lifeLeechDamageTaken"].as_i64().unwrap_or(0);
+        let ours_encoded =
+            pm.defenses.life_leech_damage as i64 + pm.defenses.life_leech_count as i64;
+        if ours_encoded != buggy_life_leech_sum {
+            mismatches.push(format!(
+                "{key} life_leech: ours life_leech_damage({}) + life_leech_count({}) = {ours_encoded}, \
+                 golden[defenses[0].lifeLeechDamageTaken]={buggy_life_leech_sum} (diff {}) -- \
+                 the golden field is GW2EI's double-increment bug, i.e. `[true sum] + [true count]`",
+                pm.defenses.life_leech_damage,
+                pm.defenses.life_leech_count,
+                ours_encoded - buggy_life_leech_sum
+            ));
+        }
+        // And GW2EI's own (never-incremented) count field must still read 0
+        // -- if a future GW2EI release fixes the bug, the identity above
+        // silently becomes wrong, so pin the bug's own signature.
+        let buggy_life_leech_count = de["lifeLeechDamageTakenCount"].as_i64().unwrap_or(0);
+        if buggy_life_leech_count != 0 {
             catalog_gap_notes.push(format!(
-                "{key} life_leech_count: ours={ours_llc} derived_golden={true_life_leech_count} \
-                 (powerDamageTakenCount={power_count} - strikeDamageTakenCount={strike_count}, \
-                 diff {}, known catalog-gap field, not hard-failed)",
-                ours_llc - true_life_leech_count
+                "{key}: golden lifeLeechDamageTakenCount={buggy_life_leech_count} != 0 -- GW2EI may \
+                 have FIXED its double-increment bug; the life_leech derivation above needs revisiting"
             ));
         }
     }
 
     if joined == 0 {
         println!(
-            "skip: 0 accounts joined between {LOCAL_POSTREWORK_ZEVTC} and {LOCAL_POSTREWORK_EI_JSON} \
+            "skip: 0 accounts joined between {postrework_zevtc} and {postrework_ei_json} \
              (post-era defenses real calibration) -- account-string mismatch, or the export has no \
              `defenses[0]` block for any joined player"
         );

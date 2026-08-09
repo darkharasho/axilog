@@ -367,9 +367,13 @@ fn ei_json_rotation_cast_counts_match_the_golden() {
 /// on the count (real EI's own `lifeLeechDamageTakenCount` is a verified-buggy
 /// always-0 -- see `axilog_core::analysis::defenses`'s module doc and this
 /// crate's `to_ei_json` doc comment on the `defenses` block) -- this test
-/// asserts OUR emitted count against the algebraically derived TRUE
-/// reference (`powerDamageTakenCount - strikeDamageTakenCount`) instead,
-/// same derivation `defenses_golden.rs` already established.
+/// asserts OUR emitted values against a derived TRUE reference instead:
+/// primarily the fourth-bucket-immune bug identity
+/// (`ours lifeLeechDamageTaken + ours lifeLeechDamageTakenCount ==
+/// golden's double-incremented lifeLeechDamageTaken`), with the older
+/// `powerDamageTakenCount - strikeDamageTakenCount` derivation retained as
+/// a cross-check that this committed fixture is still fourth-bucket-free
+/// (MCONDCAT Task 1 -- see `axilog_core::analysis::condition_catalog`).
 #[test]
 fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
     use axilog_core::evtc::anon_account;
@@ -489,21 +493,48 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
             }
 
             // `lifeLeechDamageTaken(Count)`: intentional divergence -- see
-            // this test's module doc. Golden's raw `lifeLeechDamageTakenCount`
-            // is a known-buggy always-0; derive the TRUE reference from
-            // `powerDamageTakenCount - strikeDamageTakenCount` instead
-            // (unaffected by the bug, same derivation `defenses_golden.rs`
-            // already established), and assert OUR emitted count against
-            // THAT, not the raw fixture field.
+            // this test's module doc. Golden's raw
+            // `lifeLeechDamageTakenCount` is a known-buggy always-0, so the
+            // reference has to be derived.
+            //
+            // **MCONDCAT Task 1 changed the derivation.** It used to be
+            // `powerDamageTakenCount - strikeDamageTakenCount`, which is
+            // `life_leech + FOURTH BUCKET` (buff==1 hits outside GW2EI's
+            // condition catalog and not life-leech -- see
+            // `axilog_core::analysis::condition_catalog`), not life-leech
+            // alone. That difference happens to be 0 on THIS committed
+            // pre-rework fixture, but it is emphatically not 0 in general
+            // (33 of 48 players on the local post-rework capture), so the
+            // old derivation was correct here only by accident. Use the
+            // fourth-bucket-immune identity instead: GW2EI's ctor
+            // increments the SUM field twice per life-leech hit (the second
+            // increment being the copy-paste bug that should have been
+            // `LifeLeechDamageTakenCount++`), so the reported sum is
+            // exactly `[true sum] + [true count]`.
+            let buggy_life_leech_sum = de["lifeLeechDamageTaken"].as_i64().unwrap_or(0);
+            let our_llc = our_defenses["lifeLeechDamageTakenCount"].as_i64().unwrap_or(-1);
+            let our_lld = our_defenses["lifeLeechDamageTaken"].as_i64().unwrap_or(-1);
+            if our_lld + our_llc != buggy_life_leech_sum {
+                mismatches.push(format!(
+                    "{key} defenses[0] life-leech: ours lifeLeechDamageTaken({our_lld}) + \
+                     lifeLeechDamageTakenCount({our_llc}) = {}, golden's raw (double-incremented) \
+                     lifeLeechDamageTaken={buggy_life_leech_sum}",
+                    our_lld + our_llc
+                ));
+            }
+            // Retain the OLD derivation as a cross-check, valid precisely
+            // because this fixture is fourth-bucket-free (asserted below).
             let power_count = de["powerDamageTakenCount"].as_i64().unwrap_or(0);
             let strike_count = de["strikeDamageTakenCount"].as_i64().unwrap_or(0);
             let true_life_leech_count = (power_count - strike_count).max(0);
-            let our_llc = our_defenses["lifeLeechDamageTakenCount"].as_i64().unwrap_or(-1);
             if our_llc != true_life_leech_count {
                 mismatches.push(format!(
                     "{key} defenses[0].lifeLeechDamageTakenCount: ours={our_llc} \
-                     derived_true={true_life_leech_count} (NOT golden's raw buggy \
-                     lifeLeechDamageTakenCount={})",
+                     derived_true={true_life_leech_count} -- on THIS fixture the fourth bucket is \
+                     empty, so `powerDamageTakenCount - strikeDamageTakenCount` must still agree \
+                     with the bug-identity derivation above; a mismatch means the committed \
+                     fixture has grown fourth-bucket rows and its golden numbers need review \
+                     (NOT golden's raw buggy lifeLeechDamageTakenCount={})",
                     de["lifeLeechDamageTakenCount"].as_i64().unwrap_or(0)
                 ));
             }
