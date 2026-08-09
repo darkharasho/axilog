@@ -748,19 +748,33 @@ pub fn to_ei_json(
         });
         if e.is_player {
             if let Some(track) = enemy_track.as_mut().and_then(|it| it.next()) {
-                t.as_object_mut().expect("target is a JSON object").insert(
-                    "combatReplayData".to_string(),
-                    json!({
-                        "start": track.start,
-                        "end": track.end,
-                        "iconURL": axilog_core::icons::UNKNOWN_PROFESSION_ICON,
-                        "positions": ei_positions_json(&track.positions),
-                        "orientations": ei_orientations_json(&track.orientations),
-                        "dead": ei_intervals_json(&track.dead),
-                        "down": ei_intervals_json(&track.down),
-                        "dc": ei_intervals_json(&track.dc),
-                    }),
-                );
+                // Audit fix: an enemy player is `NonSquadPlayer`, not
+                // `AgentType.Player` (`WvWLogic.cs:327`,
+                // `axilog_core::analysis::ei_replay`'s `build_world_track`
+                // comment), so GW2EI's `forcePolling` never synthesizes a
+                // sentinel point for one -- an enemy with zero raw position
+                // events polls to a genuinely EMPTY track. GW2EI's own
+                // `HasCombatReplayPositions` (`CombatReplay.cs:192-195`)
+                // gates the WHOLE `combatReplayData` object on that: an
+                // actor with no polled positions is dropped from the
+                // replay entirely, not exported with an empty `positions`
+                // array. Match that here rather than emitting a
+                // `combatReplayData` object no position data backs.
+                if !track.positions.is_empty() {
+                    t.as_object_mut().expect("target is a JSON object").insert(
+                        "combatReplayData".to_string(),
+                        json!({
+                            "start": track.start,
+                            "end": track.end,
+                            "iconURL": axilog_core::icons::UNKNOWN_PROFESSION_ICON,
+                            "positions": ei_positions_json(&track.positions),
+                            "orientations": ei_orientations_json(&track.orientations),
+                            "dead": ei_intervals_json(&track.dead),
+                            "down": ei_intervals_json(&track.down),
+                            "dc": ei_intervals_json(&track.dc),
+                        }),
+                    );
+                }
             }
         }
         t
@@ -1549,6 +1563,48 @@ mod tests {
         );
         let npc = v["targets"].as_array().unwrap().iter().find(|t| t["enemyPlayer"] == false).unwrap();
         assert!(npc.get("combatReplayData").is_none());
+    }
+
+    /// Audit fix: an enemy-player track with an EMPTY `positions` list (the
+    /// `NonSquadPlayer`/no-`forcePolling` case -- see
+    /// `axilog_core::analysis::ei_replay::build_world_track`'s doc comment)
+    /// must omit `combatReplayData` from that target entirely, mirroring
+    /// GW2EI's own `HasCombatReplayPositions` gate
+    /// (`CombatReplay.cs:192-195`), rather than emitting a
+    /// `combatReplayData` object with an empty `positions` array. A squad
+    /// player's `combatReplayData` stays always-on regardless (M11's
+    /// unconditional four fields; this gate is target-only).
+    #[test]
+    fn enemy_target_with_no_polled_positions_omits_combat_replay_data() {
+        use axilog_core::analysis::ei_replay::{EiReplay, EiTrack};
+        let report = sample_report();
+        let squad_track = |name: &str| EiTrack {
+            agent_addr: 1, name: name.to_string(), is_squad: true, start: 0, end: 600,
+            positions: vec![[1.5, 2.5]], orientations: vec![90.0], dc: vec![], down: vec![], dead: vec![],
+        };
+        // `sample_report()` has 2 players and 1 enemy PLAYER (id 9); the
+        // enemy's own track has NO polled positions at all.
+        let replay = EiReplay {
+            tracks: vec![
+                squad_track("A"),
+                squad_track("B"),
+                EiTrack {
+                    agent_addr: 9, name: "Foe".into(), is_squad: false, start: 0, end: 600,
+                    positions: vec![], orientations: vec![],
+                    dc: vec![[i64::MIN, 0], [600, i64::MAX]], down: vec![], dead: vec![],
+                },
+            ],
+            map_id: Some(38),
+            meta: None,
+        };
+        let v = to_ei_json(&report, &[], Some(&replay));
+        let enemy = v["targets"].as_array().unwrap().iter().find(|t| t["enemyPlayer"] == true).unwrap();
+        assert!(
+            enemy.get("combatReplayData").is_none(),
+            "an enemy with no polled positions must not carry a combatReplayData object"
+        );
+        // Squad players are unaffected by this gate.
+        assert!(v["players"][0]["combatReplayData"]["positions"].as_array().is_some());
     }
 
     /// M15 Task 3: a track list that does not line up with the report's own

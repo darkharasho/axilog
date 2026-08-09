@@ -1063,10 +1063,15 @@ fn build_world_track(
     let cr_segments = player_cr_trim_segments(&status);
     let (start, end) = trim_bounds(&cr_segments, first_aware, last_aware, log_duration);
 
-    // `AgentItem.Type == Player` for every roster entry here (squad players
-    // and enemy-player representatives alike), so GW2EI's `forcePolling` is
-    // unconditionally `true` on this path.
-    let (polled_pos, polled_rot) = poll(&positions, &velocities, &rotations, log_duration, true, EI_POLL_MS);
+    // GW2EI's `AgentItem.AgentType` distinguishes `Player` from
+    // `NonSquadPlayer` (`AgentItem.cs:45`); `SingleActor.cs:415` passes
+    // `forcePolling = AgentItem.Type == AgentItem.AgentType.Player` (NOT
+    // `IsPlayer`, which both share), and WvW enemy players are tagged
+    // `NonSquadPlayer` (`WvWLogic.cs:327`). So GW2EI only forces a sentinel
+    // for SQUAD players; an enemy-player representative with zero raw
+    // position events gets `forcePolling = false` and an empty polled
+    // track instead.
+    let (polled_pos, polled_rot) = poll(&positions, &velocities, &rotations, log_duration, is_squad, EI_POLL_MS);
 
     let keep = |p: &&Point3| p.t >= start && p.t <= end;
     WorldTrack {
@@ -1367,6 +1372,29 @@ fn poll(
     let rot_start_offset = if do_rotation { 0.min(rate * ((rotations[0].t / rate) - 1)) } else { 0 };
     let start_offset = pos_start_offset.min(rot_start_offset);
 
+    // Deliberate, documented divergence from a real GW2EI bug (audit
+    // follow-up, not reproduced here): `CombatReplay.cs:210` allocates its
+    // backing array at capacity `(logDuration - startOffset) / rate + 1`,
+    // but the polling loop (`:216`-`:224`, the same `t < logDuration` bound
+    // used below) only ever fills `cap - 1` of those slots whenever
+    // `logDuration % rate == 0` -- the loop's own upper bound excludes the
+    // exact-multiple endpoint, so the final pre-sized array slot is never
+    // written and keeps its C# default `(0, 0, 0)` `Vector3`. For an actor
+    // whose `first_aware == 0`, that stray zeroed sample can survive
+    // `CombatReplay`'s own `Trim` (`:72`-`:74` only clamps by INDEX
+    // position, not by re-validating each kept sample's value), and can
+    // even push the visibly-exported track's last real timestamp past the
+    // actor's own `end` -- a genuinely wrong `(0, 0, 0)`-at-`t=0` point
+    // riding along with the real polled data.
+    //
+    // `cap` here is sized identically for parity with GW2EI's formula (kept
+    // as a capacity hint only -- Rust's `Vec` never exposes uninitialized
+    // slots the way a pre-sized C# array does), but the `while t <
+    // log_duration` loop below pushes exactly one `Point3` per iteration,
+    // so `polled_pos`/`polled_rot` end up with precisely `cap` (or `cap -
+    // 1` when `log_duration % rate == 0`, matching GW2EI's own fill count)
+    // REAL samples and never a leftover default point. No `(0, 0, 0)`
+    // sample is ever emitted, and no track's samples ever run past `end`.
     let cap = ((log_duration - start_offset) / rate + 1).max(0) as usize;
     let mut polled_pos: Vec<Point3> = Vec::with_capacity(cap);
     let mut polled_rot: Vec<Point3> = Vec::with_capacity(if do_rotation { cap } else { 0 });
@@ -1907,6 +1935,30 @@ mod tests {
         assert!(pp.iter().all(|q| q.x.is_finite() && q.y.is_finite()), "{pp:?}");
     }
 
+    /// Deliberate, documented divergence from a real GW2EI bug (see `poll`'s
+    /// doc comment above `cap`): when `logDuration % rate == 0`
+    /// (`CombatReplay.cs:210`/`:216`/`:224`), GW2EI's own pre-sized backing
+    /// array leaves its last, never-written slot at the C# default `(0, 0,
+    /// 0)`, and that stray sample can survive `Trim` (`:72`-`:74`) for an
+    /// actor whose `first_aware == 0`. axilog's `Vec`-based loop has no such
+    /// pre-sized slot to leave stale, so it must never emit that spurious
+    /// point, and no sample may run past the loop's own `t < log_duration`
+    /// bound either.
+    #[test]
+    fn log_duration_multiple_of_the_poll_rate_leaves_no_spurious_zero_sample() {
+        let pos = [p(0, 5.0, 5.0), p(600, 9.0, 9.0)];
+        let (pp, _) = poll(&pos, &[], &[], 900, true, 300); // 900 % 300 == 0
+        // Grid starts one poll rate before the first sample (`start_offset`,
+        // same convention as `empty_position_track_yields_the_force_polling_
+        // sentinel`); t=900 is excluded by `t < log_duration`.
+        assert_eq!(pp.iter().map(|q| q.t).collect::<Vec<_>>(), vec![-300, 0, 300, 600]);
+        assert!(pp.iter().all(|q| q.t < 900), "no sample may run past log_duration: {pp:?}");
+        assert!(
+            !pp.iter().any(|q| q.x == 0.0 && q.y == 0.0 && q.z == 0.0),
+            "no default (0,0,0) sample may survive: {pp:?}"
+        );
+    }
+
     // -- dc / down / dead bracketing --
 
     /// The reference export's universal shape: no status events at all ->
@@ -2388,9 +2440,15 @@ mod tests {
         assert!(tracks[0].positions.iter().all(|q| *q == first), "{:?}", tracks[0].positions);
     }
 
-    /// A player with NO position events still gets a full-length track
-    /// (GW2EI's `forcePolling` sentinel) rather than being dropped -- and
-    /// nothing NaNs out on the way through the map transform.
+    /// A SQUAD player with NO position events still gets a full-length track
+    /// (GW2EI's `forcePolling` sentinel, since `AgentItem.Type ==
+    /// AgentType.Player` for squad members -- `SingleActor.cs:415`) rather
+    /// than being dropped -- and nothing NaNs out on the way through the map
+    /// transform. This sentinel is load-bearing beyond just "not dropped":
+    /// it also feeds `bounding_box_transform` (see
+    /// `auto_replay_falls_back_to_the_bounding_box_without_metadata`), which
+    /// only works because a squad player with zero raw positions still
+    /// produces a (degenerate, off-map) polled point to bound.
     #[test]
     fn player_without_position_events_still_gets_a_track() {
         let enc = enc_with(vec![player(1, "Ghost")], vec![], 900);
@@ -2398,12 +2456,78 @@ mod tests {
             state_event(0, 1, sc::CHANGE_UP),
             state_event(800, 1, sc::CHANGE_DOWN),
         ]);
+        // Pre-transform: the world track carries GW2EI's raw
+        // `(int.MinValue, int.MinValue)` sentinel verbatim.
+        let world = build_world_tracks(&raw, &enc);
+        assert_eq!(world.len(), 1);
+        assert!(world[0].is_squad);
+        assert!(
+            world[0].positions.iter().all(|q| q.x == i32::MIN as f32 && q.y == i32::MIN as f32),
+            "{:?}",
+            world[0].positions
+        );
+
         let map = MapTransform::for_map_id(96).unwrap();
         let tracks = build_ei_replay(&raw, &enc, &map);
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].positions.len(), 3, "grid 0, 300, 600 within [0, 800]");
         assert!(tracks[0].positions.iter().all(|q| q[0].is_finite() && q[1].is_finite()));
         assert!(tracks[0].orientations.is_empty(), "no facing events -> no orientations");
+    }
+
+    /// REGRESSION (audit fix): an ENEMY player -- GW2EI's `NonSquadPlayer`
+    /// (`WvWLogic.cs:327`), not `AgentType.Player` -- with zero raw position
+    /// events must NOT get the `forcePolling` sentinel: `SingleActor.cs:415`
+    /// passes `forcePolling = AgentItem.Type == AgentType.Player`, which is
+    /// `false` for `NonSquadPlayer`. Facing events alone (no positions) must
+    /// not synthesize a track either -- `poll` returns empty for both lists
+    /// the moment the position list is empty and `force` is `false`. Pins
+    /// the pre-fix bug (which passed `force = true` unconditionally for
+    /// every roster entry, squad and enemy alike) as the explicit wrong
+    /// answer: before this fix, this track would have carried 4 sentinel
+    /// points at `(int.MinValue, int.MinValue)`.
+    #[test]
+    fn enemy_player_without_position_events_gets_no_sentinel_track() {
+        let enc = enc_with(
+            vec![],
+            vec![Enemy {
+                id: 9, instid: 0, name: "Foe".into(), team: "blue".into(),
+                is_player: true, marker: None, agent_addrs: vec![9],
+            }],
+            900,
+        );
+        let raw = raw_from(vec![
+            // Facing events present, but NO position events at all.
+            mov_event(0, 9, sc::FACING, 1.0, 0.0, 0.0),
+            mov_event(600, 9, sc::FACING, 0.0, 1.0, 0.0),
+        ]);
+
+        let world = build_world_tracks(&raw, &enc);
+        assert_eq!(world.len(), 1);
+        assert!(!world[0].is_squad);
+        assert!(
+            world[0].positions.is_empty(),
+            "no forcePolling sentinel for a NonSquadPlayer enemy: {:?}",
+            world[0].positions
+        );
+        assert!(
+            world[0].rotations.is_empty(),
+            "GW2EI's PollingRate returns before polling rotations too, once positions is empty and force is false"
+        );
+
+        // Same, through the full EI-JSON-shaped pipeline.
+        let map = MapTransform::for_map_id(96).unwrap();
+        let tracks = build_ei_replay(&raw, &enc, &map);
+        assert_eq!(tracks.len(), 1);
+        assert!(tracks[0].positions.is_empty());
+        assert!(tracks[0].orientations.is_empty());
+        assert!(
+            !tracks[0]
+                .positions
+                .iter()
+                .any(|q| q[0] < -1.0e9 || q[1] < -1.0e9 || q[0] > 1.0e9 || q[1] > 1.0e9),
+            "no far-off-map sentinel coordinates should ever surface here"
+        );
     }
 
     /// REGRESSION, end to end: a player who goes down at t=600 and is never
