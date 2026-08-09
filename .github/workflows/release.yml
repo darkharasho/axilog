@@ -29,6 +29,9 @@ on:
 
 permissions:
   contents: write
+  # Required by the release job's "Dispatch PyPI publish" step
+  # (`gh workflow run pypl-publish.yml`).
+  actions: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -561,7 +564,11 @@ jobs:
               continue
             fi
             echo "Publishing $tgz ($name_ver)"
-            npm publish "$tgz" --access public
+            # The ./ prefix is load-bearing: a bare "tarballs/x.tgz"
+            # argument contains one slash, so npm parses it as a GitHub
+            # owner/repo shorthand and dies with a git error instead of
+            # publishing the file (bit for real on v0.1.1).
+            npm publish "./$tgz" --access public
           done
 
       - name: Skip npm publish (NPM_TOKEN not set)
@@ -612,3 +619,15 @@ jobs:
           gh release create "${{ github.ref_name }}" release/* \
             --title "${{ github.ref_name }}" \
             --generate-notes
+
+      # Explicitly dispatch the PyPI trusted-publishing workflow. The
+      # `release: published` trigger in pypl-publish.yml does NOT fire for
+      # a release created with this job's GITHUB_TOKEN (GitHub suppresses
+      # workflow-triggering events from workflow tokens to prevent
+      # recursion), but the workflow_dispatch API is exempt -- so this is
+      # the hop that actually reaches PyPI on an automated release. (The
+      # `release` trigger still covers releases published by hand.)
+      - name: Dispatch PyPI publish (pypl-publish.yml)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pypl-publish.yml --ref "${{ github.ref_name }}" -f tag="${{ github.ref_name }}"
