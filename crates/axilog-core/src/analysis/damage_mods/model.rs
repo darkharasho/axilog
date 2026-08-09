@@ -278,6 +278,13 @@ pub enum Trigger {
         tracker: BuffTracker,
         /// `UsingActorCheckerByPresence`/`ByAbsence` (`:27-51`).
         actor_check: Option<ActorBuffCheck>,
+        /// `WithBuffOnFoeFromActor()` (`BuffOnFoeDamageModifier.cs:53`) --
+        /// the mirror of [`Trigger::BuffOnActor::from_foe`]: only count the
+        /// buff on the foe when THIS actor applied it. Real (e.g.
+        /// `SpellbreakerHelper.cs:57,60`, `AntiquaryHelper.cs:56`) and, for
+        /// the same reason as `from_foe`, not modelled -- a definition
+        /// setting it is rejected by the engine.
+        from_actor: bool,
     },
     /// `SkillDamageModifier` (`SkillDamageModifier.cs:32-57`): qualifies iff
     /// `dl.SkillID == id`, with a hardcoded gain of `1.0` (so `damageGain`
@@ -399,6 +406,30 @@ pub struct DamageModifierDef {
     /// `hitCount / totalHitCount`. Also forces `Multiplier == true`
     /// (`DamageModifierDescriptor.cs:21`).
     pub is_counter: bool,
+    /// `.UsingActorFetchIsAlwaysMaster()`
+    /// (`DamageModifierDescriptor.cs:101-105`): `GetActor` then returns
+    /// `evt.From.GetFinalMaster()` (`OutgoingDamageModifier.cs:176-179`), so
+    /// a MINION's hit reads the MASTER's buff state rather than the
+    /// minion's own. Real and WvW-relevant: `ChronomancerHelper.cs:48,53,58`
+    /// (`Mod_DangerTime` is `SPvPWvW` mode), `MesmerHelper.cs:220`.
+    pub actor_always_master: bool,
+    /// `.UsingFoeFetchIsAlwaysMaster()`
+    /// (`DamageModifierDescriptor.cs:107-111`): the mirror, `GetFoe` returns
+    /// `evt.To.GetFinalMaster()` (`OutgoingDamageModifier.cs:171-174`).
+    pub foe_always_master: bool,
+    /// `.UsingHitAndAbsorbedDamageEvents()`
+    /// (`DamageModifierDescriptor.cs:94-99`): widens the eligible pool to
+    /// include ABSORBED hits (`Actor.cs:233`), installs an implicit
+    /// `dl.IsAbsorbed` checker, and forces `GetTotalDamage` to return `0`
+    /// (`OutgoingDamageModifier.cs:20-23`). Five real call sites
+    /// (`MesmerHelper.cs:243,246`, `GuardianHelper.cs:194`,
+    /// `ElementalistHelper.cs:230,233`).
+    ///
+    /// **Not modelled**: this project has no absorbed-hit classification
+    /// (`hit_stats::classify` returns `None` for every absorbed row, and
+    /// nothing has ever calibrated one). A definition setting this is
+    /// REJECTED by the engine rather than evaluated over the wrong pool.
+    pub with_absorbed_damage_events: bool,
     /// `.WithBuilds(min, max)` (`:74`) -- a HALF-OPEN `[min, max)` GW2 build
     /// interval (`Available`, `:138-150`). This is the "era" mechanism: a
     /// reworked trait becomes two definitions with different ids and
@@ -448,6 +479,72 @@ impl DamageModifierDef {
     /// prefix): `DamageModifier.cs:26`.
     pub fn json_id(&self) -> i32 {
         if self.incoming() { -self.id } else { self.id }
+    }
+
+    /// Catalog-time sanity check for combinations GW2EI itself cannot
+    /// produce -- a transcription guard for Task 2's hand-written table.
+    /// `Err` carries a human-readable reason.
+    ///
+    /// Checked:
+    /// - `id > 0` and `gain_per_stack != 0.0`: GW2EI's ctor THROWS on both
+    ///   (`DamageModifierDescriptor.cs:51`, `:60-63`).
+    /// - [`Trigger::Hit`] must pair with [`GainComputer::ByPresence`]:
+    ///   `DamageLogDamageModifier`'s ctor hardcodes it (`:10`), so no other
+    ///   computer can occur on that shape.
+    /// - [`Trigger::Skill`] must pair with [`GainComputer::BySkill`]:
+    ///   `SkillDamageModifier`'s ctor hardcodes ITS private computer
+    ///   (`SkillDamageModifier.cs:32-45`), and that pairing is the sole
+    ///   source of `nonMultiplier` in the whole JSON surface.
+    /// - a non-`multi` [`BuffTracker`] carries exactly one id
+    ///   (`BuffsTrackerSingle.cs:12-15` reads a single `_id`).
+    /// - build windows are non-empty.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id <= 0 {
+            return Err(format!("{}: id must be strictly positive", self.name));
+        }
+        if self.gain_per_stack == 0.0 {
+            return Err(format!("{}: gain_per_stack must not be 0 (GW2EI throws)", self.name));
+        }
+        if matches!(self.trigger, Trigger::Hit) && self.gain != GainComputer::ByPresence {
+            return Err(format!(
+                "{}: Trigger::Hit hardcodes GainComputer::ByPresence in GW2EI, got {:?}",
+                self.name, self.gain
+            ));
+        }
+        if matches!(self.trigger, Trigger::Skill(_)) != self.gain.is_skill_based() {
+            return Err(format!(
+                "{}: Trigger::Skill and GainComputer::BySkill must be used together",
+                self.name
+            ));
+        }
+        for t in self.trackers() {
+            if !t.multi && t.ids.len() != 1 {
+                return Err(format!(
+                    "{}: a single (non-multi) BuffTracker must carry exactly one id, got {}",
+                    self.name,
+                    t.ids.len()
+                ));
+            }
+            if t.ids.is_empty() {
+                return Err(format!("{}: BuffTracker must not be empty", self.name));
+            }
+        }
+        if self.min_gw2_build >= self.max_gw2_build || self.min_evtc_build >= self.max_evtc_build {
+            return Err(format!("{}: empty build window", self.name));
+        }
+        Ok(())
+    }
+
+    /// Every [`BuffTracker`] this definition consults (0, 1 or 2).
+    pub fn trackers(&self) -> Vec<&BuffTracker> {
+        match &self.trigger {
+            Trigger::Hit | Trigger::Skill(_) => Vec::new(),
+            Trigger::BuffOnActor { tracker, .. } => vec![tracker],
+            Trigger::BuffOnFoe { tracker, actor_check, .. } => match actor_check {
+                Some(c) => vec![tracker, &c.tracker],
+                None => vec![tracker],
+            },
+        }
     }
 
     /// `DamageModifierDescriptor.Available` (`:138-150`): both build

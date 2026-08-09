@@ -59,11 +59,28 @@ pub static MOVING_BONUS: DamageModifierDef = DamageModifierDef {
     mode: ModifierMode::All,
     approximate: false,
     is_counter: false,
+    actor_always_master: false,
+    foe_always_master: false,
+    with_absorbed_damage_events: false,
     min_gw2_build: START_OF_LIFE,
     max_gw2_build: END_OF_LIFE,
     min_evtc_build: EVTC_START_OF_LIFE,
     max_evtc_build: EVTC_END_OF_LIFE,
 };
+
+/// Assert every catalog entry is a combination GW2EI itself could produce
+/// (`DamageModifierDef::validate`) -- the transcription guard for Task 2's
+/// hand-written table.
+#[cfg(test)]
+#[test]
+fn catalog_definitions_are_valid() {
+    let mut ids = std::collections::BTreeSet::new();
+    for d in CATALOG {
+        d.validate().unwrap_or_else(|e| panic!("{e}"));
+        assert!(ids.insert(d.json_id()), "duplicate damage-modifier id {}", d.json_id());
+    }
+    assert!(!CATALOG.is_empty());
+}
 
 /// Every definition this project currently knows about (Task 1: one).
 ///

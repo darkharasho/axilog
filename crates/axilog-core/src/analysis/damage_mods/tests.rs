@@ -159,6 +159,9 @@ fn def_template() -> DamageModifierDef {
         mode: model::ModifierMode::All,
         approximate: false,
         is_counter: false,
+        actor_always_master: false,
+        foe_always_master: false,
+        with_absorbed_damage_events: false,
         min_gw2_build: model::START_OF_LIFE,
         max_gw2_build: model::END_OF_LIFE,
         min_evtc_build: model::EVTC_START_OF_LIFE,
@@ -554,6 +557,7 @@ fn buff_on_foe_modifiers_are_dropped_in_wvw() {
         trigger: Trigger::BuffOnFoe {
             tracker: model::BuffTracker { ids: &VULN, multi: false, intensity: true },
             actor_check: None,
+            from_actor: false,
         },
         ..def_template()
     };
@@ -739,6 +743,181 @@ fn zero_dst_addr_with_no_known_instid_is_still_dropped() {
     let stat = out[&(1, 9001)];
     assert_eq!(stat.total_hit_count, 1);
     assert_eq!(stat.total_damage, 1000);
+}
+
+/// `.UsingActorFetchIsAlwaysMaster()`
+/// (`DamageModifierDescriptor.cs:101-105` -> `GetActor` returns
+/// `evt.From.GetFinalMaster()`, `OutgoingDamageModifier.cs:176-179`): a
+/// MINION's hit must read the MASTER's buff state, not the minion's own.
+/// Real and WvW-relevant (`ChronomancerHelper.cs:53`, `Mod_DangerTime`, is
+/// `SPvPWvW` mode).
+#[test]
+fn actor_always_master_reads_the_owners_buff_state_for_a_minion_hit() {
+    static MIGHT: [u32; 1] = [crate::analysis::buffs::MIGHT];
+    let base = DamageModifierDef {
+        gain_per_stack: 10.0,
+        gain: GainComputer::ByPresence,
+        dmg_src: DamageSource::All,
+        trigger: Trigger::BuffOnActor {
+            tracker: model::BuffTracker { ids: &MIGHT, multi: false, intensity: true },
+            from_foe: false,
+        },
+        ..def_template()
+    };
+    // Might is on the PLAYER (addr 1); the minion (addr 77, master instid 1)
+    // has none of its own.
+    let events = vec![
+        buff_apply(50, 1, 1, crate::analysis::buffs::MIGHT, 8_000),
+        RawEvent { src_master_instid: 1, ..strike(200, 77, 9, 1000) },
+    ];
+
+    // Default: the minion's own (empty) timeline -> no qualifying hit.
+    assert!(
+        run(events.clone(), PRE_ERA_BUILD, &base).is_empty(),
+        "without the flag the minion's own buff state is read, and it has none"
+    );
+
+    // With the flag: the master's timeline -> the hit qualifies.
+    let master = DamageModifierDef { actor_always_master: true, ..base };
+    let stat = run(events, PRE_ERA_BUILD, &master)[&(1, 9001)];
+    assert_eq!(stat.hit_count, 1);
+    assert!(approx(stat.damage_gain, super::round_to_3(1000.0 * 10.0 / 110.0)));
+}
+
+/// The `GetFoe` mirror (`.UsingFoeFetchIsAlwaysMaster()`,
+/// `OutgoingDamageModifier.cs:171-174`) -- only reachable in a non-PvP mode,
+/// since foe-buff modifiers are dropped in WvW, so this checks the key
+/// selection directly.
+#[test]
+fn foe_always_master_selects_the_targets_owner_key() {
+    let base = def_template();
+    let hit = Hit {
+        ev: &strike(0, 1, 9, 1),
+        actor: 1,
+        actor_buff_key: 77,
+        actor_master_buff_key: 1,
+        foe_buff_key: 88,
+        foe_master_buff_key: 9,
+        from_minion: true,
+        incoming: false,
+        dmg: 1,
+        is_strike: true,
+        is_condition: false,
+        is_life_leech: false,
+        is_crit: false,
+        is_glance: false,
+        is_src_moving: false,
+        is_against_moving: false,
+        is_over_ninety: false,
+        is_against_downed: false,
+    };
+    assert_eq!(hit.actor_key(&base), 77);
+    assert_eq!(hit.foe_key(&base), 88);
+    let master = DamageModifierDef {
+        actor_always_master: true,
+        foe_always_master: true,
+        ..base
+    };
+    assert_eq!(hit.actor_key(&master), 1);
+    assert_eq!(hit.foe_key(&master), 9);
+}
+
+/// `UsingHitAndAbsorbedDamageEvents` is not modelled (no absorbed-hit
+/// classification exists in this project), so such a definition is REJECTED
+/// rather than evaluated over the wrong pool.
+#[test]
+fn absorbed_damage_event_definitions_are_skipped_as_unsupported() {
+    let def = DamageModifierDef { with_absorbed_damage_events: true, ..def_template() };
+    assert!(run(vec![strike(100, 1, 9, 1000)], PRE_ERA_BUILD, &def).is_empty());
+}
+
+/// `WithBuffOnFoeFromActor` -- the mirror of `from_foe`, equally
+/// unsupported, and now expressible so it can be rejected.
+#[test]
+fn from_actor_foe_buff_definitions_are_skipped_as_unsupported() {
+    static VULN: [u32; 1] = [738];
+    let def = DamageModifierDef {
+        trigger: Trigger::BuffOnFoe {
+            tracker: model::BuffTracker { ids: &VULN, multi: false, intensity: true },
+            actor_check: None,
+            from_actor: true,
+        },
+        ..def_template()
+    };
+    // Rejected on its own merits, not merely by the WvW foe-buff drop.
+    assert!(!super::is_supported(&def));
+    assert!(run(vec![strike(100, 1, 9, 1000)], PRE_ERA_BUILD, &def).is_empty());
+}
+
+/// `DamageStatistics.ComputeDamageFrom` (`:65-96`): the aggregate buckets
+/// are an if/else chain, so a DIRECT hit whose skill is condition-catalogued
+/// lands in `strike`/`power` -- never in `condition` -- even though
+/// `FilterDamageEvents` would still treat it as eligible for a
+/// `Condition`-typed modifier. The two predicates differ in GW2EI, and the
+/// combined `compare_type` arms must not double-count.
+#[test]
+fn damage_buckets_are_mutually_exclusive_like_computedamagefrom() {
+    // Skill 736 (Bleeding) delivered as a DIRECT hit -- condition-catalogued
+    // but `buff == 0`.
+    let direct_condi_skill = RawEvent { skillid: 736, ..strike(100, 1, 9, 1000) };
+    let real_tick = condi_tick(200, 1, 9, 300);
+    let events = vec![direct_condi_skill, real_tick];
+
+    for (compare, expected) in [
+        (DamageType::All, 1300),
+        (DamageType::Strike, 1000),
+        (DamageType::Condition, 300),
+        (DamageType::Power, 1000),
+        // Sum of two mutually exclusive buckets -- no double count.
+        (DamageType::StrikeAndCondition, 1300),
+    ] {
+        let def = DamageModifierDef { compare_type: compare, ..def_template() };
+        let stat = run(events.clone(), POST_ERA_BUILD, &def)[&(1, 9001)];
+        assert_eq!(stat.total_damage, expected, "compare_type {compare:?}");
+    }
+}
+
+/// `validate()` rejects the combinations GW2EI's own ctors throw on.
+#[test]
+fn validate_rejects_gw2ei_impossible_definitions() {
+    assert!(def_template().validate().is_ok());
+
+    // `DamageModifierDescriptor.cs:60-63`
+    assert!(DamageModifierDef { gain_per_stack: 0.0, ..def_template() }.validate().is_err());
+    // `:51`
+    assert!(DamageModifierDef { id: 0, ..def_template() }.validate().is_err());
+    // `DamageLogDamageModifier.cs:10` hardcodes ByPresence.
+    assert!(DamageModifierDef { gain: GainComputer::ByStack, ..def_template() }.validate().is_err());
+    // Skill trigger and skill computer must come as a pair.
+    assert!(DamageModifierDef {
+        trigger: Trigger::Skill(1),
+        gain: GainComputer::ByPresence,
+        ..def_template()
+    }
+    .validate()
+    .is_err());
+    assert!(DamageModifierDef {
+        trigger: Trigger::Skill(1),
+        gain: GainComputer::BySkill,
+        ..def_template()
+    }
+    .validate()
+    .is_ok());
+    // `BuffsTrackerSingle` reads exactly one id.
+    static TWO: [u32; 2] = [740, 725];
+    assert!(DamageModifierDef {
+        trigger: Trigger::BuffOnActor {
+            tracker: model::BuffTracker { ids: &TWO, multi: false, intensity: true },
+            from_foe: false,
+        },
+        ..def_template()
+    }
+    .validate()
+    .is_err());
+    // Empty build window.
+    assert!(DamageModifierDef { min_gw2_build: 200, max_gw2_build: 100, ..def_template() }
+        .validate()
+        .is_err());
 }
 
 /// Determinism: the same input yields a bit-identical map, twice.

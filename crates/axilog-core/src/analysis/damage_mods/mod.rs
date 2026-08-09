@@ -57,11 +57,13 @@
 //!   modifier `gain_i == 1`, so `damage_gain` is raw "damage during".
 //! - **`total_damage`** -- the DENOMINATOR, from `GetTotalDamage`, filtered
 //!   by **`compare_type`** (NOT `src_type`; the two are routinely different)
-//!   and by `dmg_src`. Two GW2EI quirks are reproduced deliberately:
-//!   `WithAbsorbedDamageEvents` modifiers report `0`
-//!   (`OutgoingDamageModifier.cs:20-23`), and `PetsOnly` reports the
-//!   actor+minion total because GW2EI's minions-only subtraction is
-//!   commented out (`:35-36, 83-84`).
+//!   and by `dmg_src`. One GW2EI quirk is reproduced deliberately:
+//!   `PetsOnly` reports the actor+minion total, because GW2EI's
+//!   minions-only subtraction is commented out (`:35-36, 83-84`). Its
+//!   bucket construction mirrors `DamageStatistics.ComputeDamageFrom`
+//!   branch for branch -- see [`DamageSums::add`], which documents why
+//!   those buckets deliberately do NOT use the same predicates
+//!   `DamageType::keeps` does.
 //!
 //! An entry exists only when the modifier produced at least one qualifying
 //! hit: GW2EI's loop iterates the per-modifier event dictionary, so a
@@ -89,11 +91,30 @@
 //!   divergence on barrier-heavy targets.
 //! - **`WithBuffOnActorFromFoe` / `WithBuffOnFoeFromActor`.** GW2EI can ask
 //!   for "the stacks of B on A that were applied BY the foe"
-//!   (`BuffOnActorDamageModifier.cs:42`). This project's buff extraction
-//!   records the applier but has no per-applier stack simulation, so a
-//!   definition requesting it is REJECTED by [`evaluate`] (logged as
-//!   unsupported and skipped) rather than silently evaluated against
-//!   total stacks.
+//!   (`BuffOnActorDamageModifier.cs:42`) and its mirror
+//!   (`BuffOnFoeDamageModifier.cs:53`). Both are real -- `DeadeyeHelper.cs`
+//!   and `SoulbeastHelper.cs` for the first, `SpellbreakerHelper.cs:57,60`
+//!   and `AntiquaryHelper.cs:56` for the second. This project's buff
+//!   extraction records the applier but has no per-applier stack
+//!   simulation, so BOTH are expressible on the definition
+//!   ([`model::Trigger::BuffOnActor::from_foe`],
+//!   [`model::Trigger::BuffOnFoe::from_actor`]) purely so [`evaluate`] can
+//!   REJECT them, rather than silently evaluating against total stacks.
+//! - **`UsingHitAndAbsorbedDamageEvents`**
+//!   (`DamageModifierDescriptor.cs:94-99`) widens the eligible pool to
+//!   absorbed hits, installs an implicit `dl.IsAbsorbed` checker, and forces
+//!   `totalDamage` to `0` (`OutgoingDamageModifier.cs:20-23`). Five real
+//!   call sites (Mesmer/Guardian/Elementalist). NOT modelled -- nothing in
+//!   this project classifies an absorbed hit (`hit_stats::classify` returns
+//!   `None` for every one of them) -- so
+//!   [`model::DamageModifierDef::with_absorbed_damage_events`] exists only
+//!   to let [`evaluate`] reject such a definition.
+//! - **`GetFinalMaster()` depth.** `.UsingActorFetchIsAlwaysMaster()` /
+//!   `.UsingFoeFetchIsAlwaysMaster()` ARE modelled (see
+//!   [`Hit::actor_key`]/[`Hit::foe_key`]), routing the buff-state key
+//!   through the agent's owner. GW2EI walks the master chain to its top;
+//!   arcdps only ever reports one level of `*_master_instid`, so this
+//!   resolves as far as the wire allows.
 //! - **Early-exit checkers** (`_earlyExitCheckers`, ORed, abort the whole
 //!   modifier for an actor) and **gain adjusters** (`DamageGainAdjuster`,
 //!   e.g. the vulnerability adjuster) are not modelled; no definition needs
@@ -205,8 +226,14 @@ struct Hit<'a> {
     /// Buff-timeline key for the DEALING agent -- the minion's own addr for
     /// a minion hit, matching `log.FindActor(GetActor(evt))`.
     actor_buff_key: u64,
+    /// The same, but through `GetFinalMaster()` -- what
+    /// [`DamageModifierDef::actor_always_master`] selects.
+    actor_master_buff_key: u64,
     /// Buff-timeline key for the other party (`GetFoe`).
     foe_buff_key: u64,
+    /// `GetFoe` through `GetFinalMaster()` --
+    /// [`DamageModifierDef::foe_always_master`].
+    foe_master_buff_key: u64,
     /// True when the dealer is a minion rather than the player.
     from_minion: bool,
     incoming: bool,
@@ -222,37 +249,74 @@ struct Hit<'a> {
     is_against_downed: bool,
 }
 
+impl Hit<'_> {
+    /// `GetActor(evt)` (`OutgoingDamageModifier.cs:176-179`,
+    /// `IncomingDamageModifier.cs`): the dealing agent, or its final master
+    /// when the definition asked for `.UsingActorFetchIsAlwaysMaster()`.
+    fn actor_key(&self, def: &DamageModifierDef) -> u64 {
+        if def.actor_always_master { self.actor_master_buff_key } else { self.actor_buff_key }
+    }
+
+    /// `GetFoe(evt)` (`OutgoingDamageModifier.cs:171-174`).
+    fn foe_key(&self, def: &DamageModifierDef) -> u64 {
+        if def.foe_always_master { self.foe_master_buff_key } else { self.foe_buff_key }
+    }
+}
+
 /// Damage aggregates for one actor, in the shape
 /// `OutgoingDamageModifier.GetTotalDamage` switches over.
 #[derive(Debug, Clone, Copy, Default)]
 struct DamageSums {
     all: u64,
+    power: u64,
     strike: u64,
     condition: u64,
     life_leech: u64,
 }
 
 impl DamageSums {
+    /// `DamageStatistics.ComputeDamageFrom`
+    /// (`EIData/Statistics/DamageStatistics.cs:65-96`), branch for branch.
+    ///
+    /// **The buckets are NOT the same predicates `DamageType::keeps` uses,
+    /// and that asymmetry is GW2EI's, not a simplification here.**
+    /// `FilterDamageEvents` (`Actor.cs:446-479`) tests
+    /// `ConditionDamageBased` on its own, so a DIRECT hit whose skill is in
+    /// the condition catalog is eligible for a `Condition`-typed modifier;
+    /// the aggregate below only credits `conditionDamage` for NON-DIRECT
+    /// rows, putting that same hit in `strikeDamage`/`powerDamage`. Same for
+    /// life-leech, which the aggregate credits only inside the non-direct,
+    /// non-condition arm. Mirroring the C# exactly is the only way to keep
+    /// `totalDamage` matching.
     fn add(&mut self, h: &Hit<'_>) {
         self.all += h.dmg;
         if h.is_strike {
+            // `else` arm, `:91-95`: strike AND power.
             self.strike += h.dmg;
-        }
-        if h.is_condition {
+            self.power += h.dmg;
+        } else if h.is_condition {
+            // `:78-81`
             self.condition += h.dmg;
-        }
-        if h.is_life_leech {
-            self.life_leech += h.dmg;
+        } else {
+            // `:82-89`
+            self.power += h.dmg;
+            if h.is_life_leech {
+                self.life_leech += h.dmg;
+            }
         }
     }
 
-    /// `GetTotalDamage`'s `CompareType` switch. `Power` is
-    /// "everything that is not condition-based", mirroring
-    /// `damageData.PowerDamage`.
+    /// `GetTotalDamage`'s `CompareType` switch. The combined arms are plain
+    /// SUMS of two independently-accumulated aggregates -- exactly as GW2EI
+    /// writes them (e.g. `StrikeDamage + ConditionDamage`,
+    /// `OutgoingDamageModifier.cs:87-97`) -- so any hit that landed in both
+    /// buckets would be counted twice there too. With the bucket
+    /// construction above no hit ever can, since the arms are mutually
+    /// exclusive.
     fn by_type(&self, t: DamageType) -> u64 {
         match t {
             DamageType::All => self.all,
-            DamageType::Power => self.all.saturating_sub(self.condition),
+            DamageType::Power => self.power,
             DamageType::Strike => self.strike,
             DamageType::Condition => self.condition,
             DamageType::LifeLeech => self.life_leech,
@@ -309,6 +373,17 @@ pub fn evaluate(
         .filter(|d| d.available(gw2, evtc) && d.keep(modes.parse_mode, modes.skill_mode))
         .filter(|d| is_supported(d))
         .collect();
+    // Catalog-transcription guard (M16 Task 1 fix round 1): combinations
+    // GW2EI's own ctors reject can only arrive from a hand-written
+    // definition table, so fail loudly in debug rather than silently
+    // producing wrong numbers in release. `catalog.rs` is also validated by
+    // a unit test, which is the gate that actually runs in CI.
+    #[cfg(debug_assertions)]
+    for d in &active {
+        if let Err(e) = d.validate() {
+            debug_assert!(false, "invalid damage-modifier definition: {e}");
+        }
+    }
     if active.is_empty() {
         return BTreeMap::new();
     }
@@ -326,6 +401,12 @@ pub fn evaluate(
     let enemies: BTreeSet<u64> =
         enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
 
+    // Perf follow-up (deferred, M16 Task 1 review): with a one-definition
+    // catalog the inner `for def in &active` loop is trivial, but Task 2's
+    // full table makes it O(events x definitions). Pre-bucketing `active`
+    // by direction and `src_type` (and hoisting the `Trigger::Hit` constant
+    // gain) turns most of that scan into a slice index. Left until there is
+    // a real catalog to measure against.
     let scope = Scope {
         registry,
         states: BuffStates::build(raw, registry, &addr_to_rep, &wanted_buffs(&active)),
@@ -402,8 +483,12 @@ pub fn evaluate_catalog(
 /// Whether the engine models everything this definition asks for -- see the
 /// module doc's gap list.
 fn is_supported(def: &DamageModifierDef) -> bool {
+    if def.with_absorbed_damage_events {
+        return false;
+    }
     match def.trigger {
         Trigger::BuffOnActor { from_foe, .. } => !from_foe,
+        Trigger::BuffOnFoe { from_actor, .. } => !from_actor,
         _ => true,
     }
 }
@@ -424,7 +509,7 @@ fn wanted_buffs(active: &[&DamageModifierDef]) -> BTreeMap<u32, bool> {
     for d in active {
         match &d.trigger {
             Trigger::BuffOnActor { tracker, .. } => add(tracker),
-            Trigger::BuffOnFoe { tracker, actor_check } => {
+            Trigger::BuffOnFoe { tracker, actor_check, .. } => {
                 add(tracker);
                 if let Some(c) = actor_check {
                     add(&c.tracker);
@@ -484,36 +569,60 @@ fn classify_hit<'a>(ev: &'a RawEvent, scope: &Scope<'_>) -> Option<Hit<'a>> {
     let dst_agent = resolve_zero_addr(ev.dst_agent, ev.dst_instid, ev.time, addr_index);
     let src_in_squad = squad.contains(&src_agent);
     let dst_in_squad = squad.contains(&dst_agent);
-    let (actor, actor_buff_key, foe_buff_key, from_minion, incoming) = if src_in_squad
-        && enemies.contains(&dst_agent)
-    {
-        let rep = addr_to_rep[&src_agent];
-        (rep, rep, states.actor_key(dst_agent), false, false)
-    } else if !src_in_squad && enemies.contains(&dst_agent) {
-        // A friendly pet/minion: resolve its owner through the same
-        // time-aware `src_master_instid` lookup `damage::pet_credit_events`
-        // uses. (Unlike that function this does not additionally team-gate
-        // the source, because the destination is already constrained to the
-        // resolved enemy set.)
-        let owner = registry.resolve_at(ev.src_master_instid, ev.time)?;
-        if !squad.contains(&owner) {
-            return None;
+    // `AgentItem.GetFinalMaster()` stand-in: an agent's owner, via the same
+    // time-aware master-instid resolution the pet-credit path uses. GW2EI
+    // walks the master chain to its top; arcdps only ever reports one level
+    // of `*_master_instid`, so this resolves the whole chain it can see.
+    let final_master = |addr: u64, master_instid: u16| -> u64 {
+        if master_instid == 0 {
+            return states.actor_key(addr);
         }
-        let rep = addr_to_rep[&owner];
-        // GW2EI reads the MINION's own buff graphs for a minion hit.
-        (rep, states.actor_key(src_agent), states.actor_key(dst_agent), true, false)
-    } else if dst_in_squad && !src_in_squad {
-        let rep = addr_to_rep[&dst_agent];
-        (rep, rep, states.actor_key(src_agent), false, true)
+        match registry.resolve_at(master_instid, ev.time) {
+            Some(m) if m != 0 => states.actor_key(m),
+            _ => states.actor_key(addr),
+        }
+    };
+
+    let (actor, actor_buff_key, actor_master_buff_key, foe_buff_key, from_minion, incoming) =
+        if src_in_squad && enemies.contains(&dst_agent) {
+            let rep = addr_to_rep[&src_agent];
+            (rep, rep, rep, states.actor_key(dst_agent), false, false)
+        } else if !src_in_squad && enemies.contains(&dst_agent) {
+            // A friendly pet/minion: resolve its owner through the same
+            // time-aware `src_master_instid` lookup
+            // `damage::pet_credit_events` uses. (Unlike that function this
+            // does not additionally team-gate the source, because the
+            // destination is already constrained to the resolved enemy set.)
+            let owner = registry.resolve_at(ev.src_master_instid, ev.time)?;
+            if !squad.contains(&owner) {
+                return None;
+            }
+            let rep = addr_to_rep[&owner];
+            // GW2EI reads the MINION's own buff graphs for a minion hit --
+            // unless the definition asked for `ActorAlwaysMaster`, which is
+            // what the master key alongside it is for.
+            (rep, states.actor_key(src_agent), rep, states.actor_key(dst_agent), true, false)
+        } else if dst_in_squad && !src_in_squad {
+            let rep = addr_to_rep[&dst_agent];
+            (rep, rep, rep, states.actor_key(src_agent), false, true)
+        } else {
+            return None;
+        };
+    // `GetFoe` is `evt.To` outgoing / `evt.From` incoming; its master form
+    // reads the corresponding `*_master_instid`.
+    let foe_master_buff_key = if incoming {
+        final_master(src_agent, ev.src_master_instid)
     } else {
-        return None;
+        final_master(dst_agent, ev.dst_master_instid)
     };
 
     Some(Hit {
         ev,
         actor,
         actor_buff_key,
+        actor_master_buff_key,
         foe_buff_key,
+        foe_master_buff_key,
         from_minion,
         incoming,
         dmg: c.dmg,
@@ -540,6 +649,17 @@ fn classify_hit<'a>(ev: &'a RawEvent, scope: &Scope<'_>) -> Option<Hit<'a>> {
 /// (chronological, out-of-order-safe insert, `sc::EXTENSION`/
 /// `EXTENSION_COMBAT` rows excluded because their addr fields are
 /// untrustworthy -- see that function's doc comment), minus the zeros.
+///
+/// **Two known follow-ups, deliberately deferred (M16 Task 1 review):**
+/// this duplicates ~25 lines of `InstidRegistry`'s registration logic
+/// (mergeable once that type can be asked to skip zero addrs without
+/// changing its existing consumers' output), and [`Self::resolve_at`]'s
+/// fallback has UNBOUNDED lookback -- it will happily attribute a zeroed row
+/// to an addr first seen minutes later, where GW2EI bounds agent identity by
+/// each `AgentItem`'s own `FirstAware`/`LastAware` window
+/// (`ParsedData/Agents/AgentItem.cs:310-313`). Neither matters at the one
+/// observed occurrence on the reference capture, but a large catalog leaning
+/// harder on the repair should tighten both.
 #[derive(Debug, Default)]
 struct NonZeroAddrIndex {
     by_instid: BTreeMap<u16, Vec<(u64, u64)>>,
@@ -624,23 +744,23 @@ fn compute_gain(def: &DamageModifierDef, hit: &Hit<'_>, states: &BuffStates) -> 
             1.0
         }
         Trigger::BuffOnActor { tracker, .. } => {
-            let stack = states.tracker_stack(tracker, hit.actor_buff_key, hit.ev.time);
+            let stack = states.tracker_stack(tracker, hit.actor_key(def), hit.ev.time);
             def.gain.compute_gain(def.gain_per_stack, stack)
         }
-        Trigger::BuffOnFoe { tracker, actor_check } => {
+        Trigger::BuffOnFoe { tracker, actor_check, .. } => {
             // `CheckActor` (`BuffOnFoeDamageModifier.cs:78-80`) gates the
             // whole hit before the foe-side gain is even used; `1.0` is
             // GW2EI's own dummy `gainPerStack` there (only the sign
             // matters).
             if let Some(check) = actor_check {
-                let stack = states.tracker_stack(&check.tracker, hit.actor_buff_key, hit.ev.time);
+                let stack = states.tracker_stack(&check.tracker, hit.actor_key(def), hit.ev.time);
                 let computer =
                     if check.by_absence { GainComputer::ByAbsence } else { GainComputer::ByPresence };
                 if computer.compute_gain(1.0, stack) <= 0.0 {
                     return None;
                 }
             }
-            let stack = states.tracker_stack(tracker, hit.foe_buff_key, hit.ev.time);
+            let stack = states.tracker_stack(tracker, hit.foe_key(def), hit.ev.time);
             def.gain.compute_gain(def.gain_per_stack, stack)
         }
     };
