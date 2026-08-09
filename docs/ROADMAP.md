@@ -12,15 +12,21 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
 - **v0.1.0 RELEASED** — GitHub Release with 22 assets (5 CLI binaries+checksums, 6 npm tarballs, 4 wheels+sdist); publish steps gated no-ops (no tokens)
 - M11 contribution family + axibridge tier-1
 - M12 per-skill (totalDamageDist EXACT vs EI) + per-second (damage1S, --timeseries gate) + dpsTargets + ei-json mapping + SDK ei options
+- M13 Hit-quality + defenses: outgoing statsAll hit-quality (crit/flank/glance/against-moving/
+  connected/direct/condition/critable/against-downed/life-leech/above-90%-HP, EXACT vs EI) +
+  incoming defenses (block/evade/dodge/miss/interrupt/invuln counts, strike/power/condition/
+  life-leech/barrier/breakbar damage-taken breakdown, EXACT vs EI except a documented real
+  GW2EI `lifeLeechDamageTakenCount` counting bug axilog deliberately doesn't reproduce) + ei-json
+  mapping (`statsAll[0]`/`defenses[0]`, EXACT vs EI) + `--view defense`. Post-era classification
+  now has REAL (not just synthetic) local calibration; first real capture confirmed the
+  documented condition-skill-id-catalog simplification gap is real (not just theoretical) on the
+  incoming side, see `analysis::defenses`'s module doc.
 - CI: x86_64-apple-darwin cross-compiles on arm64 (macos-13 retired); ci concurrency-cancel
 
 ## In flight
-- M13 Hit-quality + defenses (see Queued)
+(none)
 
 ## Queued (autonomous — build in order; reorder only for dependency)
-- M13 Hit-quality + defenses: statsTargets fine-grained (crit/flank/glance/miss/block/evade/
-  interrupt/invuln, connected counts), defenses hit-outcome counts, breakbar damage. Needs
-  GW2EI/decompile for exact crit/flank/glance definitions.
 - M14 Rotation + skillMap: cast/rotation event tracking, skill name/icon map (IDTOGUID SKILL
   mappings already decoded). Unblocks Skill Usage / APM.
 - M15 Combat-replay positions in EI shape: resample sparse tracks → EI fixed-rate grid;

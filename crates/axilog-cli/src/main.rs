@@ -120,6 +120,9 @@ enum View {
     /// arcdps healing-extension totals (M10, Task 1): healing out (total),
     /// allies, barrier out, downed-ally healing.
     Healing,
+    /// Incoming defenses (M13, Task 3): blocks/evades/dodges, total damage
+    /// taken (+ strike/condi split), downs taken.
+    Defense,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -210,6 +213,7 @@ fn axilog_cli_table(r: &axilog_schema::Report, view: View) -> String {
         View::Support => axilog_cli_table_support(r),
         View::Boons => axilog_cli_table_boons(r),
         View::Healing => axilog_cli_table_healing(r),
+        View::Defense => axilog_cli_table_defense(r),
     }
 }
 fn axilog_cli_table_default(r: &axilog_schema::Report) -> String {
@@ -292,6 +296,32 @@ fn axilog_cli_table_healing(r: &axilog_schema::Report) -> String {
     }
     if !has_any {
         s.push_str("(healing extension not present in this log)\n");
+    }
+    s
+}
+/// `--view defense` (M13, Task 3): incoming defenses -- account,
+/// profession, blocks/evades/dodges (hit-outcome counts, `p.defenses`),
+/// total damage taken (`p.damage_taken`, the pre-existing whole-fight
+/// scalar -- NOT `p.defenses.strike_damage + condition_damage +
+/// life_leech_damage`, which excludes barrier/blocked/evaded/etc. and is a
+/// narrower, additive breakdown, not a replacement total -- see
+/// `axilog_core::analysis::defenses`'s module doc), a strike/condi split
+/// (`p.defenses.strike_damage`/`condition_damage`, the brief's "maybe"
+/// extra columns) alongside it, and downs taken (`p.downs_taken`).
+/// `p.defenses` is always present (not gated), so this view never needs the
+/// healing view's "extension not present" fallback dashes.
+fn axilog_cli_table_defense(r: &axilog_schema::Report) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("{:<24} {:<12} {:>7} {:>7} {:>7} {:>10} {:>9} {:>9} {:>6}\n",
+        "account", "profession", "blocks", "evades", "dodges", "dmg taken", "strike", "condi", "downs"));
+    let mut players: Vec<_> = r.players.iter().collect();
+    players.sort_by_key(|p| std::cmp::Reverse(p.damage_taken));
+    for p in players {
+        s.push_str(&format!("{:<24} {:<12} {:>7} {:>7} {:>7} {:>10} {:>9} {:>9} {:>6}\n",
+            trunc(&p.account, 24), trunc(&p.profession, 12),
+            p.defenses.blocked_count, p.defenses.evaded_count, p.defenses.dodge_count,
+            p.damage_taken, p.defenses.strike_damage, p.defenses.condition_damage,
+            p.downs_taken));
     }
     s
 }

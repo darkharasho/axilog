@@ -363,13 +363,13 @@ mod tests {
         RawEvent { time: 0, src_agent: addr, dst_agent: 0, value: team as i32, buff_dmg: 0,
             overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
-            is_activation: 0, is_buffremove: 0, is_statechange: sc::TEAM_CHANGE, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: sc::TEAM_CHANGE, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
     fn point_of_view(addr: u64) -> RawEvent {
         RawEvent { time: 0, src_agent: addr, dst_agent: 0, value: 0, buff_dmg: 0,
             overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
-            is_activation: 0, is_buffremove: 0, is_statechange: sc::POINT_OF_VIEW, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: sc::POINT_OF_VIEW, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
     /// Synthetic CBTS_WVWTEAMS event. Packs (red, blue, green) into the
     /// same 6xu32 layout `parse_wvw_teams_event` reads back
@@ -379,7 +379,7 @@ mod tests {
         RawEvent { time: 0, src_agent: 0, dst_agent, value: blue as i32, buff_dmg: green as i32,
             overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
-            is_activation: 0, is_buffremove: 0, is_statechange: sc::WVW_TEAMS, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: sc::WVW_TEAMS, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
     /// Synthetic CBTS_IDTOGUID event mapping a WvW team id to a stable GUID
     /// (content type TEAM = 4).
@@ -391,6 +391,7 @@ mod tests {
             value: 0, buff_dmg: 0, overstack: 4, skillid: team_id,
             src_instid: 0, dst_instid: 0, src_master_instid: 0, dst_master_instid: 0,
             iff: 0, buff: 0, result: 0, is_activation: 0, is_buffremove: 0,
+            is_ninety: 0, is_moving: 0,
             is_statechange: sc::ID_TO_GUID,
             is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
         }
@@ -427,7 +428,7 @@ mod tests {
         RawEvent { time: 0, src_agent: src, dst_agent: dst, value, buff_dmg: 0,
             overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff, buff: 0, result: 0,
-            is_activation: 0, is_buffremove: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
 
     /// M4 post-rework real-log finding: an objective NPC (Keep/Camp/Tower
@@ -498,7 +499,7 @@ mod tests {
         RawEvent { time, src_agent: src, dst_agent: 0, value, buff_dmg: 0,
             overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 0, buff, result: 0,
-            is_activation: 0, is_buffremove: 0, is_statechange: sc::MARKER, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: sc::MARKER, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
     fn marker_guid(local_id: u32, guid_bytes: [u8; 16]) -> RawEvent {
         RawEvent {
@@ -508,6 +509,7 @@ mod tests {
             value: 0, buff_dmg: 0, overstack: 1, skillid: local_id,
             src_instid: 0, dst_instid: 0, src_master_instid: 0, dst_master_instid: 0,
             iff: 0, buff: 0, result: 0, is_activation: 0, is_buffremove: 0,
+            is_ninety: 0, is_moving: 0,
             is_statechange: sc::ID_TO_GUID, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
         }
     }

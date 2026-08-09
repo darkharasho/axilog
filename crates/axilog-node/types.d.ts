@@ -203,6 +203,69 @@ export interface ContributionOut {
   movement_impairing: number
 }
 
+/**
+ * Outgoing hit-quality stats (M13, Task 1) -- mirrors EI's `statsAll[0]`.
+ * `against_downed`/`above90_*` are plain per-event wire flags (NOT
+ * down-interval/health-tracker state); this block deliberately does NOT
+ * fold pet/minion damage onto the owner (unlike `DamageOut`/
+ * `SkillDamageOut`) -- EI's own `statsAll[0]` is actor-only. Always present
+ * (not gated) -- no per-target/per-skill combinatorial blowup here.
+ */
+export interface HitStatsOut {
+  crit_count: number
+  crit_damage: number
+  flank_count: number
+  glance_count: number
+  moving_count: number
+  connected_count: number
+  connected_damage: number
+  direct_count: number
+  direct_damage: number
+  condition_count: number
+  condition_damage: number
+  critable_direct_count: number
+  against_downed_count: number
+  against_downed_damage: number
+  life_leech_count: number
+  life_leech_damage: number
+  above90_power_count: number
+  above90_power_damage: number
+  above90_condition_count: number
+  above90_condition_damage: number
+}
+
+/**
+ * Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
+ * Task 2) -- mirrors EI's `defenses[0]`. `dodge_count` is NOT derived from
+ * any incoming event (a self-cast dodge-skill count, independent of
+ * `evaded_count`); `power_count`/`power_damage` always equal
+ * `strike_count`/`strike_damage` + `life_leech_count`/`life_leech_damage`;
+ * `life_leech_count`/`life_leech_damage` are the TRUE values (a real GW2EI
+ * counting bug in its own `lifeLeechDamageTakenCount` is deliberately not
+ * reproduced). Purely additive alongside `downs_taken`/`deaths`/
+ * `damage_taken`/`cc`. Always present (not gated), like `hit_stats`.
+ */
+export interface DefensesOut {
+  blocked_count: number
+  evaded_count: number
+  dodge_count: number
+  missed_count: number
+  interrupted_count: number
+  invulned_count: number
+  strike_count: number
+  strike_damage: number
+  power_count: number
+  power_damage: number
+  condition_count: number
+  condition_damage: number
+  life_leech_count: number
+  life_leech_damage: number
+  barrier_count: number
+  barrier_damage: number
+  breakbar_count: number
+  breakbar_damage: number
+}
+
 export interface PlayerOut {
   account: string
   character: string
@@ -270,6 +333,16 @@ export interface PlayerOut {
    * entirely (not `[]`) when not requested.
    */
   dps_targets?: DpsTargetOut[]
+  /**
+   * Outgoing hit-quality stats (M13, Task 1). Always present, unlike
+   * `skill_damage`/`per_second`/`dps_targets`. See `HitStatsOut`.
+   */
+  hit_stats: HitStatsOut
+  /**
+   * Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
+   * Task 2). Always present, same as `hit_stats`. See `DefensesOut`.
+   */
+  defenses: DefensesOut
 }
 
 export interface EnemyOut {

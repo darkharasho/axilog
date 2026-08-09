@@ -364,6 +364,7 @@ mod tests {
             result: 0,
             is_activation: 0,
             is_buffremove: 0,
+            is_ninety: 0, is_moving: 0,
             is_statechange: statechange,
             is_flanking,
             is_shields: 0,

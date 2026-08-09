@@ -262,6 +262,69 @@ class HealingOut(TypedDict):
     barrier_out: int
     downed_healing_out: int
 
+# --- hit-quality stats (M13, Task 1) ---------------------------------------
+
+class HitStatsOut(TypedDict):
+    """Outgoing hit-quality stats -- mirrors EI's `statsAll[0]`.
+    `against_downed_*`/`above90_*` are plain per-event wire flags (NOT
+    down-interval/health-tracker state); this block deliberately does NOT
+    fold pet/minion damage onto the owner (unlike `DamageOut`/
+    `SkillDamageOut`) -- EI's own `statsAll[0]` is actor-only. Always
+    present (not gated), like `boons`/`support`."""
+
+    crit_count: int
+    crit_damage: int
+    flank_count: int
+    glance_count: int
+    moving_count: int
+    connected_count: int
+    connected_damage: int
+    direct_count: int
+    direct_damage: int
+    condition_count: int
+    condition_damage: int
+    critable_direct_count: int
+    against_downed_count: int
+    against_downed_damage: int
+    life_leech_count: int
+    life_leech_damage: int
+    above90_power_count: int
+    above90_power_damage: int
+    above90_condition_count: int
+    above90_condition_damage: int
+
+# --- incoming defenses (M13, Task 2) ----------------------------------------
+
+class DefensesOut(TypedDict):
+    """Incoming defenses: hit-outcome counts + damage-taken breakdown --
+    mirrors EI's `defenses[0]`. `dodge_count` is NOT derived from any
+    incoming event (a self-cast dodge-skill count, independent of
+    `evaded_count`); `power_count`/`power_damage` always equal
+    `strike_count`/`strike_damage` + `life_leech_count`/`life_leech_damage`;
+    `life_leech_count`/`life_leech_damage` are the TRUE values (a real GW2EI
+    counting bug in its own `lifeLeechDamageTakenCount` is deliberately not
+    reproduced). Purely additive alongside `downs_taken`/`deaths`/
+    `damage_taken`/`cc`. Always present (not gated), like `hit_stats`."""
+
+    blocked_count: int
+    evaded_count: int
+    dodge_count: int
+    missed_count: int
+    interrupted_count: int
+    invulned_count: int
+    strike_count: int
+    strike_damage: int
+    power_count: int
+    power_damage: int
+    condition_count: int
+    condition_damage: int
+    life_leech_count: int
+    life_leech_damage: int
+    barrier_count: int
+    barrier_damage: int
+    breakbar_count: int
+    breakbar_damage: int
+
 # --- players / enemies -----------------------------------------------------
 
 class _PlayerOutRequired(TypedDict):
@@ -284,6 +347,8 @@ class _PlayerOutRequired(TypedDict):
     downed_by: ContributionOut
     boons: List[BoonOut]
     support: SupportOut
+    hit_stats: HitStatsOut
+    defenses: DefensesOut
 
 class PlayerOut(_PlayerOutRequired, total=False):
     """`marker`/`commander_tag` are omitted (not `null`) when absent.

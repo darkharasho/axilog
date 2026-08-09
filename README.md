@@ -87,7 +87,7 @@ release artifact.
 ### Parse a log
 
 ```sh
-axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons|healing] [-o FILE] [--replay] [--missiles] [--skill-damage] [--timeseries]
+axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons|healing|defense] [-o FILE] [--replay] [--missiles] [--skill-damage] [--timeseries]
 ```
 
 - `json` (default) — axilog's own native schema (`axilog_schema::Report`): encounter info, teams,
@@ -143,6 +143,8 @@ below).
 - `healing` (M10) — arcdps healing-extension totals: healing out (total), allies, barrier out,
   downed-ally healing. Renders `-` per row (not misleading zeros) when the log carries no
   healing-extension data at all.
+- `defense` (M13) — incoming defenses: blocks, evades, dodges, total damage taken, a strike/condi
+  split, downs taken, sorted by damage taken.
 
 Example `table --view default` output (anonymized account names, from the committed golden fixture):
 
@@ -175,6 +177,17 @@ account                  profession   Might(avg)  Quick%   Alac%   Stab%   Prot%
 :Anon106.4922            Guardian          13.81    44.4     0.0    70.1    98.0
 :Anon107.4959            Mesmer             8.64    63.8     0.0    72.8    87.6
 :Anon163.7031            Mesmer             8.60    29.0    37.4    77.8    66.2
+```
+
+Example `table --view defense` output:
+
+```
+account                  profession    blocks  evades  dodges  dmg taken    strike     condi  downs
+:Anon119.5403            Guardian          24       2       4      81974     79652      1652      0
+:Anon123.5551            Mesmer            15       1       0      69439     67535      1160      0
+:Anon130.5810            Guardian          19       0       0      66177     64312       661      1
+:Anon105.4885            Ranger            16       0       1      63912     62634      1120      1
+:Anon133.5921            Elementalist       3       5       3      63506     62613       667      2
 ```
 
 ### HTML report
@@ -362,17 +375,18 @@ Calibrated against a real dps.report EI export for one WvW log (Green Alpine Bor
 | `players[].totalDamageDist[][]` / `targetDamageDist[][][]` / `totalDamageTaken[][]` (`ei-json`) | Emitted, opt-in | `[phase][skillEntry]` / `[targetIndex][phase][skillEntry]` array shapes, verified against a real dps.report export; each entry carries only the fields this project computes (`id`, `totalDamage`, `min`, `max`, `hits`, `crit`, `flank` — real EI's `connectedHits`/`glance`/`missed`/`invulned`/`blocked`/`downContribution`/`indirectDamage`/etc. aren't tracked anywhere in this schema, omitted rather than faked). Present only when the `Report` was built with `--skill-damage`/SDK `skill_damage: true` (M12 Task 1's opt-in gate — measured +249% JSON size when always-on); omitted entirely (not emitted empty) otherwise. Every shared skill id matches the golden fixture's `skillDamage.outgoing` **exactly** (37/37 joined accounts, `crates/axilog-ei/tests/ei_golden.rs`) |
 | `players[].damage1S[][]` / `targetDamage1S[][][]` / `damageTaken1S[][]` (`ei-json`) | Emitted, opt-in | `[phase][second]` / `[targetIndex][phase][second]` cumulative running-total arrays (this project's own per-second series are already cumulative by construction, matching GW2EI's own `*1S` semantics — see `axilog_core::analysis::timeseries`'s module doc). Present only when the `Report` was built with `--timeseries`/SDK `timeseries: true` (M12 Task 2's opt-in gate — measured +147.7% JSON size when always-on); omitted entirely otherwise. `damage1S[0].last()` matches the golden fixture's whole-fight damage scalar **exactly** (37/37 joined accounts) |
 | `players[].dpsTargets[][]` (`ei-json`) | Emitted, opt-in | `[targetIndex][phase]{dps, damage}`, positionally keyed to `targets[]`; only the two fields this project computes (real EI's `condiDps`/`powerDps`/`breakbarDamage`/`actor*` duplicates aren't tracked, omitted). Gated by the SAME `--timeseries` flag as `damage1S` above (not a separate one — `axilog_schema::build_report` populates both off one bool); a real WvW log's large enemy roster makes `dpsTargets` alone exceed the size-discipline guideline (+36.4%), so it's opt-in too, not always-on as originally considered |
+| `players[].statsAll[0]` hit-quality fields (`criticalRate`/`criticalDmg`/`flankingRate`/`glanceRate`/`againstMovingRate`/`connectedDamageCount`/`connectedDmg`/`connectedDirectDamageCount`/`connectedDirectDmg`/`connectedConditionCount`/`connectedConditionDamage`/`critableDirectDamageCount`/`againstDownedCount`/`againstDownedDamage`/`connectedLifeLeechCount`/`connectedLifeLeechDamage`/`connectedPowerAbove90HPCount`/`connectedPowerAbove90HPDamage`/`connectedConditionAbove90HPCount`/`connectedConditionAbove90HPDamage`) (`ei-json`) | Emitted, always-on | mapped from the native `hit_stats` block (M13 Task 1); EI field names exact, actor-only scope (no pet-credit fold — matches real EI's own `statsAll[0]`). Pre-era (< 20260501): every field matches the golden fixture **exactly** (37/37 joined accounts, `crates/axilog-ei/tests/ei_golden.rs`); post-era (≥ 20260501): the condition/power/life-leech buff==1 split is approximate pending condition-skill-id catalog — immune fields (crit/flank/glance/block/evade/dodge/miss/interrupt/invuln) and all damage totals remain exact |
+| `players[].defenses[0]` hit-outcome + damage-taken-breakdown fields (`blockedCount`/`evadedCount`/`dodgeCount`/`missedCount`/`interruptedCount`/`invulnedCount`/`strikeDamageTaken(Count)`/`powerDamageTaken(Count)`/`conditionDamageTaken(Count)`/`lifeLeechDamageTaken(Count)`/`damageBarrier(Count)`/`breakbarDamageTaken(Count)`) (`ei-json`) | Emitted, always-on | mapped from the native `defenses` block (M13 Task 2). Pre-era (< 20260501): every field matches the golden fixture **exactly** except `lifeLeechDamageTakenCount` (37/37 joined accounts, `crates/axilog-ei/tests/ei_golden.rs`) — this project deliberately emits the TRUE derived life-leech count rather than reproducing a real, verified GW2EI bug; post-era (≥ 20260501): the condition/power/life-leech damage-taken split is approximate pending condition-skill-id catalog — hit-outcome counts (blocked/evaded/dodge/miss/interrupt/invuln) remain exact both eras. See `axilog_core::analysis::defenses`'s module doc for the full citation |
 
 The `ei-json` output only emits fields backed by a real computed metric. Where real EI has a field
 we don't compute (e.g. per-target down-contribution/CC splits, most of `statsAll`'s damage-modifier
 and rotation detail), it's simply omitted — never faked — and the omission is documented inline in
-`crates/axilog-ei/src/lib.rs`. As of M12 (per-skill damage distribution + per-player per-second
-series), the remaining axibridge-flagged gaps in this table are narrower still: the per-skill/
-per-second/dpsTargets family that used to be entirely absent from `ei-json` is now emitted (opt-in,
-behind `--skill-damage`/`--timeseries`, same as the native schema's own gating) — what's left
-absent is hit-quality/defenses fine-grained outcome counts (crit/flank/glance/miss/block/evade/
-interrupt/invuln — M13), rotation/skillMap (M14), replay positions in EI's own coordinate grid
-(M15), and damage-modifier attribution (M16), per `docs/ROADMAP.md`'s Queued list.
+`crates/axilog-ei/src/lib.rs`. As of M13 (hit-quality/defenses), the remaining axibridge-flagged
+gaps in this table are narrower still: the per-skill/per-second/dpsTargets family (M12) and the
+hit-quality/defenses fine-grained outcome counts (crit/flank/glance/miss/block/evade/interrupt/
+invuln — M13) that used to be entirely absent from `ei-json` are now both emitted — what's left
+absent is rotation/skillMap (M14), replay positions in EI's own coordinate grid (M15), and
+damage-modifier attribution (M16), per `docs/ROADMAP.md`'s Queued list.
 
 ### Supported log eras
 

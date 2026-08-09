@@ -261,3 +261,194 @@ fn ei_json_per_skill_and_per_second_blocks_match_the_golden() {
          0 totalDamageDist shared-id mismatches, 0 damage1S-final mismatches"
     );
 }
+
+/// M13 Task 3: `to_ei_json`'s `statsAll[0]` hit-quality mapping and
+/// `defenses[0]` mapping, calibrated against the SAME golden sidecar fields
+/// `hit_stats_golden.rs`/`defenses_golden.rs` already calibrate the
+/// underlying `axilog_core` metrics against (`fixtures/wvw-small.ei.json`'s
+/// `players[].hitStats`/`players[].defenses`) -- like
+/// `ei_json_per_skill_and_per_second_blocks_match_the_golden` above, this
+/// test's job is narrower: confirm the ei-json ADAPTER LAYER carries those
+/// already-calibrated `HitStatsOut`/`DefensesOut` numbers through into EI's
+/// own `statsAll[0]`/`defenses[0]` field names correctly, not re-derive the
+/// underlying calibration itself.
+///
+/// Every field is checked EXACT except `defenses[0].lifeLeechDamageTaken(Count)`,
+/// which is INTENTIONALLY expected to diverge from the fixture's raw value
+/// on the count (real EI's own `lifeLeechDamageTakenCount` is a verified-buggy
+/// always-0 -- see `axilog_core::analysis::defenses`'s module doc and this
+/// crate's `to_ei_json` doc comment on the `defenses` block) -- this test
+/// asserts OUR emitted count against the algebraically derived TRUE
+/// reference (`powerDamageTakenCount - strikeDamageTakenCount`) instead,
+/// same derivation `defenses_golden.rs` already established.
+#[test]
+fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
+    use axilog_core::evtc::anon_account;
+    use std::collections::HashMap;
+
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let golden = read_json(GOLDEN_JSON_PATH);
+    let golden_players = golden["players"].as_array().expect("players array");
+    let mut golden_by_account: HashMap<String, &serde_json::Value> = HashMap::new();
+    for p in golden_players {
+        let account = p["account"].as_str().expect("account").to_string();
+        golden_by_account.insert(account, p);
+    }
+
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false);
+    let ei = axilog_ei::to_ei_json(&report, &[]);
+
+    // (ei-json statsAll[0] key, golden hitStats key) EXACT count/sum pairs.
+    const HIT_STATS_FIELDS: &[&str] = &[
+        "criticalRate",
+        "criticalDmg",
+        "flankingRate",
+        "glanceRate",
+        "againstMovingRate",
+        "connectedDamageCount",
+        "connectedDmg",
+        "connectedDirectDamageCount",
+        "connectedDirectDmg",
+        "connectedConditionCount",
+        "connectedConditionDamage",
+        "critableDirectDamageCount",
+        "againstDownedCount",
+        "againstDownedDamage",
+        "connectedLifeLeechCount",
+        "connectedLifeLeechDamage",
+        "connectedPowerAbove90HPCount",
+        "connectedPowerAbove90HPDamage",
+        "connectedConditionAbove90HPCount",
+        "connectedConditionAbove90HPDamage",
+    ];
+    // (ei-json defenses[0] key) EXACT pairs -- `lifeLeechDamageTaken(Count)`
+    // handled separately below (see module doc).
+    const DEFENSES_FIELDS: &[&str] = &[
+        "blockedCount",
+        "evadedCount",
+        "dodgeCount",
+        "missedCount",
+        "interruptedCount",
+        "invulnedCount",
+        "strikeDamageTaken",
+        "strikeDamageTakenCount",
+        "powerDamageTaken",
+        "powerDamageTakenCount",
+        "conditionDamageTaken",
+        "conditionDamageTakenCount",
+        "damageBarrier",
+        "damageBarrierCount",
+        "breakbarDamageTaken",
+        "breakbarDamageTakenCount",
+    ];
+
+    let mut joined_hit_stats = 0usize;
+    let mut joined_defenses = 0usize;
+    let mut mismatches: Vec<String> = Vec::new();
+
+    for (i, agent) in raw.agents.iter().enumerate() {
+        if !agent.is_player() {
+            continue;
+        }
+        let expected_account = anon_account(i);
+        let key = expected_account.trim_start_matches(':').to_string();
+        let Some(golden_p) = golden_by_account.get(&key) else { continue };
+        let Some(player_idx) = enc.players.iter().position(|p| p.agent_addrs.contains(&agent.addr))
+        else {
+            continue;
+        };
+        let our_player = &ei["players"][player_idx];
+        assert_eq!(
+            our_player["account"].as_str().map(|s| s.trim_start_matches(':')),
+            Some(key.as_str()),
+            "positional join sanity: ei-json players[{player_idx}] must be this same account"
+        );
+
+        if let Some(hs) = golden_p.get("hitStats") {
+            joined_hit_stats += 1;
+            let our_stats_all = &our_player["statsAll"][0];
+            for &field in HIT_STATS_FIELDS {
+                let golden_val = hs[field].as_i64().unwrap_or(0);
+                let our_val = our_stats_all[field].as_i64().unwrap_or_else(|| {
+                    panic!("account {key}: statsAll[0].{field} must be an integer")
+                });
+                if our_val != golden_val {
+                    mismatches.push(format!(
+                        "{key} statsAll[0].{field}: ours={our_val} golden[hitStats.{field}]={golden_val}"
+                    ));
+                }
+            }
+        }
+
+        if let Some(de) = golden_p.get("defenses") {
+            joined_defenses += 1;
+            let our_defenses = &our_player["defenses"][0];
+            for &field in DEFENSES_FIELDS {
+                let golden_val = de[field].as_i64().unwrap_or(0);
+                let our_val = our_defenses[field].as_i64().unwrap_or_else(|| {
+                    panic!("account {key}: defenses[0].{field} must be an integer")
+                });
+                if our_val != golden_val {
+                    mismatches.push(format!(
+                        "{key} defenses[0].{field}: ours={our_val} golden[defenses.{field}]={golden_val}"
+                    ));
+                }
+            }
+
+            // `lifeLeechDamageTaken(Count)`: intentional divergence -- see
+            // this test's module doc. Golden's raw `lifeLeechDamageTakenCount`
+            // is a known-buggy always-0; derive the TRUE reference from
+            // `powerDamageTakenCount - strikeDamageTakenCount` instead
+            // (unaffected by the bug, same derivation `defenses_golden.rs`
+            // already established), and assert OUR emitted count against
+            // THAT, not the raw fixture field.
+            let power_count = de["powerDamageTakenCount"].as_i64().unwrap_or(0);
+            let strike_count = de["strikeDamageTakenCount"].as_i64().unwrap_or(0);
+            let true_life_leech_count = (power_count - strike_count).max(0);
+            let our_llc = our_defenses["lifeLeechDamageTakenCount"].as_i64().unwrap_or(-1);
+            if our_llc != true_life_leech_count {
+                mismatches.push(format!(
+                    "{key} defenses[0].lifeLeechDamageTakenCount: ours={our_llc} \
+                     derived_true={true_life_leech_count} (NOT golden's raw buggy \
+                     lifeLeechDamageTakenCount={})",
+                    de["lifeLeechDamageTakenCount"].as_i64().unwrap_or(0)
+                ));
+            }
+            // Confirm the intentional divergence is actually real on this
+            // fixture (golden's raw count really is the documented bug's
+            // 0), not an accidentally-vacuous check -- same "prove the
+            // divergence is real, not just permitted" bar the M13 Task 3
+            // brief expects.
+            if true_life_leech_count > 0 {
+                assert_eq!(
+                    de["lifeLeechDamageTakenCount"].as_i64().unwrap_or(-1),
+                    0,
+                    "{key}: expected the golden fixture's raw lifeLeechDamageTakenCount to \
+                     exhibit the documented GW2EI bug (always 0) whenever a true nonzero \
+                     life-leech count exists -- if this fires, the fixture/GW2EI may have \
+                     changed and this test's divergence framing needs revisiting"
+                );
+            }
+        }
+    }
+
+    assert!(joined_hit_stats >= 30, "expected at least 30 accounts to join hitStats, got {joined_hit_stats}");
+    assert!(joined_defenses >= 30, "expected at least 30 accounts to join defenses, got {joined_defenses}");
+    assert!(
+        mismatches.is_empty(),
+        "{} statsAll[0]/defenses[0] mismatch(es) (checked {joined_hit_stats} hitStats + \
+         {joined_defenses} defenses accounts):\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
+
+    println!(
+        "ei_json_stats_all_hit_quality_and_defenses_match_the_golden: {joined_hit_stats} hitStats \
+         accounts + {joined_defenses} defenses accounts joined, all fields EXACT except the \
+         intentional lifeLeechDamageTakenCount divergence (ours=derived-true, asserted correct)"
+    );
+}

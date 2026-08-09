@@ -42,6 +42,24 @@ pub mod skill_damage;
 /// `timeseries`'s module doc for the GW2EI cumulative-vs-instant citation
 /// and the `dps_targets`-vs-EI-`dpsTargets` scope note.
 pub mod timeseries;
+/// Outgoing hit-quality stats (M13 Task 1) -- like `skill_damage`/
+/// `timeseries` above, wired into [`analyze`] below (`PlayerMetrics::
+/// hit_stats`), computed unconditionally (cheap: one extra scan reusing
+/// `damage`'s squad/enemy membership predicate, WITHOUT the pet-credit fold
+/// -- see `hit_stats`'s module doc for why EI's own `statsAll` is
+/// actor-only, unlike `damage_total`/`skill_damage`).
+pub mod hit_stats;
+/// Incoming defenses -- hit-outcome counts + damage-taken breakdown (M13
+/// Task 2) -- like `hit_stats` above, wired into [`analyze`] below
+/// (`PlayerMetrics::defenses`), computed unconditionally (cheap: two extra
+/// scans over `raw.events` plus a third cast-event scan for `dodge_count`).
+/// Purely additive alongside the pre-existing `downs_taken`/`deaths`/
+/// `damage_taken`/`cc` fields on `PlayerMetrics` -- see `defenses`'s module
+/// doc for the full GW2EI `DefenseAllStatistics` citation trail, notably the
+/// `dodge_count` vs `evaded_count` distinction and a real GW2EI counting bug
+/// in `LifeLeechDamageTakenCount` this module deliberately does NOT
+/// reproduce.
+pub mod defenses;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -82,15 +100,24 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     /// `sum(dps_targets[*].damage)` equals `per_enemy`'s own total, and the
     /// final element of `damage`/`damage_taken` equals `damage_total`/
     /// `damage_taken` exactly, both by construction.
-    pub timeseries: timeseries::TimeseriesMetrics }
+    pub timeseries: timeseries::TimeseriesMetrics,
+    /// Outgoing hit-quality stats (M13 Task 1) -- see `hit_stats`'s module
+    /// doc. Deliberately does NOT fold pet/minion damage (unlike
+    /// `damage_total`/`skill_damage`) -- matches EI's own actor-only
+    /// `statsAll[0]` scope.
+    pub hit_stats: hit_stats::HitStats,
+    /// Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
+    /// Task 2). See `defenses`'s module doc. Purely additive alongside
+    /// `downs_taken`/`deaths`/`damage_taken`/`cc` above.
+    pub defenses: defenses::DefenseStats }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
 #[derive(Debug, Clone)]
 pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// Per-(agent representative, boon id) stack-count timelines (M3, Task
-    /// 1) -- see `buffs::simulate_boons`. Computed after all other passes
-    /// below; does not alter any pre-existing metric.
+    /// 1) -- see `buffs::simulate_boons`. Computed after all other passes,
+    ///    not altering any pre-existing metric.
     pub boons: BTreeMap<(u64, u32), buffs::BoonTimeline>,
     /// Per-(agent representative, boon id) uptime summaries (M3, Task 2) --
     /// see `buffs::simulate_boon_uptimes`/`buffs::uptime`. Reduces `boons`
@@ -305,6 +332,25 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             p.timeseries = ts.clone();
         }
     }
+    // M13 Task 1: outgoing hit-quality stats -- a classification-only pass
+    // over the same `squad -> enemies` event family (no pet-credit fold,
+    // see `hit_stats`'s module doc).
+    let hit_stats_by_rep = hit_stats::build(raw, &squad, &enemies, &addr_to_rep);
+    for p in &mut players {
+        if let Some(hs) = hit_stats_by_rep.get(&p.agent_addr) {
+            p.hit_stats = *hs;
+        }
+    }
+    // M13 Task 2: incoming defenses -- the mirror-image classification pass
+    // (see `defenses`'s module doc). No `enemies` set needed: unlike
+    // `hit_stats`, this is scoped to ANY source hitting a squad player, same
+    // as `damage::accumulate_damage_taken`.
+    let defenses_by_rep = defenses::build(raw, &squad, &addr_to_rep);
+    for p in &mut players {
+        if let Some(d) = defenses_by_rep.get(&p.agent_addr) {
+            p.defenses = *d;
+        }
+    }
     let timeline = cc::timeline(enc, raw, &squad, &enemies);
     // Computed last, after every other pass, per the Task 1 brief -- does
     // not read or alter `players`/`timeline` above.
@@ -365,7 +411,7 @@ mod tests {
         RawEvent { time: 0, src_agent: src, dst_agent: dst, value: dmg, buff_dmg: 0,
             overstack: 0, skillid: 1, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 1, buff: 0, result: 0,
-            is_activation: 0, is_buffremove: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
 
     fn raw_from(events: Vec<RawEvent>) -> RawLog {
@@ -568,7 +614,7 @@ mod tests {
                 time: 0, src_agent: 1, dst_agent: 2, value: 5000, buff_dmg: 0,
                 overstack: 0, skillid: buffs::MIGHT, src_instid: 0, dst_instid: 0,
                 src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 1, result: 0,
-                is_activation: 0, is_buffremove: 0, is_statechange: sc::BUFF_APPLY,
+                is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: sc::BUFF_APPLY,
                 is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
             }],
             guid_map: vec![],
