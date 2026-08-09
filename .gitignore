@@ -20,3 +20,6 @@ crates/axilog-py/.venv/
 *.egg-info/
 __pycache__/
 *.pyc
+
+# generated reports at repo root (contain real player names — never commit)
+/*.html
