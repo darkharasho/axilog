@@ -398,20 +398,45 @@ test("positionsAt: empty track (no samples) returns null, not a position", () =>
   assert.equal(pos, null);
 });
 
-test("isDownAt / isDeadAt: inside/outside/boundary of their respective intervals", () => {
+test("isDownAt / isDeadAt: half-open [start,end) -- inclusive start, exclusive end", () => {
   const track = replayTrack({ down_intervals: [[500, 900]], dead_intervals: [[900, 1200]] });
   assert.equal(AxilogReport.isDownAt(track, 700), true);
   assert.equal(AxilogReport.isDownAt(track, 500), true); // inclusive start
-  assert.equal(AxilogReport.isDownAt(track, 900), true); // inclusive end
+  assert.equal(AxilogReport.isDownAt(track, 900), false); // exclusive end
   assert.equal(AxilogReport.isDownAt(track, 100), false);
   assert.equal(AxilogReport.isDeadAt(track, 1000), true);
   assert.equal(AxilogReport.isDeadAt(track, 700), false);
+});
+
+test("isDownAt / isDeadAt: down->dead sharing one timestamp -- exactly one state true at the transition ms", () => {
+  // Matches the Rust `Interval` contract (half-open, == GW2EI): a
+  // CHANGE_DEAD event both closes the down interval and opens the dead
+  // interval at the same ms -- at that instant the agent reads as dead,
+  // not down.
+  const track = replayTrack({ down_intervals: [[500, 900]], dead_intervals: [[900, 1200]] });
+  assert.equal(AxilogReport.isDownAt(track, 900), false);
+  assert.equal(AxilogReport.isDeadAt(track, 900), true);
 });
 
 test("isDownAt / isDeadAt: empty intervals never match", () => {
   const track = replayTrack({ down_intervals: [], dead_intervals: [] });
   assert.equal(AxilogReport.isDownAt(track, 700), false);
   assert.equal(AxilogReport.isDeadAt(track, 700), false);
+});
+
+test("shouldScheduleNextTick: false when paused, regardless of remaining duration", () => {
+  assert.equal(AxilogReport.shouldScheduleNextTick(false, 0, 49000), false);
+  assert.equal(AxilogReport.shouldScheduleNextTick(false, 49000, 49000), false);
+});
+
+test("shouldScheduleNextTick: false once currentMs reaches/passes durationMs, even while playing", () => {
+  assert.equal(AxilogReport.shouldScheduleNextTick(true, 49000, 49000), false);
+  assert.equal(AxilogReport.shouldScheduleNextTick(true, 50000, 49000), false);
+});
+
+test("shouldScheduleNextTick: true only while playing AND before the fight's end", () => {
+  assert.equal(AxilogReport.shouldScheduleNextTick(true, 0, 49000), true);
+  assert.equal(AxilogReport.shouldScheduleNextTick(true, 48999, 49000), true);
 });
 
 console.log(`ok - ${ran} pure-function tests passed`);

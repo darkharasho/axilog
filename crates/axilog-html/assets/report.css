@@ -469,29 +469,22 @@ table {
 }
 
 /* ---- combat replay (M9); reuses .axilog-timeline-empty/-svg/-gridline. */
-
 .axilog-replay-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
-
 .axilog-replay-btn {
   background: var(--bg-inset); border: 1px solid var(--border); color: var(--text);
   border-radius: var(--radius); padding: 6px 14px; font: inherit; font-weight: 600;
   font-size: 12px; cursor: pointer; min-width: 64px;
 }
-
 .axilog-replay-btn:hover { border-color: var(--accent); color: var(--accent); }
 .axilog-replay-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .axilog-replay-scrub { flex: 1 1 200px; accent-color: var(--accent); }
 .axilog-replay-time { color: var(--text-muted); font-family: var(--font-mono); font-size: 12px;
   font-variant-numeric: tabular-nums; white-space: nowrap; }
-
 .axilog-replay-stage { background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-
-/* Real bounds are rarely square (WvW maps run tall) -- cap height rather
- * than stretch the page; default preserveAspectRatio letterboxes the rest. */
+/* Tall/narrow real bounds shouldn't stretch the page -- cap height;
+ * default preserveAspectRatio letterboxes the rest. */
 .axilog-replay-stage .axilog-timeline-svg { height: min(70vh, 640px); }
-
 .axilog-replay-dot { transition: opacity 0.1s linear; }
-
 /* --team-color: shared by squad (filled) and enemy (hollow) markers. */
 .axilog-replay-marker.team-red { --team-color: var(--team-red); }
 .axilog-replay-marker.team-blue { --team-color: var(--team-blue); }

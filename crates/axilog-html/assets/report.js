@@ -562,23 +562,18 @@
     return { areaPath: areaPath, linePath: linePath, downMarkers: downMarkers, ccBars: ccBars, xTicks: xTicks, yTicks: yTicks };
   }
 
-  // ---- replay (pure) -----------------------------------------------------
-  // Replay tab math, kept DOM-free (node-testable, see pure_fn_tests.mjs).
-  // `renderReplayView` further below is the thin rAF-driven DOM glue.
+  // ---- replay (pure; see pure_fn_tests.mjs) -----------------------------
 
-  /** Gate deciding whether the Replay tab appears: "rendered ONLY when
-   * data.replay present". Shared by `initTabs` and the node tests. */
+  /** Gate: the Replay tab appears only when `data.replay` is present. */
   function hasReplay(report) {
     return !!(report && report.replay && report.replay.tracks && report.replay.tracks.length > 0);
   }
 
-  /** How long (ms) a dot fades out after its track's last sample, once the
-   * playhead has moved past it. */
+  /** How long (ms) a dot fades after its track's last sample. */
   var REPLAY_FADE_MS = 3000;
 
-  /** Pad `bounds` 5% into an SVG `viewBox`-shaped `{x,y,width,height}`.
-   * Degenerate bounds (width/height <= 0) fall back to a 1x1 span first,
-   * so the stage never collapses to a zero-area viewBox. */
+  /** Pad `bounds` 5% into a viewBox `{x,y,width,height}`; degenerate
+   * (width/height <= 0) bounds fall back to a 1x1 span first. */
   function replayViewBox(bounds) {
     var b = bounds || { min_x: 0, min_y: 0, max_x: 0, max_y: 0 };
     var w = b.max_x - b.min_x;
@@ -590,8 +585,8 @@
     return { x: b.min_x - padX, y: b.min_y - padY, width: w + padX * 2, height: h + padY * 2 };
   }
 
-  /** Opacity for a dot holding position `lastT` once playhead `t` has
-   * passed it: 1 up to `lastT`, linear fade to 0 over `REPLAY_FADE_MS`. */
+  /** Opacity holding `lastT`'s position once `t` passes it: 1 up to
+   * `lastT`, linear fade to 0 over `REPLAY_FADE_MS`. */
   function replayFadeOpacity(t, lastT) {
     if (t <= lastT) return 1;
     var elapsed = t - lastT;
@@ -599,23 +594,19 @@
     return 1 - elapsed / REPLAY_FADE_MS;
   }
 
-  /** Position (+ opacity) for one track at time `t` (ms): interpolates
-   * between the `[t_ms, x, y]` samples bracketing `t`, `null` for an
-   * empty track. Holds the first sample before it, the last (fading via
-   * `replayFadeOpacity`) at/after it. */
+  /** Position (+ opacity) for a track at `t` (ms): interpolates between
+   * bracketing `[t_ms,x,y]` samples; `null` for an empty track; holds+
+   * fades before-first/after-last (see `replayFadeOpacity`). */
   function replayPositionAt(track, t) {
     var samples = (track && track.samples) || [];
     var n = samples.length;
     if (n === 0) return null;
-
     var first = samples[0];
     if (t <= first[0]) return { x: first[1], y: first[2], opacity: 1 };
-
     var last = samples[n - 1];
     if (t >= last[0]) {
       return { x: last[1], y: last[2], opacity: replayFadeOpacity(t, last[0]) };
     }
-
     for (var i = 0; i < n - 1; i++) {
       var a = samples[i];
       var b = samples[i + 1];
@@ -628,19 +619,19 @@
     return { x: last[1], y: last[2], opacity: replayFadeOpacity(t, last[0]) }; // unreachable
   }
 
-  /** `replayPositionAt` mapped over every track; the one function the
-   * animation loop calls every frame. */
+  /** `replayPositionAt` mapped over every track; called every frame. */
   function positionsAt(tracks, t) {
     return (tracks || []).map(function (track) {
       return replayPositionAt(track, t);
     });
   }
 
-  /** True when `t` falls inside any `[start_ms, end_ms]` pair (inclusive
-   * both ends). Shared by `isDownAt`/`isDeadAt`. */
+  /** `t` in `[start_ms,end_ms)` of any pair -- half-open, matching Rust's
+   * `Interval` (== GW2EI): a down->dead transition sharing one ms reads
+   * dead, not down. */
   function withinAnyReplayInterval(intervals, t) {
     return (intervals || []).some(function (iv) {
-      return t >= iv[0] && t <= iv[1];
+      return t >= iv[0] && t < iv[1];
     });
   }
 
@@ -650,6 +641,11 @@
 
   function isDeadAt(track, t) {
     return withinAnyReplayInterval(track && track.dead_intervals, t);
+  }
+
+  /** False once paused or past the fight's end -- stops the rAF loop. */
+  function shouldScheduleNextTick(playing, currentMs, durationMs) {
+    return !!playing && currentMs < durationMs;
   }
 
   var REPLAY_SPEEDS = [1, 4, 8];
@@ -1055,16 +1051,13 @@
     container.appendChild(svg);
   }
 
-  /** `team-<color>` (+ `is-enemy`) class for a dot, reusing `teamCssClass`
-   * for the same unknown-color fallback as the header chips. */
+  /** `team-<color>` (+ `is-enemy`) class for a dot; reuses `teamCssClass`. */
   function replayMarkerClass(track) {
     return "axilog-replay-marker team-" + teamCssClass(track.team) + (track.is_squad ? "" : " is-enemy");
   }
 
-  /** Animated Replay tab: play/pause + scrub + mm:ss readout + 1x/4x/8x
-   * speed over an inline SVG stage (squad filled, enemy hollow, commander
-   * gold ring, pulsing red ring while `isDownAt`, 25% opacity while
-   * `isDeadAt`). Lazily built once; thin glue driving `positionsAt`. */
+  /** Animated Replay tab: controls + SVG stage over `positionsAt`; thin,
+   * lazily-built (once) DOM glue -- see the "replay (pure)" section. */
   function renderReplayView(container, report) {
     container.textContent = "";
 
@@ -1081,12 +1074,10 @@
 
     var controls = document.createElement("div");
     controls.className = "axilog-replay-controls";
-
     var playBtn = document.createElement("button");
     playBtn.type = "button";
     playBtn.className = "axilog-replay-btn";
     playBtn.textContent = "Play";
-
     var scrub = document.createElement("input");
     scrub.type = "range";
     scrub.className = "axilog-replay-scrub";
@@ -1095,15 +1086,12 @@
     scrub.step = "100";
     scrub.value = "0";
     scrub.setAttribute("aria-label", "Replay scrub position");
-
     var timeLabel = document.createElement("span");
     timeLabel.className = "axilog-replay-time";
-
     var speedWrap = document.createElement("div");
     speedWrap.className = "axilog-segmented";
     speedWrap.setAttribute("role", "group");
     speedWrap.setAttribute("aria-label", "Playback speed");
-
     controls.appendChild(playBtn);
     controls.appendChild(scrub);
     controls.appendChild(timeLabel);
@@ -1111,7 +1099,6 @@
 
     var stage = document.createElement("div");
     stage.className = "axilog-replay-stage";
-
     var svg = svgEl("svg", {
       viewBox: vb.x + " " + vb.y + " " + vb.width + " " + vb.height,
       width: "100%",
@@ -1133,17 +1120,14 @@
     var markerRadius = Math.max(vb.width, vb.height) * 0.012;
     var dots = tracks.map(function (track) {
       var g = svgEl("g", { class: "axilog-replay-dot" });
-
       var commanderRing = null;
       if (track.commander) {
         commanderRing = svgEl("circle", { class: "axilog-replay-commander-ring", r: markerRadius * 1.9 });
         g.appendChild(commanderRing);
       }
-
       var downRing = svgEl("circle", { class: "axilog-replay-down-ring", r: markerRadius * 1.6 });
       downRing.hidden = true;
       g.appendChild(downRing);
-
       var marker = svgEl("circle", { class: replayMarkerClass(track), r: markerRadius });
       var title = svgEl("title", {});
       title.textContent = track.name;
@@ -1158,7 +1142,7 @@
     container.appendChild(controls);
     container.appendChild(stage);
 
-    var playing = false, speed = REPLAY_DEFAULT_SPEED, currentMs = 0, lastWallTs = null;
+    var playing = false, speed = REPLAY_DEFAULT_SPEED, currentMs = 0, lastWallTs = null, rafId = null;
 
     REPLAY_SPEEDS.forEach(function (s) {
       var btn = document.createElement("button");
@@ -1220,13 +1204,14 @@
         setCurrentTime(currentMs + (ts - lastWallTs) * speed);
       }
       lastWallTs = ts;
-      if (currentMs >= durationMs) {
+      if (!shouldScheduleNextTick(playing, currentMs, durationMs)) {
         playing = false;
         lastWallTs = null;
+        rafId = null;
         updatePlayButton();
         return;
       }
-      requestAnimationFrame(tick);
+      rafId = requestAnimationFrame(tick);
     }
 
     function play() {
@@ -1235,12 +1220,13 @@
       playing = true;
       lastWallTs = null;
       updatePlayButton();
-      requestAnimationFrame(tick);
+      rafId = requestAnimationFrame(tick);
     }
 
     function pause() {
       playing = false;
       lastWallTs = null;
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
       updatePlayButton();
     }
 
@@ -1254,6 +1240,12 @@
       setCurrentTime(Number(scrub.value));
     });
 
+    // Stop the rAF loop once not visible (tab switch, or tab backgrounded).
+    container.axilogOnHide = pause;
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) pause();
+    });
+
     setCurrentTime(0);
   }
 
@@ -1265,9 +1257,8 @@
 
   var REPLAY_TAB_DEF = { id: "replay", buttonId: "axilog-tab-replay", panelId: "axilog-view-replay", render: renderReplayView };
 
-  /** Appended only when `hasReplay` says there's something to show --
-   * "tab only appears when data.replay present". The button itself is
-   * always in the skeleton, `hidden` by default; `initTabs` unhides it. */
+  /** Appended only when `hasReplay` is true; the button is always in the
+   * skeleton, `hidden` by default -- `initTabs` unhides it. */
   function tabDefsFor(report) {
     return hasReplay(report) ? BASE_TAB_DEFS.concat([REPLAY_TAB_DEF]) : BASE_TAB_DEFS;
   }
@@ -1288,6 +1279,7 @@
         var btn = byId(def.buttonId);
         var panel = byId(def.panelId);
         var active = i === index;
+        if (!active && panel.axilogOnHide) panel.axilogOnHide(); // e.g. pause replay
         panel.hidden = !active;
         btn.setAttribute("aria-selected", active ? "true" : "false");
         btn.tabIndex = active ? 0 : -1;
@@ -1403,6 +1395,7 @@
     positionsAt: positionsAt,
     isDownAt: isDownAt,
     isDeadAt: isDeadAt,
+    shouldScheduleNextTick: shouldScheduleNextTick,
     REPLAY_FADE_MS: REPLAY_FADE_MS,
     REPLAY_SPEEDS: REPLAY_SPEEDS,
     REPLAY_DEFAULT_SPEED: REPLAY_DEFAULT_SPEED,
