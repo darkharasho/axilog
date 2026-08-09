@@ -169,6 +169,43 @@ export interface EncounterOut {
   tick_rate?: TickRateOut
 }
 
+/** Min/max `x`/`y` observed across every `ReplayOut.tracks[].samples` -- lets a consumer size a viewBox without a second pass over `tracks`. */
+export interface ReplayBoundsOut {
+  min_x: number
+  min_y: number
+  max_x: number
+  max_y: number
+}
+
+/**
+ * One tracked agent's combat-replay track (M9, Task 2). `name`/`team` mirror
+ * the display-field precedence used elsewhere (`PlayerOut.character` for
+ * squad players, `EnemyOut.name` for enemy-player representatives).
+ * `samples` are `[t_ms, x, y]` triples (`x`/`y` rounded to 1 decimal place);
+ * `down_intervals`/`dead_intervals` are `[start_ms, end_ms]` pairs.
+ */
+export interface ReplayTrackOut {
+  name: string
+  team: string
+  commander: boolean
+  is_squad: boolean
+  samples: [number, number, number][]
+  down_intervals: [number, number][]
+  dead_intervals: [number, number][]
+}
+
+/**
+ * Combat-replay position tracks (M9, Task 2), native-only -- present only
+ * when the caller opted in (CLI `--replay` / SDK `replay: true`). See
+ * `axilog_core::analysis::replay` for how `poll_ms`/samples/intervals are
+ * computed.
+ */
+export interface ReplayOut {
+  poll_ms: number
+  bounds: ReplayBoundsOut
+  tracks: ReplayTrackOut[]
+}
+
 /**
  * axilog's native report shape (`axilog_schema::Report`), as returned by
  * `parseFile`/`parseBuffer`. `schema_version` is currently always `"0.1"`.
@@ -182,4 +219,6 @@ export interface Report {
   timeline: TimelineOut
   /** Structured, user-facing analysis warnings (e.g. an unsupported post-rework build). Omitted entirely (not `[]`) when there are none. */
   warnings?: string[]
+  /** Opt-in combat-replay block (M9, Task 2) -- present only when requested via `{ replay: true }`. Omitted entirely (not `null`) otherwise. */
+  replay?: ReplayOut
 }

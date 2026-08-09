@@ -12,20 +12,37 @@ export declare function anonymizeFile(inPath: string, outPath: string): number
 
 /**
  * Parses an already-read `.evtc`/`.zevtc` buffer and returns the native
- * `Report` as a plain JS object.
+ * `Report` as a plain JS object. `opts.replay` (M9, Task 2) opts into
+ * embedding the native combat-replay block.
  */
-export declare function parseBuffer(buf: Buffer): Report
+export declare function parseBuffer(buf: Buffer, opts?: ParseOptions | undefined | null): Report
 
 /**
  * Parses a `.evtc`/`.zevtc` file at `path` and returns the native
  * `Report` as a plain JS object (see module docs for the field-name
- * behavior).
+ * behavior). `opts.replay` (M9, Task 2) opts into embedding the native
+ * combat-replay block; omitted entirely for back-compat with every
+ * existing zero-arg call site.
  */
-export declare function parseFile(path: string): Report
+export declare function parseFile(path: string, opts?: ParseOptions | undefined | null): Report
 
 /**
  * Parses a `.evtc`/`.zevtc` file at `path` and returns the Elite
  * Insights-compatibility JSON (`axilog_ei::to_ei_json`) as a plain JS
- * object.
+ * object. No `replay` option -- EI's JSON shape has no comparable field
+ * (see `axilog_ei::to_ei_json`'s module doc).
  */
 export declare function parseFileEi(path: string): any
+
+/**
+ * Optional per-call parse settings (M9, Task 2). `replay: true` opts into
+ * computing and embedding the native combat-replay block (`ReplayOut`) in
+ * the returned `Report`; omitted (or `false`, or the argument itself
+ * omitted entirely -- napi treats a trailing `Option<T>` parameter as
+ * optional in the generated TypeScript signature) keeps the existing
+ * zero-arg call shape's behavior unchanged (no `replay` key in the
+ * output, matching `Report.replay`'s serde skip-when-absent).
+ */
+export interface ParseOptions {
+  replay?: boolean
+}

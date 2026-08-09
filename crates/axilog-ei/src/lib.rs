@@ -211,7 +211,7 @@ mod tests {
             timeline:Timeline{resolution_ms:1000,squad_damage:vec![800],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default()};
-        axilog_schema::build_report(&enc,&m,"0.1.0")
+        axilog_schema::build_report(&enc,&m,"0.1.0", None)
     }
     #[test]
     fn maps_core_ei_fields() {
@@ -282,7 +282,7 @@ mod tests {
             boons: Default::default(), boon_uptime, boon_generation,
             warnings: Default::default(),
         };
-        axilog_schema::build_report(&enc,&m,"0.1.0")
+        axilog_schema::build_report(&enc,&m,"0.1.0", None)
     }
 
     #[test]

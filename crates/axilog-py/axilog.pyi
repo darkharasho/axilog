@@ -69,6 +69,9 @@ __all__ = [
     "EnemyOut",
     "TimelineOut",
     "PerSecondOut",
+    "ReplayBoundsOut",
+    "ReplayTrackOut",
+    "ReplayOut",
 ]
 
 # --- encounter / metadata ---------------------------------------------
@@ -211,6 +214,39 @@ class TimelineOut(TypedDict):
     resolution_ms: int
     per_second: PerSecondOut
 
+# --- combat replay (M9, Task 2) --------------------------------------------
+
+class ReplayBoundsOut(TypedDict):
+    """Min/max `x`/`y` observed across every `ReplayOut.tracks[].samples`."""
+
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+
+class ReplayTrackOut(TypedDict):
+    """One tracked agent's combat-replay track. `name`/`team` mirror the
+    display-field precedence used elsewhere (`PlayerOut.character` for squad
+    players, `EnemyOut.name` for enemy-player representatives). `samples`
+    are `[t_ms, x, y]` triples (`x`/`y` rounded to 1 decimal place);
+    `down_intervals`/`dead_intervals` are `[start_ms, end_ms]` pairs."""
+
+    name: str
+    team: str
+    commander: bool
+    is_squad: bool
+    samples: List[List[float]]
+    down_intervals: List[List[int]]
+    dead_intervals: List[List[int]]
+
+class ReplayOut(TypedDict):
+    """Combat-replay position tracks, native-only -- present only when
+    `replay=True` was passed to `parse_file`/`parse_bytes`."""
+
+    poll_ms: int
+    bounds: ReplayBoundsOut
+    tracks: List[ReplayTrackOut]
+
 # --- top-level report -----------------------------------------------------
 
 class _ReportRequired(TypedDict):
@@ -222,22 +258,29 @@ class _ReportRequired(TypedDict):
     timeline: TimelineOut
 
 class Report(_ReportRequired, total=False):
-    """`warnings` is omitted (not `[]`) when there are no analysis warnings."""
+    """`warnings` is omitted (not `[]`) when there are no analysis warnings.
+    `replay` is omitted (not `None`) unless requested via `replay=True`."""
 
     warnings: List[str]
+    replay: ReplayOut
 
 # --- module functions -----------------------------------------------------
 
-def parse_file(path: str) -> Report:
+def parse_file(path: str, replay: bool = False) -> Report:
     """Parse a `.evtc`/`.zevtc` file at `path` into the native `Report` shape.
+
+    `replay` (M9, Task 2) opts into embedding the native combat-replay
+    block (`Report["replay"]`); defaults to `False`.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.
     """
     ...
 
-def parse_bytes(data: bytes) -> Report:
+def parse_bytes(data: bytes, replay: bool = False) -> Report:
     """Parse an already-read `.evtc`/`.zevtc` buffer into the native `Report` shape.
+
+    `replay` (M9, Task 2) opts into embedding the native combat-replay block.
 
     Raises `ValueError` if `data` is not a decodable/parseable arcdps log.
     """

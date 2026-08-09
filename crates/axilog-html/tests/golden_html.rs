@@ -13,6 +13,7 @@
 //! independently of those core-level tests.
 
 use axilog_core::analysis::analyze;
+use axilog_core::analysis::replay::{build_replay, DEFAULT_POLL_MS};
 use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
 use axilog_schema::{build_report, Report};
@@ -23,13 +24,26 @@ const CSS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/report.css")
 const JS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/report.js");
 
 /// Full pipeline, fixture -> native `Report` — mirrors what `axilog-cli`'s
-/// `parse --format html` does.
+/// `parse --format html` (without `--replay`) does.
 fn fixture_report() -> Report {
     let bytes = std::fs::read(FIXTURE_PATH).expect("committed fixture present");
     let raw = decode_raw(&bytes).expect("fixture decodes");
     let enc = resolve(&raw);
     let metrics = analyze(&enc, &raw);
-    build_report(&enc, &metrics, "0.1.0-test")
+    build_report(&enc, &metrics, "0.1.0-test", None)
+}
+
+/// Same pipeline, but with `--replay` (M9, Task 2): computes
+/// `axilog_core::analysis::replay::build_replay` at the CLI's default
+/// polling rate and embeds it, mirroring `axilog-cli`'s
+/// `parse --format html --replay`.
+fn fixture_report_with_replay() -> Report {
+    let bytes = std::fs::read(FIXTURE_PATH).expect("committed fixture present");
+    let raw = decode_raw(&bytes).expect("fixture decodes");
+    let enc = resolve(&raw);
+    let metrics = analyze(&enc, &raw);
+    let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
+    build_report(&enc, &metrics, "0.1.0-test", Some(&replay))
 }
 
 /// Extract the raw text between the `axilog-data` script tags and parse it
@@ -132,6 +146,61 @@ fn total_report_size_stays_under_budget() {
         "fixture report is {} bytes, must stay under the 250KB total-file budget",
         html.len()
     );
+}
+
+/// M9 Task 2 size gate: a replay-enabled fixture report must stay under
+/// 600KB (the plan's Global Constraints budget -- deliberately looser than
+/// the non-replay report's 250KB budget above, since `ReplayOut.tracks[]`
+/// adds a full downsampled position track per squad/enemy-player). Also
+/// logs the embedded replay block's own serialized byte size (informational
+/// only, per the Task 2 brief -- "no hard gate" on that number alone).
+#[test]
+fn replay_enabled_report_stays_under_600kb_budget() {
+    let report = fixture_report_with_replay();
+    let replay = report.replay.as_ref().expect("replay block present when requested");
+    let replay_json_len = serde_json::to_string(replay).expect("replay serializes").len();
+    println!(
+        "replay-enabled fixture: embedded replay JSON block is {replay_json_len} bytes \
+         ({} tracks)",
+        replay.tracks.len()
+    );
+
+    let html = axilog_html::render(&report);
+    assert!(
+        html.len() < 600_000,
+        "replay-enabled fixture report is {} bytes, must stay under the 600KB budget \
+         (replay JSON block alone is {replay_json_len} bytes)",
+        html.len()
+    );
+}
+
+/// Determinism must hold with replay data embedded too (M9 Task 2 brief),
+/// not just for the non-replay path already covered by
+/// `render_is_deterministic_for_the_real_fixture` above.
+#[test]
+fn render_is_deterministic_with_replay_enabled() {
+    let report = fixture_report_with_replay();
+    let a = axilog_html::render(&report);
+    let b = axilog_html::render(&report);
+    assert_eq!(a, b, "render() must stay byte-for-byte deterministic with replay data embedded");
+}
+
+/// The replay block must actually reach the embedded JSON the client-side
+/// Replay tab (M9 Task 3) reads from -- i.e. `--format html --replay`'s
+/// data script tag carries `replay`, not just the in-memory `Report`.
+#[test]
+fn embedded_json_carries_the_replay_block_when_requested() {
+    let report = fixture_report_with_replay();
+    let html = axilog_html::render(&report);
+    let data = extract_embedded_json(&html);
+    assert!(data.get("replay").is_some(), "expected a replay key in the embedded JSON");
+    assert!(!data["replay"]["tracks"].as_array().expect("tracks array").is_empty());
+
+    // The non-replay path must still omit it entirely (not null).
+    let plain_report = fixture_report();
+    let plain_html = axilog_html::render(&plain_report);
+    let plain_data = extract_embedded_json(&plain_html);
+    assert!(plain_data.get("replay").is_none(), "replay must be omitted when not requested");
 }
 
 #[test]

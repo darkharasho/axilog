@@ -108,6 +108,7 @@ mod tests {
                 per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             },
             warnings: vec![],
+            replay: None,
         }
     }
 

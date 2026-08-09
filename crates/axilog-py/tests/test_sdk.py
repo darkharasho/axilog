@@ -163,6 +163,36 @@ class ParseFileTests(unittest.TestCase):
         )
 
 
+class ReplayOptInTests(unittest.TestCase):
+    """M9 Task 2: `replay=True` opts into the native combat-replay block;
+    absent by default. Mirrors `crates/axilog-node/__test__/sdk.test.mjs`'s
+    equivalent test."""
+
+    def test_replay_absent_by_default_present_and_shaped_when_requested(self):
+        without_replay = axilog.parse_file(FIXTURE)
+        self.assertNotIn("replay", without_replay)
+
+        with_replay = axilog.parse_file(FIXTURE, replay=True)
+        self.assertIn("replay", with_replay)
+        replay = with_replay["replay"]
+        self.assertIsInstance(replay["poll_ms"], int)
+        self.assertGreater(len(replay["tracks"]), 0)
+        track = replay["tracks"][0]
+        self.assertIsInstance(track["name"], str)
+        self.assertIsInstance(track["team"], str)
+        self.assertIsInstance(track["is_squad"], bool)
+        if track["samples"]:
+            self.assertEqual(len(track["samples"][0]), 3, "each sample is a [t, x, y] triple")
+
+        explicitly_off = axilog.parse_file(FIXTURE, replay=False)
+        self.assertNotIn("replay", explicitly_off)
+
+        with open(FIXTURE, "rb") as f:
+            data = f.read()
+        bytes_with_replay = axilog.parse_bytes(data, replay=True)
+        self.assertIn("replay", bytes_with_replay)
+
+
 class ParseBytesTests(unittest.TestCase):
     def test_parse_bytes_matches_parse_file(self):
         from_file = axilog.parse_file(FIXTURE)

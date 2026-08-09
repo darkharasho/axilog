@@ -30,14 +30,35 @@ fn napi_err(reason: impl std::fmt::Display) -> Error {
     Error::from_reason(reason.to_string())
 }
 
+/// Optional per-call parse settings (M9, Task 2). `replay: true` opts into
+/// computing and embedding the native combat-replay block (`ReplayOut`) in
+/// the returned `Report`; omitted (or `false`, or the argument itself
+/// omitted entirely -- napi treats a trailing `Option<T>` parameter as
+/// optional in the generated TypeScript signature) keeps the existing
+/// zero-arg call shape's behavior unchanged (no `replay` key in the
+/// output, matching `Report.replay`'s serde skip-when-absent).
+#[napi(object)]
+#[derive(Default, Clone, Copy)]
+pub struct ParseOptions {
+    pub replay: Option<bool>,
+}
+
 /// Shared decode -> resolve -> analyze -> build_report pipeline (identical
 /// to `axilog-cli`'s `Cmd::Parse` handler) over an already-read byte
-/// buffer.
-fn build_report_from_bytes(bytes: &[u8]) -> Result<axilog_schema::Report> {
+/// buffer. `want_replay` mirrors `ParseOptions.replay` (defaulted to
+/// `false` by callers that pass no options at all).
+fn build_report_from_bytes(bytes: &[u8], want_replay: bool) -> Result<axilog_schema::Report> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
-    Ok(axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION")))
+    let replay = want_replay.then(|| {
+        axilog_core::analysis::replay::build_replay(
+            &raw,
+            &enc,
+            axilog_core::analysis::replay::DEFAULT_POLL_MS,
+        )
+    });
+    Ok(axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref()))
 }
 
 fn report_to_value(report: &axilog_schema::Report) -> Result<Value> {
@@ -46,28 +67,33 @@ fn report_to_value(report: &axilog_schema::Report) -> Result<Value> {
 
 /// Parses a `.evtc`/`.zevtc` file at `path` and returns the native
 /// `Report` as a plain JS object (see module docs for the field-name
-/// behavior).
+/// behavior). `opts.replay` (M9, Task 2) opts into embedding the native
+/// combat-replay block; omitted entirely for back-compat with every
+/// existing zero-arg call site.
 #[napi]
-pub fn parse_file(path: String) -> Result<Value> {
+pub fn parse_file(path: String, opts: Option<ParseOptions>) -> Result<Value> {
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    parse_buffer(bytes.into())
+    parse_buffer(bytes.into(), opts)
 }
 
 /// Parses an already-read `.evtc`/`.zevtc` buffer and returns the native
-/// `Report` as a plain JS object.
+/// `Report` as a plain JS object. `opts.replay` (M9, Task 2) opts into
+/// embedding the native combat-replay block.
 #[napi]
-pub fn parse_buffer(buf: Buffer) -> Result<Value> {
-    let report = build_report_from_bytes(buf.as_ref())?;
+pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
+    let want_replay = opts.and_then(|o| o.replay).unwrap_or(false);
+    let report = build_report_from_bytes(buf.as_ref(), want_replay)?;
     report_to_value(&report)
 }
 
 /// Parses a `.evtc`/`.zevtc` file at `path` and returns the Elite
 /// Insights-compatibility JSON (`axilog_ei::to_ei_json`) as a plain JS
-/// object.
+/// object. No `replay` option -- EI's JSON shape has no comparable field
+/// (see `axilog_ei::to_ei_json`'s module doc).
 #[napi]
 pub fn parse_file_ei(path: String) -> Result<Value> {
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let report = build_report_from_bytes(&bytes)?;
+    let report = build_report_from_bytes(&bytes, false)?;
     Ok(axilog_ei::to_ei_json(&report))
 }
 

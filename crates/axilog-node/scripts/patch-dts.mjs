@@ -39,13 +39,18 @@ if (!src.includes(IMPORT_LINE)) {
   }
 }
 
+// M9 Task 2: `parseFile`/`parseBuffer` gained a trailing optional `opts`
+// parameter (`ParseOptions`, for the opt-in `replay` block) -- match up to
+// the closing `)` generically rather than the old fixed-arity signature, so
+// this still finds (and only swaps the return type of) the right
+// declaration regardless of the exact parameter list napi-rs emits.
 src = src.replace(
-  /export declare function parseFile\(path: string\): any/,
-  'export declare function parseFile(path: string): Report',
+  /export declare function parseFile\(([^)]*)\): any/,
+  'export declare function parseFile($1): Report',
 )
 src = src.replace(
-  /export declare function parseBuffer\(buf: Buffer\): any/,
-  'export declare function parseBuffer(buf: Buffer): Report',
+  /export declare function parseBuffer\(([^)]*)\): any/,
+  'export declare function parseBuffer($1): Report',
 )
 
 if (src !== before) {
