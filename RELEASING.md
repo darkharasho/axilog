@@ -1,9 +1,7 @@
 # Releasing axilog
 
-This covers cutting a tag-triggered CLI binary release (M8 Task 1). npm
-platform packages and Python wheels attach to the same GitHub Release in
-later M8 tasks; this document will grow to cover their version-sync and
-publish steps when those land.
+This covers cutting a tag-triggered release: CLI binaries, npm platform packages, and
+Python wheels/sdist, all attached to one GitHub Release.
 
 ## How it works
 
@@ -21,9 +19,29 @@ Pushing a tag matching `v*` triggers `.github/workflows/release.yml`, which:
    - `x86_64-pc-windows-msvc`
    - `x86_64-apple-darwin`
    - `aarch64-apple-darwin`
-3. **`release`** — downloads every build's artifacts, re-checks the version guard,
+3. **`addon-build`** / **`npm-pack-main`** / **`npm-install-shape`** — build the napi-rs
+   native addon for the same 5 targets, stage each into its `crates/axilog-node/npm/<platform>`
+   package, `npm pack` every platform package plus the main `@axi/axilog` package, and
+   validate the install shape end-to-end (packs the main + linux-x64-gnu tarballs into a
+   throwaway project, installs, requires, parses the committed fixture, asserts 42 players /
+   squad damage total 2138414).
+4. **`wheel-build`** / **`sdist-build`** — build the Python wheel (`maturin build --release`,
+   abi3 — one wheel per platform covers every CPython ≥3.9) for
+   `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`, `x86_64-apple-darwin`,
+   `aarch64-apple-darwin`, plus a platform-independent sdist (`maturin sdist`) on Linux.
+5. **`npm-publish`** / **`pypi-publish`** — gated publish steps (see below).
+6. **`release`** — downloads every build's artifacts, re-checks the version guard,
    generates a consolidated `SHA256SUMS`, and creates the GitHub Release (`gh release
-   create`) with generated release notes and every archive + checksum attached.
+   create`) with generated release notes and every archive/tarball/wheel/sdist +
+   checksum file attached.
+
+Every job above runs the same way whether the workflow was triggered by a tag push or by
+`workflow_dispatch` (manual "dry run" — see the workflow file's header comment) — the only
+difference is that `npm-publish`, `pypi-publish`, and `release` are gated to run **only**
+on `github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')`. A
+`workflow_dispatch` run — even one manually pointed at an existing tag ref — always
+dry-runs: it builds, packs, and validates everything, but never creates a Release or
+publishes to npm/PyPI.
 
 ### aarch64-unknown-linux-gnu cross-compilation
 
@@ -36,7 +54,14 @@ multi-hundred-MB image on every release for a target that is build-only here (no
 execute under emulation, which is `cross`'s main advantage over a bare linker). A plain
 `apt install` + linker env var is faster and has no extra moving parts; axilog-cli and
 its workspace dependencies are pure Rust with no aarch64-specific native deps, so a bare
-cross-linked binary is exactly as reliable here.
+cross-linked binary is exactly as reliable here. The same reasoning covers the
+`addon-build` job's `linux-arm64-gnu` leg.
+
+The Python wheel matrix does **not** include an aarch64-Linux leg: maturin's manylinux
+compatibility tagging inspects the actual linked ELF symbol versions on the build host,
+which needs to run on the target architecture to be trustworthy — there is no hosted
+aarch64 Linux runner to do that natively, so this target is deferred rather than shipped
+with an unverified platform tag.
 
 ### Packaging script
 
@@ -61,38 +86,92 @@ and zip code paths, plus a missing-binary failure case. Not wired into `ci.yml` 
 release-path-only tooling); run it manually before cutting a release if you've touched
 the packaging script.
 
+## Version single-sourcing
+
+`[workspace.package].version` in the root `Cargo.toml` is the single source of truth.
+Every other place a version string is hand-duplicated must be bumped in lockstep and is
+checked by `scripts/check-versions.sh` (wired into `ci.yml` as a cheap ubuntu-only step,
+and re-runnable locally at any time):
+
+- `crates/axilog-node/package.json` (`version`)
+- `crates/axilog-node/npm/<platform>/package.json` (`version`, one per napi-rs platform
+  package: `linux-x64-gnu`, `linux-arm64-gnu`, `win32-x64-msvc`, `darwin-x64`,
+  `darwin-arm64`)
+- `crates/axilog-node/package.json`'s `optionalDependencies` pins on those same platform
+  packages (a stale pin makes `npm install` silently resolve nothing, or the wrong
+  version, for a released main package)
+- `crates/axilog-py/pyproject.toml` (`[project].version` — static, not
+  maturin-`dynamic`, so it needs the same manual bump as the Node versions; see the
+  comment at the top of `scripts/check-versions.sh` for why this crate doesn't use
+  maturin's `dynamic = ["version"]` option)
+
+`scripts/check-versions.sh` prints every mismatch it finds (not just the first) and
+exits non-zero if anything is out of sync — run it after bumping, before tagging:
+
+```sh
+scripts/check-versions.sh
+```
+
+`release.yml`'s `version-guard` job additionally checks the pushed tag itself against
+`Cargo.toml` (`scripts/check-tag-version.sh`) — that's a separate check (tag vs.
+Cargo.toml) from `check-versions.sh` (Cargo.toml vs. every other duplicated copy); a
+release needs both to agree.
+
 ## Cutting a release
 
-1. Bump the version:
+1. Bump the version everywhere `scripts/check-versions.sh` checks:
    - `[workspace.package].version` in the root `Cargo.toml`
-   - `crates/axilog-node/package.json` (`version` field)
+   - `crates/axilog-node/package.json` (`version`)
+   - `crates/axilog-node/npm/*/package.json` (`version`, all 5 platform packages)
+   - `crates/axilog-node/package.json`'s `optionalDependencies` pins (all 5, same value)
    - `crates/axilog-py/pyproject.toml` (`[project].version`)
-
-   (Automated version-sync checking across all three — `scripts/check-versions.sh`,
-   wired into `ci.yml` — lands in M8 Task 2. For now, bump all three by hand and
-   double-check they match before tagging.)
-2. Commit the bump:
+2. Verify everything agrees before touching git:
    ```sh
-   git add Cargo.toml crates/axilog-node/package.json crates/axilog-py/pyproject.toml
+   scripts/check-versions.sh
+   ```
+3. Commit the bump:
+   ```sh
+   git add Cargo.toml crates/axilog-node/package.json crates/axilog-node/npm \
+     crates/axilog-py/pyproject.toml
    git commit -m "chore: bump version to X.Y.Z"
    ```
-3. Tag and push:
+4. Tag and push:
    ```sh
    git tag vX.Y.Z
    git push origin main
    git push origin vX.Y.Z
    ```
-4. Watch the `Release` workflow run in GitHub Actions. On success, a GitHub Release
+5. Watch the `Release` workflow run in GitHub Actions. On success, a GitHub Release
    named `vX.Y.Z` will exist with:
-   - One `axilog-X.Y.Z-<target>.tar.gz` / `.zip` per target, each with a `.sha256`
+   - One `axilog-X.Y.Z-<target>.tar.gz` / `.zip` per CLI target, each with a `.sha256`
      alongside it
-   - A consolidated `SHA256SUMS` covering every archive
+   - One `.tgz` per npm package (main `@axi/axilog` + all 5 platform packages)
+   - One `.whl` per Python wheel target, plus one sdist `.tar.gz`
+   - A consolidated `SHA256SUMS` covering every archive/tarball/wheel/sdist
    - Auto-generated release notes
 
 If the tag doesn't match `Cargo.toml`'s version, the workflow fails immediately in the
 `version-guard` job (and again, redundantly, right before the Release is created) with a
 clear error — fix the version, delete the bad tag (`git tag -d vX.Y.Z && git push
 --delete origin vX.Y.Z`), and retag.
+
+## Publishing to npm / PyPI (optional, gated)
+
+`npm-publish` and `pypi-publish` only run on a real tag **push** (never on
+`workflow_dispatch`, even one pointed at an existing tag — see the workflow's header
+comment), and each additionally requires its registry token to be configured as a
+repository secret:
+
+- **npm**: set the `NPM_TOKEN` repository secret (an npm automation/publish token) to
+  enable `npm publish --access public` for every packed tarball on the next tag push.
+- **PyPI**: set the `PYPI_TOKEN` repository secret (a PyPI API token, used as
+  `TWINE_PASSWORD` with `TWINE_USERNAME=__token__`) to enable `twine upload` for every
+  wheel + the sdist on the next tag push.
+
+Without the corresponding secret, the publish step logs a clear skip message and exits
+successfully — the GitHub Release itself (and its attached npm tarballs / wheels /
+sdist) is still created either way, so consumers can always install from the Release
+even before either registry is wired up.
 
 ## Verifying a downloaded release archive
 

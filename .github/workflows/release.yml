@@ -323,6 +323,158 @@ jobs:
             console.log('install-shape validation OK: 42 players, squad damage total ' + total);
           "
 
+  # Python wheel builds (M8 Task 3). abi3 (pyo3 "abi3-py39" feature, see
+  # crates/axilog-py/Cargo.toml) means a single wheel per platform covers
+  # every CPython >=3.9 -- no per-Python-minor matrix legs needed, unlike a
+  # non-abi3 extension. Four native legs (no cross-compile target here,
+  # unlike the CLI/addon matrices' aarch64-linux leg): ubuntu-latest/x86_64,
+  # windows-latest/x86_64, macos-13/x86_64 (last Intel runner image),
+  # macos-latest/aarch64 (Apple Silicon). aarch64-unknown-linux-gnu is
+  # intentionally NOT built here -- maturin's manylinux compatibility
+  # auditing (see below) needs to run ON the target architecture to inspect
+  # the produced ELF's actual linked symbol versions, and there is no
+  # hosted aarch64 Linux runner to do that natively; cross-compiling a
+  # wheel and asserting its manylinux tag without ever running it on
+  # aarch64 hardware is out of scope for this task (the CLI/addon aarch64
+  # legs are build-only with no such platform-tag correctness requirement).
+  #
+  # manylinux tagging: plain `maturin build --release` (no docker, no
+  # `--manylinux` flag, no `maturin-action`) was verified locally on this
+  # sandbox's ubuntu host -- maturin's built-in auditwheel-equivalent ELF
+  # analysis auto-tagged the wheel `manylinux_2_34_x86_64` (PEP 600
+  # perennial tag, computed from the actual glibc symbol versions the
+  # compiled `.so` links against) with zero extra configuration. This
+  # crate has no non-libc native dependencies (pyo3 abi3-py39 +
+  # extension-module links only against libc/libpython's stable ABI), so
+  # the same auto-tagging is expected to hold on ubuntu-latest in CI. See
+  # the Task 3 report for the exact local wheel filename this produced.
+  wheel-build:
+    name: Build Python wheel (${{ matrix.target }})
+    needs: version-guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: crates/axilog-py/pyproject.toml
+
+      # Pinned to the same range crates/axilog-py/pyproject.toml's
+      # [build-system].requires declares (">=1.5,<2.0"), so the version
+      # that builds the released wheel here is never silently newer/older
+      # than the range the package itself documents as its build backend.
+      - name: Install maturin
+        run: python -m pip install --upgrade pip "maturin>=1.5,<2.0"
+
+      - name: Build wheel (abi3, release)
+        working-directory: crates/axilog-py
+        run: maturin build --release --target ${{ matrix.target }} --out ../../dist-wheel
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target }}
+          path: dist-wheel/*.whl
+          if-no-files-found: error
+
+  # sdist (M8 Task 3): source distribution, platform-independent, built once
+  # on ubuntu. Lets `pip install axilog` fall back to a source build (needs
+  # a Rust toolchain + maturin on the installing machine) on any platform
+  # the wheel matrix above doesn't cover, and is the artifact PyPI expects
+  # alongside wheels for a "real" package release.
+  sdist-build:
+    name: Build Python sdist
+    needs: version-guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: crates/axilog-py/pyproject.toml
+
+      - name: Install maturin
+        run: python -m pip install --upgrade pip "maturin>=1.5,<2.0"
+
+      - name: Build sdist
+        working-directory: crates/axilog-py
+        run: maturin sdist --out ../../dist-wheel
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-sdist
+          path: dist-wheel/*.tar.gz
+          if-no-files-found: error
+
+  # Gated PyPI publish (M8 Task 3). Same event+ref gate as `npm-publish`/
+  # `release` below (github.event_name == 'push' && startsWith(github.ref,
+  # 'refs/tags/')) -- a workflow_dispatch run pointed at an existing tag ref
+  # must never publish for real, only build+validate. Independently gated
+  # on the PYPI_TOKEN repository secret being present, with a clear
+  # log-skip message when it's absent -- mirrors npm-publish's NPM_TOKEN
+  # pattern exactly. NEVER requires or embeds real credentials for this job
+  # to succeed locally/in CI without the secret.
+  pypi-publish:
+    name: Publish to PyPI (gated)
+    needs: [wheel-build, sdist-build]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    env:
+      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist-wheel
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-sdist
+          path: dist-wheel
+          merge-multiple: true
+
+      - name: Install twine
+        if: env.PYPI_TOKEN != ''
+        run: python -m pip install --upgrade pip twine
+
+      - name: Publish to PyPI
+        if: env.PYPI_TOKEN != ''
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: twine upload dist-wheel/*.whl dist-wheel/*.tar.gz
+
+      - name: Skip PyPI publish (PYPI_TOKEN not set)
+        if: env.PYPI_TOKEN == ''
+        run: echo "PYPI_TOKEN repository secret is not set -- skipping PyPI publish. Set PYPI_TOKEN to enable publishing on future tag pushes."
+
   # Gated npm publish (M8 Task 2). Never runs on a workflow_dispatch dry run
   # (job-level event+ref gate, same pattern as `release` below); on a real
   # tag PUSH it still only publishes if the NPM_TOKEN repository secret is
@@ -374,7 +526,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build, npm-pack-main, addon-build, npm-install-shape]
+    needs: [build, npm-pack-main, addon-build, npm-install-shape, wheel-build, sdist-build]
     runs-on: ubuntu-latest
     # Never runs on a workflow_dispatch dry run -- only a real `v*` tag PUSH
     # creates/updates a GitHub Release. `github.event_name == 'push'` is
@@ -402,10 +554,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name '*.tgz' \) \
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name '*.tgz' -o -name '*.whl' \) \
             -exec cp {} release/ \;
           cd release
-          sha256sum -- *.tar.gz *.zip *.tgz > SHA256SUMS
+          sha256sum -- *.tar.gz *.zip *.tgz *.whl > SHA256SUMS
           echo "Release contents:"
           ls -la
 
