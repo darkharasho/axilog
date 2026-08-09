@@ -22,6 +22,7 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   documented condition-skill-id-catalog simplification gap is real (not just theoretical) on the
   incoming side, see `analysis::defenses`'s module doc.
 - CI: x86_64-apple-darwin cross-compiles on arm64 (macos-13 retired); ci concurrency-cancel
+- M13 hit-quality (statsAll, 20 fields EXACT) + defenses (SURPASSES EI: true life-leech count EI's own bug zeroes) + --view defense
 
 ## In flight
 (none)
@@ -31,6 +32,7 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   mappings already decoded). Unblocks Skill Usage / APM.
 - M15 Combat-replay positions in EI shape: resample sparse tracks → EI fixed-rate grid;
   inchToPixel map-scale table (per-map). Unblocks axibridge replay map / heatmap / positioning.
+- MCONDCAT Condition-skill-id classification catalog: EMPIRICALLY-CONFIRMED gap (M13 post-era: up to 35%% divergence on condition/power/life-leech buff==1 split; immune fields exact). Pull GW2EI Buff Classification==Condition catalog (like M3's cleanse set, complete). Unblocks exact condition/power split on post-era logs.
 - M16 Damage modifiers: trait/sigil/food/rune modifier attribution engine
   (`damageModifiers`/`incomingDamageModifiers` + maps). Largest; GW2EI DamageModifier defs +
   decompile for edge cases. Least WvW-critical — can slot late.
