@@ -87,7 +87,7 @@ release artifact.
 ### Parse a log
 
 ```sh
-axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons|healing] [-o FILE] [--replay] [--missiles]
+axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons|healing] [-o FILE] [--replay] [--missiles] [--skill-damage] [--timeseries]
 ```
 
 - `json` (default) — axilog's own native schema (`axilog_schema::Report`): encounter info, teams,
@@ -117,6 +117,22 @@ block — per-squad-player `fired`/`hit`/`denied`/`reflected_at_self` counts plu
 `axilog_core::analysis::missiles`'s module doc for exactly what's attributable — the arcdps wire
 format has no blocked/reflected/destroyed reason code, so `denied` is deliberately undifferentiated
 and there is no per-player "who denied this" credit anywhere.
+
+`--skill-damage` (M12 Task 1) computes and embeds each squad player's per-skill damage
+distribution — outgoing (whole-fight and per-target) and incoming, grouped by skill id.
+`--format json` embeds it as each player's `skill_damage` field; `--format ei-json` (M12 Task 3)
+maps the same data into EI's own `totalDamageDist`/`targetDamageDist`/`totalDamageTaken` array
+shapes; every other format ignores it. Off by default — measured +249% JSON size on the committed
+fixture when always-on (see **EI-JSON parity** below and `axilog_schema::Report::players`'s
+`PlayerOut::skill_damage` doc comment).
+
+`--timeseries` (M12 Task 2) computes and embeds each squad player's per-second cumulative
+`damage`/`damage_taken`/per-target series, plus a per-enemy `dps_targets` whole-fight summary.
+`--format json` embeds them as each player's `per_second`/`dps_targets` fields; `--format ei-json`
+(M12 Task 3) maps the same data into EI's own `damage1S`/`targetDamage1S`/`damageTaken1S`/
+`dpsTargets` array shapes; every other format ignores it. Off by default — measured +147.7%/
++36.4% JSON size respectively on the committed fixture when always-on (see **EI-JSON parity**
+below).
 
 `--view` (M3/M10) selects the `table` format's column layout — ignored for every other `--format`:
 
@@ -343,11 +359,20 @@ Calibrated against a real dps.report EI export for one WvW log (Green Alpine Bor
 | `targets[].isFake` (`ei-json`) | Exact | always `false` — every one of this project's `all_enemies` is a real, individually tracked agent, never one of real EI's synthetic aggregate pseudo-targets |
 | `players[].combatReplayData.{start,end,down,dead}` (`ei-json`) | Exact (down/dead), Approximate (start/end) | `down`/`dead` byte-exact vs. the golden (`crates/axilog-ei/tests/ei_golden.rs`); `start`/`end` (first/last event of any kind for that agent) match GW2EI's `FirstAware`/`LastAware` on every joined player in the golden fixture. Computed **unconditionally** (not gated on `--replay`) — cheap, unlike the position track. `positions[]`/`orientations`/`dc` stay absent (`--replay`'s own native `replay` block has positions; ei-json parity for those is deferred to M15) |
 | `players[].activeTimes` (`ei-json`) | Exact | `SingleActor.GetActiveDuration(log, 0, durationMS)` reproduced as `(last_aware − first_aware) − dead_ms` (down time is NOT subtracted, verified against GW2EI source); 0.0000% max error across all 37 joined players on the golden fixture (gate: ≤0.5%) |
+| `players[].totalDamageDist[][]` / `targetDamageDist[][][]` / `totalDamageTaken[][]` (`ei-json`) | Emitted, opt-in | `[phase][skillEntry]` / `[targetIndex][phase][skillEntry]` array shapes, verified against a real dps.report export; each entry carries only the fields this project computes (`id`, `totalDamage`, `min`, `max`, `hits`, `crit`, `flank` — real EI's `connectedHits`/`glance`/`missed`/`invulned`/`blocked`/`downContribution`/`indirectDamage`/etc. aren't tracked anywhere in this schema, omitted rather than faked). Present only when the `Report` was built with `--skill-damage`/SDK `skill_damage: true` (M12 Task 1's opt-in gate — measured +249% JSON size when always-on); omitted entirely (not emitted empty) otherwise. Every shared skill id matches the golden fixture's `skillDamage.outgoing` **exactly** (37/37 joined accounts, `crates/axilog-ei/tests/ei_golden.rs`) |
+| `players[].damage1S[][]` / `targetDamage1S[][][]` / `damageTaken1S[][]` (`ei-json`) | Emitted, opt-in | `[phase][second]` / `[targetIndex][phase][second]` cumulative running-total arrays (this project's own per-second series are already cumulative by construction, matching GW2EI's own `*1S` semantics — see `axilog_core::analysis::timeseries`'s module doc). Present only when the `Report` was built with `--timeseries`/SDK `timeseries: true` (M12 Task 2's opt-in gate — measured +147.7% JSON size when always-on); omitted entirely otherwise. `damage1S[0].last()` matches the golden fixture's whole-fight damage scalar **exactly** (37/37 joined accounts) |
+| `players[].dpsTargets[][]` (`ei-json`) | Emitted, opt-in | `[targetIndex][phase]{dps, damage}`, positionally keyed to `targets[]`; only the two fields this project computes (real EI's `condiDps`/`powerDps`/`breakbarDamage`/`actor*` duplicates aren't tracked, omitted). Gated by the SAME `--timeseries` flag as `damage1S` above (not a separate one — `axilog_schema::build_report` populates both off one bool); a real WvW log's large enemy roster makes `dpsTargets` alone exceed the size-discipline guideline (+36.4%), so it's opt-in too, not always-on as originally considered |
 
 The `ei-json` output only emits fields backed by a real computed metric. Where real EI has a field
 we don't compute (e.g. per-target down-contribution/CC splits, most of `statsAll`'s damage-modifier
 and rotation detail), it's simply omitted — never faked — and the omission is documented inline in
-`crates/axilog-ei/src/lib.rs`.
+`crates/axilog-ei/src/lib.rs`. As of M12 (per-skill damage distribution + per-player per-second
+series), the remaining axibridge-flagged gaps in this table are narrower still: the per-skill/
+per-second/dpsTargets family that used to be entirely absent from `ei-json` is now emitted (opt-in,
+behind `--skill-damage`/`--timeseries`, same as the native schema's own gating) — what's left
+absent is hit-quality/defenses fine-grained outcome counts (crit/flank/glance/miss/block/evade/
+interrupt/invuln — M13), rotation/skillMap (M14), replay positions in EI's own coordinate grid
+(M15), and damage-modifier attribution (M16), per `docs/ROADMAP.md`'s Queued list.
 
 ### Supported log eras
 

@@ -71,6 +71,72 @@ export interface DamageOut {
   per_enemy: PerEnemyOut[]
 }
 
+/**
+ * One skill id's aggregated hit stats within some grouping (M12, Task 1).
+ * `hits`/`min`/`max` count only CONTRIBUTING (`dmg > 0`) events, matching
+ * this project's established damage predicate -- a deliberate divergence
+ * from GW2EI's own `totalDamageDist[].hits` (which also counts 0-damage
+ * missed/blocked/invulned/evaded attempts). `crit_hits`/`flank_hits` are
+ * hit COUNTS (not damage sums).
+ */
+export interface SkillEntryOut {
+  skill_id: number
+  total: number
+  hits: number
+  min: number
+  max: number
+  crit_hits: number
+  flank_hits: number
+}
+
+/** One enemy's per-skill outgoing breakdown (M12, Task 1) -- explicit `enemy_id`, not positional. */
+export interface PerTargetSkillsOut {
+  enemy_id: number
+  skills: SkillEntryOut[]
+}
+
+/**
+ * Per-skill damage distribution: outgoing (total + per-target) and
+ * incoming, each grouped by skill id (M12, Task 1). `sum(outgoing[*].total)
+ * == DamageOut.total` and `sum(taken[*].total) == PlayerOut.damage_taken`
+ * hold exactly by construction. Pet/minion damage is folded onto the owner
+ * here (using the pet's own skill id), matching `DamageOut.total`'s own
+ * pet-fold -- unlike GW2EI's `totalDamageDist`, which tracks the player
+ * actor only and excludes pet/minion damage entirely.
+ */
+export interface SkillDamageOut {
+  outgoing: SkillEntryOut[]
+  taken: SkillEntryOut[]
+  per_target: PerTargetSkillsOut[]
+}
+
+/** One enemy's cumulative per-second outgoing-damage series (M12, Task 2). */
+export interface PlayerTargetSeriesOut {
+  enemy_id: number
+  damage: number[]
+}
+
+/**
+ * A player's per-second detail block (M12, Task 2), opt-in -- see
+ * `PlayerOut.per_second`. `damage`/`damage_taken`/every `per_target[].damage`
+ * are CUMULATIVE running totals, one entry per second, bucketed the same way
+ * `Report.timeline` is (`resolution_ms = 1000`, from the log's first event)
+ * -- mirrors GW2EI's `damage1S`/`damageTaken1S`/`targetDamage1S` cumulative
+ * (not instant-delta) shape.
+ */
+export interface PlayerPerSecondOut {
+  damage: number[]
+  damage_taken: number[]
+  per_target: PlayerTargetSeriesOut[]
+}
+
+/** One enemy's whole-fight dps/damage summary (M12, Task 2) -- see `PlayerOut.dps_targets`. */
+export interface DpsTargetOut {
+  enemy_id: number
+  damage: number
+  dps: number
+}
+
 export interface CcOut {
   applied_total: number
   applied_duration_ms: number
@@ -178,6 +244,32 @@ export interface PlayerOut {
    * player never healed".
    */
   healing?: HealingOut
+  /**
+   * Per-skill damage distribution (M12, Task 1), opt-in like `replay`/
+   * `missiles` -- present only when requested (`{ skillDamage: true }`,
+   * see `ParseOptions.skillDamage` in `index.d.ts`). Omitted entirely
+   * (not `null`) when not requested; measured +249% native JSON size on
+   * the committed fixture when always-on, hence opt-in rather than
+   * always-present like `boons`/`support`.
+   */
+  skill_damage?: SkillDamageOut
+  /**
+   * Per-second cumulative `damage`/`damage_taken`/`per_target` detail
+   * (M12, Task 2), opt-in like `skill_damage` -- present only when
+   * requested (`{ timeseries: true }`, see `ParseOptions.timeseries` in
+   * `index.d.ts`). Omitted entirely (not `null`) when not requested;
+   * measured +147.7% native JSON size on the committed fixture when
+   * always-on, hence opt-in.
+   */
+  per_second?: PlayerPerSecondOut
+  /**
+   * Per-enemy whole-fight dps/damage summary (M12, Task 2). Gated by the
+   * SAME `{ timeseries: true }` option as `per_second` (NOT always-on --
+   * measured +36.4% native JSON size alone on the committed fixture, a
+   * real WvW log can enumerate dozens of enemies per player). Omitted
+   * entirely (not `[]`) when not requested.
+   */
+  dps_targets?: DpsTargetOut[]
 }
 
 export interface EnemyOut {
@@ -290,9 +382,8 @@ export interface SquadMissilesOut {
 /**
  * Opt-in missile (projectile) analytics (M10, Task 2), native-only --
  * present only when the caller opted in (CLI `--missiles` / SDK
- * `missiles: true`). Not yet exposed via this Node SDK's `ParseOptions`
- * (see that interface's doc comment) -- declared here so the type surface
- * matches the schema `axilog_schema::Report` can actually produce.
+ * `{ missiles: true }`, see `ParseOptions.missiles`, added final-review
+ * fix wave).
  */
 export interface MissilesOut {
   players: PlayerMissilesOut[]
@@ -315,11 +406,9 @@ export interface Report {
   /** Opt-in combat-replay block (M9, Task 2) -- present only when requested via `{ replay: true }`. Omitted entirely (not `null`) otherwise. */
   replay?: ReplayOut
   /**
-   * Opt-in missile (projectile) analytics block (M10, Task 2). Not yet
-   * requestable through this Node SDK (`ParseOptions` has no `missiles`
-   * flag) -- declared `?` here purely so the type surface matches what
-   * `axilog_schema::Report` can produce; always omitted (`undefined`) in
-   * practice until the SDK grows that flag.
+   * Opt-in missile (projectile) analytics block (M10, Task 2) -- present
+   * only when requested via `{ missiles: true }` (`ParseOptions.missiles`,
+   * added final-review fix wave). Omitted entirely (not `null`) otherwise.
    */
   missiles?: MissilesOut
 }

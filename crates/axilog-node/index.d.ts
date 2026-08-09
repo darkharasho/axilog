@@ -13,7 +13,10 @@ export declare function anonymizeFile(inPath: string, outPath: string): number
 /**
  * Parses an already-read `.evtc`/`.zevtc` buffer and returns the native
  * `Report` as a plain JS object. `opts.replay` (M9, Task 2) opts into
- * embedding the native combat-replay block.
+ * embedding the native combat-replay block; `opts.skill_damage` (M12,
+ * Task 1) opts into embedding the native per-skill damage distribution
+ * block; `opts.missiles` (final-review fix wave) opts into embedding the
+ * native top-level missile analytics block.
  */
 export declare function parseBuffer(buf: Buffer, opts?: ParseOptions | undefined | null): Report
 
@@ -29,10 +32,21 @@ export declare function parseFile(path: string, opts?: ParseOptions | undefined 
 /**
  * Parses a `.evtc`/`.zevtc` file at `path` and returns the Elite
  * Insights-compatibility JSON (`axilog_ei::to_ei_json`) as a plain JS
- * object. No `replay` option -- EI's JSON shape has no comparable field
- * (see `axilog_ei::to_ei_json`'s module doc).
+ * object. `opts` (final-review fix wave) accepts the same `ParseOptions`
+ * shape `parseFile`/`parseBuffer` do -- `opts.skill_damage`/
+ * `opts.timeseries` are what actually let `totalDamageDist`/`damage1S`/
+ * `dpsTargets`/etc (M12, Task 3's ei-json mapping) surface in the
+ * returned JSON, since `axilog_ei::to_ei_json` reads them straight off
+ * the native `Report` this function builds internally; previously this
+ * function always built that `Report` with both flags forced `false`,
+ * silently discarding any M12 detail regardless of what a caller wanted
+ * (axibridge consumes ei-json exclusively through this function). `opts.
+ * replay`/`opts.missiles` are accepted for parity with `parseFile` but
+ * have no effect on the output -- EI's JSON shape has no comparable field
+ * for either (see `axilog_ei::to_ei_json`'s module doc). Omitting `opts`
+ * entirely keeps every existing zero-arg call site's behavior unchanged.
  */
-export declare function parseFileEi(path: string): any
+export declare function parseFileEi(path: string, opts?: ParseOptions | undefined | null): any
 
 /**
  * Optional per-call parse settings (M9, Task 2). `replay: true` opts into
@@ -42,7 +56,29 @@ export declare function parseFileEi(path: string): any
  * optional in the generated TypeScript signature) keeps the existing
  * zero-arg call shape's behavior unchanged (no `replay` key in the
  * output, matching `Report.replay`'s serde skip-when-absent).
+ * `skill_damage: true` (M12, Task 1) opts into embedding the native
+ * per-skill damage distribution block (`SkillDamageOut`) on every
+ * `players[]` entry -- see `axilog_schema::Report::players`'s
+ * `PlayerOut::skill_damage` doc comment for why this defaults to opt-in
+ * (measured +249% JSON size on the committed fixture when always-on).
+ * `timeseries: true` (M12, Task 2) opts into embedding the native
+ * per-player per-second series block (`PlayerPerSecondOut`) AND the
+ * per-enemy `dps_targets` summary on every `players[]` entry -- see
+ * `axilog_schema::Report::players`'s `PlayerOut::per_second`/`PlayerOut::
+ * dps_targets` doc comments (measured +147.7%/+36.4% JSON size
+ * respectively on the committed fixture when always-on -- `dps_targets`
+ * is NOT small on a real WvW log with many enemies, so both stay behind
+ * this one flag).
+ * `missiles: true` (final-review fix wave) opts into embedding the
+ * native top-level missile (projectile) analytics block
+ * (`Report::missiles`), mirroring the CLI's `--missiles` flag -- see
+ * `axilog_core::analysis::missiles`'s module doc for exactly what it
+ * contains. Omitted (or `false`) keeps `Report.missiles` absent, matching
+ * its serde skip-when-`None`.
  */
 export interface ParseOptions {
   replay?: boolean
+  skillDamage?: boolean
+  timeseries?: boolean
+  missiles?: boolean
 }

@@ -143,6 +143,101 @@ test('parseFile: replay opt-in (M9 Task 2) -- absent by default, present + shape
   assert.ok(bufWithReplay.replay)
 })
 
+test('parseFile: skillDamage opt-in (M12 Task 1) -- absent by default, present + shaped when requested', () => {
+  const without = sdk.parseFile(FIXTURE)
+  assert.equal(without.players[0].skill_damage, undefined, 'skill_damage must be absent by default')
+
+  const withIt = sdk.parseFile(FIXTURE, { skillDamage: true })
+  const p0 = withIt.players.find((p) => p.damage.total > 0)
+  assert.ok(p0, 'expected at least one player with nonzero damage')
+  assert.ok(p0.skill_damage, 'expected a skill_damage block when { skillDamage: true }')
+  assert.ok(Array.isArray(p0.skill_damage.outgoing))
+  assert.ok(Array.isArray(p0.skill_damage.taken))
+  assert.ok(Array.isArray(p0.skill_damage.per_target))
+  assert.ok(p0.skill_damage.outgoing.length > 0, 'expected at least one outgoing skill entry')
+  const entry = p0.skill_damage.outgoing[0]
+  assert.equal(typeof entry.skill_id, 'number')
+  assert.equal(typeof entry.total, 'number')
+  assert.equal(typeof entry.hits, 'number')
+  // sum(outgoing[*].total) == damage.total exactly (internal invariant).
+  const sum = sumBy(p0.skill_damage.outgoing, (e) => e.total)
+  assert.equal(sum, p0.damage.total, 'sum(outgoing totals) must equal damage.total exactly')
+
+  // opts.skillDamage: false must behave the same as omitting opts entirely.
+  const explicitlyOff = sdk.parseFile(FIXTURE, { skillDamage: false })
+  assert.equal(explicitlyOff.players[0].skill_damage, undefined)
+})
+
+test('parseFile: timeseries opt-in (M12 Task 2) -- per_second AND dps_targets both absent by default, both present + shaped when requested', () => {
+  const without = sdk.parseFile(FIXTURE)
+  assert.equal(without.players[0].per_second, undefined, 'per_second must be absent by default')
+  assert.equal(without.players[0].dps_targets, undefined, 'dps_targets must be absent by default')
+
+  const withIt = sdk.parseFile(FIXTURE, { timeseries: true })
+  const p0 = withIt.players.find((p) => p.damage.total > 0)
+  assert.ok(p0, 'expected at least one player with nonzero damage')
+  assert.ok(p0.per_second, 'expected a per_second block when { timeseries: true }')
+  assert.ok(Array.isArray(p0.per_second.damage))
+  assert.ok(Array.isArray(p0.per_second.damage_taken))
+  assert.ok(Array.isArray(p0.per_second.per_target))
+  assert.ok(p0.per_second.damage.length > 0, 'expected at least one bucket')
+  // Cumulative: the final bucket equals damage.total exactly (internal invariant).
+  const finalDamage = p0.per_second.damage[p0.per_second.damage.length - 1]
+  assert.equal(finalDamage, p0.damage.total, 'final per_second.damage bucket must equal damage.total exactly')
+  // Monotonic non-decreasing.
+  for (let i = 1; i < p0.per_second.damage.length; i++) {
+    assert.ok(p0.per_second.damage[i] >= p0.per_second.damage[i - 1], 'per_second.damage must be cumulative (monotonic non-decreasing)')
+  }
+
+  assert.ok(Array.isArray(p0.dps_targets), 'expected a dps_targets array when { timeseries: true }')
+  assert.ok(p0.dps_targets.length > 0, 'expected at least one dps_targets entry')
+  const dt = p0.dps_targets[0]
+  assert.equal(typeof dt.enemy_id, 'number')
+  assert.equal(typeof dt.damage, 'number')
+  assert.equal(typeof dt.dps, 'number')
+  // sum(dps_targets[*].damage) == damage.total exactly (internal invariant).
+  const dtSum = sumBy(p0.dps_targets, (d) => d.damage)
+  assert.equal(dtSum, p0.damage.total, 'sum(dps_targets damage) must equal damage.total exactly')
+
+  // opts.timeseries: false must behave the same as omitting opts entirely.
+  const explicitlyOff = sdk.parseFile(FIXTURE, { timeseries: false })
+  assert.equal(explicitlyOff.players[0].per_second, undefined)
+  assert.equal(explicitlyOff.players[0].dps_targets, undefined)
+})
+
+test('parseFile: missiles opt-in -- absent by default, present + shaped when requested', () => {
+  const without = sdk.parseFile(FIXTURE)
+  assert.equal(without.missiles, undefined, 'missiles must be absent by default')
+
+  const withIt = sdk.parseFile(FIXTURE, { missiles: true })
+  assert.ok(withIt.missiles, 'expected a missiles block when { missiles: true }')
+  assert.ok(Array.isArray(withIt.missiles.players))
+  assert.ok(withIt.missiles.squad, 'expected a squad missiles rollup')
+  assert.equal(typeof withIt.missiles.squad.fired, 'number')
+  assert.equal(typeof withIt.missiles.squad.hit, 'number')
+  assert.equal(typeof withIt.missiles.squad.denied, 'number')
+  assert.equal(typeof withIt.missiles.squad.incoming_fired, 'number')
+  assert.equal(typeof withIt.missiles.squad.incoming_denied, 'number')
+
+  // opts.missiles: false must behave the same as omitting opts entirely.
+  const explicitlyOff = sdk.parseFile(FIXTURE, { missiles: false })
+  assert.equal(explicitlyOff.missiles, undefined)
+})
+
+test('parseFileEi: accepts the same ParseOptions as parseFile -- skillDamage/timeseries surface totalDamageDist/damage1S; default omits both', () => {
+  const withoutOpts = sdk.parseFileEi(FIXTURE)
+  const p0Without = withoutOpts.players[0]
+  assert.equal(p0Without.totalDamageDist, undefined, 'totalDamageDist must be absent by default (back-compat)')
+  assert.equal(p0Without.damage1S, undefined, 'damage1S must be absent by default (back-compat)')
+
+  const withOpts = sdk.parseFileEi(FIXTURE, { skillDamage: true, timeseries: true })
+  const p0With = withOpts.players.find((p) => Array.isArray(p.totalDamageDist) && p.totalDamageDist[0]?.length > 0)
+  assert.ok(p0With, 'expected at least one player with a non-empty totalDamageDist when { skillDamage: true }')
+  assert.ok(Array.isArray(p0With.totalDamageDist))
+  assert.ok(Array.isArray(p0With.damage1S), 'expected damage1S when { timeseries: true }')
+  assert.ok(p0With.damage1S[0].length > 0, 'expected a non-empty per-second series inside damage1S\'s phase wrapper')
+})
+
 test('parseFileEi: axibridge-read key shapes', () => {
   const ei = sdk.parseFileEi(FIXTURE)
 

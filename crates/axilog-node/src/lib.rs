@@ -37,17 +37,47 @@ fn napi_err(reason: impl std::fmt::Display) -> Error {
 /// optional in the generated TypeScript signature) keeps the existing
 /// zero-arg call shape's behavior unchanged (no `replay` key in the
 /// output, matching `Report.replay`'s serde skip-when-absent).
+/// `skill_damage: true` (M12, Task 1) opts into embedding the native
+/// per-skill damage distribution block (`SkillDamageOut`) on every
+/// `players[]` entry -- see `axilog_schema::Report::players`'s
+/// `PlayerOut::skill_damage` doc comment for why this defaults to opt-in
+/// (measured +249% JSON size on the committed fixture when always-on).
+/// `timeseries: true` (M12, Task 2) opts into embedding the native
+/// per-player per-second series block (`PlayerPerSecondOut`) AND the
+/// per-enemy `dps_targets` summary on every `players[]` entry -- see
+/// `axilog_schema::Report::players`'s `PlayerOut::per_second`/`PlayerOut::
+/// dps_targets` doc comments (measured +147.7%/+36.4% JSON size
+/// respectively on the committed fixture when always-on -- `dps_targets`
+/// is NOT small on a real WvW log with many enemies, so both stay behind
+/// this one flag).
+/// `missiles: true` (final-review fix wave) opts into embedding the
+/// native top-level missile (projectile) analytics block
+/// (`Report::missiles`), mirroring the CLI's `--missiles` flag -- see
+/// `axilog_core::analysis::missiles`'s module doc for exactly what it
+/// contains. Omitted (or `false`) keeps `Report.missiles` absent, matching
+/// its serde skip-when-`None`.
 #[napi(object)]
 #[derive(Default, Clone, Copy)]
 pub struct ParseOptions {
     pub replay: Option<bool>,
+    pub skill_damage: Option<bool>,
+    pub timeseries: Option<bool>,
+    pub missiles: Option<bool>,
 }
 
 /// Shared decode -> resolve -> analyze -> build_report pipeline (identical
 /// to `axilog-cli`'s `Cmd::Parse` handler) over an already-read byte
-/// buffer. `want_replay` mirrors `ParseOptions.replay` (defaulted to
-/// `false` by callers that pass no options at all).
-fn build_report_from_bytes(bytes: &[u8], want_replay: bool) -> Result<axilog_schema::Report> {
+/// buffer. `want_replay` mirrors `ParseOptions.replay`; `want_skill_damage`
+/// mirrors `ParseOptions.skill_damage`; `want_missiles` mirrors
+/// `ParseOptions.missiles` (all defaulted to `false` by callers that pass
+/// no options at all).
+fn build_report_from_bytes(
+    bytes: &[u8],
+    want_replay: bool,
+    want_skill_damage: bool,
+    want_timeseries: bool,
+    want_missiles: bool,
+) -> Result<axilog_schema::Report> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
@@ -58,7 +88,12 @@ fn build_report_from_bytes(bytes: &[u8], want_replay: bool) -> Result<axilog_sch
             axilog_core::analysis::replay::DEFAULT_POLL_MS,
         )
     });
-    Ok(axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None))
+    let missiles = want_missiles
+        .then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
+    Ok(axilog_schema::build_report(
+        &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
+        want_skill_damage, want_timeseries,
+    ))
 }
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
@@ -67,9 +102,22 @@ fn build_report_from_bytes(bytes: &[u8], want_replay: bool) -> Result<axilog_sch
 /// adapter needs for `combatReplayData`/`activeTimes` -- computed
 /// unconditionally (cheap, unlike `--replay`'s position track), independent
 /// of `want_replay`.
+///
+/// `want_skill_damage`/`want_timeseries` (final-review fix wave) are
+/// threaded into the `build_report` call below so `parseFileEi`'s
+/// `{ skillDamage: true }`/`{ timeseries: true }` options can actually
+/// surface `totalDamageDist`/`damage1S`/etc in the returned ei-json (see
+/// `axilog_ei::to_ei_json`, which reads those fields straight off
+/// `PlayerOut::skill_damage`/`PlayerOut::per_second` -- previously always
+/// `None` here regardless of what the caller asked for). `want_missiles`
+/// is threaded the same way for symmetry with `parse_buffer`/`parse_file`,
+/// even though `to_ei_json` does not currently read `Report::missiles`.
 fn build_report_and_activity_from_bytes(
     bytes: &[u8],
     want_replay: bool,
+    want_skill_damage: bool,
+    want_timeseries: bool,
+    want_missiles: bool,
 ) -> Result<(axilog_schema::Report, Vec<axilog_core::analysis::replay::ActivityIntervals>)> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -81,8 +129,13 @@ fn build_report_and_activity_from_bytes(
             axilog_core::analysis::replay::DEFAULT_POLL_MS,
         )
     });
+    let missiles = want_missiles
+        .then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
-    let report = axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None);
+    let report = axilog_schema::build_report(
+        &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
+        want_skill_damage, want_timeseries,
+    );
     Ok((report, activity))
 }
 
@@ -103,22 +156,47 @@ pub fn parse_file(path: String, opts: Option<ParseOptions>) -> Result<Value> {
 
 /// Parses an already-read `.evtc`/`.zevtc` buffer and returns the native
 /// `Report` as a plain JS object. `opts.replay` (M9, Task 2) opts into
-/// embedding the native combat-replay block.
+/// embedding the native combat-replay block; `opts.skill_damage` (M12,
+/// Task 1) opts into embedding the native per-skill damage distribution
+/// block; `opts.missiles` (final-review fix wave) opts into embedding the
+/// native top-level missile analytics block.
 #[napi]
 pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
     let want_replay = opts.and_then(|o| o.replay).unwrap_or(false);
-    let report = build_report_from_bytes(buf.as_ref(), want_replay)?;
+    let want_skill_damage = opts.and_then(|o| o.skill_damage).unwrap_or(false);
+    let want_timeseries = opts.and_then(|o| o.timeseries).unwrap_or(false);
+    let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
+    let report = build_report_from_bytes(
+        buf.as_ref(), want_replay, want_skill_damage, want_timeseries, want_missiles,
+    )?;
     report_to_value(&report)
 }
 
 /// Parses a `.evtc`/`.zevtc` file at `path` and returns the Elite
 /// Insights-compatibility JSON (`axilog_ei::to_ei_json`) as a plain JS
-/// object. No `replay` option -- EI's JSON shape has no comparable field
-/// (see `axilog_ei::to_ei_json`'s module doc).
+/// object. `opts` (final-review fix wave) accepts the same `ParseOptions`
+/// shape `parseFile`/`parseBuffer` do -- `opts.skill_damage`/
+/// `opts.timeseries` are what actually let `totalDamageDist`/`damage1S`/
+/// `dpsTargets`/etc (M12, Task 3's ei-json mapping) surface in the
+/// returned JSON, since `axilog_ei::to_ei_json` reads them straight off
+/// the native `Report` this function builds internally; previously this
+/// function always built that `Report` with both flags forced `false`,
+/// silently discarding any M12 detail regardless of what a caller wanted
+/// (axibridge consumes ei-json exclusively through this function). `opts.
+/// replay`/`opts.missiles` are accepted for parity with `parseFile` but
+/// have no effect on the output -- EI's JSON shape has no comparable field
+/// for either (see `axilog_ei::to_ei_json`'s module doc). Omitting `opts`
+/// entirely keeps every existing zero-arg call site's behavior unchanged.
 #[napi]
-pub fn parse_file_ei(path: String) -> Result<Value> {
+pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> {
+    let want_replay = opts.and_then(|o| o.replay).unwrap_or(false);
+    let want_skill_damage = opts.and_then(|o| o.skill_damage).unwrap_or(false);
+    let want_timeseries = opts.and_then(|o| o.timeseries).unwrap_or(false);
+    let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let (report, activity) = build_report_and_activity_from_bytes(&bytes, false)?;
+    let (report, activity) = build_report_and_activity_from_bytes(
+        &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles,
+    )?;
     Ok(axilog_ei::to_ei_json(&report, &activity))
 }
 

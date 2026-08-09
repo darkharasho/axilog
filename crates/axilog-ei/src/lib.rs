@@ -37,6 +37,38 @@ fn interval_json(iv: &Interval) -> Value {
     json!([iv.start_ms, iv.end_ms])
 }
 
+/// One skill entry's EI-shaped JSON row (M12, Task 3) -- mirrors real EI's
+/// `totalDamageDist`/`targetDamageDist`/`totalDamageTaken` entry shape
+/// (verified against axibridge's `test-fixtures/boon/20260117-181030.json`,
+/// `players[0].totalDamageDist[0][0]`), emitting ONLY the fields this
+/// project actually computes (`axilog_schema::SkillEntryOut`'s own fields):
+/// `id`, `totalDamage`, `min`, `max`, `hits`, `crit`, `flank`. Real EI's
+/// sibling fields on the same entry (`totalBreakbarDamage`, `connectedHits`,
+/// `glance`, `againstMoving`, `missed`, `invulned`, `interrupted`, `evaded`,
+/// `blocked`, `shieldDamage`, `critDamage`, `downContribution`,
+/// `indirectDamage`) aren't computed anywhere in this project's damage
+/// predicate (see `axilog_core::analysis::skill_damage`'s module doc: only
+/// CONTRIBUTING, `dmg > 0` events are tracked at all, with no missed/
+/// blocked/evaded/etc. outcome tracking anywhere else in this schema
+/// either) -- omitted rather than faked, same "don't fake absent data"
+/// convention `statsTargets`/`support`/`extHealingStats` above already
+/// follow. `crit`/`flank` map directly to `SkillEntryOut::crit_hits`/
+/// `flank_hits` (hit COUNTS, matching real EI's own `crit`/`flank`
+/// semantics exactly -- both are cleanly available, unlike the omitted
+/// fields above, so they're included here even though the Task 3 brief's
+/// minimal-field list only named `id`/`totalDamage`/`min`/`max`/`hits`).
+fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
+    json!({
+        "id": e.skill_id,
+        "totalDamage": e.total,
+        "min": e.min,
+        "max": e.max,
+        "hits": e.hits,
+        "crit": e.crit_hits,
+        "flank": e.flank_hits,
+    })
+}
+
 /// `activity` (M11 Task 3): per-player down/dead intervals + first/last-
 /// aware bounds from `axilog_core::analysis::replay::build_activity_intervals`
 /// -- ALWAYS computed by every caller (CLI/Node/Python), unlike `--replay`'s
@@ -233,6 +265,113 @@ pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
                 }),
             );
         }
+        // `totalDamageDist`/`targetDamageDist`/`totalDamageTaken` (M12,
+        // Task 3): only present when this player's native `skill_damage`
+        // block is present (`--skill-damage`/SDK `skill_damage: true` was
+        // requested when the `Report` was built --
+        // `axilog_schema::PlayerOut::skill_damage`'s doc comment) -- keyed
+        // off THAT presence, not a separate flag threaded through
+        // `to_ei_json` itself (the M12 Task 3 brief: "key off presence, not
+        // a flag"), so a `Report` built without `--skill-damage` gets these
+        // three arrays OMITTED entirely, not emitted empty. Real EI shape
+        // verified against axibridge's `test-fixtures/boon/
+        // 20260117-181030.json`: `totalDamageDist`/`totalDamageTaken` are
+        // `[phase][skillEntry]` (a single-element phase array wrapping the
+        // skill list -- this project's one-phase convention, matching
+        // `statsAll`/`extHealingStats` elsewhere in this fn);
+        // `targetDamageDist` is `[targetIndex][phase][skillEntry]`,
+        // positionally keyed to `targets[]` (built from
+        // `report.all_enemies`, the same unfiltered roster/positional
+        // convention `statsTargets` above already uses) -- a target this
+        // player never damaged gets an empty skill list (`[[]]`), not an
+        // absent entry, matching real EI's own always-present-per-target
+        // shape.
+        if let Some(sd) = &p.skill_damage {
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
+            obj.insert(
+                "totalDamageDist".to_string(),
+                json!([ sd.outgoing.iter().map(skill_entry_ei_json).collect::<Vec<_>>() ]),
+            );
+            obj.insert(
+                "totalDamageTaken".to_string(),
+                json!([ sd.taken.iter().map(skill_entry_ei_json).collect::<Vec<_>>() ]),
+            );
+            let target_dist: Vec<Value> = report
+                .all_enemies
+                .iter()
+                .map(|e| {
+                    let skills = sd
+                        .per_target
+                        .iter()
+                        .find(|t| t.enemy_id == e.id)
+                        .map(|t| t.skills.iter().map(skill_entry_ei_json).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    json!([skills])
+                })
+                .collect();
+            obj.insert("targetDamageDist".to_string(), json!(target_dist));
+        }
+        // `damage1S`/`damageTaken1S`/`targetDamage1S`/`dpsTargets` (M12,
+        // Task 3): only present when this player's native `per_second`
+        // block is present (`--timeseries`/SDK `timeseries: true` --
+        // `axilog_schema::PlayerOut::per_second`'s doc comment); `dpsTargets`
+        // is gated by that SAME `p.per_second.is_some()` check rather than
+        // its own `p.dps_targets.is_empty()` check -- an empty `dps_targets`
+        // Vec can't distinguish "not requested" from "requested, but this
+        // player never damaged any enemy", while `axilog_schema::
+        // build_report` populates BOTH `per_second` and `dps_targets` off
+        // the identical `include_timeseries` bool (see that fn's doc
+        // comment), so keying off `per_second`'s presence is the correct
+        // "presence, not a flag" signal for both. Real EI shape (same
+        // fixture): `damage1S`/`damageTaken1S` are `[phase][second]`
+        // (single-element phase array wrapping the per-second numbers --
+        // this project's own `per_second.damage`/`damage_taken` are ALREADY
+        // cumulative running totals by construction, see
+        // `axilog_core::analysis::timeseries`'s module doc, so no extra
+        // transform is needed here, just the EI phase-array wrapper);
+        // `targetDamage1S` is `[targetIndex][phase][second]`, `dpsTargets`
+        // is `[targetIndex][phase]{dps, damage}` -- both positionally keyed
+        // to `targets[]`/`report.all_enemies`, same convention
+        // `targetDamageDist` above uses. A target this player never damaged
+        // gets an all-zero series (length matching this player's own
+        // `per_second.damage`) / a `{dps: 0, damage: 0}` entry, not an
+        // absent one. `dps` is rounded to the nearest integer, matching
+        // `dpsAll[0].dps`'s own convention above (real EI's own
+        // `dpsTargets[][].dps` is likewise an integer on the source
+        // fixture) -- only `dps`/`damage` are emitted, real EI's many other
+        // `dpsTargets[][]` fields (`condiDps`, `powerDps`, `breakbarDamage`,
+        // the `actor*` duplicates, ...) aren't computed here, omitted
+        // rather than faked.
+        if let Some(ps) = &p.per_second {
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
+            obj.insert("damage1S".to_string(), json!([ps.damage]));
+            obj.insert("damageTaken1S".to_string(), json!([ps.damage_taken]));
+            let buckets = ps.damage.len();
+            let target_damage_1s: Vec<Value> = report
+                .all_enemies
+                .iter()
+                .map(|e| {
+                    let series = ps
+                        .per_target
+                        .iter()
+                        .find(|t| t.enemy_id == e.id)
+                        .map(|t| t.damage.clone())
+                        .unwrap_or_else(|| vec![0u64; buckets]);
+                    json!([series])
+                })
+                .collect();
+            obj.insert("targetDamage1S".to_string(), json!(target_damage_1s));
+
+            let dps_targets: Vec<Value> = report
+                .all_enemies
+                .iter()
+                .map(|e| match p.dps_targets.iter().find(|d| d.enemy_id == e.id) {
+                    Some(d) => json!([ { "dps": d.dps.round() as i64, "damage": d.damage } ]),
+                    None => json!([ { "dps": 0, "damage": 0 } ]),
+                })
+                .collect();
+            obj.insert("dpsTargets".to_string(), json!(dps_targets));
+        }
         // `extHealingStats`/`extBarrierStats` (M10 Task 1): only when this
         // log carries the healing extension at all (`p.healing` is `None`
         // otherwise -- `axilog_schema::PlayerOut.healing`'s doc comment).
@@ -379,7 +518,7 @@ mod tests {
             // so this doesn't change `maps_core_ei_fields`'s `targets[]`
             // assertions below -- it's set for realism, not correctness.
             combat_participant_enemies: [9u64].into_iter().collect()};
-        axilog_schema::build_report(&enc,&m,"0.1.0", None, None)
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false)
     }
     #[test]
     fn maps_core_ei_fields() {
@@ -464,7 +603,7 @@ mod tests {
             has_healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
         };
-        axilog_schema::build_report(&enc,&m,"0.1.0", None, None)
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false)
     }
 
     #[test]
@@ -520,8 +659,8 @@ mod tests {
     #[test]
     fn heals_and_barrier_map_to_ei_field_names_only_when_present() {
         use axilog_schema::{
-            CcOut, ContributionOut, DamageOut, EncounterOut, HealingOut, PlayerOut, SupportOut,
-            TimelineOut, PerSecondOut, Report,
+            CcOut, ContributionOut, DamageOut, EncounterOut, HealingOut, PlayerOut,
+            SupportOut, TimelineOut, PerSecondOut, Report,
         };
         fn base_player(account: &str, healing: Option<HealingOut>) -> PlayerOut {
             PlayerOut {
@@ -537,6 +676,9 @@ mod tests {
                 boons: vec![],
                 support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
                 healing,
+                skill_damage: None,
+                per_second: None,
+                dps_targets: vec![],
             }
         }
         let report = Report {
@@ -634,5 +776,184 @@ mod tests {
         assert_eq!(v["players"][0]["activeTimes"], json!([9_500]));
         assert_eq!(v["players"][1]["combatReplayData"]["down"], json!([]));
         assert_eq!(v["players"][1]["activeTimes"], json!([1_000]));
+    }
+
+    /// Shared player-row builder for the M12 Task 3 tests below -- same
+    /// "hand-build a `PlayerOut`" pattern `heals_and_barrier_map_to_ei_
+    /// field_names_only_when_present`'s `base_player` already uses, extended
+    /// with `skill_damage`/`per_second`/`dps_targets` parameters so each
+    /// test only has to specify what it cares about.
+    fn skill_and_timeseries_player(
+        skill_damage: Option<axilog_schema::SkillDamageOut>,
+        per_second: Option<axilog_schema::PlayerPerSecondOut>,
+        dps_targets: Vec<axilog_schema::DpsTargetOut>,
+    ) -> axilog_schema::PlayerOut {
+        use axilog_schema::{CcOut, ContributionOut, DamageOut, PlayerOut, SupportOut};
+        PlayerOut {
+            account: ":A.1".into(), character: "A".into(), profession: "Guardian".into(),
+            elite_spec: "".into(), team: "red".into(), subgroup: 1, in_squad: true,
+            commander: false, marker: None, commander_tag: None,
+            damage: DamageOut { total: 0, dps: 0.0, per_enemy: vec![] },
+            downs_dealt: 0, kills_dealt: 0, downs_taken: 0, deaths: 0, damage_taken: 0,
+            cc: CcOut { applied_total: 0, applied_duration_ms: 0, stun_breaks: 0, removed_stun_duration_ms: 0 },
+            downs_contribution: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
+            downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
+            boons: vec![],
+            support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
+            healing: None,
+            skill_damage, per_second, dps_targets,
+        }
+    }
+
+    fn report_with_players(
+        all_enemies: Vec<axilog_schema::EnemyOut>,
+        players: Vec<axilog_schema::PlayerOut>,
+    ) -> axilog_schema::Report {
+        use axilog_schema::{EncounterOut, PerSecondOut, Report, TimelineOut};
+        Report {
+            schema_version: "0.2", axilog_version: "0.1.0".to_string(),
+            encounter: EncounterOut { kind: "wvw".into(), map: "".into(), duration_ms: 2_000,
+                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None },
+            players,
+            enemies: vec![],
+            all_enemies,
+            timeline: TimelineOut { resolution_ms: 1000, per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![] } },
+            warnings: vec![],
+            replay: None,
+            missiles: None,
+        }
+    }
+
+    /// M12 Task 3: `totalDamageDist`/`totalDamageTaken`/`targetDamageDist`
+    /// are present, correctly shaped (`[phase][skillEntry]` /
+    /// `[targetIndex][phase][skillEntry]`), and carry the exact computed
+    /// values only when `skill_damage` was requested (`PlayerOut::
+    /// skill_damage: Some(..)`).
+    #[test]
+    fn total_damage_dist_shape_and_known_value_when_skill_damage_present() {
+        use axilog_schema::{EnemyOut, PerTargetSkillsOut, SkillDamageOut, SkillEntryOut};
+        fn entry() -> SkillEntryOut {
+            SkillEntryOut { skill_id: 42009, total: 32503, hits: 5, min: 100, max: 20000, crit_hits: 2, flank_hits: 1 }
+        }
+        let taken_entry = SkillEntryOut { skill_id: 700, total: 275, hits: 2, min: 75, max: 200, crit_hits: 0, flank_hits: 0 };
+        let sd = SkillDamageOut {
+            outgoing: vec![entry()],
+            taken: vec![taken_entry],
+            per_target: vec![PerTargetSkillsOut { enemy_id: 9, skills: vec![entry()] }],
+        };
+        let enemies = vec![
+            EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None },
+            EnemyOut { id: 10, name: "Untouched".into(), team: "blue".into(), is_player: false, marker: None },
+        ];
+        let player = skill_and_timeseries_player(Some(sd), None, vec![]);
+        let report = report_with_players(enemies, vec![player]);
+
+        let v = to_ei_json(&report, &[]);
+        let p = &v["players"][0];
+
+        // totalDamageDist: [phase][skillEntry], only the computed fields.
+        assert_eq!(p["totalDamageDist"][0][0]["id"], 42009);
+        assert_eq!(p["totalDamageDist"][0][0]["totalDamage"], 32503);
+        assert_eq!(p["totalDamageDist"][0][0]["min"], 100);
+        assert_eq!(p["totalDamageDist"][0][0]["max"], 20000);
+        assert_eq!(p["totalDamageDist"][0][0]["hits"], 5);
+        assert_eq!(p["totalDamageDist"][0][0]["crit"], 2);
+        assert_eq!(p["totalDamageDist"][0][0]["flank"], 1);
+        assert!(p["totalDamageDist"][0][0].get("connectedDamage").is_none(), "uncomputed fields must not be faked");
+        assert!(p["totalDamageDist"][0][0].get("indirectDamage").is_none());
+
+        // totalDamageTaken: same [phase][skillEntry] shape.
+        assert_eq!(p["totalDamageTaken"][0][0]["id"], 700);
+        assert_eq!(p["totalDamageTaken"][0][0]["totalDamage"], 275);
+
+        // targetDamageDist: [targetIndex][phase][skillEntry], positionally
+        // keyed to `all_enemies` (enemy 9 first, enemy 10 second) -- enemy
+        // 10 was never damaged, so its skill list is empty, not absent.
+        assert_eq!(p["targetDamageDist"].as_array().unwrap().len(), 2, "one entry per real target");
+        assert_eq!(p["targetDamageDist"][0][0][0]["id"], 42009);
+        assert_eq!(p["targetDamageDist"][0][0][0]["totalDamage"], 32503);
+        assert_eq!(p["targetDamageDist"][1][0], json!([]), "untouched target gets an empty skill list");
+    }
+
+    /// M12 Task 3: `totalDamageDist`/`targetDamageDist`/`totalDamageTaken`
+    /// must be OMITTED entirely (not emitted empty) when the `Report` was
+    /// built without `--skill-damage` (`PlayerOut::skill_damage: None`) --
+    /// the gate-respecting requirement keyed off presence, not a flag.
+    #[test]
+    fn total_damage_dist_omitted_when_skill_damage_absent() {
+        use axilog_schema::EnemyOut;
+        let enemies = vec![EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None }];
+        let player = skill_and_timeseries_player(None, None, vec![]);
+        let report = report_with_players(enemies, vec![player]);
+
+        let v = to_ei_json(&report, &[]);
+        let p = &v["players"][0];
+        assert!(p.get("totalDamageDist").is_none(), "totalDamageDist must be omitted, not emitted empty");
+        assert!(p.get("totalDamageTaken").is_none());
+        assert!(p.get("targetDamageDist").is_none());
+    }
+
+    /// M12 Task 3: `damage1S`/`damageTaken1S`/`targetDamage1S`/`dpsTargets`
+    /// are present, correctly shaped, and the final cumulative element of
+    /// `damage1S`/`damageTaken1S` matches the whole-fight scalar -- only
+    /// when `per_second` was requested (`PlayerOut::per_second: Some(..)`).
+    #[test]
+    fn per_second_ei_fields_shape_and_known_value_when_present() {
+        use axilog_schema::{DpsTargetOut, EnemyOut, PlayerPerSecondOut, PlayerTargetSeriesOut};
+        let ps = PlayerPerSecondOut {
+            damage: vec![50, 80, 80],
+            damage_taken: vec![10, 10, 10],
+            per_target: vec![PlayerTargetSeriesOut { enemy_id: 9, damage: vec![50, 80, 80] }],
+        };
+        let dps_targets = vec![DpsTargetOut { enemy_id: 9, damage: 80, dps: 40.0 }];
+        let enemies = vec![
+            EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None },
+            EnemyOut { id: 10, name: "Untouched".into(), team: "blue".into(), is_player: false, marker: None },
+        ];
+        let player = skill_and_timeseries_player(None, Some(ps), dps_targets);
+        let report = report_with_players(enemies, vec![player]);
+
+        let v = to_ei_json(&report, &[]);
+        let p = &v["players"][0];
+
+        // damage1S/damageTaken1S: [phase][second], cumulative, final ==
+        // the whole-fight total (already cumulative by construction).
+        assert_eq!(p["damage1S"], json!([[50, 80, 80]]));
+        assert_eq!(p["damage1S"][0].as_array().unwrap().last().unwrap(), &json!(80));
+        assert_eq!(p["damageTaken1S"], json!([[10, 10, 10]]));
+
+        // targetDamage1S: [targetIndex][phase][second] -- enemy 9 gets the
+        // real series, enemy 10 (untouched) gets an all-zero series of the
+        // SAME length.
+        assert_eq!(p["targetDamage1S"].as_array().unwrap().len(), 2);
+        assert_eq!(p["targetDamage1S"][0], json!([[50, 80, 80]]));
+        assert_eq!(p["targetDamage1S"][1], json!([[0, 0, 0]]), "untouched target gets an all-zero series, not absent");
+
+        // dpsTargets: [targetIndex][phase]{dps, damage} -- enemy 9 carries
+        // the real dps/damage, enemy 10 defaults to zero.
+        assert_eq!(p["dpsTargets"][0][0]["dps"], 40);
+        assert_eq!(p["dpsTargets"][0][0]["damage"], 80);
+        assert_eq!(p["dpsTargets"][1][0]["dps"], 0);
+        assert_eq!(p["dpsTargets"][1][0]["damage"], 0);
+    }
+
+    /// M12 Task 3: `damage1S`/`damageTaken1S`/`targetDamage1S`/`dpsTargets`
+    /// must ALL be OMITTED (not emitted empty) when the `Report` was built
+    /// without `--timeseries` (`PlayerOut::per_second: None`) -- including
+    /// `dpsTargets`, which is gated by `per_second`'s presence rather than
+    /// its own (possibly legitimately empty) `p.dps_targets` vec.
+    #[test]
+    fn per_second_ei_fields_omitted_when_absent() {
+        use axilog_schema::EnemyOut;
+        let enemies = vec![EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None }];
+        let player = skill_and_timeseries_player(None, None, vec![]);
+        let report = report_with_players(enemies, vec![player]);
+
+        let v = to_ei_json(&report, &[]);
+        let p = &v["players"][0];
+        assert!(p.get("damage1S").is_none(), "damage1S must be omitted, not emitted empty");
+        assert!(p.get("damageTaken1S").is_none());
+        assert!(p.get("targetDamage1S").is_none());
+        assert!(p.get("dpsTargets").is_none(), "dpsTargets omitted even though the Vec field itself is always present/empty on PlayerOut");
     }
 }

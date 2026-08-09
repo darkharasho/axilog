@@ -140,6 +140,71 @@ class CcOut(TypedDict):
     stun_breaks: int
     removed_stun_duration_ms: int
 
+# --- per-skill damage distribution (M12, Task 1) ---------------------------
+
+class SkillEntryOut(TypedDict):
+    """One skill id's aggregated hit stats within some grouping. `hits`/
+    `min`/`max` count only CONTRIBUTING (`dmg > 0`) events -- a deliberate
+    divergence from GW2EI's own `totalDamageDist[].hits` (which also counts
+    0-damage missed/blocked/invulned/evaded attempts). `crit_hits`/
+    `flank_hits` are hit COUNTS (not damage sums)."""
+
+    skill_id: int
+    total: int
+    hits: int
+    min: int
+    max: int
+    crit_hits: int
+    flank_hits: int
+
+class PerTargetSkillsOut(TypedDict):
+    """One enemy's per-skill outgoing breakdown -- explicit `enemy_id`, not positional."""
+
+    enemy_id: int
+    skills: List[SkillEntryOut]
+
+class SkillDamageOut(TypedDict):
+    """Per-skill damage distribution: outgoing (total + per-target) and
+    incoming, each grouped by skill id. `sum(outgoing[*]["total"])` ==
+    `DamageOut["total"]` and `sum(taken[*]["total"])` ==
+    `PlayerOut["damage_taken"]` hold exactly by construction. Pet/minion
+    damage is folded onto the owner here (using the pet's own skill id),
+    matching `DamageOut["total"]`'s own pet-fold -- unlike GW2EI's
+    `totalDamageDist`, which tracks the player actor only and excludes
+    pet/minion damage entirely."""
+
+    outgoing: List[SkillEntryOut]
+    taken: List[SkillEntryOut]
+    per_target: List[PerTargetSkillsOut]
+
+# --- per-player per-second series + dpsTargets (M12, Task 2) ---------------
+
+class PlayerTargetSeriesOut(TypedDict):
+    """One enemy's cumulative per-second outgoing-damage series."""
+
+    enemy_id: int
+    damage: List[int]
+
+class PlayerPerSecondOut(TypedDict):
+    """A player's per-second detail block, opt-in -- see
+    `PlayerOut["per_second"]`. `damage`/`damage_taken`/every
+    `per_target[]["damage"]` are CUMULATIVE running totals, one entry per
+    second, bucketed the same way `Report["timeline"]` is
+    (`resolution_ms = 1000`, from the log's first event) -- mirrors GW2EI's
+    `damage1S`/`damageTaken1S`/`targetDamage1S` cumulative (not
+    instant-delta) shape."""
+
+    damage: List[int]
+    damage_taken: List[int]
+    per_target: List[PlayerTargetSeriesOut]
+
+class DpsTargetOut(TypedDict):
+    """One enemy's whole-fight dps/damage summary -- see `PlayerOut["dps_targets"]`."""
+
+    enemy_id: int
+    damage: int
+    dps: float
+
 # --- boons / support ------------------------------------------------------
 
 class GenerationOut(TypedDict):
@@ -224,11 +289,23 @@ class PlayerOut(_PlayerOutRequired, total=False):
     """`marker`/`commander_tag` are omitted (not `null`) when absent.
     `healing` is omitted entirely (not a `null`/all-zero dict) when the log
     carries no healing-extension data at all -- a real "no data" signal, not
-    "the player never healed"."""
+    "the player never healed". `skill_damage` (M12, Task 1) is opt-in like
+    `Report["replay"]`/`Report["missiles"]` -- omitted unless requested via
+    `skill_damage=True` (see `parse_file`/`parse_bytes`); measured +249%
+    native JSON size on the committed fixture when always-on, hence opt-in
+    rather than always-present like `boons`/`support`. `per_second`/
+    `dps_targets` (M12, Task 2) are BOTH gated by the SAME `timeseries=True`
+    flag -- omitted unless requested; measured +147.7%/+36.4% native JSON
+    size respectively when always-on (a real WvW log can enumerate dozens
+    of enemies per player, so `dps_targets` is not small enough to stay
+    always-on the way `boons`/`support` are)."""
 
     marker: str
     commander_tag: CommanderTagOut
     healing: HealingOut
+    skill_damage: SkillDamageOut
+    per_second: PlayerPerSecondOut
+    dps_targets: List[DpsTargetOut]
 
 class _EnemyOutRequired(TypedDict):
     id: int
@@ -318,10 +395,9 @@ class SquadMissilesOut(TypedDict):
     incoming_denied: int
 
 class MissilesOut(TypedDict):
-    """Opt-in missile (projectile) analytics, native-only. Not yet
-    requestable through this Python SDK's `parse_file`/`parse_bytes`
-    (neither has a `missiles` parameter) -- declared here so the type
-    surface matches what `axilog_schema::Report` can produce."""
+    """Opt-in missile (projectile) analytics, native-only. Requestable via
+    `parse_file`/`parse_bytes`'s `missiles=True` keyword arg (final-review
+    fix wave)."""
 
     players: List[PlayerMissilesOut]
     squad: SquadMissilesOut
@@ -339,8 +415,8 @@ class _ReportRequired(TypedDict):
 class Report(_ReportRequired, total=False):
     """`warnings` is omitted (not `[]`) when there are no analysis warnings.
     `replay` is omitted (not `None`) unless requested via `replay=True`.
-    `missiles` is omitted (not `None`) -- always, until this SDK grows a
-    `missiles=True` parameter to request it."""
+    `missiles` (final-review fix wave) is omitted (not `None`) unless
+    requested via `missiles=True` (see `parse_file`/`parse_bytes`)."""
 
     warnings: List[str]
     replay: ReplayOut
@@ -348,28 +424,69 @@ class Report(_ReportRequired, total=False):
 
 # --- module functions -----------------------------------------------------
 
-def parse_file(path: str, replay: bool = False) -> Report:
+def parse_file(
+    path: str,
+    replay: bool = False,
+    skill_damage: bool = False,
+    timeseries: bool = False,
+    missiles: bool = False,
+) -> Report:
     """Parse a `.evtc`/`.zevtc` file at `path` into the native `Report` shape.
 
     `replay` (M9, Task 2) opts into embedding the native combat-replay
-    block (`Report["replay"]`); defaults to `False`.
+    block (`Report["replay"]`); `skill_damage` (M12, Task 1) opts into
+    embedding the native per-skill damage distribution block on every
+    `players[]` entry (`PlayerOut["skill_damage"]`). `timeseries` (M12,
+    Task 2) opts into embedding the native per-player per-second series
+    block AND the per-enemy `dps_targets` summary (`PlayerOut["per_second"]`/
+    `PlayerOut["dps_targets"]`). `missiles` (final-review fix wave) opts
+    into embedding the native top-level missile analytics block
+    (`Report["missiles"]`), mirroring the CLI's `--missiles` flag. All four
+    default to `False`.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.
     """
     ...
 
-def parse_bytes(data: bytes, replay: bool = False) -> Report:
+def parse_bytes(
+    data: bytes,
+    replay: bool = False,
+    skill_damage: bool = False,
+    timeseries: bool = False,
+    missiles: bool = False,
+) -> Report:
     """Parse an already-read `.evtc`/`.zevtc` buffer into the native `Report` shape.
 
     `replay` (M9, Task 2) opts into embedding the native combat-replay block.
+    `skill_damage` (M12, Task 1) opts into embedding the native per-skill
+    damage distribution block. `timeseries` (M12, Task 2) opts into
+    embedding the native per-player per-second series block AND the
+    per-enemy `dps_targets` summary. `missiles` (final-review fix wave)
+    opts into embedding the native top-level missile analytics block.
 
     Raises `ValueError` if `data` is not a decodable/parseable arcdps log.
     """
     ...
 
-def parse_file_ei(path: str) -> Dict[str, Any]:
+def parse_file_ei(
+    path: str,
+    *,
+    replay: bool = False,
+    skill_damage: bool = False,
+    timeseries: bool = False,
+    missiles: bool = False,
+) -> Dict[str, Any]:
     """Parse a `.evtc`/`.zevtc` file at `path` into Elite Insights-compatibility JSON.
+
+    `skill_damage`/`timeseries` (final-review fix wave, keyword-only) are
+    what actually let `totalDamageDist`/`damage1S`/`dpsTargets`/etc (M12,
+    Task 3's ei-json mapping) surface in the returned JSON -- previously
+    this function always omitted them regardless of caller intent.
+    `replay`/`missiles` are accepted for signature parity with `parse_file`
+    but have no effect on the output (EI's JSON shape has no comparable
+    field for either). All four default to `False`, keeping
+    `parse_file_ei(path)` back-compatible.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.
