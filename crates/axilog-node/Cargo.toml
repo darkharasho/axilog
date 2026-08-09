@@ -1,0 +1,24 @@
+[package]
+name = "axilog-node"
+version.workspace = true
+edition.workspace = true
+# Overrides the workspace's 1.74 MSRV: napi-build 2.x's build-script output
+# uses the `cargo::` (double-colon) directive syntax, which cargo only
+# accepts once the crate's declared rust-version is >= 1.77.
+rust-version = "1.77"
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+axilog-core = { path = "../axilog-core" }
+axilog-schema = { path = "../axilog-schema" }
+axilog-ei = { path = "../axilog-ei" }
+serde_json.workspace = true
+napi = { version = "3.12.0", default-features = false, features = ["napi4", "serde-json"] }
+napi-derive = "3.6.2"
+
+[build-dependencies]
+napi-build = "2.4.0"

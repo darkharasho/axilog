@@ -39,6 +39,40 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: crates/axilog-node/package-lock.json
+
+      # Node SDK (crates/axilog-node, M5): the napi-rs addon is built on every
+      # platform in this matrix so a platform-specific build break is still
+      # caught immediately, but its `npm test` (node --test) only runs here,
+      # on ubuntu. Why: (1) the suite's dual-path parity test shells out to
+      # the CLI binary built just below and resolves fixtures via repo-root-
+      # relative paths — exercising that plumbing on Windows/macOS as well
+      # would mostly multiply CI time, not coverage; (2) the addon links the
+      # same platform-agnostic axilog-core pipeline everywhere, so the test
+      # bodies (JSON/struct field assertions) have no OS-specific branches
+      # to catch. A green build on Windows/macOS is the signal that matters
+      # there.
+      - name: Build CLI (Node SDK parity test dependency)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo build -p axilog-cli
+
+      - name: Node SDK - install
+        working-directory: crates/axilog-node
+        run: npm ci
+
+      - name: Node SDK - build addon
+        working-directory: crates/axilog-node
+        run: npm run build
+
+      - name: Node SDK - test (linux only, see comment above)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: crates/axilog-node
+        run: npm test
+
   # aarch64-unknown-linux-gnu is a build-only cross-target follow-up: there
   # is no hosted GitHub Actions runner for that target today, so it is not
   # included in the matrix above. Revisit with cross/qemu if native ARM

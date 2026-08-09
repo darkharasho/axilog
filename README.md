@@ -2,10 +2,11 @@
 
 axilog is a cross-platform, CLI-first reimplementation of Elite Insights for parsing GW2 arcdps
 combat logs, part of the axi suite. It has a reusable Rust parsing core (`crates/axilog-core`)
-with planned Python/Node SDKs on top, matches standard Elite Insights (EI) functionality for the
-metrics it currently covers, and follows the arcdps spec more closely than EI in a few places —
-notably down contribution, CC-over-time, and full per-second timeline support. Unlike the
-original EI, it isn't tied to a single OS.
+with a Node SDK (`crates/axilog-node`, native [napi-rs](https://napi.rs) bindings) and a planned
+Python SDK on top, matches standard Elite Insights (EI) functionality for the metrics it currently
+covers, and follows the arcdps spec more closely than EI in a few places — notably down
+contribution, CC-over-time, and full per-second timeline support. Unlike the original EI, it isn't
+tied to a single OS.
 
 Current focus is WvW logs (M1/M2/M3). PvE encounter logic, healing, and rotation/skill-cast
 tracking are not implemented yet (see Milestones below).
@@ -94,6 +95,48 @@ Rewrites every player agent's character/account name to a deterministic `Anon<N>
 skill table, and NPC/gadget agents) is preserved exactly, so parsed metrics are identical before
 and after. Use this to produce a PII-safe log before filing a bug report, sharing a log publicly,
 or committing it as a test fixture — never commit a raw `.zevtc`/`.evtc` (see Fixture policy).
+
+## SDKs
+
+### Node
+
+`crates/axilog-node` (package `@axi/axilog`) is a native addon over the same Rust core the CLI
+uses — [napi-rs](https://napi.rs) bindings, not a subprocess wrapper, so there's no JSON-over-pipe
+overhead and no separate implementation to drift from the CLI's output (a dual-path parity test
+asserts the two stay identical). Not yet published to npm — see below.
+
+```sh
+cd crates/axilog-node
+npm install
+npm run build   # compiles the Rust crate to a platform .node addon
+```
+
+```js
+const { parseFile, parseFileEi } = require('@axi/axilog')
+
+// Native schema (axilog_schema::Report) — the same JSON the CLI's
+// `--format json` prints, typed via index.d.ts/types.d.ts.
+const report = parseFile('./fight.zevtc')
+const squadDamage = report.players.reduce((sum, p) => sum + p.damage.total, 0)
+const quickness = report.players[0].boons.find((b) => b.name === 'Quickness')
+console.log(report.players.length, squadDamage, quickness?.presence_pct)
+
+// EI-compatibility JSON (axilog_ei::to_ei_json) — the shape axibridge-style
+// consumers already read (players[].account, dpsAll[0].damage, buffUptimes[], ...).
+const ei = parseFileEi('./fight.zevtc')
+```
+
+See [`crates/axilog-node/README.md`](crates/axilog-node/README.md) for the full API
+(`parseFile`/`parseBuffer`/`parseFileEi`/`anonymizeFile`), build/test instructions, and how the
+TypeScript types are generated/patched.
+
+**Not yet on npm.** The package builds and tests cleanly (CI: linux build + `npm test`; the addon
+also builds on Windows/macOS every run) but publishing to the npm registry is deferred to a later
+milestone — for now, consume it from a local build or a git dependency.
+
+### Python
+
+Planned, not started — see Milestones.
 
 ## EI-JSON parity
 
@@ -239,10 +282,19 @@ zero extracted buff events; added `tests/postrework_golden.rs`, a real-capture c
 that activates automatically the moment a `fixtures/local/wvw-postrework.zevtc` fixture exists —
 see "Supported log eras" above.
 
+**M5 (done):** Node SDK (`crates/axilog-node`, `@axi/axilog`) — napi-rs native addon exporting
+`parseFile`/`parseBuffer`/`parseFileEi`/`anonymizeFile` over the same decode → resolve → analyze →
+build_report pipeline the CLI drives (no reimplementation, no JSON-over-subprocess); hand-maintained
+TypeScript types (`types.d.ts`) for the native schema, patched into the generated `index.d.ts`; a
+`node --test` suite covering all four exports plus a dual-path parity test against the CLI's own
+`--format json` output; CI builds the addon on Linux/Windows/macOS and runs the node test suite on
+Linux (see `.github/workflows/ci.yml`). npm publishing deferred — see SDKs above.
+
 **Later:** healing/barrier stats, rotation/skill-cast tracking, PvE encounter logic (boss health
-phases, mechanics), Python/Node SDKs over the Rust core, HTML report output (incl. the tick-rate
-corner widget and marker-driven combat-replay eye candy — see arcdps-dev-notes), real-capture
-calibration of the M4 post-rework code paths once a fixture is available.
+phases, mechanics), Python SDK over the Rust core, npm publishing for `@axi/axilog`, HTML report
+output (incl. the tick-rate corner widget and marker-driven combat-replay eye candy — see
+arcdps-dev-notes), real-capture calibration of the M4 post-rework code paths once a fixture is
+available.
 
 ## License
 

@@ -1,0 +1,39 @@
+{
+  "name": "@axi/axilog",
+  "version": "0.1.0",
+  "description": "Node bindings (napi-rs) for axilog's Rust GW2 arcdps WvW parsing core",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "files": [
+    "index.d.ts",
+    "index.js",
+    "types.d.ts"
+  ],
+  "napi": {
+    "binaryName": "axilog",
+    "packageName": "@axi/axilog",
+    "targets": [
+      "x86_64-pc-windows-msvc",
+      "x86_64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-apple-darwin",
+      "aarch64-unknown-linux-musl",
+      "aarch64-pc-windows-msvc"
+    ]
+  },
+  "engines": {
+    "node": ">= 18"
+  },
+  "scripts": {
+    "build": "napi build --platform --release && node scripts/patch-dts.mjs",
+    "build:debug": "napi build --platform && node scripts/patch-dts.mjs",
+    "artifacts": "napi artifacts",
+    "test": "node --test __test__/*.test.mjs"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.8.2"
+  }
+}
