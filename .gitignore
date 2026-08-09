@@ -12,3 +12,11 @@ build
 
 # local raw .zevtc fixtures (contain real account names — never commit)
 /fixtures/local/
+
+# Python SDK (crates/axilog-py) build venv/artifacts -- created locally by
+# `python3 -m venv .venv && pip install maturin && maturin develop`, never
+# committed.
+crates/axilog-py/.venv/
+*.egg-info/
+__pycache__/
+*.pyc

@@ -2,9 +2,10 @@
 
 axilog is a cross-platform, CLI-first reimplementation of Elite Insights for parsing GW2 arcdps
 combat logs, part of the axi suite. It has a reusable Rust parsing core (`crates/axilog-core`)
-with a Node SDK (`crates/axilog-node`, native [napi-rs](https://napi.rs) bindings) and a planned
-Python SDK on top, matches standard Elite Insights (EI) functionality for the metrics it currently
-covers, and follows the arcdps spec more closely than EI in a few places — notably down
+with a Node SDK (`crates/axilog-node`, native [napi-rs](https://napi.rs) bindings) and a Python SDK
+(`crates/axilog-py`, native [PyO3](https://pyo3.rs) bindings) on top, matches standard Elite
+Insights (EI) functionality for the metrics it currently covers, and follows the arcdps spec more
+closely than EI in a few places — notably down
 contribution, CC-over-time, and full per-second timeline support. Unlike the original EI, it isn't
 tied to a single OS.
 
@@ -136,7 +137,41 @@ milestone — for now, consume it from a local build or a git dependency.
 
 ### Python
 
-Planned, not started — see Milestones.
+`crates/axilog-py` (package `axilog`) is a native extension module ([PyO3](https://pyo3.rs)
+bindings, `abi3-py39`) over the same Rust core the CLI and Node SDK use — again no subprocess
+wrapper, and a CLI-parity test keeps it from drifting from the CLI's own output. Not yet published
+to PyPI — see below.
+
+```sh
+cd crates/axilog-py
+python3 -m venv .venv
+.venv/bin/pip install maturin
+.venv/bin/maturin develop --release   # compiles the Rust crate into .venv as the `axilog` module
+```
+
+```python
+import axilog
+
+# Native schema (axilog_schema::Report) — the same JSON the CLI's
+# `--format json` prints, typed via axilog.pyi.
+report = axilog.parse_file("./fight.zevtc")
+squad_damage = sum(p["damage"]["total"] for p in report["players"])
+quickness = next(b for b in report["players"][0]["boons"] if b["name"] == "Quickness")
+print(len(report["players"]), squad_damage, quickness["presence_pct"])
+
+# EI-compatibility JSON (axilog_ei::to_ei_json) — the shape axibridge-style
+# consumers already read (players[].account, dpsAll[0].damage, buffUptimes[], ...).
+ei = axilog.parse_file_ei("./fight.zevtc")
+```
+
+See [`crates/axilog-py/README.md`](crates/axilog-py/README.md) for the full API
+(`parse_file`/`parse_bytes`/`parse_file_ei`/`anonymize_file`), build/test instructions, and the
+`axilog.pyi` typed-stub layout.
+
+**Not yet on PyPI.** The extension builds and tests cleanly (CI: linux `maturin develop` + the
+stdlib `unittest` suite; the wheel also builds on Windows/macOS every run via `maturin build`) but
+publishing to the PyPI registry is deferred to a later milestone — for now, consume it from a local
+`maturin develop`/`maturin build` or a git dependency.
 
 ## EI-JSON parity
 
@@ -290,8 +325,17 @@ TypeScript types (`types.d.ts`) for the native schema, patched into the generate
 `--format json` output; CI builds the addon on Linux/Windows/macOS and runs the node test suite on
 Linux (see `.github/workflows/ci.yml`). npm publishing deferred — see SDKs above.
 
+**M6 (done):** Python SDK (`crates/axilog-py`, package `axilog`) — PyO3 native extension module
+(`abi3-py39`) exporting `parse_file`/`parse_bytes`/`parse_file_ei`/`anonymize_file` over the same
+decode → resolve → analyze → build_report pipeline the CLI and Node SDK drive (no
+reimplementation); hand-maintained typed stubs (`axilog.pyi` + `py.typed`) for the native schema,
+auto-bundled into the wheel by maturin; a stdlib `unittest` suite covering all four exports plus a
+CLI-parity test against the CLI's own `--format json` output; CI builds the extension on
+Linux/Windows/macOS (`maturin build`) and runs `maturin develop` + the unittest suite on Linux (see
+`.github/workflows/ci.yml`). PyPI publishing deferred — see SDKs above.
+
 **Later:** healing/barrier stats, rotation/skill-cast tracking, PvE encounter logic (boss health
-phases, mechanics), Python SDK over the Rust core, npm publishing for `@axi/axilog`, HTML report
+phases, mechanics), npm publishing for `@axi/axilog`, PyPI publishing for `axilog`, HTML report
 output (incl. the tick-rate corner widget and marker-driven combat-replay eye candy — see
 arcdps-dev-notes), real-capture calibration of the M4 post-rework code paths once a fixture is
 available.
