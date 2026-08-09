@@ -116,8 +116,8 @@ pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
 #[derive(Debug, Clone)]
 pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// Per-(agent representative, boon id) stack-count timelines (M3, Task
-    /// 1) -- see `buffs::simulate_boons`. Computed after all other passes
-    /// below; does not alter any pre-existing metric.
+    /// 1) -- see `buffs::simulate_boons`. Computed after all other passes,
+    ///    not altering any pre-existing metric.
     pub boons: BTreeMap<(u64, u32), buffs::BoonTimeline>,
     /// Per-(agent representative, boon id) uptime summaries (M3, Task 2) --
     /// see `buffs::simulate_boon_uptimes`/`buffs::uptime`. Reduces `boons`
