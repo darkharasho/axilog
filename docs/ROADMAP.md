@@ -10,15 +10,14 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
 - M1 WvW core · M2 polish · M3 boons/support · M4 post-rework era · M5 Node SDK · M6 Python SDK
 - M7 HTML report · M8 release pipeline · M9 combat replay · M10 healing/missiles/polish
 - v0.1.0 tagged (release pipeline first run)
-- M11 contribution family (arcdps-methodology down/CC/strip/move-impair, health tracking, schema 0.2) + axibridge tier-1 (isFake, replay down/dead intervals, activeTimes 0.0000%%)
+- M11 contribution family + axibridge tier-1
+- M12 per-skill (totalDamageDist EXACT vs EI) + per-second (damage1S, --timeseries gate) + dpsTargets + ei-json mapping + SDK ei options
+- CI: x86_64-apple-darwin cross-compiles on arm64 (macos-13 retired); ci concurrency-cancel
 
 ## In flight
-- M12 Per-skill + per-second detail (see Queued)
+- M13 Hit-quality + defenses (see Queued)
 
 ## Queued (autonomous — build in order; reorder only for dependency)
-- M12 Per-skill + per-second detail: `totalDamageDist`/`targetDamageDist`/`totalDamageTaken`
-  (per-skill damage attribution), per-player `damage1S`/`targetDamage1S`/`damageTaken1S`,
-  `dpsTargets`. Unblocks axibridge spike-damage, player-breakdown, incremental aggregation.
 - M13 Hit-quality + defenses: statsTargets fine-grained (crit/flank/glance/miss/block/evade/
   interrupt/invuln, connected counts), defenses hit-outcome counts, breakbar damage. Needs
   GW2EI/decompile for exact crit/flank/glance definitions.
