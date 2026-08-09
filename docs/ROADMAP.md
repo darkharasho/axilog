@@ -71,13 +71,15 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   `hit_stats_golden.rs`/`defenses_golden.rs`/`ei_golden.rs` are hard-EXACT on all 44 joined accounts
   of a real post-era capture. Pre-era committed fixture output byte-identical across all 7 formats.
 
+- MDOCS COMPLETE (arcdps-wiki c06aaf2): five-page axilog section live on the wiki (overview,
+  quickstart with registry-verified commands, methodology, schema reference, accuracy story —
+  all facts source-verified, zero dead links). axilog README de-staled (registries live,
+  M11 down-contribution row, Later list).
+
 ## Queued (autonomous — build in order; reorder only for dependency)
 - M16 Damage modifiers: trait/sigil/food/rune modifier attribution engine
   (`damageModifiers`/`incomingDamageModifiers` + maps). Largest; GW2EI DamageModifier defs +
   decompile for edge cases. Least WvW-critical — can slot late.
-- MDOCS Documentation milestone: publish architecture, native+EI schema reference, arcdps-spec
-  calc methodology, calibration results to the arcdps-wiki Astro site (one dir up); keep
-  axilog README/docs current every milestone regardless.
 
 ## Parked (user-gated — do NOT do autonomously)
 - axibridge's actual cutover from EI CLI to the axilog SDK (both registries now live, so this is
