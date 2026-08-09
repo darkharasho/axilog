@@ -53,13 +53,13 @@ fn escape_for_script(json: &str) -> String {
 mod tests {
     use super::*;
     use axilog_schema::{
-        CcOut, DamageOut, EncounterOut, PlayerOut, Report, SupportOut, TeamOut, TimelineOut,
-        PerSecondOut,
+        CcOut, ContributionOut, DamageOut, EncounterOut, PlayerOut, Report, SupportOut, TeamOut,
+        TimelineOut, PerSecondOut,
     };
 
     fn fixture_report() -> Report {
         Report {
-            schema_version: "0.1",
+            schema_version: "0.2",
             axilog_version: "0.1.0-test".into(),
             encounter: EncounterOut {
                 kind: "wvw".into(),
@@ -89,7 +89,6 @@ mod tests {
                 damage: DamageOut { total: 1000, dps: 8.0, per_enemy: vec![] },
                 downs_dealt: 0,
                 kills_dealt: 0,
-                down_contribution: 0,
                 downs_taken: 0,
                 deaths: 0,
                 damage_taken: 0,
@@ -99,6 +98,8 @@ mod tests {
                     stun_breaks: 0,
                     removed_stun_duration_ms: 0,
                 },
+                downs_contribution: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
+                downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
                 boons: vec![],
                 support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
                 healing: None,

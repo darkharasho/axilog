@@ -248,7 +248,10 @@
         downs: p.downs_dealt,
         kills: p.kills_dealt,
         deaths: p.deaths,
-        downContribution: p.down_contribution,
+        // M11 Task 2: the arcdps-methodology damage_to_downs value
+        // (p.downs_contribution.damage), not the retired M1-era 10s-window
+        // approximation this same column used to source.
+        downContribution: p.downs_contribution.damage,
         damageTaken: p.damage_taken,
       };
     });

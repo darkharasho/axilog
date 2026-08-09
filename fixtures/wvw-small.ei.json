@@ -1,6 +1,6 @@
 {
   "_source": "axibridge test-fixtures/boon/20260117-181030.json (dps.report EI JSON, accounts anonymized)",
-  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index \u2014 the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (`rincka.1608`, would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task). Task 1 (M9): each matched player's `combatReplay` object holds EI's raw `combatReplayData` `{start, count, first, last}` (start = EI's own log-relative start ms; count/first/last = positions.length / positions[0] / positions[-1], EI's map-pixel space) for parity spot-checks, plus a full verbatim `positions` array (EI map-pixel `[x,y]` pairs, one per 300ms poll) for the 3 longest tracks (Anon104.4848/Anon108.4996/Anon122.5514, 165 samples each) for full-track calibration. Source: this log's mapID=95 (Green Alpine Borderlands) `combatReplayMetaData` {inchToPixel:0.009, pollingRate:300, sizes:[523,750]}. Same real-account join method as Tasks 2-4 (M3) (obfuscate(real account) -> raw agent-table index -> `Anon<N>`); 37 of 41 players matched (4 `Non Squad Player N` rows have no real account to join from, same as `generation`). See `crates/axilog-core/tests/replay_golden.rs` for how this is consumed (raw world positions decoded from `wvw-small.anon.zevtc`'s `CBTS_POSITION` events, downsampled via `analysis::replay::build_replay`, then transformed into this same map-pixel space via the Green/Blue Alpine Borderland affine transform derived from GW2EI's `WvWLogic.GetCombatMapInternal`/`CombatReplayMap.GetMapCoordRounded` -- the test file cites the exact formula). Task 1 (M10): each player's `healing` object holds the arcdps healing-extension totals for the full fight (single phase, matching this fixture's `phases` length of 1): `healing`/`downedHealing` mirror EI's raw `extHealingStats.outgoingHealing[0]` `{healing, downedHealing}` fields verbatim (target=null, i.e. every friendly-directed heal this player cast, self included); `barrier` mirrors `extBarrierStats.outgoingBarrier[0].barrier` verbatim. `healingSelf` is EI's own `outgoingHealingAllies[selfIndex][0].healing` (selfIndex = this player's own position in EI's `Friendlies`/`players[]` ordering, verified to line up 1:1 with axibridge's `players[]` array index for all 41 rows here -- self healing at that index never exceeds the player's own `healing` total, the sanity check used to confirm the assumption). `healingAllies` is DERIVED (`healing - healingSelf`), NOT a sum of EI's own per-friendly `outgoingHealingAllies[*][0].healing` array -- that array's sum under-counts real ally healing (e.g. Anon-index 21's ally-array sums to 165971 vs its true `healing` total of 205820) because EI's per-friendly breakdown only enumerates real `Friendlies` (players), never non-enumerated friendly targets like pets/minions that legitimately receive `ToFriendly` heals and count toward the scalar total. Same real-account join method as prior tasks (profession + `dpsAll[0].damage` + `statsAll[0].appliedCrowdControl` triple -> unique row, verified unique across all 41 rows with zero collisions), since the healing extension has no separate obfuscated-account reference to join through. `squadHealingTotal`/`squadHealingSelf`/`squadHealingAllies`/`squadDownedHealing`/`squadBarrierTotal` are sums of the same fields over all 41 players (1008414/36563/971851/55681/279498) -- the calibration targets `healing_golden.rs` checks against.",
+  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index \u2014 the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (`rincka.1608`, would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task). Task 1 (M9): each matched player's `combatReplay` object holds EI's raw `combatReplayData` `{start, count, first, last}` (start = EI's own log-relative start ms; count/first/last = positions.length / positions[0] / positions[-1], EI's map-pixel space) for parity spot-checks, plus a full verbatim `positions` array (EI map-pixel `[x,y]` pairs, one per 300ms poll) for the 3 longest tracks (Anon104.4848/Anon108.4996/Anon122.5514, 165 samples each) for full-track calibration. Source: this log's mapID=95 (Green Alpine Borderlands) `combatReplayMetaData` {inchToPixel:0.009, pollingRate:300, sizes:[523,750]}. Same real-account join method as Tasks 2-4 (M3) (obfuscate(real account) -> raw agent-table index -> `Anon<N>`); 37 of 41 players matched (4 `Non Squad Player N` rows have no real account to join from, same as `generation`). See `crates/axilog-core/tests/replay_golden.rs` for how this is consumed (raw world positions decoded from `wvw-small.anon.zevtc`'s `CBTS_POSITION` events, downsampled via `analysis::replay::build_replay`, then transformed into this same map-pixel space via the Green/Blue Alpine Borderland affine transform derived from GW2EI's `WvWLogic.GetCombatMapInternal`/`CombatReplayMap.GetMapCoordRounded` -- the test file cites the exact formula). Task 1 (M10): each player's `healing` object holds the arcdps healing-extension totals for the full fight (single phase, matching this fixture's `phases` length of 1): `healing`/`downedHealing` mirror EI's raw `extHealingStats.outgoingHealing[0]` `{healing, downedHealing}` fields verbatim (target=null, i.e. every friendly-directed heal this player cast, self included); `barrier` mirrors `extBarrierStats.outgoingBarrier[0].barrier` verbatim. `healingSelf` is EI's own `outgoingHealingAllies[selfIndex][0].healing` (selfIndex = this player's own position in EI's `Friendlies`/`players[]` ordering, verified to line up 1:1 with axibridge's `players[]` array index for all 41 rows here -- self healing at that index never exceeds the player's own `healing` total, the sanity check used to confirm the assumption). `healingAllies` is DERIVED (`healing - healingSelf`), NOT a sum of EI's own per-friendly `outgoingHealingAllies[*][0].healing` array -- that array's sum under-counts real ally healing (e.g. Anon-index 21's ally-array sums to 165971 vs its true `healing` total of 205820) because EI's per-friendly breakdown only enumerates real `Friendlies` (players), never non-enumerated friendly targets like pets/minions that legitimately receive `ToFriendly` heals and count toward the scalar total. Same real-account join method as prior tasks (profession + `dpsAll[0].damage` + `statsAll[0].appliedCrowdControl` triple -> unique row, verified unique across all 41 rows with zero collisions), since the healing extension has no separate obfuscated-account reference to join through. `squadHealingTotal`/`squadHealingSelf`/`squadHealingAllies`/`squadDownedHealing`/`squadBarrierTotal` are sums of the same fields over all 41 players (1008414/36563/971851/55681/279498) -- the calibration targets `healing_golden.rs` checks against. Task 3 (M11): each player's `activeTimes` (single-element array, matching this fixture's one-phase convention) and `combatReplayData` `{start, end, down, dead}` are EI's raw fields verbatim (real `combatReplayData.positions`/`orientations`/`iconURL`/`dc` are NOT copied here -- not needed by this task's calibration, `positions` in particular stays a deliberately heavier, still-`--replay`-gated concept per M9). Same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, both already cross-checked profession+damage+CC with zero mismatches across all 41 rows). `start`/`end` are GW2EI's own `AgentItem.FirstAware`/`LastAware` (verified: `DaringCanyon.5440`, this fixture's `players[35]`, has `start=1 end=49266` -- exactly `combatReplay.start=1` from the M9 Task 1 addition above, an independent field on the same row, confirming the join). `activeTimes[0]` is GW2EI's `SingleActor.GetActiveDuration(log, 0, durationMS)` (`GW2EIEvtcParser/EIData/Actors/ActorsHelper/SingleActorStatusHelper.cs`): `(end - start) - sum(dead \u2229 [start,end]) - sum(dc \u2229 [start,end])` -- verified NOT to subtract down time (that same row, `players[35]`, has a real 2870ms down interval `combatReplayData.down=[[12642,15512]]` yet `activeTimes[0]=49265` equals `end-start` exactly); every one of this log's 41 players has `dead=[]` (no deaths, only downs), so this fixture alone can't distinguish \"dead subtracted\" from \"dead not subtracted\" -- confirmed from the GW2EI source formula directly, not just this fixture's numbers. Two players (`players[35]`/`DaringCanyon.5440` and `players[40]`/`Non Squad Player 10`) have non-empty `down` arrays -- the only two in the whole log; `crates/axilog-ei/tests/ei_golden.rs` asserts byte-exact `down`/`dead` interval reproduction for the one of the two reachable through its real-account join (`DaringCanyon.5440` -- `Non Squad Player 10` has no real account to join through at all, same limitation the M9/M3 golden tests already document for that row type).",
   "fightName": "World vs World - Green Alpine Borderlands",
   "durationMS": 49285,
   "friendlyPlayerCount": 41,
@@ -162,6 +162,15 @@
         "healingSelf": 531,
         "healingAllies": 0,
         "barrier": 0
+      },
+      "activeTimes": [
+        49263
+      ],
+      "combatReplayData": {
+        "start": 3,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -312,6 +321,15 @@
         "healingSelf": 6267,
         "healingAllies": 82734,
         "barrier": 0
+      },
+      "activeTimes": [
+        49263
+      ],
+      "combatReplayData": {
+        "start": 3,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -462,6 +480,15 @@
         "healingSelf": 0,
         "healingAllies": 2304,
         "barrier": 0
+      },
+      "activeTimes": [
+        49247
+      ],
+      "combatReplayData": {
+        "start": 19,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -612,6 +639,15 @@
         "healingSelf": 1794,
         "healingAllies": 22318,
         "barrier": 0
+      },
+      "activeTimes": [
+        49264
+      ],
+      "combatReplayData": {
+        "start": 2,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -762,6 +798,15 @@
         "healingSelf": 1877,
         "healingAllies": 86413,
         "barrier": 37804
+      },
+      "activeTimes": [
+        49258
+      ],
+      "combatReplayData": {
+        "start": 8,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -912,6 +957,15 @@
         "healingSelf": 770,
         "healingAllies": 0,
         "barrier": 0
+      },
+      "activeTimes": [
+        49264
+      ],
+      "combatReplayData": {
+        "start": 2,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -1724,6 +1778,15 @@
         "healingSelf": 321,
         "healingAllies": 28207,
         "barrier": 0
+      },
+      "activeTimes": [
+        49266
+      ],
+      "combatReplayData": {
+        "start": 0,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -1874,6 +1937,15 @@
         "healingSelf": 0,
         "healingAllies": 0,
         "barrier": 0
+      },
+      "activeTimes": [
+        49261
+      ],
+      "combatReplayData": {
+        "start": 5,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -2024,6 +2096,15 @@
         "healingSelf": 0,
         "healingAllies": 25330,
         "barrier": 16447
+      },
+      "activeTimes": [
+        49263
+      ],
+      "combatReplayData": {
+        "start": 3,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -2174,6 +2255,15 @@
         "healingSelf": 0,
         "healingAllies": 27471,
         "barrier": 0
+      },
+      "activeTimes": [
+        49264
+      ],
+      "combatReplayData": {
+        "start": 2,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -2324,6 +2414,15 @@
         "healingSelf": 0,
         "healingAllies": 0,
         "barrier": 0
+      },
+      "activeTimes": [
+        49261
+      ],
+      "combatReplayData": {
+        "start": 5,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -2474,6 +2573,15 @@
         "healingSelf": 4753,
         "healingAllies": 23162,
         "barrier": 16586
+      },
+      "activeTimes": [
+        49262
+      ],
+      "combatReplayData": {
+        "start": 4,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -3286,6 +3394,15 @@
         "healingSelf": 0,
         "healingAllies": 32726,
         "barrier": 0
+      },
+      "activeTimes": [
+        49266
+      ],
+      "combatReplayData": {
+        "start": 0,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -3436,6 +3553,15 @@
         "healingSelf": 0,
         "healingAllies": 0,
         "barrier": 0
+      },
+      "activeTimes": [
+        49258
+      ],
+      "combatReplayData": {
+        "start": 8,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -3586,6 +3712,15 @@
         "healingSelf": 0,
         "healingAllies": 11405,
         "barrier": 14052
+      },
+      "activeTimes": [
+        49259
+      ],
+      "combatReplayData": {
+        "start": 7,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -3736,6 +3871,15 @@
         "healingSelf": 0,
         "healingAllies": 0,
         "barrier": 0
+      },
+      "activeTimes": [
+        49259
+      ],
+      "combatReplayData": {
+        "start": 7,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -3886,6 +4030,15 @@
         "healingSelf": 0,
         "healingAllies": 16459,
         "barrier": 3651
+      },
+      "activeTimes": [
+        49263
+      ],
+      "combatReplayData": {
+        "start": 3,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -4036,6 +4189,15 @@
         "healingSelf": 553,
         "healingAllies": 86969,
         "barrier": 49691
+      },
+      "activeTimes": [
+        49266
+      ],
+      "combatReplayData": {
+        "start": 0,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -4186,6 +4348,15 @@
         "healingSelf": 0,
         "healingAllies": 4052,
         "barrier": 0
+      },
+      "activeTimes": [
+        49266
+      ],
+      "combatReplayData": {
+        "start": 0,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -4336,6 +4507,15 @@
         "healingSelf": 132,
         "healingAllies": 0,
         "barrier": 0
+      },
+      "activeTimes": [
+        49262
+      ],
+      "combatReplayData": {
+        "start": 4,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -5148,6 +5328,15 @@
         "healingSelf": 763,
         "healingAllies": 0,
         "barrier": 3930
+      },
+      "activeTimes": [
+        49266
+      ],
+      "combatReplayData": {
+        "start": 0,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -5298,6 +5487,15 @@
         "healingSelf": 996,
         "healingAllies": 204824,
         "barrier": 0
+      },
+      "activeTimes": [
+        49266
+      ],
+      "combatReplayData": {
+        "start": 0,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -5448,6 +5646,15 @@
         "healingSelf": 16,
         "healingAllies": 3978,
         "barrier": 2358
+      },
+      "activeTimes": [
+        49262
+      ],
+      "combatReplayData": {
+        "start": 4,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -5598,6 +5805,15 @@
         "healingSelf": 0,
         "healingAllies": 14253,
         "barrier": 2420
+      },
+      "activeTimes": [
+        49255
+      ],
+      "combatReplayData": {
+        "start": 11,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -5748,6 +5964,15 @@
         "healingSelf": 6024,
         "healingAllies": 11962,
         "barrier": 31184
+      },
+      "activeTimes": [
+        49265
+      ],
+      "combatReplayData": {
+        "start": 1,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -5898,6 +6123,15 @@
         "healingSelf": 0,
         "healingAllies": 24064,
         "barrier": 0
+      },
+      "activeTimes": [
+        49261
+      ],
+      "combatReplayData": {
+        "start": 5,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -6048,6 +6282,15 @@
         "healingSelf": 0,
         "healingAllies": 0,
         "barrier": 0
+      },
+      "activeTimes": [
+        49254
+      ],
+      "combatReplayData": {
+        "start": 12,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -6198,6 +6441,15 @@
         "healingSelf": 0,
         "healingAllies": 0,
         "barrier": 0
+      },
+      "activeTimes": [
+        49265
+      ],
+      "combatReplayData": {
+        "start": 1,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -6348,6 +6600,15 @@
         "healingSelf": 0,
         "healingAllies": 35850,
         "barrier": 0
+      },
+      "activeTimes": [
+        49265
+      ],
+      "combatReplayData": {
+        "start": 1,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -6498,6 +6759,15 @@
         "healingSelf": 0,
         "healingAllies": 710,
         "barrier": 0
+      },
+      "activeTimes": [
+        49265
+      ],
+      "combatReplayData": {
+        "start": 1,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -6648,6 +6918,15 @@
         "healingSelf": 9358,
         "healingAllies": 36971,
         "barrier": 14690
+      },
+      "activeTimes": [
+        49265
+      ],
+      "combatReplayData": {
+        "start": 1,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -6798,6 +7077,15 @@
         "healingSelf": 0,
         "healingAllies": 13615,
         "barrier": 19805
+      },
+      "activeTimes": [
+        49265
+      ],
+      "combatReplayData": {
+        "start": 1,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -6948,6 +7236,15 @@
         "healingSelf": 0,
         "healingAllies": 0,
         "barrier": 0
+      },
+      "activeTimes": [
+        49235
+      ],
+      "combatReplayData": {
+        "start": 31,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -7098,6 +7395,15 @@
         "healingSelf": 22,
         "healingAllies": 96573,
         "barrier": 0
+      },
+      "activeTimes": [
+        49250
+      ],
+      "combatReplayData": {
+        "start": 16,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -7248,6 +7554,15 @@
         "healingSelf": 0,
         "healingAllies": 31750,
         "barrier": 23570
+      },
+      "activeTimes": [
+        49256
+      ],
+      "combatReplayData": {
+        "start": 10,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -7398,6 +7713,20 @@
         "healingSelf": 874,
         "healingAllies": 15036,
         "barrier": 30443
+      },
+      "activeTimes": [
+        49265
+      ],
+      "combatReplayData": {
+        "start": 1,
+        "end": 49266,
+        "down": [
+          [
+            12642,
+            15512
+          ]
+        ],
+        "dead": []
       }
     },
     {
@@ -7548,6 +7877,15 @@
         "healingSelf": 1512,
         "healingAllies": 0,
         "barrier": 3051
+      },
+      "activeTimes": [
+        49249
+      ],
+      "combatReplayData": {
+        "start": 17,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -7624,6 +7962,15 @@
         "healingSelf": 0,
         "healingAllies": 25,
         "barrier": 0
+      },
+      "activeTimes": [
+        49245
+      ],
+      "combatReplayData": {
+        "start": 21,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -7700,6 +8047,15 @@
         "healingSelf": 0,
         "healingAllies": 32044,
         "barrier": 0
+      },
+      "activeTimes": [
+        49212
+      ],
+      "combatReplayData": {
+        "start": 54,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -7776,6 +8132,15 @@
         "healingSelf": 0,
         "healingAllies": 646,
         "barrier": 9816
+      },
+      "activeTimes": [
+        49259
+      ],
+      "combatReplayData": {
+        "start": 7,
+        "end": 49266,
+        "down": [],
+        "dead": []
       }
     },
     {
@@ -7852,6 +8217,24 @@
         "healingSelf": 0,
         "healingAllies": 0,
         "barrier": 0
+      },
+      "activeTimes": [
+        49212
+      ],
+      "combatReplayData": {
+        "start": 54,
+        "end": 49266,
+        "down": [
+          [
+            19295,
+            19530
+          ],
+          [
+            35623,
+            41161
+          ]
+        ],
+        "dead": []
       }
     }
   ],

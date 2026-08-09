@@ -18,7 +18,7 @@ fn check_parses_fixture_to_json(fixture_path: &str) {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["schema_version"], "0.1");
+    assert_eq!(v["schema_version"], "0.2");
     assert!(v["players"].as_array().unwrap().len() > 0);
 }
 

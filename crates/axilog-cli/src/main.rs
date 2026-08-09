@@ -119,10 +119,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Task 1) can apply uniformly regardless of `--format`.
             let rendered = match format {
                 Format::Json => format!("{}\n", serde_json::to_string_pretty(&report)?),
-                Format::EiJson => format!(
-                    "{}\n",
-                    serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report))?
-                ),
+                Format::EiJson => {
+                    // M11 Task 3: down/dead intervals + activeTimes are
+                    // cheap (no position decode/downsample), so they're
+                    // computed here unconditionally -- unlike `--replay`'s
+                    // `replay_data` above, which stays opt-in.
+                    let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+                    format!(
+                        "{}\n",
+                        serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report, &activity))?
+                    )
+                }
                 Format::Table => axilog_cli_table(&report, view),
                 Format::Csv => axilog_cli_csv(&report),
                 Format::Html => axilog_html::render(&report),
@@ -244,12 +251,20 @@ fn axilog_cli_table_healing(r: &axilog_schema::Report) -> String {
     }
     s
 }
+/// M11 Task 2 fix round: this column carries `downs_contribution.damage` --
+/// the arcdps-methodology `damage_to_downs` value (see `axilog_core::
+/// analysis::contribution`'s module doc), NOT the retired M1-era 10s-window
+/// approximation. The column header is named `damage_to_downs` (renamed
+/// from the original `down_contribution`, review fix round 1) rather than
+/// keeping the old name on new semantics -- CSV has no schema-version
+/// field, so a consumer reading an unchanged column name would silently get
+/// different numbers with no way to detect the change.
 fn axilog_cli_csv(r: &axilog_schema::Report) -> String {
-    let mut s = String::from("account,character,profession,team,damage,dps,downs_dealt,kills_dealt,down_contribution,deaths\n");
+    let mut s = String::from("account,character,profession,team,damage,dps,downs_dealt,kills_dealt,damage_to_downs,deaths\n");
     for p in &r.players {
         s.push_str(&format!("{},{},{},{},{},{:.0},{},{},{},{}\n",
             p.account, p.character, p.profession, p.team, p.damage.total, p.damage.dps,
-            p.downs_dealt, p.kills_dealt, p.down_contribution, p.deaths));
+            p.downs_dealt, p.kills_dealt, p.downs_contribution.damage, p.deaths));
     }
     s
 }

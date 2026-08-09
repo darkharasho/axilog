@@ -322,6 +322,106 @@ fn interp_at(positions: &[(u64, f32, f32, f32)], t: u64) -> (f32, f32, f32) {
     )
 }
 
+/// One player's cheap activity data (M11 Task 3): down/dead intervals plus
+/// first/last-aware bounds, WITHOUT the downsampled position track --
+/// intervals (and the min/max event-time scan below) are cheap, positions
+/// are the expensive part (decode + sort + interpolate every `CBTS_POSITION`
+/// event), so this is computed unconditionally by [`build_activity_intervals`]
+/// regardless of whether `--replay`/SDK `replay: true` was requested --
+/// unlike [`Track`]'s `samples`, which stay behind that opt-in gate. See
+/// `axilog_ei::to_ei_json`'s `combatReplayData`/`activeTimes` mapping for
+/// the consumer.
+#[derive(Debug, Clone)]
+pub struct ActivityIntervals {
+    /// The representative raw agent addr (first of `agent_addrs`) -- stable
+    /// join key, matching [`Track::agent_addr`].
+    pub agent_addr: u64,
+    /// This agent's own "first aware" time -- earliest event of ANY kind,
+    /// log-relative ms (same anchor `build_track` uses for the position
+    /// polling grid -- see its doc comment for the citation trail).
+    /// Mirrors GW2EI's `AgentItem.FirstAware` / exported
+    /// `combatReplayData.start`.
+    pub start_ms: u64,
+    /// This agent's own "last aware" time -- latest event of ANY kind,
+    /// log-relative ms. Mirrors GW2EI's `AgentItem.LastAware` / exported
+    /// `combatReplayData.end`.
+    pub end_ms: u64,
+    pub down_intervals: Vec<Interval>,
+    pub dead_intervals: Vec<Interval>,
+}
+
+impl ActivityIntervals {
+    /// GW2EI's `SingleActorStatusHelper.GetActiveDuration`
+    /// (`GW2EIEvtcParser/EIData/Actors/ActorsHelper/
+    /// SingleActorStatusHelper.cs`): for the whole-fight phase (`start=0`,
+    /// `end=durationMS`), `activeDuration = (end - start) -
+    /// sum(dead-segments ∩ [start,end]) - sum(dc-segments ∩ [start,end])`,
+    /// where GW2EI's own `dc` ("disconnected"/not-yet-spawned) segments are
+    /// exactly `[MinValue, FirstAware)` and `(LastAware, MaxValue]`
+    /// (`SingleActorStatusHelper.FillStatus`) in the common case (no mid-
+    /// fight despawn/respawn). Down time is deliberately NOT subtracted --
+    /// verified against the real EI export this project's golden fixture
+    /// derives from (`axibridge/test-fixtures/boon/20260117-181030.json`):
+    /// player `DaringCanyon.5440` has a real 2870ms down interval
+    /// (`combatReplayData.down = [[12642, 15512]]`) yet
+    /// `activeTimes[0] = 49265` exactly equals `end - start` (`49266 - 1`),
+    /// no down-time deduction; cross-checked against all 41 players in that
+    /// export (every one satisfies `activeTimes[0] == end - start -
+    /// dead_ms` exactly, `dead_ms` always 0 in that particular log).
+    ///
+    /// This reduces to `(end_ms - start_ms) - dead_ms` here because
+    /// `start_ms`/`end_ms` are already this agent's own first/last-aware
+    /// bounds (GW2EI's `dc` boundary segments, by construction, fall
+    /// entirely outside `[start_ms, end_ms]`) -- algebraically identical to
+    /// GW2EI's own formula whenever `dc` only occurs at those two log-
+    /// boundary edges. This project doesn't track GW2EI's rarer mid-log
+    /// despawn/respawn `dc` segments (out of scope for this cheap tier-1
+    /// win -- a genuine WvW relog is folded across `agent_addrs` into one
+    /// continuous track instead, per `build_track`'s own folding
+    /// convention), so a player with a real mid-fight disconnect gap would
+    /// diverge slightly from GW2EI's own number here; the M11 Task 3 gate
+    /// is a 0.5% tolerance, not byte-exact, for exactly this reason.
+    pub fn active_ms(&self) -> u64 {
+        let span = self.end_ms.saturating_sub(self.start_ms);
+        let dead_ms: u64 = self
+            .dead_intervals
+            .iter()
+            .map(|iv| iv.end_ms.saturating_sub(iv.start_ms))
+            .sum();
+        span.saturating_sub(dead_ms)
+    }
+}
+
+/// Build [`ActivityIntervals`] for every player in `enc.players`, in that
+/// same order (positional join key back to `axilog_schema::Report::players`
+/// -- both are built by iterating `enc.players` 1:1, see
+/// `axilog_schema::build_report`'s own player loop). Cheap: no position
+/// decode/sort/interpolation, just a min/max scan over each player's own
+/// events plus the existing [`build_intervals`] down/dead scan -- safe to
+/// call unconditionally (M11 Task 3), unlike [`build_replay`].
+pub fn build_activity_intervals(raw: &RawLog, enc: &Encounter) -> Vec<ActivityIntervals> {
+    let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+    enc.players
+        .iter()
+        .map(|p| {
+            let addr_set: BTreeSet<u64> = p.agent_addrs.iter().copied().collect();
+            let agent_addr = p.agent_addrs.first().copied().unwrap_or(p.agent_addr);
+            let mut start_ms = u64::MAX;
+            let mut end_ms = 0u64;
+            for e in raw.events.iter().filter(|e| addr_set.contains(&e.src_agent)) {
+                let t = e.time.saturating_sub(t0);
+                start_ms = start_ms.min(t);
+                end_ms = end_ms.max(t);
+            }
+            if start_ms == u64::MAX {
+                start_ms = 0; // no events at all for this player -- degenerate, avoid u64::MAX leaking out
+            }
+            let (down_intervals, dead_intervals) = build_intervals(raw, t0, &addr_set);
+            ActivityIntervals { agent_addr, start_ms, end_ms, down_intervals, dead_intervals }
+        })
+        .collect()
+}
+
 /// Build down/dead intervals for one agent (folded across `addr_set`) from
 /// `CBTS_CHANGEDOWN`/`CBTS_CHANGEDEAD`/`CBTS_CHANGEUP`, per this module's
 /// doc comment. Events across all of `addr_set` are merged and
@@ -731,5 +831,108 @@ mod tests {
         let replay = build_replay(&raw, &enc, 0);
         assert_eq!(replay.poll_ms, 1);
         assert_eq!(replay.tracks[0].samples.len(), 3); // t=0,1,2
+    }
+
+    // -- M11 Task 3: `build_activity_intervals`/`ActivityIntervals::active_ms` --
+
+    #[test]
+    fn activity_intervals_start_end_are_first_and_last_event_of_any_kind() {
+        let p = player(1);
+        let enc = Encounter { players: vec![p], ..empty_enc() };
+        // t0 = the log's first event's own time (50, per this module's
+        // `t0 = raw.events.first().time` convention) -- relative times
+        // below are each event's absolute time minus that 50.
+        let raw = raw_from(vec![
+            pos_event(50, 1, 0.0, 0.0, 0.0),
+            state_event(200, 1, sc::CHANGE_DOWN),
+            state_event(400, 1, sc::CHANGE_UP),
+            pos_event(1000, 1, 1.0, 1.0, 0.0),
+        ]);
+        let activity = build_activity_intervals(&raw, &enc);
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].start_ms, 0, "earliest event of any kind, not just position events");
+        assert_eq!(activity[0].end_ms, 950, "latest event of any kind, relative to t0=50");
+        assert_eq!(activity[0].down_intervals, vec![Interval { start_ms: 150, end_ms: 350 }]);
+        assert!(activity[0].dead_intervals.is_empty());
+    }
+
+    #[test]
+    fn active_ms_subtracts_dead_but_not_down() {
+        // 1000ms total span (0..1000); a 200ms down (200..400, NOT
+        // subtracted) and a 100ms dead (600..700, subtracted).
+        let iv = ActivityIntervals {
+            agent_addr: 1,
+            start_ms: 0,
+            end_ms: 1000,
+            down_intervals: vec![Interval { start_ms: 200, end_ms: 400 }],
+            dead_intervals: vec![Interval { start_ms: 600, end_ms: 700 }],
+        };
+        assert_eq!(iv.active_ms(), 900, "1000 - 100 dead, down NOT subtracted");
+    }
+
+    #[test]
+    fn active_ms_with_no_dead_time_equals_the_full_span() {
+        let iv = ActivityIntervals {
+            agent_addr: 1,
+            start_ms: 3,
+            end_ms: 49_266,
+            down_intervals: vec![Interval { start_ms: 12_642, end_ms: 15_512 }],
+            dead_intervals: vec![],
+        };
+        // Matches the real EI golden finding cited in `active_ms`'s doc
+        // comment (`DaringCanyon.5440`: end-start with no dead == activeTimes
+        // exactly, down time not subtracted).
+        assert_eq!(iv.active_ms(), 49_263);
+    }
+
+    #[test]
+    fn build_activity_intervals_is_positionally_joined_to_enc_players() {
+        let mut p1 = player(1);
+        p1.character = "First".into();
+        let mut p2 = player(2);
+        p2.character = "Second".into();
+        let enc = Encounter { players: vec![p1, p2], ..empty_enc() };
+        let raw = raw_from(vec![
+            state_event(0, 1, sc::CHANGE_DOWN),
+            state_event(10, 1, sc::CHANGE_UP),
+            state_event(0, 2, sc::CHANGE_DOWN),
+            state_event(20, 2, sc::CHANGE_UP),
+        ]);
+        let activity = build_activity_intervals(&raw, &enc);
+        assert_eq!(activity.len(), 2);
+        // Index 0 <-> enc.players[0] (agent 1), index 1 <-> enc.players[1]
+        // (agent 2) -- same order, no reordering/filtering.
+        assert_eq!(activity[0].agent_addr, 1);
+        assert_eq!(activity[0].down_intervals, vec![Interval { start_ms: 0, end_ms: 10 }]);
+        assert_eq!(activity[1].agent_addr, 2);
+        assert_eq!(activity[1].down_intervals, vec![Interval { start_ms: 0, end_ms: 20 }]);
+    }
+
+    #[test]
+    fn build_activity_intervals_folds_across_relog_addrs() {
+        let mut p = player(1);
+        p.agent_addrs = vec![1, 2];
+        let enc = Encounter { players: vec![p], ..empty_enc() };
+        let raw = raw_from(vec![
+            state_event(0, 1, sc::CHANGE_DOWN),   // pre-relog addr
+            state_event(100, 2, sc::CHANGE_UP),   // post-relog addr, same account
+        ]);
+        let activity = build_activity_intervals(&raw, &enc);
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].start_ms, 0);
+        assert_eq!(activity[0].end_ms, 100);
+        assert_eq!(activity[0].down_intervals, vec![Interval { start_ms: 0, end_ms: 100 }]);
+    }
+
+    #[test]
+    fn build_activity_intervals_handles_a_player_with_no_events_without_panicking() {
+        let p = player(1);
+        let enc = Encounter { players: vec![p], ..empty_enc() };
+        let raw = raw_from(vec![]);
+        let activity = build_activity_intervals(&raw, &enc);
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].start_ms, 0);
+        assert_eq!(activity[0].end_ms, 0);
+        assert_eq!(activity[0].active_ms(), 0);
     }
 }

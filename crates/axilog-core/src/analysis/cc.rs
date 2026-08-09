@@ -141,7 +141,7 @@ pub fn timeline(
 /// `appliedCrowdControlDuration` squad totals within tolerance (34 /
 /// 50460ms). `post_era` comes from `RawHeader::is_post_buff_rework` at each
 /// call site.
-fn is_cc(e: &crate::evtc::RawEvent, post_era: bool) -> bool {
+pub(crate) fn is_cc(e: &crate::evtc::RawEvent, post_era: bool) -> bool {
     e.is_statechange == 0
         && (post_era || e.buff == 0)
         && e.result == crate::evtc::result::CROWD_CONTROL

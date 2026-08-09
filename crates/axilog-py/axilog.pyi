@@ -168,6 +168,22 @@ class SupportOut(TypedDict):
     strips: int
     resurrects: int
 
+# --- contribution family (M11, Task 2) --------------------------------------
+
+class ContributionOut(TypedDict):
+    """The arcdps-methodology contribution family's four stats -- used for
+    both `PlayerOut.downs_contribution` (outgoing: this player's own credit
+    toward downing enemy players) and `PlayerOut.downed_by` (incoming: what
+    non-squad contributors did to THIS player before each of their own
+    downs, aggregated onto this row, not broken down by attacker). Replaces
+    the retired M1-era `down_contribution` 10s-window approximation (schema
+    0.1 -> 0.2)."""
+
+    damage: int
+    cc: int
+    strips: int
+    movement_impairing: int
+
 # --- healing (M10, Task 1) -------------------------------------------------
 
 class HealingOut(TypedDict):
@@ -195,11 +211,12 @@ class _PlayerOutRequired(TypedDict):
     damage: DamageOut
     downs_dealt: int
     kills_dealt: int
-    down_contribution: int
     downs_taken: int
     deaths: int
     damage_taken: int
     cc: CcOut
+    downs_contribution: ContributionOut
+    downed_by: ContributionOut
     boons: List[BoonOut]
     support: SupportOut
 

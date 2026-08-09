@@ -121,6 +121,22 @@ export interface HealingOut {
   downed_healing_out: number
 }
 
+/**
+ * The arcdps-methodology contribution family's four stats (M11, Task 2) --
+ * used for both `PlayerOut.downs_contribution` (outgoing: this player's own
+ * credit toward downing enemy players) and `PlayerOut.downed_by` (incoming:
+ * what non-squad contributors did to THIS player before each of their own
+ * downs, aggregated onto this row, not broken down by attacker). Replaces
+ * the retired M1-era `down_contribution` 10s-window approximation (schema
+ * 0.1 -> 0.2).
+ */
+export interface ContributionOut {
+  damage: number
+  cc: number
+  strips: number
+  movement_impairing: number
+}
+
 export interface PlayerOut {
   account: string
   character: string
@@ -137,11 +153,21 @@ export interface PlayerOut {
   damage: DamageOut
   downs_dealt: number
   kills_dealt: number
-  down_contribution: number
   downs_taken: number
   deaths: number
   damage_taken: number
   cc: CcOut
+  /**
+   * Outgoing arcdps-methodology contribution toward downing enemy players
+   * (M11, Task 2). See `ContributionOut`.
+   */
+  downs_contribution: ContributionOut
+  /**
+   * The mirror: what non-squad contributors did to THIS player before each
+   * of their own downs, aggregated onto this row, not broken down by
+   * attacker (M11, Task 2).
+   */
+  downed_by: ContributionOut
   /** One entry per tracked boon id, in `axilog_core::analysis::buffs::BOON_IDS` order. */
   boons: BoonOut[]
   support: SupportOut
@@ -275,7 +301,7 @@ export interface MissilesOut {
 
 /**
  * axilog's native report shape (`axilog_schema::Report`), as returned by
- * `parseFile`/`parseBuffer`. `schema_version` is currently always `"0.1"`.
+ * `parseFile`/`parseBuffer`. `schema_version` is currently always `"0.2"`.
  */
 export interface Report {
   schema_version: string

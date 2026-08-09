@@ -115,7 +115,7 @@ class ParseFileTests(unittest.TestCase):
     def test_shape_and_calibrated_values(self):
         report = axilog.parse_file(FIXTURE)
 
-        self.assertEqual(report["schema_version"], "0.1")
+        self.assertEqual(report["schema_version"], "0.2")
         self.assertIsInstance(report["axilog_version"], str)
         self.assertGreater(len(report["players"]), 0)
         self.assertEqual(len(report["players"]), EXPECTED_PLAYER_COUNT)
@@ -234,6 +234,27 @@ class ParseFileEiTests(unittest.TestCase):
         self.assertGreater(len(ei["targets"]), 0)
         for t in ei["targets"]:
             self.assertIsInstance(t["enemyPlayer"], bool)
+            # M11 Task 3: every target is a real (non-aggregate) agent --
+            # axibridge filters `!t.isFake` everywhere it reads `targets[]`.
+            self.assertEqual(t["isFake"], False, "every target must be isFake: false")
+
+        # M11 Task 3: `activeTimes`/`combatReplayData` are ALWAYS present
+        # (not gated on a `--replay`-equivalent option -- `parse_file_ei`
+        # takes none), with `down`/`dead` arrays of `[start, end]` pairs
+        # (positions stay absent -- see `axilog_ei::to_ei_json`'s module
+        # comment).
+        self.assertIsInstance(p0["activeTimes"], list)
+        self.assertEqual(len(p0["activeTimes"]), 1)
+        self.assertIsInstance(p0["activeTimes"][0], int)
+        self.assertIn("combatReplayData", p0)
+        self.assertIsInstance(p0["combatReplayData"]["start"], int)
+        self.assertIsInstance(p0["combatReplayData"]["end"], int)
+        self.assertIsInstance(p0["combatReplayData"]["down"], list)
+        self.assertIsInstance(p0["combatReplayData"]["dead"], list)
+        self.assertNotIn(
+            "positions", p0["combatReplayData"],
+            "positions must stay absent (deferred to M15)",
+        )
 
         self.assertIn("wvWMapData", ei)
         self.assertIsNotNone(ei["wvWMapData"])

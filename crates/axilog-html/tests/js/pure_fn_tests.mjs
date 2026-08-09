@@ -174,7 +174,7 @@ function fixturePlayer(overrides) {
       damage: { total: 1234567, dps: 8901.2, per_enemy: [] },
       downs_dealt: 3,
       kills_dealt: 1,
-      down_contribution: 42,
+      downs_contribution: { damage: 42, cc: 0, strips: 0, movement_impairing: 0 },
       deaths: 0,
       damage_taken: 5000,
       cc: { applied_total: 0, applied_duration_ms: 0, stun_breaks: 2, removed_stun_duration_ms: 4500 },
@@ -207,8 +207,8 @@ test("buildDamageRows: thousand-separator-ready raw numbers + nonSquad flag", ()
 
 test("buildDamageTotals: sums every numeric column across rows", () => {
   const rows = AxilogReport.buildDamageRows([
-    fixturePlayer({ damage: { total: 100, dps: 10, per_enemy: [] }, downs_dealt: 1, kills_dealt: 1, deaths: 1, down_contribution: 1, damage_taken: 1 }),
-    fixturePlayer({ damage: { total: 200, dps: 20, per_enemy: [] }, downs_dealt: 2, kills_dealt: 2, deaths: 2, down_contribution: 2, damage_taken: 2 }),
+    fixturePlayer({ damage: { total: 100, dps: 10, per_enemy: [] }, downs_dealt: 1, kills_dealt: 1, deaths: 1, downs_contribution: { damage: 1, cc: 0, strips: 0, movement_impairing: 0 }, damage_taken: 1 }),
+    fixturePlayer({ damage: { total: 200, dps: 20, per_enemy: [] }, downs_dealt: 2, kills_dealt: 2, deaths: 2, downs_contribution: { damage: 2, cc: 0, strips: 0, movement_impairing: 0 }, damage_taken: 2 }),
   ]);
   const totals = AxilogReport.buildDamageTotals(rows);
   assert.equal(totals.damage, 300);

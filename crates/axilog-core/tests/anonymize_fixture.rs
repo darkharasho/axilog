@@ -115,7 +115,8 @@ fn anon_fixture_metrics_match_local_and_contains_no_pii() {
         assert_eq!(l.per_enemy, a.per_enemy, "per_enemy differs for addr {:#x}", l.agent_addr);
         assert_eq!(l.downs_dealt, a.downs_dealt);
         assert_eq!(l.kills_dealt, a.kills_dealt);
-        assert_eq!(l.down_contribution, a.down_contribution);
+        assert_eq!(l.downs_contribution, a.downs_contribution, "downs_contribution differs for addr {:#x}", l.agent_addr);
+        assert_eq!(l.downed_by, a.downed_by, "downed_by differs for addr {:#x}", l.agent_addr);
         assert_eq!(l.downs_taken, a.downs_taken);
         assert_eq!(l.deaths, a.deaths);
         assert_eq!(l.damage_taken, a.damage_taken);

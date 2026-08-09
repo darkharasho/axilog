@@ -116,10 +116,13 @@ fn golden_ei_parity_local_raw_when_present() {
     check_golden_ei_parity(&bytes, &golden);
 }
 
-/// Finding #4: `cc::timeline`'s squad_damage buckets and `downs::apply`'s
-/// down_contribution windowed-damage loop must exclude
+/// Finding #4: `cc::timeline`'s squad_damage buckets must exclude
 /// `result::CROWD_CONTROL` rows (which carry CC duration ms, not damage) —
-/// exactly like `damage::accumulate` already does. After that fix,
+/// exactly like `damage::accumulate` already does (the M1-era `downs::
+/// apply`'s own windowed-damage loop this finding originally also applied
+/// to was retired in M11 Task 2, replaced by `analysis::contribution`'s
+/// arcdps-methodology engine — see that module's doc for its own,
+/// independently-verified damage predicate). After that fix,
 /// `sum(timeline.squad_damage)` should equal `sum(player.damage_total)`
 /// on the golden log, since both now use the same damage predicate (and
 /// the timeline also folds in the same friendly pet/minion credit that
