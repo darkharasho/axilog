@@ -43,13 +43,14 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   pypi-validate wheel install-smoke gate, npm/PyPI publish idempotency).
 
 ## In flight
-- MPUB (remainder, USER-BLOCKED): PyPI trusted publishing. Workflow `pypl-publish.yml` is wired
-  (OIDC, skip-existing, dispatched by release.yml post-release) but PyPI rejects the token
-  exchange with `invalid-publisher` for every tested claim combination (workflow
-  pypl-publish.yml/pypi-publish.yml × environment absent/`pypi`). The publisher config on PyPI
-  must be aligned to: owner `darkharasho`, repo `axilog`, workflow `pypl-publish.yml`,
-  environment `pypi` (or cleared), project `axilog`, on pypi.org (not TestPyPI). Then re-dispatch:
-  `gh workflow run pypl-publish.yml -f tag=v0.1.1`.
+(none)
+
+## Done (publishing)
+- MPUB COMPLETE: npm `@axiapps/axilog` (+5 platform packages) AND PyPI `axilog` both LIVE at
+  0.1.1, install-smoke verified from the public registries. PyPI = trusted publishing (OIDC) via
+  `.github/workflows/pypi-publish.yml` (environment `pypi`), dispatched by release.yml after each
+  release; npm = NPM_TOKEN secret in release.yml. Both idempotent. Future releases publish to
+  both registries automatically on tag push.
 
 ## Queued (autonomous — build in order; reorder only for dependency)
 - M15 Combat-replay positions in EI shape: resample sparse tracks → EI fixed-rate grid;
@@ -63,9 +64,8 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   axilog README/docs current every milestone regardless.
 
 ## Parked (user-gated — do NOT do autonomously)
-- npm/PyPI publishing (needs NPM_TOKEN/PYPI_TOKEN + the M8 publish-hardening: index.js version
-  regen, wheel install-smoke gate, publish idempotency/--skip-existing).
-- First non-v0.1.0 release tags; axibridge's actual cutover from EI CLI to the axilog SDK.
+- axibridge's actual cutover from EI CLI to the axilog SDK (both registries now live, so this is
+  unblocked whenever the user wants it).
 - Replay eye-candy backlog (dev-notes #6/#8: mounts/glider via TRANSFORMATION/GLIDER, capping via
   GADGETCAPTURE) — cosmetic; do only if a milestone naturally reaches it.
 
