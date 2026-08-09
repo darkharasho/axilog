@@ -22,6 +22,19 @@ pub mod sc {
     pub const CHANGE_DOWN: u8 = 5;
     pub const LOG_START: u8 = 9;
     pub const LOG_END: u8 = 10;
+    /// Per-agent health-percentage change (M11 Task 1 -- health tracking +
+    /// the arcdps-methodology contribution family's "over-99 anchor"). See
+    /// `crate::analysis::health`'s module doc for the full ordinal + payload
+    /// citation trail (curl'd `arcdps/evtc/README.txt`, 2026-08-09:
+    /// `CBTS_HEALTHPCTUPDATE` is index 8, immediately after `CBTS_DESPAWN`
+    /// (7) and before this project's already-independently-verified
+    /// `LOG_START`/`CBTS_SQCOMBATSTART` (9); cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.HealthUpdate = 8`) and the percent-encoding
+    /// derivation (`dst_agent` is percent * 100, per GW2EI's
+    /// `HealthUpdateEvent.GetHealthPercent` and `EvtcParser`'s own
+    /// event-filter comment -- NOT the reference text's literal, internally
+    /// inconsistent "* 10000" prose).
+    pub const HEALTH_UPDATE: u8 = 8;
     pub const MAX_HEALTH: u8 = 12;
     pub const POINT_OF_VIEW: u8 = 13;
     pub const TEAM_CHANGE: u8 = 22;

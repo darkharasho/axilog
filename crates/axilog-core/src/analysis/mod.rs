@@ -12,6 +12,12 @@ pub mod replay;
 /// Opt-in missile (projectile) analytics (M10 Task 2) -- standalone from
 /// [`analyze`]; see `missiles::build_missiles`.
 pub mod missiles;
+/// Per-agent health-percent tracking + the M11 contribution-family's
+/// "over-99 anchor" query (M11 Task 1) -- standalone from [`analyze`], like
+/// `replay`/`missiles` above; see `health::HealthTracker`'s module doc for
+/// the ordinal/payload citation trail and the "why not on `Metrics`" design
+/// note.
+pub mod health;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
