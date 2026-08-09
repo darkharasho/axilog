@@ -36,14 +36,13 @@ tar xzf axilog-X.Y.Z-<target>.tar.gz
 Targets published per release: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
 `x86_64-pc-windows-msvc`, `x86_64-apple-darwin`, `aarch64-apple-darwin`.
 
-### Node SDK (npm tarball)
+### Node SDK (npm)
 
-`@axiapps/axilog` is not yet published to the npm registry (see **SDKs** below) — until then, install
-the tarballs attached to a GitHub Release directly:
+`@axiapps/axilog` is published to the npm registry (platform binaries resolve automatically
+via optionalDependencies):
 
 ```sh
-# main package + the platform package matching your OS/arch, e.g. linux-x64-gnu
-npm install ./axi-axilog-X.Y.Z.tgz ./axi-axilog-linux-x64-gnu-X.Y.Z.tgz
+npm install @axiapps/axilog
 ```
 
 ```js
@@ -51,14 +50,13 @@ const { parseFile } = require('@axiapps/axilog')
 console.log(parseFile('./fight.zevtc').players.length)
 ```
 
-### Python SDK (pip wheel)
+### Python SDK (pip)
 
-`axilog` is not yet published to PyPI (see **SDKs** below) — until then, install the wheel
-attached to a GitHub Release directly for your platform (`cp39-abi3` — one wheel per platform
-covers every CPython ≥3.9):
+`axilog` is published to PyPI (`cp39-abi3` — one wheel per platform covers every
+CPython ≥3.9):
 
 ```sh
-pip install ./axilog-X.Y.Z-cp39-abi3-<platform_tag>.whl
+pip install axilog
 ```
 
 ```python
@@ -395,7 +393,7 @@ Calibrated against a real dps.report EI export for one WvW log (Green Alpine Bor
 | Map name | Exact | resolved from the log's `MAP_ID` event |
 | Team colors / team IDs | Exact | prefers the log's own `CBTS_WVWTEAMS` event when present (recent arcdps builds); falls back to a static id→color table (sourced from axibridge, itself reconciled from two community EVTC tools) for older logs without it |
 | Friendly player count | Approximate | within ±2 of EI's count (one known relog straggler with a blank account, contributes 0 to every metric) |
-| Down contribution | Approximate | our own algorithm: damage from squad → that enemy in the 10s window before its down event, excluding CC-only events; not calibrated against EI's own (undocumented) down-contribution algorithm, only unit-tested |
+| Down contribution | Emitted (arcdps methodology) | the M11 contribution family (`downs_contribution`/`downed_by`): health-anchored window per the dev-relayed arcdps methodology — max(last-≥99%-health − 2000ms, log start, prev-down + 2100ms reset) — with four stats (damage/CC/strips/movement-impairing), both directions; replaces the retired M1-era 10s-window approximation (schema 0.1 → 0.2). EI has no equivalent surface — this follows arcdps itself, not EI |
 | CC detection (`is_cc` predicate) | Approximate, era-gated | exact vs. EI on a pre-`ResultEnumRework` arcdps build (< 20260501; `34`/`50460`ms, see the CC row above); post-era (≥ 20260501) now also accepts genuine `buff == 1` CC rows, era-gated off `RawHeader::is_post_buff_rework` (M4 Task 2, verified against GW2EI's post-`ResultEnumRework` source — no real post-rework capture to calibrate the post-era branch's numbers against yet), see "Supported log eras" below |
 | Per-second timeline (squad damage / CC applied / downs) | Native-only | EI's JSON doesn't expose a comparable per-second series; ours does (`timeline.per_second`) |
 | Down-contribution timeline (per-window breakdown) | Native-only, not yet exposed | the down-contribution algorithm already works in time windows internally; a windowed *timeline* (vs. today's single per-player total) is a planned native-only extension |
@@ -649,11 +647,11 @@ against the full, unfiltered roster, matching real EI's own behavior). Team ids
 truncating cast on dynamic `CBTS_WVWTEAMS` ids (future-proofing; no real fixture currently has an
 id large enough for the truncation to have mattered).
 
-**Later:** PvE encounter logic (boss health phases, mechanics), actually publishing to the
-npm/PyPI registries (the pipeline is gated and ready — see M8 — but `NPM_TOKEN`/`PYPI_TOKEN`
-aren't configured yet), HTML report extras (tick-rate corner widget, mounts/glider/capping replay
-eye candy, a healing tab, missile analytics — see arcdps-dev-notes), real-capture calibration of
-the M4 post-rework code paths once a fixture is available.
+**Later:** PvE encounter logic (boss health phases, mechanics), damage-modifier attribution
+(M16), HTML report extras (tick-rate corner widget, mounts/glider/capping replay eye candy, a
+healing tab — see arcdps-dev-notes). Registry publishing is LIVE (npm `@axiapps/axilog`, PyPI
+`axilog` — automated on tag push via NPM_TOKEN + PyPI trusted publishing), and the post-rework
+era is fully real-capture calibrated.
 
 ## License
 
