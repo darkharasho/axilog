@@ -87,6 +87,15 @@ pub mod rotation;
 /// citation trail.
 pub mod skill_map;
 
+/// GW2EI's `SkillEvent.ConditionDamageBased` skill-id catalog (MCONDCAT
+/// Task 1) -- the `BuffClassification.Condition` id set that decides the
+/// condition-vs-power bucketing in `hit_stats` (outgoing) and `defenses`
+/// (incoming), and the condition-cleanse id set in `support`. See that
+/// module's doc comment for the exhaustive-scan provenance and the proof
+/// that GW2EI's runtime `BuffsByIDs` membership can never differ from the
+/// static list.
+pub mod condition_catalog;
+
 use crate::evtc::RawLog;
 use crate::model::Encounter;
 use std::collections::{BTreeMap, BTreeSet};

@@ -21,32 +21,28 @@ use crate::model::Encounter;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The 14 condition/debuff skill ids GW2EI classifies under
-/// `Buff.BuffClassification.Condition` -- verified directly against
-/// `GW2EIEvtcParser/EIData/Buffs/CommonBuffs.cs` (`CommonBuffs.Boons` --
-/// despite the field's name, this table lists BOTH `BuffClassification.Boon`
-/// and `.Condition` entries; only the 14 `.Condition`-tagged rows are used
-/// here) and each id cross-checked against `GW2EIEvtcParser/ParserHelpers/
-/// IDs/SkillIDs.cs`. Matches the M3 Task 3 brief's curated list exactly (no
-/// deviations found).
-pub const BLEEDING: u32 = 736;
-pub const BURNING: u32 = 737;
-pub const CONFUSION: u32 = 861;
-pub const POISON: u32 = 723;
-pub const TORMENT: u32 = 19426;
-pub const BLIND: u32 = 720;
-pub const CHILLED: u32 = 722;
-pub const CRIPPLED: u32 = 721;
-pub const FEAR: u32 = 791;
-pub const IMMOBILE: u32 = 727;
-pub const SLOW: u32 = 26766;
-pub const TAUNT: u32 = 27705;
-pub const WEAKNESS: u32 = 742;
-pub const VULNERABILITY: u32 = 738;
+/// `Buff.BuffClassification.Condition`.
+///
+/// **MCONDCAT Task 1: this is no longer a local table.** The ids now live in
+/// exactly one place, `analysis::condition_catalog`, which is ALSO the
+/// arbiter for `hit_stats`'/`defenses`' condition-vs-power damage bucketing
+/// (`SkillEvent.ConditionDamageBased`). Both consumers ask GW2EI the same
+/// question -- "is this id a `BuffClassification.Condition` buff?" -- so
+/// they must not be able to drift apart. Re-exported here (rather than
+/// deleted) to keep `support::CONDITION_IDS`/`support::BLEEDING`/... working
+/// unchanged for existing callers.
+///
+/// The previous doc comment on this block cited the wrong list
+/// (`CommonBuffs.Boons`); the correct site is `CommonBuffs.Conditions`
+/// (`GW2EIEvtcParser/EIData/Buffs/CommonBuffs.cs:34-52`) -- corrected, with
+/// the full exhaustive-scan provenance, in `condition_catalog`'s module doc.
+pub use crate::analysis::condition_catalog::{
+    BLEEDING, BLIND, BURNING, CHILLED, CONFUSION, CRIPPLED, FEAR, IMMOBILE, POISON, SLOW, TAUNT,
+    TORMENT, VULNERABILITY, WEAKNESS,
+};
 
-pub const CONDITION_IDS: [u32; 14] = [
-    BLEEDING, BURNING, CONFUSION, POISON, TORMENT, BLIND, CHILLED, CRIPPLED, FEAR, IMMOBILE,
-    SLOW, TAUNT, WEAKNESS, VULNERABILITY,
-];
+/// Alias of `condition_catalog::CONDITION_SKILL_IDS` -- see above.
+pub use crate::analysis::condition_catalog::CONDITION_SKILL_IDS as CONDITION_IDS;
 
 /// `SkillIDs.Resurrect` (`GW2EIEvtcParser/ParserHelpers/IDs/SkillIDs.cs`) --
 /// the "Res" skill every profession has on downed/defeated allies. Distinct

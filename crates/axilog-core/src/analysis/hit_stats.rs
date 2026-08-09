@@ -77,19 +77,57 @@
 //! `BUFF_NOT_CYCLE_DMG_TO_TARGET_ON_HIT` (16) or
 //! `BUFF_NOT_CYCLE_DMG_TO_TARGET_ON_STACK_REMOVE` (18)) vs **condition**
 //! (anything else classified `ConditionDamageBased` -- GW2EI checks the
-//! skill id against its own Condition-category buff catalog). This project
-//! has no equivalent skill-id condition-category catalog, so `classify`
-//! instead treats every buff==1 hit that ISN'T life-leech as "condition" --
-//! **verified to reproduce the calibration fixture EXACTLY**: cross-checked
-//! all 41 players in `axibridge/test-fixtures/boon/20260117-181030.json`,
-//! `connectedConditionCount + connectedLifeLeechCount + connectedDirectDamageCount
-//! == connectedDamageCount` holds EXACTLY for every row (zero residual "buff==1,
-//! neither condition nor life-leech" rows observed anywhere in this fixture)
-//! -- i.e. there is no third bucket to misclassify on this log. A
-//! genuinely different buff==1 damage-dealing skill outside GW2EI's
-//! Condition catalog (a rare arcdps edge case, if any exists at all) would
-//! be misclassified as "condition" by this simplification; documented, not
-//! observed.
+//! skill id against its own Condition-category buff catalog).
+//!
+//! **MCONDCAT Task 1: that catalog is now reproduced exactly** --
+//! `analysis::condition_catalog::is_condition_damage_based` (see that
+//! module's doc for the exhaustive-scan provenance and the proof that
+//! GW2EI's runtime `BuffsByIDs` membership can never differ from its static
+//! 14-id list). `record` below now mirrors `OffensiveStatistics`'s ctor
+//! statement for statement:
+//!
+//! ```text
+//! // GW2EIEvtcParser/EIData/Statistics/OffensiveStatistics.cs:107-158
+//! if (dl.ConditionDamageBased(log)) {
+//!     ConditionDamageCount++; ConditionDamage += dl.HealthDamage;
+//!     if (dl.IsOverNinety) { ConditionDamageAbove90HPCount++; ConditionDamageAbove90HP += ...; }
+//! } else {
+//!     if (dl is NonDirectHealthDamageEvent ndhd) {
+//!         if (ndhd.IsLifeLeech) { LifeLeechDamageCount++; LifeLeechDamage += ...; }
+//!     } else {
+//!         if (SkillItem.CanCrit(...)) { if (dl.HasCrit) { CriticalDamageCount++; ... } CritableDirectDamageCount++; }
+//!         DirectDamageCount++; DirectDamage += ...;
+//!         if (dl.IsFlanking) { FlankingCount++; }
+//!         if (dl.HasGlanced) { GlancingCount++; }
+//!     }
+//!     PowerDamageCount++; PowerDamage += ...;
+//!     if (dl.IsOverNinety) { PowerDamageAbove90HPCount++; PowerDamageAbove90HP += ...; }
+//! }
+//! ```
+//!
+//! Two consequences worth stating explicitly, because the pre-MCONDCAT
+//! approximation ("condition == every buff==1 hit that isn't life-leech")
+//! had neither:
+//!
+//! 1. **The FOURTH BUCKET is now representable.** A buff==1 hit outside the
+//!    catalog and not life-leech (`dl is NonDirectHealthDamageEvent`, but
+//!    neither inner `if` fires) increments `PowerDamageCount`/`PowerDamage`
+//!    (and `above90_power_*`) and NOTHING else -- never `direct_*`, never
+//!    `condition_*`, never `life_leech_*`. So the old by-construction
+//!    identity `connected == direct + condition + life_leech` no longer
+//!    holds in general, and correctly so: it does not hold in GW2EI either.
+//! 2. **The catalog probe is NOT gated on `buff == 1`.** GW2EI runs it
+//!    ahead of the `is DirectHealthDamageEvent` test, so a buff==0 STRIKE
+//!    row whose skill id happens to be catalogued counts as a condition hit
+//!    and skips the crit/critable/flank/glance/direct block entirely. That
+//!    ordering is reproduced verbatim rather than "cleaned up".
+//!
+//! Empirically: on the committed pre-rework fixture the rework is a no-op
+//! (zero fourth-bucket rows, zero catalogued-id buff==0 rows -- every
+//! output format is byte-identical to pre-MCONDCAT). On the local
+//! post-rework capture it is exactly what closed the previously-reported
+//! `connectedConditionCount`/`connectedPowerCount` divergence (2 of 44
+//! accounts on the outgoing side; see `hit_stats_golden.rs`).
 //!
 //! ## `against_downed` -- a WIRE FLAG, not down-interval/health-state
 //! tracking
@@ -196,6 +234,7 @@
 //! documented, not silently assumed). Verified EXACT against the golden
 //! fixture once applied.
 
+use crate::analysis::condition_catalog;
 use crate::evtc::{result, RawEvent, RawLog};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -399,43 +438,54 @@ fn record(stats: &mut HitStats, e: &RawEvent, c: &Classified) {
     stats.connected_count += 1;
     stats.connected_damage += c.dmg;
 
-    if c.is_direct_hit {
-        stats.direct_count += 1;
-        stats.direct_damage += c.dmg;
-        // GW2EI gates crit_count/critable_direct_count (but NOT
-        // direct_count/flank_count/glance_count) behind CanCrit -- see
-        // module doc's `critable_direct_count` section + `NON_CRITABLE_SKILLS`.
-        if can_crit(e.skillid) {
-            stats.critable_direct_count += 1;
-            if c.is_crit {
-                stats.crit_count += 1;
-                stats.crit_damage += c.dmg;
-            }
-        }
-        if c.is_glance {
-            stats.glance_count += 1;
-        }
-        if e.is_flanking != 0 {
-            stats.flank_count += 1;
-        }
-        if c.is_above_ninety {
-            stats.above90_power_count += 1;
-            stats.above90_power_damage += c.dmg;
-        }
-    } else if c.is_life_leech_hit {
-        stats.life_leech_count += 1;
-        stats.life_leech_damage += c.dmg;
-        if c.is_above_ninety {
-            stats.above90_power_count += 1;
-            stats.above90_power_damage += c.dmg;
-        }
-    } else {
-        // buff==1, hit, not life-leech -- "condition" (see module doc).
+    // MCONDCAT Task 1: the branch structure below mirrors
+    // `OffensiveStatistics`'s ctor STATEMENT FOR STATEMENT -- in particular
+    // the `ConditionDamageBased` catalog probe comes FIRST, ahead of the
+    // direct-vs-non-direct type test, and the power bucket increments in
+    // the whole `else` arm (not just its two named sub-branches). See this
+    // module's "Direct vs Condition vs Life-leech" doc section.
+    if condition_catalog::is_condition_damage_based(e.skillid) {
         stats.condition_count += 1;
         stats.condition_damage += c.dmg;
         if c.is_above_ninety {
             stats.above90_condition_count += 1;
             stats.above90_condition_damage += c.dmg;
+        }
+    } else {
+        if !c.is_direct_hit {
+            // `dl is NonDirectHealthDamageEvent` (buff==1).
+            if c.is_life_leech_hit {
+                stats.life_leech_count += 1;
+                stats.life_leech_damage += c.dmg;
+            }
+            // ELSE: the FOURTH BUCKET -- a buff==1 hit that is neither
+            // catalogued as a condition nor life-leech. GW2EI records it in
+            // NO inner bucket at all; only the outer power counters below
+            // see it. Nothing to do here, deliberately.
+        } else {
+            // GW2EI gates crit_count/critable_direct_count (but NOT
+            // direct_count/flank_count/glance_count) behind CanCrit -- see
+            // module doc's `critable_direct_count` section +
+            // `NON_CRITABLE_SKILLS`.
+            if can_crit(e.skillid) {
+                stats.critable_direct_count += 1;
+                if c.is_crit {
+                    stats.crit_count += 1;
+                    stats.crit_damage += c.dmg;
+                }
+            }
+            stats.direct_count += 1;
+            stats.direct_damage += c.dmg;
+            if e.is_flanking != 0 {
+                stats.flank_count += 1;
+            }
+            if c.is_glance {
+                stats.glance_count += 1;
+            }
+        }
+        if c.is_above_ninety {
+            stats.above90_power_count += 1;
+            stats.above90_power_damage += c.dmg;
         }
     }
 
@@ -531,11 +581,24 @@ mod tests {
         e
     }
 
+    /// A buff==1 damage row carrying an UNCATALOGUED skill id (`base`'s
+    /// default `skillid: 1`, which is not one of
+    /// `condition_catalog::CONDITION_SKILL_IDS`). Post-MCONDCAT this is a
+    /// FOURTH-BUCKET row unless its `result`/`BuffCycle` makes it
+    /// life-leech -- use `condi_dmg_event` for the condition bucket.
     fn buff_dmg_event(src: u64, dst: u64, result_: u8, dmg: i32) -> RawEvent {
         let mut e = base(src, dst);
         e.buff = 1;
         e.result = result_;
         e.buff_dmg = dmg;
+        e
+    }
+
+    /// Same as `buff_dmg_event`, but with a CATALOGUED skill id (Bleeding,
+    /// 736) -- i.e. one GW2EI's `ConditionDamageBased` returns true for.
+    fn condi_dmg_event(src: u64, dst: u64, result_: u8, dmg: i32) -> RawEvent {
+        let mut e = buff_dmg_event(src, dst, result_, dmg);
+        e.skillid = condition_catalog::BLEEDING;
         e
     }
 
@@ -702,7 +765,7 @@ mod tests {
 
     #[test]
     fn pre_era_condition_tick_expected_to_hit_counts_condition() {
-        let raw = raw_from(vec![buff_dmg_event(1, 9, 0, 30)]); // ConditionResult::ExpectedToHit
+        let raw = raw_from(vec![condi_dmg_event(1, 9, 0, 30)]); // ConditionResult::ExpectedToHit
         let h = build(&raw, &squad1(), &enemies9(), &no_rep())[&1];
         assert_eq!(h.condition_count, 1);
         assert_eq!(h.condition_damage, 30);
@@ -781,7 +844,7 @@ mod tests {
 
     #[test]
     fn post_era_buff_cycle_counts_condition() {
-        let raw = raw_post(vec![buff_dmg_event(1, 9, result::BUFF_CYCLE, 45)]);
+        let raw = raw_post(vec![condi_dmg_event(1, 9, result::BUFF_CYCLE, 45)]);
         let h = build(&raw, &squad1(), &enemies9(), &no_rep())[&1];
         assert_eq!(h.condition_count, 1);
         assert_eq!(h.condition_damage, 45);
@@ -789,14 +852,14 @@ mod tests {
 
     #[test]
     fn post_era_buff_not_cycle_counts_condition() {
-        let raw = raw_post(vec![buff_dmg_event(1, 9, result::BUFF_NOT_CYCLE, 20)]);
+        let raw = raw_post(vec![condi_dmg_event(1, 9, result::BUFF_NOT_CYCLE, 20)]);
         let h = build(&raw, &squad1(), &enemies9(), &no_rep())[&1];
         assert_eq!(h.condition_count, 1);
     }
 
     #[test]
     fn post_era_buff_not_cycle_dmg_to_source_on_hit_counts_condition_not_lifeleech() {
-        let raw = raw_post(vec![buff_dmg_event(
+        let raw = raw_post(vec![condi_dmg_event(
             1,
             9,
             result::BUFF_NOT_CYCLE_DMG_TO_SOURCE_ON_HIT,
@@ -863,7 +926,7 @@ mod tests {
 
     #[test]
     fn post_era_above90_condition_via_is_ninety() {
-        let mut e = buff_dmg_event(1, 9, result::BUFF_CYCLE, 9);
+        let mut e = condi_dmg_event(1, 9, result::BUFF_CYCLE, 9);
         e.is_ninety = 1;
         let raw = raw_post(vec![e]);
         let h = build(&raw, &squad1(), &enemies9(), &no_rep())[&1];
@@ -880,6 +943,100 @@ mod tests {
         let h = build(&raw, &squad1(), &enemies9(), &no_rep())[&1];
         assert_eq!(h.above90_power_count, 1, "life-leech counts as power, not condition");
         assert_eq!(h.above90_condition_count, 0);
+    }
+
+    // ---- MCONDCAT Task 1: the four buckets ----
+
+    /// Bucket 1 (strike): buff==0, uncatalogued skill id.
+    #[test]
+    fn bucket_strike_uncatalogued_direct_hit() {
+        let raw = raw_post(vec![direct(1, 9, result::NORMAL, 100)]);
+        let h = build(&raw, &squad1(), &enemies9(), &no_rep())[&1];
+        assert_eq!((h.direct_count, h.direct_damage), (1, 100));
+        assert_eq!(h.critable_direct_count, 1);
+        assert_eq!(h.condition_count, 0);
+        assert_eq!(h.life_leech_count, 0);
+    }
+
+    /// Bucket 2 (condition): the catalog probe, not the `buff` byte.
+    #[test]
+    fn bucket_condition_is_decided_by_the_catalog() {
+        let raw = raw_post(vec![condi_dmg_event(1, 9, result::BUFF_CYCLE, 45)]);
+        let h = build(&raw, &squad1(), &enemies9(), &no_rep())[&1];
+        assert_eq!((h.condition_count, h.condition_damage), (1, 45));
+        assert_eq!(h.direct_count, 0);
+        assert_eq!(h.life_leech_count, 0);
+    }
+
+    /// Bucket 3 (life-leech): buff==1, uncatalogued, life-leech `result`.
+    #[test]
+    fn bucket_life_leech_uncatalogued_leech_result() {
+        let raw =
+            raw_post(vec![buff_dmg_event(1, 9, result::BUFF_NOT_CYCLE_DMG_TO_TARGET_ON_HIT, 33)]);
+        let h = build(&raw, &squad1(), &enemies9(), &no_rep())[&1];
+        assert_eq!((h.life_leech_count, h.life_leech_damage), (1, 33));
+        assert_eq!(h.condition_count, 0);
+        assert_eq!(h.direct_count, 0);
+    }
+
+    /// **Bucket 4 (the fourth bucket)**: buff==1, UNCATALOGUED skill id, NOT
+    /// life-leech. Pre-MCONDCAT this was silently counted as a condition
+    /// hit; GW2EI puts it in NO inner bucket, only the outer power one --
+    /// which for the OUTGOING side means `above90_power_*` and nothing else
+    /// (this module has no standalone `power_count` field; EI's
+    /// `powerDamageCount` is the whole `else` arm).
+    #[test]
+    fn bucket_fourth_uncatalogued_buff_hit_is_neither_condition_nor_strike() {
+        let mut e = buff_dmg_event(1, 9, result::BUFF_CYCLE, 45);
+        e.is_ninety = 1;
+        let raw = raw_post(vec![e]);
+        let h = build(&raw, &squad1(), &enemies9(), &no_rep())[&1];
+        assert_eq!(h.connected_count, 1, "it is still a HIT");
+        assert_eq!(h.connected_damage, 45);
+        assert_eq!(h.condition_count, 0, "fourth bucket must NOT count as condition");
+        assert_eq!(h.condition_damage, 0);
+        assert_eq!(h.direct_count, 0, "fourth bucket must NOT count as strike");
+        assert_eq!(h.critable_direct_count, 0);
+        assert_eq!(h.life_leech_count, 0, "fourth bucket must NOT count as life-leech");
+        assert_eq!(h.above90_power_count, 1, "it DOES count toward power");
+        assert_eq!(h.above90_power_damage, 45);
+        assert_eq!(h.above90_condition_count, 0);
+        // The old by-construction identity is now legitimately broken.
+        assert_ne!(
+            h.connected_count,
+            h.direct_count + h.condition_count + h.life_leech_count,
+            "`connected == direct + condition + life_leech` must NOT hold on a fourth-bucket row"
+        );
+    }
+
+    /// Same pre-era, where "not life-leech" comes from the `BuffCycle`-
+    /// decoded `is_offcycle` byte rather than `result`.
+    #[test]
+    fn bucket_fourth_pre_era_uncatalogued_tick() {
+        let raw = raw_from(vec![buff_dmg_event(1, 9, 0, 30)]);
+        let h = build(&raw, &squad1(), &enemies9(), &no_rep())[&1];
+        assert_eq!(h.connected_count, 1);
+        assert_eq!(h.condition_count, 0);
+        assert_eq!(h.life_leech_count, 0);
+        assert_eq!(h.direct_count, 0);
+    }
+
+    /// The catalog probe runs BEFORE the direct-vs-non-direct type test, so
+    /// a buff==0 STRIKE row with a catalogued skill id is a condition hit
+    /// and never reaches the crit/critable/flank/glance block -- GW2EI's
+    /// own ordering (`OffensiveStatistics.cs:109`), reproduced verbatim.
+    #[test]
+    fn catalogued_skill_id_on_a_direct_row_still_counts_as_condition() {
+        let mut e = direct(1, 9, result::CRIT, 50);
+        e.skillid = condition_catalog::BURNING;
+        e.is_flanking = 1;
+        let raw = raw_post(vec![e]);
+        let h = build(&raw, &squad1(), &enemies9(), &no_rep())[&1];
+        assert_eq!((h.condition_count, h.condition_damage), (1, 50));
+        assert_eq!(h.direct_count, 0);
+        assert_eq!(h.crit_count, 0);
+        assert_eq!(h.critable_direct_count, 0);
+        assert_eq!(h.flank_count, 0);
     }
 
     // ---- misc plumbing ----

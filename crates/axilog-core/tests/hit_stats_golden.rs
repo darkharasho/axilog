@@ -32,15 +32,34 @@ use axilog_core::evtc::{anon_account, decode_raw};
 use axilog_core::model::resolve;
 use std::collections::HashMap;
 
+mod common;
+
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
-const LOCAL_FIXTURE_PATH: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-small.zevtc");
+
 const GOLDEN_JSON_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.ei.json");
-const LOCAL_POSTREWORK_ZEVTC: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-postrework.zevtc");
-const LOCAL_POSTREWORK_EI_JSON: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-postrework.ei.json");
+/// Gitignored, PII-bearing local captures -- resolved through
+/// `common::local_fixture` (M15 Task 1) so `AXILOG_LOCAL_FIXTURES` can point
+/// a `git worktree` at the primary checkout's `fixtures/local/` instead of
+/// requiring the captures to be copied (which would duplicate PII):
+///
+/// ```sh
+/// AXILOG_LOCAL_FIXTURES=/path/to/axilog/fixtures/local \
+///     cargo test -p axilog-core --test defenses_golden -- --nocapture
+/// ```
+///
+/// Unset, these resolve to the in-tree `fixtures/local/` exactly as the
+/// hardcoded `concat!(env!("CARGO_MANIFEST_DIR"), ...)` paths they replaced
+/// did, so CI behaviour (skip-when-absent) is unchanged.
+fn local_fixture_path() -> String {
+    common::local_fixture("wvw-small.zevtc")
+}
+fn local_postrework_zevtc() -> String {
+    common::local_fixture("wvw-postrework.zevtc")
+}
+fn local_postrework_ei_json() -> String {
+    common::local_fixture("wvw-postrework.ei.json")
+}
 
 /// Relative tolerance for damage sums (M13 plan: 0.5%). Measured on the
 /// golden fixture: every damage-sum field is actually EXACT (0 tolerance
@@ -58,10 +77,11 @@ fn read_anon_fixture() -> Vec<u8> {
 }
 
 fn read_local_fixture_or_skip(test_name: &str) -> Option<Vec<u8>> {
-    match std::fs::read(LOCAL_FIXTURE_PATH) {
+    let path = local_fixture_path();
+    match std::fs::read(&path) {
         Ok(b) => Some(b),
         Err(_) => {
-            println!("skip: {LOCAL_FIXTURE_PATH} absent ({test_name} local-only extra check)");
+            println!("skip: {path} absent ({test_name} local-only extra check)");
             None
         }
     }
@@ -232,8 +252,9 @@ fn hit_stats_matches_ei_golden_local_raw_when_present() {
 /// self-consistent output on a real post-rework capture.
 #[test]
 fn hit_stats_present_and_sane_on_local_postrework_when_available() {
-    let Some(bytes) = std::fs::read(LOCAL_POSTREWORK_ZEVTC).ok() else {
-        println!("skip: {LOCAL_POSTREWORK_ZEVTC} absent (local-only postrework sanity check)");
+    let postrework_zevtc = local_postrework_zevtc();
+    let Some(bytes) = std::fs::read(&postrework_zevtc).ok() else {
+        println!("skip: {postrework_zevtc} absent (local-only postrework sanity check)");
         return;
     };
     let raw = decode_raw(&bytes).expect("decode postrework fixture");
@@ -243,16 +264,28 @@ fn hit_stats_present_and_sane_on_local_postrework_when_available() {
 
     let mut any_connected = false;
     let mut any_direct = false;
+    let mut fourth_bucket_players = 0usize;
+    let mut fourth_bucket_hits = 0u32;
     for p in &metrics.players {
         let h = &p.hit_stats;
-        // Internal invariants: connected is the union of direct/condition/
-        // life-leech; a hit-count can never exceed its own connected total.
-        assert_eq!(
-            h.direct_count + h.condition_count + h.life_leech_count,
-            h.connected_count,
-            "agent {:#x}: direct+condition+life_leech must equal connected exactly",
-            p.agent_addr
+        // **MCONDCAT Task 1 reworked this assertion.** `direct + condition
+        // + life_leech == connected` held only by this module's own
+        // pre-catalog construction (three buckets, exhaustive by
+        // definition). With the FOURTH BUCKET (buff==1, outside the
+        // condition catalog, not life-leech -- see
+        // `analysis::condition_catalog`) the correct invariant is the
+        // inequality, the slack being exactly the fourth-bucket count.
+        let three_buckets = h.direct_count + h.condition_count + h.life_leech_count;
+        assert!(
+            three_buckets <= h.connected_count,
+            "agent {:#x}: direct+condition+life_leech ({three_buckets}) must not exceed connected ({})",
+            p.agent_addr,
+            h.connected_count
         );
+        fourth_bucket_hits += h.connected_count - three_buckets;
+        if h.connected_count > three_buckets {
+            fourth_bucket_players += 1;
+        }
         assert!(h.crit_count <= h.direct_count, "agent {:#x}: crit_count must not exceed direct_count", p.agent_addr);
         assert!(h.glance_count <= h.direct_count, "agent {:#x}: glance_count must not exceed direct_count", p.agent_addr);
         assert!(h.critable_direct_count <= h.direct_count.max(h.critable_direct_count), "agent {:#x}: critable_direct_count sanity", p.agent_addr);
@@ -267,6 +300,10 @@ fn hit_stats_present_and_sane_on_local_postrework_when_available() {
     }
     assert!(any_connected, "a real WvW squad fight should show nonzero connected hits somewhere");
     assert!(any_direct, "a real WvW squad fight should show nonzero direct hits somewhere");
+    println!(
+        "hit_stats_present_and_sane_on_local_postrework: fourth bucket populated for \
+         {fourth_bucket_players} player(s), {fourth_bucket_hits} hit(s) total"
+    );
 
     println!(
         "hit_stats_present_and_sane_on_local_postrework: {} players, internal invariants hold on a real post-era log",
@@ -300,20 +337,29 @@ const RELIABLE_COUNT_FIELDS: &[(&str, &str)] = &[
 /// (not the committed golden fixture, which is EXACT) -- see that const's
 /// doc comment.
 const RELIABLE_COUNT_ABS_TOLERANCE: i64 = 2;
-/// Fields that fall inside the documented buff==1 condition-vs-life-leech
-/// simplification gap (`hit_stats::condition_count`'s own doc section) --
-/// NOT hard-asserted here (see this test's doc comment for why), only
-/// reported.
-const CATALOG_GAP_COUNT_FIELDS: &[(&str, &str)] = &[
+/// The fields that used to fall inside the buff==1 condition-vs-life-leech
+/// simplification gap and were therefore REPORT-ONLY here.
+///
+/// **MCONDCAT Task 1 closed that gap** (`analysis::condition_catalog`), so
+/// they are now hard-asserted EXACT -- no tolerance, no reporting escape
+/// hatch -- against a real post-era capture, exactly like the committed
+/// fixture's own check. Damage sums are included alongside the counts: a
+/// reclassification moves both, and asserting only counts would let a
+/// same-count/different-sum regression through.
+const CATALOG_EXACT_FIELDS: &[(&str, &str)] = &[
     ("condition_count", "connectedConditionCount"),
+    ("condition_damage", "connectedConditionDamage"),
     ("life_leech_count", "connectedLifeLeechCount"),
+    ("life_leech_damage", "connectedLifeLeechDamage"),
     ("above90_power_count", "connectedPowerAbove90HPCount"),
+    ("above90_power_damage", "connectedPowerAbove90HPDamage"),
     ("above90_condition_count", "connectedConditionAbove90HPCount"),
+    ("above90_condition_damage", "connectedConditionAbove90HPDamage"),
 ];
 
 /// M13 Task 3 (post-era calibration hook, cheap win from review): when a
 /// real post-rework EI JSON sidecar (the dps.report `getJson` output for
-/// the SAME log as `LOCAL_POSTREWORK_ZEVTC`) is ALSO present, this
+/// the SAME log as `local_postrework_zevtc()`) is ALSO present, this
 /// calibrates `hit_stats`'s count fields against real `statsAll[0]`
 /// numbers on that capture -- unlike
 /// `hit_stats_present_and_sane_on_local_postrework_when_available` above
@@ -322,28 +368,23 @@ const CATALOG_GAP_COUNT_FIELDS: &[(&str, &str)] = &[
 /// (`hit_stats::classify`'s `post_era` branch), the moment a real capture +
 /// export pair exists.
 ///
-/// **First real run of this hook (48-player, ~5m48s, arcdps build
-/// 20260718, WvW capture) empirically CONFIRMED the theoretical
-/// `condition_count`/catalog-gap caveat this module's doc already
-/// disclosed** -- previously "documented, not observed" (the committed
-/// synthetic/pre-rework fixtures showed zero residual). On this real
-/// capture, a handful of players (`darkpink.9145`: `connectedConditionCount`
-/// 139 (golden) vs 177 (ours), `connectedPowerAbove90HPCount` 450 vs 412,
-/// `connectedConditionAbove90HPCount` 122 vs 160; `Lento.3714`: same pattern,
-/// magnitude 1) show a real, non-trivial condition/power split divergence
-/// -- but CONSERVED in total (`ours condition + ours life_leech ==
-/// golden's condition + (golden's power_above90-style non-strike bucket)`
-/// -- verified by hand for both players), i.e. a genuine buff==1 skill this
-/// project's simplification puts in "condition" that real GW2EI's
-/// `ConditionDamageBased` skill-id catalog evidently does NOT (or vice
-/// versa) -- a real-world instance of the missing-catalog gap, not a
-/// dropped/extra event. `RELIABLE_COUNT_FIELDS` (immune to this specific
-/// split, see that const's doc comment) are asserted with a small
-/// tolerance; `CATALOG_GAP_COUNT_FIELDS` are reported only, not hard-failed
-/// -- hard-failing on a KNOWN, now-empirically-confirmed simplification gap
-/// would make this hook permanently red for every future real capture with
-/// even one uncatalogued buff==1 skill in play, defeating its own "green
-/// signal for real regressions" purpose.
+/// **History: MCONDCAT Task 1 closed this hook's one known gap.** Its first
+/// real run (48-player, ~5m48s, arcdps build 20260718, WvW capture)
+/// empirically confirmed the then-disclosed missing-catalog caveat: 2 of 44
+/// joined accounts diverged on `connectedConditionCount` /
+/// `connectedPowerAbove90HPCount` / `connectedConditionAbove90HPCount` (the
+/// larger of the two by 38 hits, the other by 1), CONSERVED in total -- a
+/// genuine buff==1 skill that this project's "every non-life-leech buff hit
+/// is a condition" simplification bucketed as condition while GW2EI's
+/// `ConditionDamageBased` skill-id catalog did not. The incoming side
+/// (`defenses_golden.rs`'s equivalent hook, same capture) showed a far larger
+/// gap, 33 of 44 accounts, plausibly because incoming attackers span a whole
+/// opposing WvW roster's build diversity rather than the recording squad's
+/// own narrower skill set.
+///
+/// With `analysis::condition_catalog` in place, every one of those fields is
+/// **EXACT on all 44 joined accounts**, so `CATALOG_EXACT_FIELDS` is
+/// hard-asserted here rather than merely reported.
 ///
 /// Joined by RAW account string (this fixture is a real, non-anonymized
 /// local capture, unlike the committed `wvw-small.anon.zevtc`/
@@ -356,16 +397,18 @@ const CATALOG_GAP_COUNT_FIELDS: &[(&str, &str)] = &[
 /// automatically, without writing a new test first.
 #[test]
 fn hit_stats_calibrated_against_local_postrework_ei_json_when_available() {
-    let Some(bytes) = std::fs::read(LOCAL_POSTREWORK_ZEVTC).ok() else {
-        println!("skip: {LOCAL_POSTREWORK_ZEVTC} absent (post-era hitStats real calibration)");
+    let postrework_zevtc = local_postrework_zevtc();
+    let postrework_ei_json = local_postrework_ei_json();
+    let Some(bytes) = std::fs::read(&postrework_zevtc).ok() else {
+        println!("skip: {postrework_zevtc} absent (post-era hitStats real calibration)");
         return;
     };
-    let Some(golden_s) = std::fs::read_to_string(LOCAL_POSTREWORK_EI_JSON).ok() else {
-        println!("skip: {LOCAL_POSTREWORK_EI_JSON} absent (post-era hitStats real calibration)");
+    let Some(golden_s) = std::fs::read_to_string(&postrework_ei_json).ok() else {
+        println!("skip: {postrework_ei_json} absent (post-era hitStats real calibration)");
         return;
     };
     let golden: serde_json::Value =
-        serde_json::from_str(&golden_s).unwrap_or_else(|e| panic!("parse {LOCAL_POSTREWORK_EI_JSON}: {e}"));
+        serde_json::from_str(&golden_s).unwrap_or_else(|e| panic!("parse {postrework_ei_json}: {e}"));
 
     let raw = decode_raw(&bytes).expect("decode postrework fixture");
     assert!(
@@ -385,7 +428,6 @@ fn hit_stats_calibrated_against_local_postrework_ei_json_when_available() {
 
     let mut joined = 0usize;
     let mut mismatches: Vec<String> = Vec::new();
-    let mut catalog_gap_notes: Vec<String> = Vec::new();
     for p in &enc.players {
         let key = p.account.trim_start_matches(':').to_string();
         let Some(golden_p) = golden_by_account.get(&key) else { continue };
@@ -405,13 +447,14 @@ fn hit_stats_calibrated_against_local_postrework_ei_json_when_available() {
             }
         }
 
-        for &(our_field, golden_key) in CATALOG_GAP_COUNT_FIELDS {
+        // MCONDCAT Task 1: EXACT, hard-failed (previously report-only).
+        for &(our_field, golden_key) in CATALOG_EXACT_FIELDS {
             let ours = field_value(&pm.hit_stats, our_field) as i64;
             let golden_val = stats_all[golden_key].as_i64().unwrap_or(0);
             if ours != golden_val {
-                catalog_gap_notes.push(format!(
+                mismatches.push(format!(
                     "{key} {our_field}: ours={ours} golden[statsAll[0].{golden_key}]={golden_val} \
-                     (diff {}, known catalog-gap field, not hard-failed)",
+                     (diff {}, catalog-classified field -- must be EXACT since MCONDCAT Task 1)",
                     ours - golden_val
                 ));
             }
@@ -420,7 +463,7 @@ fn hit_stats_calibrated_against_local_postrework_ei_json_when_available() {
 
     if joined == 0 {
         println!(
-            "skip: 0 accounts joined between {LOCAL_POSTREWORK_ZEVTC} and {LOCAL_POSTREWORK_EI_JSON} \
+            "skip: 0 accounts joined between {postrework_zevtc} and {postrework_ei_json} \
              (post-era hitStats real calibration) -- account-string mismatch, or the export has no \
              `statsAll[0]` block for any joined player"
         );
@@ -429,20 +472,18 @@ fn hit_stats_calibrated_against_local_postrework_ei_json_when_available() {
 
     assert!(
         mismatches.is_empty(),
-        "{} RELIABLE count mismatch(es) exceeding tolerance {RELIABLE_COUNT_ABS_TOLERANCE} against \
-         a REAL post-era capture (checked {joined} accounts):\n{}",
+        "{} mismatch(es) against a REAL post-era capture (checked {joined} accounts) -- \
+         `RELIABLE_COUNT_FIELDS` allow +/-{RELIABLE_COUNT_ABS_TOLERANCE}, `CATALOG_EXACT_FIELDS` \
+         must be EXACT:\n{}",
         mismatches.len(),
         mismatches.join("\n")
     );
 
     println!(
-        "hit_stats_calibrated_against_local_postrework_ei_json: {joined} accounts joined, all {} \
-         reliable count fields within tolerance {RELIABLE_COUNT_ABS_TOLERANCE} on a REAL post-era \
-         capture; {} catalog-gap-field note(s) (reported, not hard-failed):",
+        "hit_stats_calibrated_against_local_postrework_ei_json: {joined} accounts joined; all {} \
+         reliable count fields within tolerance {RELIABLE_COUNT_ABS_TOLERANCE} and all {} \
+         catalog-classified fields EXACT on a REAL post-era capture",
         RELIABLE_COUNT_FIELDS.len(),
-        catalog_gap_notes.len()
+        CATALOG_EXACT_FIELDS.len()
     );
-    for n in &catalog_gap_notes {
-        println!("  {n}");
-    }
 }
