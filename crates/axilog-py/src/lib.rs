@@ -212,7 +212,10 @@ fn parse_file_ei(
     let bytes = std::fs::read(path).map_err(io_err)?;
     let (report, activity, ei_replay) =
         build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation)?;
-    let ei = axilog_ei::to_ei_json(&report, &activity, ei_replay.as_ref());
+    let ei = axilog_ei::to_ei_json(
+        &report,
+        &axilog_ei::EiInputs { activity: &activity, replay: ei_replay.as_ref() },
+    );
     value_to_py(py, &ei)
 }
 

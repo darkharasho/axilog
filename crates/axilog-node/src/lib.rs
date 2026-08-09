@@ -223,7 +223,10 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let (report, activity, ei_replay) = build_report_and_activity_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
     )?;
-    Ok(axilog_ei::to_ei_json(&report, &activity, ei_replay.as_ref()))
+    Ok(axilog_ei::to_ei_json(
+        &report,
+        &axilog_ei::EiInputs { activity: &activity, replay: ei_replay.as_ref() },
+    ))
 }
 
 /// Rewrites every player's character/account name in the `.zevtc` at

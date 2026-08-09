@@ -163,51 +163,79 @@ fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
     })
 }
 
-/// `activity` (M11 Task 3): per-player down/dead intervals + first/last-
-/// aware bounds from `axilog_core::analysis::replay::build_activity_intervals`
-/// -- ALWAYS computed by every caller (CLI/Node/Python), unlike `--replay`'s
-/// position track, since intervals are cheap (see that function's module
-/// doc). Positionally joined to `report.players` (both built by iterating
-/// `enc.players` in the same order -- see `build_activity_intervals`'s doc
-/// comment); pass an empty slice if unavailable (every field this powers is
-/// then a harmless zero/empty default, not a panic).
+/// The side-channel inputs [`to_ei_json`] needs on top of the native
+/// [`Report`] (M16 Task 1).
 ///
-/// `replay` (M15 Task 3): the GW2EI-shape fixed-rate combat replay from
-/// `axilog_core::analysis::ei_replay::build_ei_replay_auto`, or `None`. This
-/// is the OPT-IN gate for `combatReplayData.{positions, orientations, dc,
-/// iconURL}` and the top-level `combatReplayMetaData`: every caller
-/// (CLI/Node/Python) computes it exactly when `--replay`/SDK `replay: true`
-/// was requested -- i.e. the same request that populates
-/// `axilog_schema::Report::replay` -- so the presence of this argument is
-/// the "was replay requested" signal, mirroring how the `skill_damage`/
-/// `timeseries`/`rotation` blocks key off `PlayerOut`'s own `Option`
-/// presence rather than a separate flag.
+/// Everything here is EI-SHAPE data that the native schema deliberately does
+/// not carry (see each field), computed by the caller and handed in
+/// alongside the report. It is an options struct rather than a positional
+/// argument list because this surface only grows: M11 added `activity`, M15
+/// added `replay`, and further EI-only inputs are expected. Adding a field
+/// is then a source-compatible change for in-workspace callers that build it
+/// with `..Default::default()`, and a one-line change for the rest.
 ///
-/// It arrives as a side-channel argument rather than a `Report` field for
-/// the same reason `activity` does: it is EI-shape data (map PIXELS on
-/// GW2EI's own 300ms grid, GW2EI's sentinel-bracketed `dc`), which the
-/// native schema deliberately does not carry -- `Report::replay` is this
-/// project's own narrower world-unit shape, computed by a different engine
-/// (`axilog_core::analysis::replay`), and widening it would change the
-/// native `--replay` JSON.
+/// [`Default`] is the "nothing available" case (`activity: &[]`,
+/// `replay: None`), which every field's own default behaviour treats as a
+/// harmless zero/empty, never a panic — so
+/// `to_ei_json(&report, &EiInputs::default())` is always valid.
 ///
-/// Positionally joined to `report.players` (GW2EI-shape tracks are built by
-/// iterating `enc.players` then the `is_player` entries of `enc.enemies`,
-/// exactly the orders `report.players`/`report.all_enemies` use), and
-/// ignored entirely if that length invariant does not hold.
+/// It is `Copy` and holds only borrows, so passing it costs nothing and it
+/// never takes ownership of the caller's buffers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EiInputs<'a> {
+    /// `activity` (M11 Task 3): per-player down/dead intervals + first/last-
+    /// aware bounds from
+    /// `axilog_core::analysis::replay::build_activity_intervals`
+    /// — ALWAYS computed by every caller (CLI/Node/Python), unlike
+    /// `--replay`'s position track, since intervals are cheap (see that
+    /// function's module doc). Positionally joined to `report.players` (both
+    /// built by iterating `enc.players` in the same order — see
+    /// `build_activity_intervals`'s doc comment); leave it empty if
+    /// unavailable (every field this powers is then a harmless zero/empty
+    /// default, not a panic).
+    pub activity: &'a [ActivityIntervals],
+    /// `replay` (M15 Task 3): the GW2EI-shape fixed-rate combat replay from
+    /// `axilog_core::analysis::ei_replay::build_ei_replay_auto`, or `None`.
+    /// This is the OPT-IN gate for `combatReplayData.{positions,
+    /// orientations, dc, iconURL}` and the top-level
+    /// `combatReplayMetaData`: every caller (CLI/Node/Python) computes it
+    /// exactly when `--replay`/SDK `replay: true` was requested — i.e. the
+    /// same request that populates `axilog_schema::Report::replay` — so the
+    /// presence of this input is the "was replay requested" signal,
+    /// mirroring how the `skill_damage`/`timeseries`/`rotation` blocks key
+    /// off `PlayerOut`'s own `Option` presence rather than a separate flag.
+    ///
+    /// It arrives as a side-channel input rather than a `Report` field for
+    /// the same reason `activity` does: it is EI-shape data (map PIXELS on
+    /// GW2EI's own 300ms grid, GW2EI's sentinel-bracketed `dc`), which the
+    /// native schema deliberately does not carry — `Report::replay` is this
+    /// project's own narrower world-unit shape, computed by a different
+    /// engine (`axilog_core::analysis::replay`), and widening it would
+    /// change the native `--replay` JSON.
+    ///
+    /// Positionally joined to `report.players` (GW2EI-shape tracks are built
+    /// by iterating `enc.players` then the `is_player` entries of
+    /// `enc.enemies`, exactly the orders `report.players`/
+    /// `report.all_enemies` use), and ignored entirely if that length
+    /// invariant does not hold.
+    ///
+    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`: 41 players, 32
+    /// enemy-player targets, 49s):** `axilog parse --format ei-json` grows
+    /// 544,372 -> 1,548,945 bytes pretty-printed (+184%), 216,173 -> 524,056
+    /// bytes compact (+142%), for 6,894 player + 4,662 enemy position
+    /// samples (and as many orientations). It scales with `players x
+    /// fight_seconds / 0.3`, so a 6-minute 50-player fight is an order of
+    /// magnitude bigger — which is why it stays opt-in.
+    pub replay: Option<&'a EiReplay>,
+}
+
+/// Render a [`Report`] plus its EI-only side inputs as Elite-Insights-
+/// compatible JSON.
 ///
-/// **Size (measured, `fixtures/wvw-small.anon.zevtc`: 41 players, 32
-/// enemy-player targets, 49s):** `axilog parse --format ei-json` grows
-/// 544,372 -> 1,548,945 bytes pretty-printed (+184%), 216,173 -> 524,056
-/// bytes compact (+142%), for 6,894 player + 4,662 enemy position samples
-/// (and as many orientations). It scales with `players x fight_seconds /
-/// 0.3`, so a 6-minute 50-player fight is an order of magnitude bigger --
-/// which is why it stays opt-in.
-pub fn to_ei_json(
-    report: &Report,
-    activity: &[ActivityIntervals],
-    replay: Option<&EiReplay>,
-) -> Value {
+/// See [`EiInputs`] for what each input gates; `EiInputs::default()` renders
+/// everything that is derivable from the `Report` alone.
+pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
+    let EiInputs { activity, replay } = *inputs;
     // Positional join guard: the tracks must be `report.players` followed by
     // the enemy-PLAYER subset of `report.all_enemies`, in those orders. A
     // caller that hand-builds a `Report` (every unit test below) can violate
@@ -925,7 +953,7 @@ mod tests {
     }
     #[test]
     fn maps_core_ei_fields() {
-        let v = to_ei_json(&sample_report(), &[], None);
+        let v = to_ei_json(&sample_report(), &EiInputs::default());
         assert_eq!(v["durationMS"], 1000);
         assert_eq!(v["recordedBy"], ":A.1");
         assert_eq!(v["players"][0]["account"], ":A.1");
@@ -1012,7 +1040,7 @@ mod tests {
 
     #[test]
     fn buff_map_covers_the_12_tracked_boons_with_computed_fields_only() {
-        let v = to_ei_json(&sample_report_with_boons(), &[], None);
+        let v = to_ei_json(&sample_report_with_boons(), &EiInputs::default());
         let buff_map = v["buffMap"].as_object().expect("buffMap must be an object");
         assert_eq!(buff_map.len(), 12, "exactly the 12 tracked boons");
         // Known value: Might (740) is Intensity-type -> stacking: true.
@@ -1025,7 +1053,7 @@ mod tests {
 
     #[test]
     fn buff_uptimes_map_intensity_and_duration_boons_to_ei_field_meanings() {
-        let v = to_ei_json(&sample_report_with_boons(), &[], None);
+        let v = to_ei_json(&sample_report_with_boons(), &EiInputs::default());
         let entries = v["players"][0]["buffUptimes"].as_array().expect("buffUptimes must be an array");
         assert_eq!(entries.len(), 12, "one entry per tracked boon");
         let might = entries.iter().find(|e| e["id"] == 740).expect("Might entry present");
@@ -1045,7 +1073,7 @@ mod tests {
 
     #[test]
     fn support_block_carries_the_four_new_computed_fields() {
-        let v = to_ei_json(&sample_report_with_boons(), &[], None);
+        let v = to_ei_json(&sample_report_with_boons(), &EiInputs::default());
         let support = &v["players"][0]["support"][0];
         assert_eq!(support["condiCleanse"], 5);
         assert_eq!(support["condiCleanseSelf"], 2);
@@ -1107,7 +1135,7 @@ mod tests {
             missiles: None,
             skill_map: Default::default(),
         };
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let healing = &v["players"][0]["extHealingStats"]["outgoingHealing"][0];
         assert_eq!(healing["healing"], 5000);
         assert_eq!(healing["downedHealing"], 500);
@@ -1134,7 +1162,7 @@ mod tests {
     /// ei_golden.rs`) asserts the same against a real multi-target log.
     #[test]
     fn every_target_is_marked_not_fake() {
-        let v = to_ei_json(&sample_report(), &[], None);
+        let v = to_ei_json(&sample_report(), &EiInputs::default());
         let targets = v["targets"].as_array().expect("targets must be an array");
         assert_eq!(targets.len(), 2, "sample_report has 2 enemies (see all_enemies above)");
         for t in targets {
@@ -1147,7 +1175,7 @@ mod tests {
     /// caller passes no `activity` data at all (`&[]`).
     #[test]
     fn active_times_and_combat_replay_data_default_to_zero_when_no_activity_supplied() {
-        let v = to_ei_json(&sample_report(), &[], None);
+        let v = to_ei_json(&sample_report(), &EiInputs::default());
         assert_eq!(v["players"][0]["activeTimes"], json!([0]));
         assert_eq!(v["players"][0]["combatReplayData"]["start"], 0);
         assert_eq!(v["players"][0]["combatReplayData"]["end"], 0);
@@ -1175,7 +1203,7 @@ mod tests {
                 down_intervals: vec![], dead_intervals: vec![],
             },
         ];
-        let v = to_ei_json(&sample_report(), &activity, None);
+        let v = to_ei_json(&sample_report(), &EiInputs { activity: &activity, ..Default::default() });
         assert_eq!(v["players"][0]["combatReplayData"]["start"], 100);
         assert_eq!(v["players"][0]["combatReplayData"]["end"], 10_100);
         assert_eq!(v["players"][0]["combatReplayData"]["down"], json!([[2_000, 3_000]]));
@@ -1260,7 +1288,7 @@ mod tests {
         let player = skill_and_timeseries_player(Some(sd), None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let p = &v["players"][0];
 
         // totalDamageDist: [phase][skillEntry], only the computed fields.
@@ -1298,7 +1326,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let p = &v["players"][0];
         assert!(p.get("totalDamageDist").is_none(), "totalDamageDist must be omitted, not emitted empty");
         assert!(p.get("totalDamageTaken").is_none());
@@ -1325,7 +1353,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, Some(ps), dps_targets);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let p = &v["players"][0];
 
         // damage1S/damageTaken1S: [phase][second], cumulative, final ==
@@ -1361,7 +1389,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let p = &v["players"][0];
         assert!(p.get("damage1S").is_none(), "damage1S must be omitted, not emitted empty");
         assert!(p.get("damageTaken1S").is_none());
@@ -1388,7 +1416,7 @@ mod tests {
         }]);
         let report = report_with_players(vec![], vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let rotation = &v["players"][0]["rotation"];
         assert_eq!(rotation.as_array().unwrap().len(), 1, "one entry per cast skill id, no phase wrapper");
         assert_eq!(rotation[0]["id"], 5008);
@@ -1412,7 +1440,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]); // rotation: None inside the builder
         let report = report_with_players(vec![], vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         assert!(v["players"][0].get("rotation").is_none(), "rotation must be omitted, not emitted empty");
     }
 
@@ -1439,7 +1467,7 @@ mod tests {
             can_crit: true,
         });
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let skill_map = v["skillMap"].as_object().expect("skillMap must be an object");
         assert_eq!(skill_map.len(), 2);
         assert_eq!(v["skillMap"]["s5492"]["name"], "Fire Attunement");
@@ -1460,7 +1488,7 @@ mod tests {
     /// matching `buffMap`'s own unconditional presence above.
     #[test]
     fn skill_map_ei_json_present_and_empty_when_report_skill_map_empty() {
-        let v = to_ei_json(&sample_report(), &[], None);
+        let v = to_ei_json(&sample_report(), &EiInputs::default());
         assert!(v.get("skillMap").is_some(), "skillMap key must always be present");
         assert_eq!(v["skillMap"].as_object().unwrap().len(), 0, "sample_report's Metrics::skill_map is Default::default() (empty)");
     }
@@ -1511,7 +1539,7 @@ mod tests {
     /// requirement, keyed off the `replay` argument's `Option` presence.
     #[test]
     fn combat_replay_surface_omitted_when_replay_absent() {
-        let v = to_ei_json(&sample_report(), &[], None);
+        let v = to_ei_json(&sample_report(), &EiInputs::default());
         assert!(v.get("combatReplayMetaData").is_none());
         let crd = &v["players"][0]["combatReplayData"];
         for k in ["positions", "orientations", "dc", "iconURL"] {
@@ -1551,7 +1579,7 @@ mod tests {
             map_id: Some(899), // Obsidian Sanctum: named by GW2EI, no image
             meta: None,
         };
-        let v = to_ei_json(&report, &[], Some(&replay));
+        let v = to_ei_json(&report, &EiInputs { replay: Some(&replay), ..Default::default() });
         assert!(
             v.get("combatReplayMetaData").is_none(),
             "no arena image => no metadata, even with replay on"
@@ -1616,7 +1644,7 @@ mod tests {
             map_id: Some(38),
             meta: None,
         };
-        let v = to_ei_json(&report, &[], Some(&replay));
+        let v = to_ei_json(&report, &EiInputs { replay: Some(&replay), ..Default::default() });
         let enemy = v["targets"].as_array().unwrap().iter().find(|t| t["enemyPlayer"] == true).unwrap();
         let crd = enemy.get("combatReplayData").expect("combatReplayData must always be present when replay is on");
         assert_eq!(crd["positions"], json!([]), "empty, not omitted");
@@ -1649,7 +1677,7 @@ mod tests {
             map_id: Some(38),
             meta: None,
         };
-        let v = to_ei_json(&sample_report(), &[], Some(&replay));
+        let v = to_ei_json(&sample_report(), &EiInputs { replay: Some(&replay), ..Default::default() });
         assert!(v["players"][0]["combatReplayData"].get("positions").is_none());
     }
 }

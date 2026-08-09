@@ -16,6 +16,7 @@
 //! `dc` segments).
 
 use axilog_core::analysis::replay::build_activity_intervals;
+use axilog_ei::EiInputs;
 use axilog_core::evtc::{anon_account, decode_raw};
 use axilog_core::model::resolve;
 use std::collections::HashMap;
@@ -45,7 +46,7 @@ fn ei_json_matches_the_golden_isfake_down_dead_and_active_times() {
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
-    let ei = axilog_ei::to_ei_json(&report, &activity, None);
+    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, ..Default::default() });
 
     // -- isFake: every target, no exceptions --
     let targets = ei["targets"].as_array().expect("targets must be an array");
@@ -181,7 +182,7 @@ fn ei_json_per_skill_and_per_second_blocks_match_the_golden() {
     // gate-respecting omission-when-absent behavior is covered by
     // `axilog-ei`'s own unit tests, not this golden-fixture test).
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true, false);
-    let ei = axilog_ei::to_ei_json(&report, &[], None);
+    let ei = axilog_ei::to_ei_json(&report, &EiInputs::default());
 
     let mut joined = 0usize;
     let mut dist_mismatches: Vec<String> = Vec::new();
@@ -298,7 +299,7 @@ fn ei_json_rotation_cast_counts_match_the_golden() {
     // omission-when-absent behavior is covered by `axilog-ei`'s own unit
     // tests, not this golden-fixture test).
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, true);
-    let ei = axilog_ei::to_ei_json(&report, &[], None);
+    let ei = axilog_ei::to_ei_json(&report, &EiInputs::default());
 
     let mut joined = 0usize;
     let mut count_mismatches: Vec<String> = Vec::new();
@@ -393,7 +394,7 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
     let enc = resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
-    let ei = axilog_ei::to_ei_json(&report, &[], None);
+    let ei = axilog_ei::to_ei_json(&report, &EiInputs::default());
 
     // (ei-json statsAll[0] key, golden hitStats key) EXACT count/sum pairs.
     const HIT_STATS_FIELDS: &[&str] = &[
@@ -654,7 +655,7 @@ fn ei_json_combat_replay_matches_the_golden() {
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let ei = axilog_ei::to_ei_json(&report, &activity, Some(&ei_replay));
+    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay) });
 
     // -- combatReplayMetaData: EXACT, field by field, as text --
     let meta = &ei["combatReplayMetaData"];
@@ -766,9 +767,9 @@ fn ei_json_replay_fields_do_not_disturb_the_always_on_surface() {
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
 
-    let without = axilog_ei::to_ei_json(&report, &activity, None);
+    let without = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, ..Default::default() });
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let mut with = axilog_ei::to_ei_json(&report, &activity, Some(&ei_replay));
+    let mut with = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay) });
 
     // Sanity: the replay-on document really does carry the new surface
     // (otherwise this test would pass vacuously).
@@ -836,7 +837,7 @@ fn ei_json_combat_replay_matches_the_local_postrework_export() {
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let ei = axilog_ei::to_ei_json(&report, &activity, Some(&ei_replay));
+    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay) });
 
     // metaData: text-exact against the export's own object.
     let want_meta = &golden["combatReplayMetaData"];

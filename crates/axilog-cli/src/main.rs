@@ -226,8 +226,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "{}\n",
                         serde_json::to_string_pretty(&axilog_ei::to_ei_json(
                             &report,
-                            &activity,
-                            ei_replay_data.as_ref(),
+                            &axilog_ei::EiInputs {
+                                activity: &activity,
+                                replay: ei_replay_data.as_ref(),
+                            },
                         ))?
                     )
                 }
