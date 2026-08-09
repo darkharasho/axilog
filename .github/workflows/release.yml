@@ -291,7 +291,7 @@ jobs:
   # together with the packed linux-x64-gnu platform package (the only
   # platform package with a real .node available on an ubuntu-latest
   # runner) into a throwaway project, exactly as an end user's
-  # `npm install @axi/axilog` would resolve on Linux/x64, then requires it
+  # `npm install @axiapps/axilog` would resolve on Linux/x64, then requires it
   # and parses the committed PII-safe fixture. This is the same check run
   # locally during Task 2 authoring (see the Task 2 report for that run's
   # output) -- it's wired in here so a regression in the loader's
@@ -329,7 +329,7 @@ jobs:
           npm init -y >/dev/null
           npm install ./*.tgz
           node -e "
-            const sdk = require('@axi/axilog');
+            const sdk = require('@axiapps/axilog');
             const report = sdk.parseFile('$FIXTURE');
             if (report.players.length !== 42) {
               throw new Error('expected 42 players, got ' + report.players.length);
@@ -445,21 +445,24 @@ jobs:
           path: dist-wheel/*.tar.gz
           if-no-files-found: error
 
-  # Gated PyPI publish (M8 Task 3). Same event+ref gate as `npm-publish`/
-  # `release` below (github.event_name == 'push' && startsWith(github.ref,
-  # 'refs/tags/')) -- a workflow_dispatch run pointed at an existing tag ref
-  # must never publish for real, only build+validate. Independently gated
-  # on the PYPI_TOKEN repository secret being present, with a clear
-  # log-skip message when it's absent -- mirrors npm-publish's NPM_TOKEN
-  # pattern exactly. NEVER requires or embeds real credentials for this job
-  # to succeed locally/in CI without the secret.
-  pypi-publish:
-    name: Publish to PyPI (gated)
+  # Python wheel validation gate (MPUB, replacing the M8 token-based
+  # publish). Actual PyPI publishing now happens via TRUSTED PUBLISHING
+  # (OIDC, no token) in `.github/workflows/pypl-publish.yml`, which fires on
+  # the GitHub Release `published` event and downloads the wheel/sdist
+  # assets this workflow attached to the release. That filename is bound to
+  # the PyPI trusted-publisher configuration -- do not rename it.
+  #
+  # This job is the pre-release gate: `twine check` metadata validation plus
+  # a real install-smoke (the M8-parked hardening) -- create a venv, pip
+  # install the manylinux x86_64 abi3 wheel, import it, and parse the
+  # committed fixture end-to-end. The `release` job `needs` this, so a wheel
+  # that doesn't install/import/parse never becomes a release asset at all
+  # (and therefore can never reach PyPI). Runs on dispatch dry-runs too --
+  # validation has no publish side effect to gate.
+  pypi-validate:
+    name: Validate Python wheels (twine check + install smoke)
     needs: [wheel-build, sdist-build]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    env:
-      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -481,19 +484,27 @@ jobs:
           merge-multiple: true
 
       - name: Install twine
-        if: env.PYPI_TOKEN != ''
         run: python -m pip install --upgrade pip twine
 
-      - name: Publish to PyPI
-        if: env.PYPI_TOKEN != ''
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
-        run: twine upload dist-wheel/*.whl dist-wheel/*.tar.gz
+      - name: twine check (metadata validation)
+        run: twine check dist-wheel/*.whl dist-wheel/*.tar.gz
 
-      - name: Skip PyPI publish (PYPI_TOKEN not set)
-        if: env.PYPI_TOKEN == ''
-        run: echo "PYPI_TOKEN repository secret is not set -- skipping PyPI publish. Set PYPI_TOKEN to enable publishing on future tag pushes."
+      - name: Wheel install smoke (venv install + import + fixture parse)
+        shell: bash
+        run: |
+          set -euo pipefail
+          WHEEL="$(ls dist-wheel/*manylinux*x86_64*.whl | head -1)"
+          echo "Smoke-testing $WHEEL"
+          python -m venv /tmp/wheel-smoke
+          /tmp/wheel-smoke/bin/pip install --no-index --no-deps "$WHEEL"
+          /tmp/wheel-smoke/bin/python - <<'PYEOF'
+          import axilog
+          report = axilog.parse_file("fixtures/wvw-small.anon.zevtc")
+          assert report["schema_version"], "missing schema_version"
+          assert report["players"], "no players parsed from fixture"
+          assert report["skill_map"], "missing skill_map"
+          print(f"smoke OK: {len(report['players'])} players, schema {report['schema_version']}")
+          PYEOF
 
   # Gated npm publish (M8 Task 2). Never runs on a workflow_dispatch dry run
   # (job-level event+ref gate, same pattern as `release` below); on a real
@@ -535,8 +546,21 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          # Idempotency (M8-parked hardening): a re-run of a partially
+          # failed publish must skip versions that already landed instead of
+          # dying on E403/E409 for the first already-published tarball and
+          # never reaching the rest.
           for tgz in tarballs/*.tgz; do
-            echo "Publishing $tgz"
+            name_ver="$(tar -xzOf "$tgz" package/package.json | node -e '
+              const fs = require("fs");
+              const pkg = JSON.parse(fs.readFileSync(0, "utf8"));
+              process.stdout.write(pkg.name + "@" + pkg.version);
+            ')"
+            if npm view "$name_ver" version >/dev/null 2>&1; then
+              echo "Skipping $tgz -- $name_ver is already published"
+              continue
+            fi
+            echo "Publishing $tgz ($name_ver)"
             npm publish "$tgz" --access public
           done
 
@@ -546,7 +570,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build, npm-pack-main, addon-build, npm-install-shape, wheel-build, sdist-build]
+    needs: [build, npm-pack-main, addon-build, npm-install-shape, wheel-build, sdist-build, pypi-validate]
     runs-on: ubuntu-latest
     # Never runs on a workflow_dispatch dry run -- only a real `v*` tag PUSH
     # creates/updates a GitHub Release. `github.event_name == 'push'` is

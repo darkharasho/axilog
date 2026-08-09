@@ -1,4 +1,4 @@
-# @axi/axilog
+# @axiapps/axilog
 
 Node bindings ([napi-rs](https://napi.rs)) for axilog's Rust GW2 arcdps WvW
 parsing core. Every export is a thin wrapper around the same
@@ -11,13 +11,13 @@ becomes a `napi::Error` carrying the underlying Rust error text).
 
 ```js
 // CommonJS
-const { parseFile, parseBuffer, parseFileEi, anonymizeFile } = require('@axi/axilog')
+const { parseFile, parseBuffer, parseFileEi, anonymizeFile } = require('@axiapps/axilog')
 ```
 
 ```ts
 // ESM / TypeScript
-import { parseFile, parseBuffer, parseFileEi, anonymizeFile } from '@axi/axilog'
-import type { Report } from '@axi/axilog/types'
+import { parseFile, parseBuffer, parseFileEi, anonymizeFile } from '@axiapps/axilog'
+import type { Report } from '@axiapps/axilog/types'
 ```
 
 ```js

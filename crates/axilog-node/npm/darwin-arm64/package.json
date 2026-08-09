@@ -1,6 +1,6 @@
 {
-  "name": "@axi/axilog-darwin-arm64",
-  "version": "0.1.0",
+  "name": "@axiapps/axilog-darwin-arm64",
+  "version": "0.1.1",
   "cpu": [
     "arm64"
   ],

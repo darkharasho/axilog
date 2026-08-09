@@ -1,3 +1,3 @@
-# `@axi/axilog-linux-arm64-gnu`
+# `@axiapps/axilog-linux-arm64-gnu`
 
-This is the **aarch64-unknown-linux-gnu** binary for `@axi/axilog`
+This is the **aarch64-unknown-linux-gnu** binary for `@axiapps/axilog`
