@@ -30,9 +30,13 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   Weaver's own combo-attunement table still out of scope) + ei-json mapping (`rotation[]`/
   `skillMap`, gate-respecting) + `--view rotation` (cast count + APM). Closes the last
   axibridge-flagged Tier-1 analysis gap — see README's EI-JSON parity section.
+  Follow-up: py `.pyi` stub synced to the M14 surface (rotation/skillMap TypedDicts + params).
 
 ## In flight
-(none)
+- MPERF Performance milestone: criterion bench harness (baseline first), then a
+  shared-scan/registry-dispatch refactor to collapse the ~15–18 unconditional full passes over
+  `raw.events` that `analyze()` currently runs. Flagged rising by the M12 + M14 whole-branch
+  reviews. Regression gate + accuracy-preservation (all calibration stays EXACT) are the bars.
 
 ## Queued (autonomous — build in order; reorder only for dependency)
 - M15 Combat-replay positions in EI shape: resample sparse tracks → EI fixed-rate grid;
@@ -41,9 +45,6 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
 - M16 Damage modifiers: trait/sigil/food/rune modifier attribution engine
   (`damageModifiers`/`incomingDamageModifiers` + maps). Largest; GW2EI DamageModifier defs +
   decompile for edge cases. Least WvW-critical — can slot late.
-- MPERF Performance milestone: criterion/bench harness; throughput+memory on the real
-  583k-event/821-agent post-rework log; single-pass analysis where possible; regression gate in
-  CI. Interleave early (after M12) so later features are measured.
 - MDOCS Documentation milestone: publish architecture, native+EI schema reference, arcdps-spec
   calc methodology, calibration results to the arcdps-wiki Astro site (one dir up); keep
   axilog README/docs current every milestone regardless.
