@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/axilog-core", "crates/axilog-schema", "crates/axilog-ei", "crates/axilog-cli"]
+members = ["crates/axilog-core", "crates/axilog-schema", "crates/axilog-ei", "crates/axilog-cli", "crates/axilog-node"]
 
 [workspace.package]
 version = "0.1.0"
