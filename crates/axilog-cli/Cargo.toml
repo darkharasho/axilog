@@ -16,3 +16,19 @@ axilog-ei = { path = "../axilog-ei" }
 axilog-html = { path = "../axilog-html" }
 clap.workspace = true
 serde_json.workspace = true
+
+# MPERF Task 1: criterion bench harness. axilog-cli is the chosen home for
+# `benches/pipeline.rs` because it already depends on both axilog-core
+# (decode_raw/model::resolve/analysis::analyze) and axilog-schema
+# (build_report) as regular (non-dev) dependencies -- adding criterion here
+# is the only new dependency edge needed; putting the bench in axilog-core
+# instead would require a axilog-core -> axilog-schema dev-dependency edge
+# that does not exist today (axilog-schema depends on axilog-core, not the
+# other way around, so that edge is directionally fine re: cycles, but it's
+# still a new edge vs. zero new edges here).
+[dev-dependencies]
+criterion = { version = "0.8", default-features = false }
+
+[[bench]]
+name = "pipeline"
+harness = false
