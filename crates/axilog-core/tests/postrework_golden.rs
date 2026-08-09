@@ -223,3 +223,67 @@ fn postrework_fixture_matches_ei_json_when_present() {
          support=({squad_cleanses}/{squad_cleanses_self}/{squad_strips}/{squad_resurrects}) exact"
     );
 }
+
+/// M10 Task 2 sanity gate: opt-in missile analytics against the same real
+/// post-rework capture. `fixtures/local/wvw-postrework.ei.json`'s own
+/// `defenses` block (`blockedCount`/`evadedCount`/`missedCount`/etc.) was
+/// checked and is NOT a comparable signal -- those are whole-fight,
+/// all-attack-types (melee included) counters derived from `CBTS_COMBAT`
+/// strike `result` values, not per-missile-instance fired/hit/denied
+/// counts from `CBTS_MISSILECREATE`/`LAUNCH`/`REMOVE`. No EI field maps
+/// onto this project's native missile stats, so this stays a pure sanity
+/// gate (non-zero fired, `denied <= fired` at squad level), not a
+/// calibration -- per the M10 Task 2 brief ("document native-only ...
+/// do NOT invent EI fields").
+#[test]
+fn postrework_fixture_missile_sanity() {
+    let Some(bytes) = read_bytes_or_skip(ZEVTC_PATH, "postrework missile sanity") else { return };
+
+    let raw = decode_raw(&bytes).expect("decode post-rework WvW fixture");
+    let enc = resolve(&raw);
+    let missiles = axilog_core::analysis::missiles::build_missiles(&raw, &enc);
+
+    assert!(
+        missiles.squad.fired > 0,
+        "expected at least one CBTS_MISSILECREATE event owned by a squad player on a real WvW \
+         capture, got 0 -- missile decode/attribution may be broken"
+    );
+    assert!(
+        missiles.squad.denied <= missiles.squad.fired,
+        "squad denied ({}) must not exceed squad fired ({})",
+        missiles.squad.denied,
+        missiles.squad.fired
+    );
+    assert!(
+        missiles.squad.hit + missiles.squad.denied <= missiles.squad.fired,
+        "hit ({}) + denied ({}) must not exceed fired ({}) -- unresolved instances (still in \
+         flight at log end) must not be double counted",
+        missiles.squad.hit,
+        missiles.squad.denied,
+        missiles.squad.fired
+    );
+    assert!(
+        missiles.squad.incoming_denied <= missiles.squad.incoming_fired,
+        "incoming_denied ({}) must not exceed incoming_fired ({})",
+        missiles.squad.incoming_denied,
+        missiles.squad.incoming_fired
+    );
+
+    let mut top: Vec<_> = missiles.players.iter().filter(|p| p.fired > 0).collect();
+    top.sort_by_key(|p| std::cmp::Reverse(p.fired));
+
+    println!("post-rework missile summary:");
+    println!(
+        "  squad: fired={} hit={} denied={} incoming_fired={} incoming_denied={}",
+        missiles.squad.fired,
+        missiles.squad.hit,
+        missiles.squad.denied,
+        missiles.squad.incoming_fired,
+        missiles.squad.incoming_denied
+    );
+    println!("  players with missile activity: {}", top.len());
+    println!("  {:<10} {:>6} {:>6} {:>6} {:>10}", "addr", "fired", "hit", "denied", "reflected");
+    for p in top.iter().take(10) {
+        println!("  {:<10} {:>6} {:>6} {:>6} {:>10}", p.agent_addr, p.fired, p.hit, p.denied, p.reflected_at_self);
+    }
+}

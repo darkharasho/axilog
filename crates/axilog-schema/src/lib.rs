@@ -2,6 +2,7 @@ use serde::Serialize;
 use axilog_core::model::Encounter;
 use axilog_core::analysis::{buffs, Metrics};
 use axilog_core::analysis::replay::Replay;
+use axilog_core::analysis::missiles::Missiles;
 
 #[derive(Serialize)]
 pub struct Report {
@@ -26,6 +27,70 @@ pub struct Report {
     /// for other opt-in/optional fields (e.g. `TickRateOut`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replay: Option<ReplayOut>,
+    /// Opt-in missile (projectile) analytics (M10, Task 2) -- only present
+    /// when the caller (CLI `--missiles` / SDK `missiles: true`) requested
+    /// it by passing `Some(&Missiles)` to [`build_report`]. Omitted
+    /// entirely from the JSON (not serialized as `null`), matching
+    /// `replay`'s same opt-in/omit-when-absent convention.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missiles: Option<MissilesOut>,
+}
+/// Native-only opt-in missile analytics (M10, Task 2) -- see
+/// `axilog_core::analysis::missiles`'s module doc for exactly what each
+/// field is (and is NOT) attributable to: the arcdps wire format has no
+/// blocked/reflected/destroyed reason code, so `denied` is deliberately
+/// undifferentiated, and there is no per-player "denier" credit anywhere
+/// (only an aggregate `squad.incoming_denied`).
+#[derive(Serialize)]
+pub struct MissilesOut {
+    pub players: Vec<PlayerMissilesOut>,
+    pub squad: SquadMissilesOut,
+}
+/// One squad player's missile totals -- mirrors
+/// `axilog_core::analysis::missiles::PlayerMissiles` field-for-field.
+#[derive(Serialize)]
+pub struct PlayerMissilesOut {
+    pub agent_addr: u64,
+    pub fired: u32,
+    pub hit: u32,
+    pub denied: u32,
+    pub reflected_at_self: u32,
+}
+/// Squad-wide missile totals -- mirrors
+/// `axilog_core::analysis::missiles::SquadMissiles` field-for-field.
+#[derive(Serialize)]
+pub struct SquadMissilesOut {
+    pub fired: u32,
+    pub hit: u32,
+    pub denied: u32,
+    pub incoming_fired: u32,
+    pub incoming_denied: u32,
+}
+
+/// Build the native [`MissilesOut`] schema block from a computed
+/// [`Missiles`] (`axilog_core::analysis::missiles::build_missiles`).
+/// Standalone from [`build_report`], mirroring `build_replay_out`.
+pub fn build_missiles_out(missiles: &Missiles) -> MissilesOut {
+    MissilesOut {
+        players: missiles
+            .players
+            .iter()
+            .map(|p| PlayerMissilesOut {
+                agent_addr: p.agent_addr,
+                fired: p.fired,
+                hit: p.hit,
+                denied: p.denied,
+                reflected_at_self: p.reflected_at_self,
+            })
+            .collect(),
+        squad: SquadMissilesOut {
+            fired: missiles.squad.fired,
+            hit: missiles.squad.hit,
+            denied: missiles.squad.denied,
+            incoming_fired: missiles.squad.incoming_fired,
+            incoming_denied: missiles.squad.incoming_denied,
+        },
+    }
 }
 /// Native-only combat-replay block (M9, Task 2) -- see
 /// `axilog_core::analysis::replay` for how `poll_ms`/`tracks`/intervals are
@@ -247,8 +312,17 @@ pub struct PerSecondOut { pub squad_damage: Vec<u64>, pub cc_applied: Vec<u32>, 
 /// caller when `--replay`/SDK `replay: true` was requested) to embed the
 /// native replay block; `None` (the default for every existing call site)
 /// omits it entirely, matching `ReplayOut`'s skip-when-absent serde
-/// attribute.
-pub fn build_report(enc: &Encounter, metrics: &Metrics, axilog_version: &str, replay: Option<&Replay>) -> Report {
+/// attribute. `missiles` (M10, Task 2) works the same way: pass `Some(&
+/// Missiles)` (from `axilog_core::analysis::missiles::build_missiles`, when
+/// `--missiles`/SDK `missiles: true` was requested) to embed the native
+/// missiles block; `None` omits it entirely.
+pub fn build_report(
+    enc: &Encounter,
+    metrics: &Metrics,
+    axilog_version: &str,
+    replay: Option<&Replay>,
+    missiles: Option<&Missiles>,
+) -> Report {
     let pm: std::collections::BTreeMap<u64, &axilog_core::analysis::PlayerMetrics> =
         metrics.players.iter().map(|p| (p.agent_addr, p)).collect();
     let players = enc.players.iter().map(|p| {
@@ -322,6 +396,7 @@ pub fn build_report(enc: &Encounter, metrics: &Metrics, axilog_version: &str, re
                 downs: metrics.timeline.downs.clone() } },
         warnings: metrics.warnings.clone(),
         replay: replay.map(build_replay_out),
+        missiles: missiles.map(build_missiles_out),
     }
 }
 
@@ -345,13 +420,14 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default() };
-        let report = build_report(&enc, &m, "0.1.0", None);
+        let report = build_report(&enc, &m, "0.1.0", None, None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.1");
         assert_eq!(v["axilog_version"], "0.1.0");
         assert_eq!(v["players"][0]["damage"]["total"], 500);
         assert_eq!(v["encounter"]["map"], "Eternal Battlegrounds");
         assert!(v.get("replay").is_none(), "replay must be omitted when not requested");
+        assert!(v.get("missiles").is_none(), "missiles must be omitted when not requested");
         assert!(
             v["players"][0].get("healing").is_none(),
             "healing must be omitted when has_healing_extension is false"
@@ -388,7 +464,7 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: true };
-        let report = build_report(&enc, &m, "0.1.0", None);
+        let report = build_report(&enc, &m, "0.1.0", None, None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["players"][0]["healing"]["healing_out_total"], 500);
         assert_eq!(v["players"][0]["healing"]["healing_out_allies"], 300);
@@ -429,7 +505,7 @@ mod tests {
                 buff_dmg: 0, overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
                 src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
                 is_activation: 0, is_buffremove: 0, is_statechange: sc::POSITION,
-                is_shields: 0, is_offcycle: 0, pad: 0,
+                is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
             }],
             guid_map: vec![],
         };
@@ -438,12 +514,66 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default() };
         let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
-        let report = build_report(&enc, &m, "0.1.0", Some(&replay));
+        let report = build_report(&enc, &m, "0.1.0", Some(&replay), None);
         assert!(report.replay.is_some());
         let r = report.replay.unwrap();
         assert_eq!(r.poll_ms, DEFAULT_POLL_MS);
         assert_eq!(r.tracks.len(), 1);
         assert_eq!(r.tracks[0].name, "Alice");
         assert_eq!(r.tracks[0].samples[0], (0, 123.5, -9.9), "x/y rounded to 1dp");
+    }
+
+    /// M10 Task 2: `missiles` is present (not omitted) only when requested,
+    /// and its fields carry the `axilog_core::analysis::missiles::Missiles`
+    /// values through unchanged.
+    #[test]
+    fn missiles_block_present_and_summed_when_requested() {
+        use axilog_core::analysis::missiles::build_missiles;
+        use axilog_core::evtc::{sc, RawEvent, RawHeader, RawLog};
+        use axilog_core::model::Player;
+
+        let player = Player {
+            agent_addr: 1, account: ":A.1".into(), character: "Alice".into(),
+            profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            agent_addrs: vec![1],
+        };
+        let enc = Encounter {
+            kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
+            revision: 1, recorded_by: None, teams: vec![], players: vec![player],
+            enemies: vec![], markers: vec![], tick_rate: None,
+        };
+        fn missile_ev(time: u64, statechange: u8, src: u64, dst: u64, is_flanking: u8, pad: u32) -> RawEvent {
+            RawEvent {
+                time, src_agent: src, dst_agent: dst, value: 0, buff_dmg: 0, overstack: 0,
+                skillid: 0, src_instid: 0, dst_instid: 0, src_master_instid: 0,
+                dst_master_instid: 0, iff: 0, buff: 0, result: 0, is_activation: 0,
+                is_buffremove: 0, is_statechange: statechange, is_flanking, is_shields: 0,
+                is_offcycle: 0, pad,
+            }
+        }
+        let raw = RawLog {
+            header: RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![],
+            events: vec![
+                missile_ev(0, sc::MISSILE_CREATE, 1, 0, 0, 100),
+                missile_ev(10, sc::MISSILE_REMOVE, 1, 0, 1, 100),
+            ],
+            guid_map: vec![],
+        };
+        let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
+            boons: Default::default(), boon_uptime: Default::default(),
+            boon_generation: Default::default(), warnings: Default::default(),
+            has_healing_extension: Default::default() };
+        let missiles = build_missiles(&raw, &enc);
+        let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles));
+        assert!(report.missiles.is_some());
+        let mo = report.missiles.unwrap();
+        assert_eq!(mo.players.len(), 1);
+        assert_eq!(mo.players[0].agent_addr, 1);
+        assert_eq!(mo.players[0].fired, 1);
+        assert_eq!(mo.players[0].hit, 1);
+        assert_eq!(mo.squad.fired, 1);
+        assert_eq!(mo.squad.hit, 1);
     }
 }

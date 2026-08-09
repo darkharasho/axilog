@@ -503,7 +503,7 @@ mod tests {
             time, src_agent: src, dst_agent: dst, value: duration_ms, buff_dmg: 0, overstack: 0,
             skillid: buff_id, src_instid: 0, dst_instid: 0, src_master_instid: 0,
             dst_master_instid: 0, iff: 0, buff: 1, result: 0, is_activation: 0, is_buffremove: 0,
-            is_statechange: 0, is_shields: 0, is_offcycle: 0, pad: 0,
+            is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
         }
     }
 

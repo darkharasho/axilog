@@ -110,6 +110,7 @@ mod tests {
             },
             warnings: vec![],
             replay: None,
+            missiles: None,
         }
     }
 

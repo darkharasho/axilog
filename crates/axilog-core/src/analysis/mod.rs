@@ -9,6 +9,9 @@ pub mod healing;
 /// Combat replay position tracks (M9 Task 1) -- standalone from
 /// [`analyze`]; see `replay::build_replay`.
 pub mod replay;
+/// Opt-in missile (projectile) analytics (M10 Task 2) -- standalone from
+/// [`analyze`]; see `missiles::build_missiles`.
+pub mod missiles;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -219,7 +222,7 @@ mod tests {
         RawEvent { time: 0, src_agent: src, dst_agent: dst, value: dmg, buff_dmg: 0,
             overstack: 0, skillid: 1, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 1, buff: 0, result: 0,
-            is_activation: 0, is_buffremove: 0, is_statechange: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
+            is_activation: 0, is_buffremove: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
 
     fn raw_from(events: Vec<RawEvent>) -> RawLog {
@@ -365,7 +368,7 @@ mod tests {
                 overstack: 0, skillid: buffs::MIGHT, src_instid: 0, dst_instid: 0,
                 src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 1, result: 0,
                 is_activation: 0, is_buffremove: 0, is_statechange: sc::BUFF_APPLY,
-                is_shields: 0, is_offcycle: 0, pad: 0,
+                is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
             }],
             guid_map: vec![],
         };

@@ -48,6 +48,127 @@ pub mod sc {
     /// duration in ms that was cancelled by the break (0 if none is
     /// reported).
     pub const STUN_BREAK: u8 = 56;
+    /// Missile creation (M10 Task 2). Verified against the arcdps EVTC
+    /// reference (`curl https://www.deltaconnected.com/arcdps/evtc/README.txt`,
+    /// 2026-08-09) by a full line-by-line hand-count of every `CBTS_*`
+    /// enumerator in `enum cbtstatechange` from `CBTS_COMBAT = 0` (see this
+    /// module's doc comment for the complete ordinal table): `CBTS_MISSILECREATE`
+    /// is the 58th enumerator (index 57), immediately after `CBTS_STUNBREAK`
+    /// (56, already independently verified above) and before
+    /// `CBTS_MISSILELAUNCH` (58). Cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.MissileCreate = 57`
+    /// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:317`).
+    ///
+    /// Payload, per the arcdps reference (`CBTS_MISSILECREATE` block):
+    /// ```text
+    /// CBTS_MISSILECREATE, // create a missile
+    /// // src_agent: related to agent
+    /// // value: (int16*)&value is int16[3], location x/y/z, divided by 10
+    /// // overstack_value: skin id (player only)
+    /// // skillid: missile skill id
+    /// // pad61: (uint32_t*)&pad61 is uint32[1], trackable id
+    /// ```
+    /// `src_agent` is the missile's OWNER (cross-checked against GW2EI's
+    /// `MissileEvent` ctor, which decodes `Skill = skillData.Get(evtcItem.SkillID)`
+    /// and inherits `Src` from the base `StatusEvent(evtcItem, agentData)`
+    /// ctor's `src_agent` read -- `ParsedData/CombatEvents/StatusEvents/MissileEvents/MissileEvent.cs`).
+    /// `pad` (this project's `pad61` field) is the trackable id correlating
+    /// CREATE/LAUNCH/REMOVE events for the same missile instance -- see
+    /// `crate::analysis::missiles`.
+    pub const MISSILE_CREATE: u8 = 57;
+    /// Missile launch/relaunch (M10 Task 2). Verified the same way:
+    /// `CBTS_MISSILELAUNCH` is the 59th enumerator (index 58), immediately
+    /// after `CBTS_MISSILECREATE` (57) and before `CBTS_MISSILEREMOVE` (59).
+    /// Cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.MissileLaunch = 58` (`ArcDPSEnums.cs:318`).
+    ///
+    /// Payload, per the arcdps reference (`CBTS_MISSILELAUNCH` block):
+    /// ```text
+    /// CBTS_MISSILELAUNCH, // launch missile
+    /// // src_agent: related to agent
+    /// // dst_agent: at agent, if set and in range
+    /// // value: (int16*)&value is int16[6], target x/y/z, current x/y/z, divided by 10
+    /// // skillid: missile skill id
+    /// // iff: (uint8_t*)&iff is uint8_t[1], launch motion. unknown, from client
+    /// // result: (int16_t*)&result is int16[1], motion radius
+    /// // is_buffremove: (uint32_t*)&is_buffremove is uint32_t[1], launch flags. unknown, from client
+    /// // is_src_flanking: non-zero if first launch
+    /// // is_shields: (int16_t*)&is_shields is int16[1], missile speed
+    /// // pad61: (uint32_t*)&pad61 is uint32[1], trackable id
+    /// ```
+    /// `dst_agent` is the launch's TARGET agent (only meaningful "if set and
+    /// in range" per the reference -- `0` otherwise). `is_src_flanking`
+    /// (this project's `is_flanking`, offset 57) is GW2EI's
+    /// `IsFirstLaunch = evtcItem.IsFlanking > 0`
+    /// (`MissileLaunchEvent.cs`) -- a missile trackable id with MORE than
+    /// one launch event is a relaunch (bounce/reflect), and GW2EI derives a
+    /// `MaybeReflected` heuristic from it: `Missile.Src.Is(TargetedAgent) &&
+    /// !IsFirstLaunch` (the relaunch's target is the ORIGINAL owner, i.e.
+    /// the missile is heading back at its own caster). This is explicitly a
+    /// heuristic (the "Maybe" prefix is GW2EI's own naming) -- neither the
+    /// arcdps reference nor GW2EI decode WHO caused the relaunch; `iff`
+    /// ("launch motion") and `is_buffremove` ("launch flags") are both
+    /// documented by arcdps itself as "unknown, from client". See
+    /// `crate::analysis::missiles`'s module doc for what this project does
+    /// and does NOT attribute from this payload.
+    pub const MISSILE_LAUNCH: u8 = 58;
+    /// Missile removal -- the terminal event for a missile instance (M10
+    /// Task 2). Verified the same way: `CBTS_MISSILEREMOVE` is the 60th
+    /// enumerator (index 59), immediately after `CBTS_MISSILELAUNCH` (58)
+    /// and before `CBTS_EFFECTGROUNDCREATE` (60). Cross-checked against
+    /// GW2EI's `ArcDPSEnums.StateChange.MissileRemove = 59`
+    /// (`ArcDPSEnums.cs:319`).
+    ///
+    /// Payload, per the arcdps reference (`CBTS_MISSILEREMOVE` block):
+    /// ```text
+    /// CBTS_MISSILEREMOVE, // remove missile
+    /// // src_agent: related to agent
+    /// // value: friendly fire damage total
+    /// // skillid: missile skill id
+    /// // buff_dmg: (int16*)&value is int16[3], location x/y/z, divided by 10
+    /// // is_src_flanking: hit at least one enemy along the way
+    /// // pad61: (uint32_t*)&pad61 is uint32[1], trackable id
+    /// ```
+    /// CRITICAL FINDING (documented precisely so no caller assumes more than
+    /// this payload actually supports): there is NO reason code on this
+    /// event distinguishing "blocked" vs "reflected" vs "destroyed" vs
+    /// "expired naturally" -- the arcdps reference's own comment text for
+    /// `is_src_flanking` is the ONLY outcome signal ("hit at least one enemy
+    /// along the way"), a plain hit/no-hit boolean. GW2EI's
+    /// `MissileRemoveEvent` ctor confirms this: it decodes exactly `DidHit =
+    /// evtcItem.IsFlanking > 0`, `FriendlyFireTotalDamage = evtcItem.Value`,
+    /// and an optional `DamagingAgent` from `src_agent` (only set when
+    /// nonzero) -- no reason/cause enum anywhere
+    /// (`ParsedData/CombatEvents/StatusEvents/MissileEvents/MissileRemoveEvent.cs`).
+    /// `DamagingAgent` is registered by GW2EI's `CombatEventFactory` into a
+    /// `MissileDamagingEventsBySrc` map ONLY when `DidHit` is true
+    /// (`CombatEventFactory.cs:483-486`) -- i.e. GW2EI's own model treats
+    /// `src_agent` here as identifying who the missile damaged on a
+    /// SUCCESSFUL hit, not who denied it on a miss; that map has no other
+    /// callers anywhere in GW2EI's codebase (dead/speculative API surface).
+    /// There is consequently no wire-level "denier" field either. See
+    /// `crate::analysis::missiles`'s module doc for the resulting scope
+    /// decision (fired/hit/not-hit and the reflected-heuristic only -- no
+    /// blocked/reflected/destroyed breakdown).
+    pub const MISSILE_REMOVE: u8 = 59;
+    /// Apply a visual effect to an in-flight missile (M10 Task 2) --
+    /// distinct from `CBTS_EFFECTAGENTCREATE`/`CBTS_EFFECTGROUNDCREATE`
+    /// (ordinary agent/ground VFX) and not decoded by this project (no
+    /// analytic use for a purely visual effect-on-missile event). Verified
+    /// by the SAME full hand-count as the other missile ordinals above:
+    /// `CBTS_MISSILEEFFECT` is the 81st enumerator (index 79), well after
+    /// `CBTS_GADGETNAME` (78) and before `CBTS_GADGETCAPTUREOUTLINESHOW`
+    /// (80). Cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.EffectMissileCreate = 79`
+    /// (`ArcDPSEnums.cs:339`) -- GW2EI names this enumerator differently
+    /// (`EffectMissileCreate` vs the reference text's `CBTS_MISSILEEFFECT`)
+    /// but the ordinal (79) and the reference's own comment ("apply effect
+    /// to missile") agree exactly. Payload, per the arcdps reference:
+    /// `dst_agent`: owner of missile; `skillid`: effect id; `value`:
+    /// duration; `pad61`: trackable id. Kept for completeness (the ordinal
+    /// count table below requires it) but not consumed anywhere in this
+    /// project's analysis -- purely cosmetic VFX, no analytic content.
+    pub const MISSILE_EFFECT: u8 = 79;
     /// Above-target squad marker assignment/removal on an agent (Task 7,
     /// M2 -- arcdps-dev guidance items 4/5). Verified against the arcdps
     /// EVTC reference by hand-counting `enum cbtstatechange` from
@@ -498,6 +619,20 @@ pub struct RawEvent {
     pub is_activation: u8,
     pub is_buffremove: u8,
     pub is_statechange: u8,
+    /// Offset 57, between `is_statechange` (56) and `is_shields` (58) --
+    /// decoded starting M10 Task 2 because the missile-family payloads need
+    /// it: `CBTS_MISSILELAUNCH`'s "is_src_flanking: non-zero if first
+    /// launch" and `CBTS_MISSILEREMOVE`'s "is_src_flanking: hit at least
+    /// one enemy along the way" (arcdps EVTC reference,
+    /// `README.txt`). Cross-checked against GW2EI's
+    /// `MissileLaunchEvent`/`MissileRemoveEvent` ctors, both of which read
+    /// `evtcItem.IsFlanking > 0`
+    /// (`GW2EIEvtcParser/ParsedData/CombatEvents/StatusEvents/MissileEvents/`).
+    /// On an ordinary `CBTS_COMBAT` strike event this is the "src is
+    /// flanking dst" flag (unused by this project outside the missile
+    /// path). See `crate::analysis::missiles` for how the two missile-event
+    /// meanings are used.
+    pub is_flanking: u8,
     /// Verified against the arcdps EVTC reference struct layout (`iff`
     /// through `is_offcycle` are single bytes at offsets 48-59; see the
     /// offset table in `decode_events` below): `is_shields` sits at offset
@@ -570,6 +705,7 @@ pub fn decode_events(buf: &[u8], count: usize) -> Result<Vec<RawEvent>, EvtcErro
             is_activation: e[51],
             is_buffremove: e[52],
             is_statechange: e[56],
+            is_flanking: e[57],
             is_shields: e[58],
             is_offcycle: e[59],
             pad: u32le(&e[60..64]),
@@ -603,7 +739,7 @@ mod tests {
         // (is_flanking@57, is_offcycle@59), so a ±1 decoder offset bug
         // (reading either neighbor instead of 58) fails the assertion in
         // `decodes_strike` below rather than silently passing.
-        b[57] = 9; // is_flanking (neighbor probe, not asserted on RawEvent -- not decoded)
+        b[57] = 9; // is_flanking (the field under test, M10 Task 2)
         b[58] = 7; // is_shields (the field under test)
         b[59] = 11; // is_offcycle (the OTHER field under test)
         b
@@ -624,6 +760,7 @@ mod tests {
         assert_eq!(e.buff, 3);
         assert_eq!(e.result, result::CRIT);
         assert_eq!(e.is_statechange, sc::ENTER_COMBAT);
+        assert_eq!(e.is_flanking, 9, "is_flanking must decode from offset 57, not a ±1 neighbor");
         assert_eq!(e.is_shields, 7, "is_shields must decode from offset 58, not a ±1 neighbor");
         assert_eq!(e.is_offcycle, 11, "is_offcycle must decode from offset 59, not a ±1 neighbor");
     }

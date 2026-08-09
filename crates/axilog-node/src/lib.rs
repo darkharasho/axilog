@@ -58,7 +58,7 @@ fn build_report_from_bytes(bytes: &[u8], want_replay: bool) -> Result<axilog_sch
             axilog_core::analysis::replay::DEFAULT_POLL_MS,
         )
     });
-    Ok(axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref()))
+    Ok(axilog_schema::build_report(&enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), None))
 }
 
 fn report_to_value(report: &axilog_schema::Report) -> Result<Value> {

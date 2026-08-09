@@ -264,7 +264,7 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default()};
-        axilog_schema::build_report(&enc,&m,"0.1.0", None)
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None)
     }
     #[test]
     fn maps_core_ei_fields() {
@@ -336,7 +336,7 @@ mod tests {
             warnings: Default::default(),
             has_healing_extension: Default::default(),
         };
-        axilog_schema::build_report(&enc,&m,"0.1.0", None)
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None)
     }
 
     #[test]
@@ -424,6 +424,7 @@ mod tests {
             timeline: TimelineOut { resolution_ms: 1000, per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![] } },
             warnings: vec![],
             replay: None,
+            missiles: None,
         };
         let v = to_ei_json(&report);
         let healing = &v["players"][0]["extHealingStats"]["outgoingHealing"][0];

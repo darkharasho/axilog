@@ -269,6 +269,7 @@ mod tests {
             is_activation: 0,
             is_buffremove: 0,
             is_statechange: 0,
+            is_flanking: 0,
             is_shields: 0,
             is_offcycle: 0,
             pad: 0,

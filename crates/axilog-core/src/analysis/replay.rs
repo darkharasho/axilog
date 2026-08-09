@@ -412,6 +412,7 @@ mod tests {
             is_activation: 0,
             is_buffremove: 0,
             is_statechange: sc::POSITION,
+            is_flanking: 0,
             is_shields: 0,
             is_offcycle: 0, pad: 0,
         }
@@ -436,6 +437,7 @@ mod tests {
             is_activation: 0,
             is_buffremove: 0,
             is_statechange: statechange,
+            is_flanking: 0,
             is_shields: 0,
             is_offcycle: 0, pad: 0,
         }

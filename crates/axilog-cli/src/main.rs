@@ -34,6 +34,16 @@ enum Cmd {
         /// shape). Off by default.
         #[arg(long)]
         replay: bool,
+        /// Compute and embed the native opt-in missile (projectile)
+        /// analytics block (M10, Task 2): per-squad-player fired/hit/denied
+        /// counts plus a squad-wide incoming-denied defensive rollup -- see
+        /// `axilog_core::analysis::missiles` for exactly what's
+        /// attributable (there is no blocked/reflected/destroyed
+        /// breakdown; the wire format doesn't support one). `--format json`
+        /// embeds it in the top-level `missiles` field; every other format
+        /// ignores it (no comparable shape). Off by default.
+        #[arg(long)]
+        missiles: bool,
     },
     /// Rewrite every player's character/account name in a .zevtc to a
     /// deterministic `Anon<N>` placeholder and write the result as a new
@@ -73,7 +83,7 @@ enum View {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Parse { path, format, view, output, replay } => {
+        Cmd::Parse { path, format, view, output, replay, missiles } => {
             let bytes = std::fs::read(&path)?;
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
@@ -85,11 +95,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     axilog_core::analysis::replay::DEFAULT_POLL_MS,
                 )
             });
+            let missiles_data =
+                missiles.then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
             let report = axilog_schema::build_report(
                 &enc,
                 &metrics,
                 env!("CARGO_PKG_VERSION"),
                 replay_data.as_ref(),
+                missiles_data.as_ref(),
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
             // post-2026-05-01 buff-statechange-rework build producing
