@@ -80,6 +80,9 @@
 //! this project's linear interpolation vs. GW2EI's own velocity-aware
 //! hold/interpolate branch in `HandlePosition`, not a systematic offset).
 
+mod common;
+
+use axilog_core::analysis::ei_replay::MapTransform;
 use axilog_core::analysis::replay::build_replay;
 use axilog_core::evtc::{anon_account, decode_raw};
 use axilog_core::model::resolve;
@@ -87,33 +90,61 @@ use axilog_core::model::resolve;
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
 const GOLDEN_JSON_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.ei.json");
-const LOCAL_POSTREWORK_ZEVTC: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/local/wvw-postrework.zevtc"
-);
-const LOCAL_POSTREWORK_JSON: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/local/wvw-postrework.ei.json"
-);
 
-/// GW2EI's Alpine Borderland (Green mapID=95 / Blue mapID=96) world rect,
-/// per this file's module doc citation.
-const RECT_TOP_X: f64 = -30720.0;
-const RECT_TOP_Y: f64 = -43008.0;
-const RECT_BOTTOM_X: f64 = 30720.0;
-const RECT_BOTTOM_Y: f64 = 43008.0;
-/// `CombatReplayMap.GetPixelMapSize()` output for `pixelSize = (697,
-/// 1000)`: `ratio = 0.697 < 1.0` => `(round(0.697*750), 750)`.
-const OUT_W: f64 = 523.0;
-const OUT_H: f64 = 750.0;
+/// GW2EI's Alpine Borderland (Green mapID=95 / Blue mapID=96)
+/// combat-replay geometry, per this file's module doc citation.
+///
+/// M15 Task 2: these four rect components and the two output dimensions
+/// used to be spelled out as literals in this file, a second copy of the
+/// same GW2EI constants that `MapTransform::for_map_id` carries. They are
+/// now read from `wvw::maps::WVW_MAPS` through that constructor -- the
+/// project's single source of truth for map geometry -- so the native
+/// replay's calibration and the EI-shape engine can no longer be calibrated
+/// against different rects. `alpine_geometry_matches_the_historical_literals`
+/// below pins the exact values this file used to hard-code, so the
+/// unification is provably behaviour-preserving.
+///
+/// Both fixtures are Alpine Borderlands (the committed one is Green /
+/// mapID 95, the local post-rework one is Blue / mapID 96); GW2EI gives
+/// the two ids identical `_pixelSize`/`_rectInMap`, which
+/// `alpine_geometry_matches_the_historical_literals` also asserts.
+fn alpine_transform() -> MapTransform {
+    MapTransform::for_map_id(95).expect("Green Alpine Borderlands is in the WvW map table")
+}
 
 /// GW2EI's `CombatReplayMap.GetMapCoordRounded`, specialized to the Alpine
-/// Borderland constants above (see this file's module doc for the
-/// derivation).
+/// Borderland geometry above (see this file's module doc for the
+/// derivation). Kept as this file's own un-rounded simplification rather
+/// than calling `MapTransform::to_map_pixel`, so that the native replay
+/// stays measured against the plain algebra it was calibrated with; the
+/// geometry it reads is now shared, which is what Task 2 required.
 fn world_to_map_pixel(x: f32, y: f32) -> (f64, f64) {
-    let nx = (x as f64 - RECT_TOP_X) / (RECT_BOTTOM_X - RECT_TOP_X);
-    let ny = (y as f64 - RECT_TOP_Y) / (RECT_BOTTOM_Y - RECT_TOP_Y);
-    (OUT_W * nx, OUT_H * (1.0 - ny))
+    let m = alpine_transform();
+    let nx = (x as f64 - m.top_x) / (m.bottom_x - m.top_x);
+    let ny = (y as f64 - m.top_y) / (m.bottom_y - m.top_y);
+    let [out_w, out_h] = m.sizes();
+    (out_w as f64 * nx, out_h as f64 * (1.0 - ny))
+}
+
+/// Pins the literals this file carried before M15 Task 2 unified the map
+/// geometry into `wvw::maps::WVW_MAPS`. If the shared table ever drifts,
+/// this fails here rather than silently re-baselining the native replay's
+/// calibration numbers quoted in this file's module doc.
+#[test]
+fn alpine_geometry_matches_the_historical_literals() {
+    let m = alpine_transform();
+    assert_eq!(m.top_x, -30720.0);
+    assert_eq!(m.top_y, -43008.0);
+    assert_eq!(m.bottom_x, 30720.0);
+    assert_eq!(m.bottom_y, 43008.0);
+    // `CombatReplayMap.GetPixelMapSize()` for `pixelSize = (697, 1000)`:
+    // `ratio = 0.697 < 1.0` => `(round(0.697*750), 750)`.
+    assert_eq!(m.sizes(), [523, 750]);
+    assert_eq!(
+        Some(m),
+        MapTransform::for_map_id(96),
+        "Green and Blue Alpine share one arena image and one rect"
+    );
 }
 
 const PIXEL_TOLERANCE: f64 = 1.0;
@@ -258,21 +289,22 @@ fn replay_calibrated_against_ei_combat_replay_data() {
 /// `combatReplayData`. Skips gracefully when either local file is absent
 /// (dev-only extra, mirrors `postrework_golden.rs`'s pattern) -- nothing
 /// from these files is extracted into any committed fixture.
+///
+/// M15 Task 3: resolved through `common::local_fixture`, so
+/// `AXILOG_LOCAL_FIXTURES` points it at the primary checkout's captures
+/// (this file used to hard-code the in-tree relative path, which silently
+/// `skip:`ped -- i.e. dropped this 99.77% gate -- for any work done in a
+/// `git worktree`, whose `fixtures/local/` is empty because the captures
+/// are PII and are never copied).
 #[test]
 fn replay_calibrated_against_ei_combat_replay_data_local_postrework_when_present() {
-    let bytes = match std::fs::read(LOCAL_POSTREWORK_ZEVTC) {
-        Ok(b) => b,
-        Err(_) => {
-            println!("skip: {LOCAL_POSTREWORK_ZEVTC} absent (local-only extra check)");
-            return;
-        }
+    let zevtc = common::local_fixture("wvw-postrework.zevtc");
+    let json_path = common::local_fixture("wvw-postrework.ei.json");
+    let Some(bytes) = common::read_bytes_or_skip(&zevtc, "local-only extra check") else {
+        return;
     };
-    let golden = match std::fs::read_to_string(LOCAL_POSTREWORK_JSON) {
-        Ok(s) => serde_json::from_str::<serde_json::Value>(&s).expect("parse local golden JSON"),
-        Err(_) => {
-            println!("skip: {LOCAL_POSTREWORK_JSON} absent (local-only extra check)");
-            return;
-        }
+    let Some(golden) = common::read_json_or_skip(&json_path, "local-only extra check") else {
+        return;
     };
     let golden_players = golden["players"].as_array().expect("players array");
     assert_eq!(golden["mapID"].as_i64(), Some(96), "expected Blue Alpine Borderlands (mapID 96)");

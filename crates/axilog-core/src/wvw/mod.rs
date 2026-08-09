@@ -3,6 +3,10 @@ use crate::model::{Encounter, Team, Player, Enemy};
 use std::collections::BTreeMap;
 
 pub mod markers;
+/// The per-WvW-map static table (M15 Task 2) -- display names, arena image
+/// URLs and combat-replay geometry, all transcribed from GW2EI. axilog's
+/// single source of truth for all three; see [`maps`]' module doc.
+pub mod maps;
 
 /// Collapse relog/build-swap duplicates: one Player per account (fallback character).
 pub fn dedupe_players(players: &mut Vec<Player>) {
@@ -58,14 +62,15 @@ fn dedupe_enemy_players(players: &mut Vec<Player>) {
 // Ids/names cross-checked against GW2EI's `MapIDs` (LogLogic/WvW) and the
 // golden fixture (Green Alpine Borderlands, id 95). Unknown ids fall back
 // to the generic "World vs World" label rather than guessing.
+//
+// M15 Task 2: the id→name pairs moved into `maps::WVW_MAPS` so that the
+// display name, the arena image URL and the combat-replay geometry can no
+// longer disagree about which id is which map. Same five ids, same five
+// strings, same fallback -- purely a de-duplication.
 fn map_name(map_id: u32) -> &'static str {
-    match map_id {
-        38 => "Eternal Battlegrounds",
-        95 => "Green Alpine Borderlands",
-        96 => "Blue Alpine Borderlands",
-        1099 => "Red Desert Borderlands",
-        968 => "Edge of the Mists",
-        _ => "World vs World",
+    match maps::map_def(map_id) {
+        Some(def) => def.name,
+        None => "World vs World",
     }
 }
 

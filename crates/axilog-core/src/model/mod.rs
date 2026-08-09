@@ -137,6 +137,17 @@ pub fn profession_name(prof: u32, is_elite: u32) -> (String, String) {
             71 => "Specter",        // Thief (EoD)
             72 => "Untamed",        // Ranger (SotO)
             73 => "Troubadour",     // Mesmer (post-SotO; fixture-verified)
+            74 => "Paragon",        // Warrior (post-SotO; fixture-verified,
+                                    // M15 Task 2): the local post-rework
+                                    // capture has exactly one unmapped
+                                    // elite id on a Warrior (74) and EI's
+                                    // export for that log reports exactly
+                                    // one Warrior spec we did not name,
+                                    // "Paragon" -- same by-elimination
+                                    // method used for 73/75/80/81 above.
+                                    // EI's own `Spec.Paragon` is grouped
+                                    // under Warrior in
+                                    // `ParserIcons.BaseResProfIcons`.
             75 => "Amalgam",        // Engineer (post-SotO; fixture-verified)
             80 => "Evoker",         // Elementalist (post-SotO; fixture-verified)
             81 => "Luminary",       // Guardian (post-SotO; fixture-verified)

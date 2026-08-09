@@ -238,6 +238,35 @@ test('parseFileEi: accepts the same ParseOptions as parseFile -- skillDamage/tim
   assert.ok(p0With.damage1S[0].length > 0, 'expected a non-empty per-second series inside damage1S\'s phase wrapper')
 })
 
+test('parseFileEi: { replay: true } adds GW2EI combat-replay positions + metaData (M15)', () => {
+  const ei = sdk.parseFileEi(FIXTURE, { replay: true })
+
+  // Top-level metaData: the arena image the pixel coordinates live on.
+  assert.ok(ei.combatReplayMetaData, 'expected combatReplayMetaData with { replay: true }')
+  assert.equal(ei.combatReplayMetaData.pollingRate, 300)
+  assert.deepEqual(ei.combatReplayMetaData.sizes, [523, 750])
+  // The f32-text contract: EI writes a C# float, so this must be exactly
+  // 0.009 -- a widened f64 would arrive as 0.008999999612569809.
+  assert.equal(ei.combatReplayMetaData.inchToPixel, 0.009)
+  assert.ok(Array.isArray(ei.combatReplayMetaData.maps) && ei.combatReplayMetaData.maps.length === 1)
+
+  const p0 = ei.players[0]
+  const crd = p0.combatReplayData
+  assert.ok(Array.isArray(crd.positions) && crd.positions.length > 0, 'expected positions')
+  assert.equal(crd.positions.length, crd.orientations.length, 'orientations are grid-aligned')
+  assert.equal(crd.positions[0].length, 2)
+  assert.equal(typeof crd.positions[0][0], 'number')
+  assert.ok(Array.isArray(crd.dc) && crd.dc.length > 0, 'expected the dc sentinel bracketing')
+  assert.equal(typeof crd.iconURL, 'string')
+  assert.ok(crd.iconURL.startsWith('https://'))
+  // M11's always-on fields are untouched by the flag.
+  const plain = sdk.parseFileEi(FIXTURE).players[0].combatReplayData
+  assert.equal(crd.start, plain.start)
+  assert.equal(crd.end, plain.end)
+  assert.deepEqual(crd.down, plain.down)
+  assert.deepEqual(crd.dead, plain.dead)
+})
+
 test('parseFileEi: axibridge-read key shapes', () => {
   const ei = sdk.parseFileEi(FIXTURE)
 
@@ -273,7 +302,8 @@ test('parseFileEi: axibridge-read key shapes', () => {
   assert.equal(typeof p0.combatReplayData.end, 'number')
   assert.ok(Array.isArray(p0.combatReplayData.down))
   assert.ok(Array.isArray(p0.combatReplayData.dead))
-  assert.equal(p0.combatReplayData.positions, undefined, 'positions must stay absent (deferred to M15)')
+  assert.equal(p0.combatReplayData.positions, undefined, 'positions must stay absent without { replay: true }')
+  assert.equal(ei.combatReplayMetaData, undefined, 'combatReplayMetaData must stay absent without { replay: true }')
 
   assert.ok(ei.wvWMapData, 'expected wvWMapData')
   for (const key of ['redTeamID', 'blueTeamID', 'greenTeamID']) {

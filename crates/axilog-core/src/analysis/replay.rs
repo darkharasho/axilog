@@ -43,7 +43,7 @@
 //!   `down=[[183019,185181],[188193,199231]]`.
 //! - `fixtures/local/wvw-small.zevtc` vs the axibridge golden JSON (via
 //!   reverse account-obfuscation lookup): the one player with a non-empty
-//!   `down` array (`DaringCanyon.5440`, golden `down=[[12642,15512]]`) has
+//!   `down` array (`players[35]`/`Anon130.5810`, golden `down=[[12642,15512]]`) has
 //!   raw events `CHANGE_DOWN@12642, CHANGE_UP@15512` -- exact match.
 //!
 //! All times above are log-relative ms (`event.time - t0`, `t0 =
@@ -362,7 +362,7 @@ impl ActivityIntervals {
     /// fight despawn/respawn). Down time is deliberately NOT subtracted --
     /// verified against the real EI export this project's golden fixture
     /// derives from (`axibridge/test-fixtures/boon/20260117-181030.json`):
-    /// player `DaringCanyon.5440` has a real 2870ms down interval
+    /// player `players[35]`/`Anon130.5810` has a real 2870ms down interval
     /// (`combatReplayData.down = [[12642, 15512]]`) yet
     /// `activeTimes[0] = 49265` exactly equals `end - start` (`49266 - 1`),
     /// no down-time deduction; cross-checked against all 41 players in that
@@ -677,7 +677,7 @@ mod tests {
 
     /// Down interval: opened at `CHANGE_DOWN`, closed at the next
     /// `CHANGE_UP` (revived) -- exactly reproduces the
-    /// `DaringCanyon.5440`/`Athena.4562`-style single-down-no-death shape
+    /// `Anon130.5810`-style single-down-no-death shape
     /// found in both golden fixtures (see this module's doc comment).
     #[test]
     fn down_interval_closes_on_change_up() {
@@ -882,7 +882,7 @@ mod tests {
             dead_intervals: vec![],
         };
         // Matches the real EI golden finding cited in `active_ms`'s doc
-        // comment (`DaringCanyon.5440`: end-start with no dead == activeTimes
+        // comment (`Anon130.5810`: end-start with no dead == activeTimes
         // exactly, down time not subtracted).
         assert_eq!(iv.active_ms(), 49_263);
     }

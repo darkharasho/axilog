@@ -23,3 +23,6 @@ __pycache__/
 
 # generated reports at repo root (contain real player names — never commit)
 /*.html
+
+# stray browser-session dumps from the Playwright MCP tool -- never committed
+.playwright-mcp/

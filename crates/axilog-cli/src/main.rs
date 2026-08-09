@@ -30,8 +30,16 @@ enum Cmd {
         /// `axilog_core::analysis::replay::DEFAULT_POLL_MS`. `--format json`
         /// embeds it in the top-level `replay` field; `--format html` passes
         /// it through to the report data the client-side Replay tab reads
-        /// (M9 Task 3). Every other format ignores it (no comparable
-        /// shape). Off by default.
+        /// (M9 Task 3). `--format ei-json` (M15 Task 3) instead emits
+        /// GW2EI's OWN replay shape -- per-actor `combatReplayData.
+        /// {positions, orientations, dc, iconURL}` in map pixels on
+        /// GW2EI's fixed 300ms grid, plus the top-level
+        /// `combatReplayMetaData` -- computed by the separate
+        /// `axilog_core::analysis::ei_replay` engine (the two shapes differ
+        /// in grid, units, intervals and rounding; see that module's doc).
+        /// `--format table`/`csv` ignore it. Off by default: measured on
+        /// the committed WvW fixture, the ei-json payload grows +184%
+        /// pretty-printed / +142% compact.
         #[arg(long)]
         replay: bool,
         /// Compute and embed the native opt-in missile (projectile)
@@ -110,7 +118,7 @@ enum Cmd {
     Anonymize { input: PathBuf, output: PathBuf },
 }
 
-#[derive(Copy, Clone, ValueEnum)]
+#[derive(Copy, Clone, PartialEq, ValueEnum)]
 enum Format {
     Json,
     Table,
@@ -169,6 +177,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
             let missiles_data =
                 missiles.then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
+            // M15 Task 3: `--replay` additionally turns on GW2EI's own
+            // fixed-rate replay shape for `--format ei-json`
+            // (`combatReplayData.{positions, orientations, dc, iconURL}` +
+            // the top-level `combatReplayMetaData`). It is a SECOND engine
+            // over the same events, not a reshaping of `replay_data` above
+            // -- see `axilog_core::analysis::ei_replay`'s module doc for
+            // why the two shapes are deliberately separate -- so it is
+            // computed only for the format that can emit it.
+            let ei_replay_data = (replay && format == Format::EiJson)
+                .then(|| axilog_core::analysis::ei_replay::build_ei_replay_auto(&raw, &enc));
             // M11 Task 3: down/dead intervals + activeTimes are cheap (no
             // position decode/downsample), so they're computed
             // unconditionally -- unlike `--replay`'s `replay_data` above,
@@ -206,7 +224,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Format::EiJson => {
                     format!(
                         "{}\n",
-                        serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report, &activity))?
+                        serde_json::to_string_pretty(&axilog_ei::to_ei_json(
+                            &report,
+                            &activity,
+                            ei_replay_data.as_ref(),
+                        ))?
                     )
                 }
                 Format::Table => axilog_cli_table(&report, view, &metrics, &activity),

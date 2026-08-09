@@ -120,6 +120,7 @@ fn build_report_from_bytes(
 /// `None` here regardless of what the caller asked for). `want_missiles`
 /// is threaded the same way for symmetry with `parse_buffer`/`parse_file`,
 /// even though `to_ei_json` does not currently read `Report::missiles`.
+#[allow(clippy::type_complexity)]
 fn build_report_and_activity_from_bytes(
     bytes: &[u8],
     want_replay: bool,
@@ -127,7 +128,11 @@ fn build_report_and_activity_from_bytes(
     want_timeseries: bool,
     want_missiles: bool,
     want_rotation: bool,
-) -> Result<(axilog_schema::Report, Vec<axilog_core::analysis::replay::ActivityIntervals>)> {
+) -> Result<(
+    axilog_schema::Report,
+    Vec<axilog_core::analysis::replay::ActivityIntervals>,
+    Option<axilog_core::analysis::ei_replay::EiReplay>,
+)> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
@@ -141,11 +146,18 @@ fn build_report_and_activity_from_bytes(
     let missiles = want_missiles
         .then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    // M15 Task 3: `opts.replay` now DOES affect the ei-json -- it adds
+    // `combatReplayData.{positions, orientations, dc, iconURL}` and the
+    // top-level `combatReplayMetaData`. Same flag, same opt-in cost
+    // rationale as the native block above (see `axilog_ei::to_ei_json`'s
+    // measured size delta).
+    let ei_replay = want_replay
+        .then(|| axilog_core::analysis::ei_replay::build_ei_replay_auto(&raw, &enc));
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation,
     );
-    Ok((report, activity))
+    Ok((report, activity, ei_replay))
 }
 
 fn report_to_value(report: &axilog_schema::Report) -> Result<Value> {
@@ -192,10 +204,13 @@ pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
 /// the native `Report` this function builds internally; previously this
 /// function always built that `Report` with both flags forced `false`,
 /// silently discarding any M12 detail regardless of what a caller wanted
-/// (axibridge consumes ei-json exclusively through this function). `opts.
-/// replay`/`opts.missiles` are accepted for parity with `parseFile` but
-/// have no effect on the output -- EI's JSON shape has no comparable field
-/// for either (see `axilog_ei::to_ei_json`'s module doc). Omitting `opts`
+/// (axibridge consumes ei-json exclusively through this function).
+/// `opts.replay` (M15, Task 3) adds GW2EI's own combat-replay surface --
+/// per-actor `combatReplayData.{positions, orientations, dc, iconURL}` plus
+/// the top-level `combatReplayMetaData` (see `axilog_ei::to_ei_json`; it
+/// roughly triples the payload, hence opt-in). `opts.missiles` is accepted
+/// for parity with `parseFile` but has no effect on the output -- EI's JSON
+/// shape has no comparable field for it. Omitting `opts`
 /// entirely keeps every existing zero-arg call site's behavior unchanged.
 #[napi]
 pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> {
@@ -205,10 +220,10 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
     let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let (report, activity) = build_report_and_activity_from_bytes(
+    let (report, activity, ei_replay) = build_report_and_activity_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
     )?;
-    Ok(axilog_ei::to_ei_json(&report, &activity))
+    Ok(axilog_ei::to_ei_json(&report, &activity, ei_replay.as_ref()))
 }
 
 /// Rewrites every player's character/account name in the `.zevtc` at

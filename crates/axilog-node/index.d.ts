@@ -40,10 +40,13 @@ export declare function parseFile(path: string, opts?: ParseOptions | undefined 
  * the native `Report` this function builds internally; previously this
  * function always built that `Report` with both flags forced `false`,
  * silently discarding any M12 detail regardless of what a caller wanted
- * (axibridge consumes ei-json exclusively through this function). `opts.
- * replay`/`opts.missiles` are accepted for parity with `parseFile` but
- * have no effect on the output -- EI's JSON shape has no comparable field
- * for either (see `axilog_ei::to_ei_json`'s module doc). Omitting `opts`
+ * (axibridge consumes ei-json exclusively through this function).
+ * `opts.replay` (M15, Task 3) adds GW2EI's own combat-replay surface --
+ * per-actor `combatReplayData.{positions, orientations, dc, iconURL}` plus
+ * the top-level `combatReplayMetaData` (see `axilog_ei::to_ei_json`; it
+ * roughly triples the payload, hence opt-in). `opts.missiles` is accepted
+ * for parity with `parseFile` but has no effect on the output -- EI's JSON
+ * shape has no comparable field for it. Omitting `opts`
  * entirely keeps every existing zero-arg call site's behavior unchanged.
  */
 export declare function parseFileEi(path: string, opts?: ParseOptions | undefined | null): any

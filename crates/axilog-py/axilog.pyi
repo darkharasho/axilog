@@ -608,10 +608,15 @@ def parse_file_ei(
     Task 3's ei-json mapping) surface in the returned JSON -- previously
     this function always omitted them regardless of caller intent.
     `rotation` (M14, Task 3, keyword-only) likewise lets the ei-json
-    `rotation[]` per-player block surface. `replay`/`missiles` are accepted
-    for signature parity with `parse_file` but have no effect on the output
-    (EI's JSON shape has no comparable field for either). All five default
-    to `False`, keeping `parse_file_ei(path)` back-compatible.
+    `rotation[]` per-player block surface. `replay` (M15, Task 3) adds
+    GW2EI's own combat-replay surface -- per-actor
+    `combatReplayData.{positions, orientations, dc, iconURL}` (map pixels
+    on GW2EI's fixed 300ms polling grid) plus the top-level
+    `combatReplayMetaData`; it roughly triples the payload, hence opt-in.
+    `missiles` is accepted for signature parity with `parse_file` but has
+    no effect on the output (EI's JSON shape has no comparable field for
+    it). All five default to `False`, keeping `parse_file_ei(path)`
+    back-compatible.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.
