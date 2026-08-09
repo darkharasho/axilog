@@ -171,10 +171,11 @@
 //! **Why this mattered (M13 Task 3's empirical finding, now resolved).**
 //! The first real post-rework capture + dps.report export pair
 //! (`fixtures/local/wvw-postrework.zevtc`/`.ei.json`, gitignored, dev-only)
-//! showed the fourth bucket genuinely populated on a real fight: roughly
-//! two-thirds of joined accounts diverged on `power_count`/
-//! `condition_count` (up to ~35% relative on one account) while every field
-//! immune to the buff==1 split stayed exact. It was hand-verified CONSERVED
+//! showed the fourth bucket genuinely populated on a real fight: 33 of 44
+//! joined accounts diverged on `power_count`/`condition_count` (up to
+//! **51.4% relative** on the worst account, `power_count` -- see MCONDCAT
+//! Task 1's report for the full flip table) while every field immune to the
+//! buff==1 split stayed exact. It was hand-verified CONSERVED
 //! in total (`ours condition + ours life_leech == golden's condition +
 //! [true non-strike power]`), i.e. a pure RECLASSIFICATION, not a
 //! dropped/extra event -- precisely what a missing catalog predicts. The

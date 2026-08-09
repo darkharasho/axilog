@@ -300,6 +300,21 @@ fn hit_stats_present_and_sane_on_local_postrework_when_available() {
     }
     assert!(any_connected, "a real WvW squad fight should show nonzero connected hits somewhere");
     assert!(any_direct, "a real WvW squad fight should show nonzero direct hits somewhere");
+    // MCONDCAT Task 2 (review Minor 1, carried from Task 1): the sibling
+    // `defenses_present_and_sane_on_local_postrework` check already asserts
+    // its fourth bucket is nonempty (33 players/840 hits on the reference
+    // capture) so it can never silently degrade back into a three-bucket-
+    // only test; this outgoing-side check counted the same thing but never
+    // asserted on it. The outgoing bucket is far smaller (2 players/39 hits
+    // on the same capture -- the recording squad's own skill set is much
+    // narrower than an entire opposing WvW roster's, see the module doc's
+    // "Why this mattered" paragraph), but it IS populated, so assert it the
+    // same way.
+    assert!(
+        fourth_bucket_hits > 0,
+        "expected the MCONDCAT fourth bucket (power-only hits) to be populated on this real \
+         post-era capture -- if this ever fires, the catalog probe has stopped doing anything"
+    );
     println!(
         "hit_stats_present_and_sane_on_local_postrework: fourth bucket populated for \
          {fourth_bucket_players} player(s), {fourth_bucket_hits} hit(s) total"

@@ -60,8 +60,18 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   always-emit combatReplayData, PII scrub (incl. pre-existing _note names). wvWMapData
   (objective capture) = documented gap. Follow-up seed: to_ei_json options struct before a 4th arg.
 
+- MCONDCAT Condition-skill-id classification catalog (merged c351e93, task-2 gate flips): reproduced
+  `SkillEvent.ConditionDamageBased(log)` exactly via the complete 14-id `Buff.BuffClassification.
+  Condition` catalog (`analysis::condition_catalog`, exhaustively scanned + machine-diffed against
+  GW2EI source) instead of the old "buff==1 and not life-leech" approximation. Added the fourth
+  `HitKind` bucket (buff==1, uncatalogued, not life-leech) both modules previously misclassified.
+  The empirically-confirmed post-era gap (M13: up to 51.4% relative divergence on `power_count`,
+  33/44 incoming + 2/44 outgoing accounts affected, pure reclassification — conserved total, never a
+  dropped/extra event) is now closed: all previously report-only/tolerant golden checks in
+  `hit_stats_golden.rs`/`defenses_golden.rs`/`ei_golden.rs` are hard-EXACT on all 44 joined accounts
+  of a real post-era capture. Pre-era committed fixture output byte-identical across all 7 formats.
+
 ## Queued (autonomous — build in order; reorder only for dependency)
-- MCONDCAT Condition-skill-id classification catalog: EMPIRICALLY-CONFIRMED gap (M13 post-era: up to 35%% divergence on condition/power/life-leech buff==1 split; immune fields exact). Pull GW2EI Buff Classification==Condition catalog (like M3's cleanse set, complete). Unblocks exact condition/power split on post-era logs.
 - M16 Damage modifiers: trait/sigil/food/rune modifier attribution engine
   (`damageModifiers`/`incomingDamageModifiers` + maps). Largest; GW2EI DamageModifier defs +
   decompile for edge cases. Least WvW-critical — can slot late.
