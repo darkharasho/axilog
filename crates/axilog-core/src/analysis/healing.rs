@@ -158,6 +158,17 @@ pub fn apply(
     squad: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
 ) -> bool {
+    // MPERF Task 3: check the extension gate BEFORE paying for a registry
+    // build. `apply_with_registry` early-returns `false` on a log with no
+    // healing extension, so on that (very common) path the registry would be
+    // built and immediately thrown away -- a full linear scan over every
+    // event for nothing. Hoisting the same gate here keeps the cold path
+    // free. `analyze()` is unaffected either way (it passes its own shared
+    // registry, already built for every other pass); this is purely for the
+    // standalone/SDK/test callers that use this `raw`-only wrapper.
+    if !ext_healing::healing_extension_present(raw) {
+        return false;
+    }
     apply_with_registry(players, raw, &InstidRegistry::build(raw), squad, addr_to_rep)
 }
 

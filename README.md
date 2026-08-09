@@ -482,6 +482,32 @@ above. To help with that:
    (players, duration, squad damage, Might average stacks, Quickness %, cleanses, strips,
    resurrects) so the first real capture's numbers are immediately visible.
 
+## Performance
+
+Measured end to end (decode → resolve → analyze → build the native report), release build, on an
+AMD Ryzen 9 7900X3D:
+
+| Log | Events | Full parse | of which `analyze` |
+|---|---|---|---|
+| Committed fixture (`fixtures/wvw-small.anon.zevtc`) | 120,435 | **28.9 ms** | 18.9 ms |
+| Real WvW zerg log (48 players, 5:48 fight) | 583,194 | **174 ms** | 93.7 ms |
+
+That is a whole real 583k-event WvW log parsed and fully analyzed — damage, downs/CC,
+arcdps-methodology down contribution, boons + generation, support, healing, per-skill damage,
+per-second series, hit quality, defenses, rotation — in under a fifth of a second, single-threaded,
+with no `unsafe`.
+
+The MPERF milestone made `analysis::analyze` 2.1× faster on the fixture and 2.6× faster on the real
+log (1.75× / 1.87× end to end), with every step verified byte-identical against the previous
+output. The benchmark harness (`crates/axilog-cli/benches/pipeline.rs`, criterion), the full
+baseline → after-Task-2 → after-Task-3 tables, and every optimization that was *declined* along
+with why, are in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Reproduce the committed-fixture arm
+with:
+
+```bash
+cargo bench -p axilog-cli --bench pipeline
+```
+
 ## Fixture policy
 
 - Committed fixtures (`fixtures/wvw-small.anon.zevtc`, `fixtures/wvw-small.ei.json`) are

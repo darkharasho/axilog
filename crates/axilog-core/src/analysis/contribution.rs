@@ -235,6 +235,50 @@ pub fn apply_with_registry(
     // kept HERE, not in `health.rs` (which stays a pure query module).
     let mut reset: BTreeMap<u64, u64> = BTreeMap::new();
 
+    // MPERF Task 3: a time-ordered index over `raw.events`, built once.
+    //
+    // `credit_window` below filters the whole event list down to ONE down's
+    // `[lo, hi]` window, and it is called once per down -- so as written this
+    // pass is O(downs x events): a full linear scan over every event for
+    // every down in the log. On a real WvW zerg log (583k events, 53 downs)
+    // that is ~31M filtered iterations and made this the single most
+    // expensive pass in `analyze()` by a wide margin.
+    //
+    // Sorting a `&RawEvent` index by `time` once turns each down's window
+    // into a contiguous subslice reachable by binary search, so the total
+    // becomes one sort plus the sum of the (small, ~2-4s wide) window sizes.
+    // Two properties make this bit-for-bit output-preserving:
+    //
+    // 1. **Same event SET per window.** `[partition_point(time < lo),
+    //    partition_point(time <= hi))` over a time-sorted index is exactly
+    //    the set `credit_window`'s own `e.time < lo || e.time > hi` guard
+    //    keeps. (That guard is deliberately left in place, so the function
+    //    stays correct for any caller and the narrowing is pure.)
+    // 2. **Order within a window cannot matter.** Every credit
+    //    `credit_window` produces is an additive accumulation into
+    //    `BTreeMap<contributor, ContributionMetrics>`, and all four
+    //    `ContributionMetrics` fields are plain `+=` sums -- there is no
+    //    first-wins/last-wins or running state anywhere in the loop. This is
+    //    the same commutativity that function's own doc comment already
+    //    relies on ("these are pure sums, so scan direction can't change the
+    //    result"). The output map is a `BTreeMap`, so its iteration order is
+    //    keyed by contributor addr, not by event order, either.
+    //
+    // A plain (stable) sort is used rather than an "is it already sorted?"
+    // fast path: real captures are *mostly* chronological but not strictly
+    // so (this project's own real post-rework WvW capture is NOT globally
+    // non-decreasing in `time`), and Rust's stable sort already detects and
+    // cheaply merges existing sorted runs, so the near-sorted case costs
+    // close to a single linear pass anyway. Skipped entirely when the log has
+    // no qualifying downs (nothing would query it).
+    let by_time: Vec<&RawEvent> = if downs.is_empty() {
+        Vec::new()
+    } else {
+        let mut v: Vec<&RawEvent> = raw.events.iter().collect();
+        v.sort_by_key(|e| e.time);
+        v
+    };
+
     for down in &downs {
         let target = down.target;
         let t_down = down.time;
@@ -251,8 +295,25 @@ pub fn apply_with_registry(
             Direction::Outgoing => enemies,
             Direction::Incoming => squad,
         };
-        let credits =
-            credit_window(&raw.events, registry, lo, t_down, target, exclude_side, &boon_ids, post_era);
+        // `lo` can legitimately exceed `t_down` -- the downstate-invuln
+        // `prev_reset` floor from an earlier down of the SAME target can land
+        // after this down's own time (two downs closer together than
+        // `RESET_GAP_MS`). The old full-scan form expressed that as "no event
+        // satisfies `lo <= e.time <= t_down`", i.e. an empty credit set;
+        // `start.min(end)` reproduces exactly that as an empty subslice
+        // (without it, the range would be inverted and panic).
+        let end = by_time.partition_point(|e| e.time <= t_down);
+        let start = by_time.partition_point(|e| e.time < lo).min(end);
+        let credits = credit_window(
+            by_time[start..end].iter().copied(),
+            registry,
+            lo,
+            t_down,
+            target,
+            exclude_side,
+            &boon_ids,
+            post_era,
+        );
 
         match down.dir {
             Direction::Outgoing => {
@@ -348,8 +409,13 @@ fn resolve_contributor(
 /// live ring-buffer walk, staying a re-expression of the METHODOLOGY, not
 /// the mechanism). Both window bounds are INCLUSIVE -- see `apply`'s doc
 /// comment for why.
-fn credit_window(
-    events: &[RawEvent],
+///
+/// `events` is any iterator of candidate events -- `apply_with_registry`
+/// passes an already-time-narrowed subslice (MPERF Task 3), but the `[lo,
+/// hi]` guard below is retained unconditionally so this stays correct when
+/// handed the whole log.
+fn credit_window<'a>(
+    events: impl IntoIterator<Item = &'a RawEvent>,
     registry: &InstidRegistry,
     lo: u64,
     hi: u64,

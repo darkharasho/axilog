@@ -416,7 +416,21 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     let timeline = cc::timeline_with_registry(enc, raw, &registry, &squad, &enemies);
     // Computed last, after every other pass, per the Task 1 brief -- does
     // not read or alter `players`/`timeline` above.
-    let boons = buffs::simulate_boons_with_registry(raw, &registry, enc);
+    // MPERF Task 3: the ONE boon extraction for this whole analysis.
+    //
+    // Both boon simulations below (`simulate_boons` for stack-count
+    // timelines, `generation::simulate_boon_generation_ms` for per-source
+    // attribution) plus the post-rework "zero buff events" warning check
+    // further down all start from the *same* extracted buff-event vector and
+    // the *same* arcdps capacity map -- three identical full scans over
+    // `raw.events` before this task. Extracting once here and lending
+    // `&BoonInputs` to all three is provably output-identical: the two
+    // simulations themselves are untouched and stay independent (see
+    // `buffs::generation`'s module doc for why that independence matters),
+    // they just stop recomputing bit-identical input. See
+    // `buffs::BoonInputs`'s doc comment.
+    let boon_inputs = buffs::extract_boon_inputs_with_registry(raw, &registry);
+    let boons = buffs::simulate_boons_with_inputs(raw, &boon_inputs, enc);
     // M3 Task 2: reduce each timeline to a `BoonUptime` over the same
     // absolute window `simulate_boons` itself ticks against (see
     // `buffs::uptime`'s module docs) -- computed directly from `boons`
@@ -434,7 +448,8 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // module docs) -- re-simulated with per-stack source tracking rather
     // than derived from `boons` (which only tracks stack COUNT, not WHICH
     // source's stack is held).
-    let target_gen = buffs::generation::simulate_boon_generation_ms_with_registry(raw, &registry, enc);
+    let target_gen =
+        buffs::generation::simulate_boon_generation_ms_with_inputs(raw, &boon_inputs, enc);
     let boon_generation = buffs::generation::rollup(&target_gen, enc, log_start_ms, log_end_ms);
     // M4 Task 3 (downgraded from the final-review fix wave's unconditional
     // warning): post-era extraction now works (M4 Tasks 1-2 era-gated
@@ -442,19 +457,19 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // warnings`'s doc comment), so only warn when a post-2026-05-01 build
     // genuinely yields zero extracted buff events -- a truncated/filtered
     // log, or a legitimate no-boon-activity fight, rather than a
-    // known-unsupported era. Re-extracts (cheap: a single linear scan over
-    // the boon skill ids) rather than threading a count out of `boons::
-    // simulate_boons`, which already discards per-owner squad-membership
-    // before this point.
+    // known-unsupported era. Reads the shared `boon_inputs` extraction above
+    // (MPERF Task 3) rather than re-extracting or threading a count out of
+    // `buffs::simulate_boons`, which already discards per-owner
+    // squad-membership before this point: `boon_inputs.events` is literally
+    // the vector the old third `extract_buff_events_with_registry(raw,
+    // &registry, BOON_IDS)` call here produced, so `is_empty()` on it is the
+    // same predicate.
     let mut warnings = Vec::new();
-    if raw.header.is_post_buff_rework() {
-        let boon_id_set: BTreeSet<u32> = buffs::BOON_IDS.iter().map(|&(id, _, _)| id).collect();
-        if buffs::events::extract_buff_events_with_registry(raw, &registry, &boon_id_set).is_empty() {
-            warnings.push(format!(
-                "no buff events found in this post-2026-05-01 log (build {}); boon/support metrics will read zero",
-                raw.header.build
-            ));
-        }
+    if raw.header.is_post_buff_rework() && boon_inputs.events.is_empty() {
+        warnings.push(format!(
+            "no buff events found in this post-2026-05-01 log (build {}); boon/support metrics will read zero",
+            raw.header.build
+        ));
     }
     if !has_healing_extension {
         warnings.push("healing extension not present in this log".to_string());
