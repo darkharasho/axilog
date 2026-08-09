@@ -110,7 +110,7 @@
 //! Before MCONDCAT, `hit_stats::classify`/`defenses::classify` approximated
 //! `ConditionDamageBased` as "`buff == 1` and not life-leech", which merges
 //! two genuinely distinct GW2EI buckets and, on a real post-rework capture,
-//! diverged by up to ~35% relative on `condition_count`/`power_count`. See
+//! diverged by up to 51.4% relative on `condition_count`/`power_count`. See
 //! those modules' own doc comments for the full ctor transcriptions and the
 //! FOURTH BUCKET (`buff == 1`, outside this catalog, not life-leech ->
 //! power-only) this catalog makes representable.
