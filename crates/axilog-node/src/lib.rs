@@ -56,6 +56,12 @@ fn napi_err(reason: impl std::fmt::Display) -> Error {
 /// `axilog_core::analysis::missiles`'s module doc for exactly what it
 /// contains. Omitted (or `false`) keeps `Report.missiles` absent, matching
 /// its serde skip-when-`None`.
+/// `rotation: true` (M14, Task 1) opts into embedding the native
+/// per-player rotation (cast tracking) block (`SkillRotationOut[]`) on
+/// every `players[]` entry -- see `axilog_schema::Report::players`'s
+/// `PlayerOut::rotation` doc comment for why this defaults to opt-in
+/// (well past the ~30% size-discipline guideline on the committed fixture
+/// when always-on).
 #[napi(object)]
 #[derive(Default, Clone, Copy)]
 pub struct ParseOptions {
@@ -63,6 +69,7 @@ pub struct ParseOptions {
     pub skill_damage: Option<bool>,
     pub timeseries: Option<bool>,
     pub missiles: Option<bool>,
+    pub rotation: Option<bool>,
 }
 
 /// Shared decode -> resolve -> analyze -> build_report pipeline (identical
@@ -77,6 +84,7 @@ fn build_report_from_bytes(
     want_skill_damage: bool,
     want_timeseries: bool,
     want_missiles: bool,
+    want_rotation: bool,
 ) -> Result<axilog_schema::Report> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -92,7 +100,7 @@ fn build_report_from_bytes(
         .then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
     Ok(axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
-        want_skill_damage, want_timeseries,
+        want_skill_damage, want_timeseries, want_rotation,
     ))
 }
 
@@ -118,6 +126,7 @@ fn build_report_and_activity_from_bytes(
     want_skill_damage: bool,
     want_timeseries: bool,
     want_missiles: bool,
+    want_rotation: bool,
 ) -> Result<(axilog_schema::Report, Vec<axilog_core::analysis::replay::ActivityIntervals>)> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -134,7 +143,7 @@ fn build_report_and_activity_from_bytes(
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
-        want_skill_damage, want_timeseries,
+        want_skill_damage, want_timeseries, want_rotation,
     );
     Ok((report, activity))
 }
@@ -166,8 +175,9 @@ pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
     let want_skill_damage = opts.and_then(|o| o.skill_damage).unwrap_or(false);
     let want_timeseries = opts.and_then(|o| o.timeseries).unwrap_or(false);
     let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
+    let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
     let report = build_report_from_bytes(
-        buf.as_ref(), want_replay, want_skill_damage, want_timeseries, want_missiles,
+        buf.as_ref(), want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
     )?;
     report_to_value(&report)
 }
@@ -193,9 +203,10 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_skill_damage = opts.and_then(|o| o.skill_damage).unwrap_or(false);
     let want_timeseries = opts.and_then(|o| o.timeseries).unwrap_or(false);
     let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
+    let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
     let (report, activity) = build_report_and_activity_from_bytes(
-        &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles,
+        &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
     )?;
     Ok(axilog_ei::to_ei_json(&report, &activity))
 }

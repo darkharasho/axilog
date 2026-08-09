@@ -108,6 +108,7 @@ mod tests {
                 dps_targets: vec![],
                 hit_stats: HitStatsOut::default(),
                 defenses: DefensesOut::default(),
+                rotation: None,
             }],
             enemies: vec![],
             all_enemies: vec![],

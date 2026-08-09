@@ -86,6 +86,20 @@ enum Cmd {
         /// dps_targets` doc comments for the full numbers.
         #[arg(long)]
         timeseries: bool,
+        /// Embed the native per-player rotation (cast tracking) block (M14
+        /// Task 1): per-squad-player cast list grouped by skill id --
+        /// `axilog_core::analysis::rotation`. Already computed
+        /// unconditionally by `analyze()` regardless of this flag (cheap);
+        /// this only controls whether the `Report` passed to every
+        /// `--format` carries it. `--format json` embeds it in each
+        /// `players[].rotation` field; every other format ignores it. Off
+        /// by default -- measured on the committed WvW fixture (compact
+        /// JSON): 170,451 -> 284,535 bytes (+66.9%), well past the ~30%
+        /// size-discipline guideline (see `axilog_schema::Report::players`'s
+        /// `PlayerOut::rotation` doc comment for the full writeup), so
+        /// it's opt-in like `--skill-damage`/`--timeseries`.
+        #[arg(long)]
+        rotation: bool,
     },
     /// Rewrite every player's character/account name in a .zevtc to a
     /// deterministic `Anon<N>` placeholder and write the result as a new
@@ -128,7 +142,7 @@ enum View {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage, timeseries } => {
+        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage, timeseries, rotation } => {
             let bytes = std::fs::read(&path)?;
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
@@ -150,6 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 missiles_data.as_ref(),
                 skill_damage,
                 timeseries,
+                rotation,
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
             // post-2026-05-01 buff-statechange-rework build producing

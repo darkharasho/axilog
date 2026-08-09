@@ -60,6 +60,16 @@ pub mod hit_stats;
 /// in `LifeLeechDamageTakenCount` this module deliberately does NOT
 /// reproduce.
 pub mod defenses;
+/// Per-player rotation (cast tracking) (M14, Task 1) -- like `skill_damage`/
+/// `timeseries`/`hit_stats`/`defenses` above, wired into [`analyze`] below
+/// (`PlayerMetrics::rotation`), computed unconditionally (one extra scan
+/// over `raw.events`, classifying `is_activation`/`ANIMATION_START`/
+/// `ANIMATION_STOP` cast-boundary rows and running a per-skill start/end
+/// pairing state machine -- no pet-credit fold, casts belong to the caster
+/// only). See `rotation`'s module doc for the full GW2EI
+/// `CombatEventFactory.CreateCastEvents`/`AnimatedCastEvent` citation trail
+/// and the documented `InstantCastEvent`-machinery scope gap.
+pub mod rotation;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -109,7 +119,11 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     /// Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
     /// Task 2). See `defenses`'s module doc. Purely additive alongside
     /// `downs_taken`/`deaths`/`damage_taken`/`cc` above.
-    pub defenses: defenses::DefenseStats }
+    pub defenses: defenses::DefenseStats,
+    /// Per-skill cast list (M14, Task 1) -- see `rotation`'s module doc.
+    /// Sorted by skill id ascending; `rotation::total_casts` sums the
+    /// per-skill cast counts.
+    pub rotation: rotation::RotationMetrics }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
@@ -349,6 +363,15 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     for p in &mut players {
         if let Some(d) = defenses_by_rep.get(&p.agent_addr) {
             p.defenses = *d;
+        }
+    }
+    // M14 Task 1: per-player rotation (cast tracking) -- see `rotation`'s
+    // module doc. No `squad`/`enemies` filter needed beyond `addr_to_rep`
+    // itself (only registered for squad player addrs).
+    let rotation_by_rep = rotation::build(raw, &addr_to_rep);
+    for p in &mut players {
+        if let Some(r) = rotation_by_rep.get(&p.agent_addr) {
+            p.rotation = r.clone();
         }
     }
     let timeline = cc::timeline(enc, raw, &squad, &enemies);

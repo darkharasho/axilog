@@ -44,7 +44,7 @@ fn ei_json_matches_the_golden_isfake_down_dead_and_active_times() {
     let enc = resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
-    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false);
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
     let ei = axilog_ei::to_ei_json(&report, &activity);
 
     // -- isFake: every target, no exceptions --
@@ -180,7 +180,7 @@ fn ei_json_per_skill_and_per_second_blocks_match_the_golden() {
     // calibrating what `to_ei_json` emits WHEN they're present (the
     // gate-respecting omission-when-absent behavior is covered by
     // `axilog-ei`'s own unit tests, not this golden-fixture test).
-    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true);
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true, false);
     let ei = axilog_ei::to_ei_json(&report, &[]);
 
     let mut joined = 0usize;
@@ -299,7 +299,7 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
     let raw = decode_raw(&bytes).expect("decode WvW fixture");
     let enc = resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
-    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false);
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
     let ei = axilog_ei::to_ei_json(&report, &[]);
 
     // (ei-json statsAll[0] key, golden hitStats key) EXACT count/sum pairs.

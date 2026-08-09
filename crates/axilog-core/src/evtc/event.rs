@@ -342,6 +342,45 @@ pub mod sc {
     /// rows (see `SupportMetrics::resurrects`'s doc comment for why this is
     /// count-equivalent on this project's calibration fixture).
     pub const ANIMATION_START: u8 = 67;
+    /// Cast-animation STOP statechange (M14 Task 1, `analysis::rotation`) --
+    /// the post-era pair to `ANIMATION_START` above, ordinal 68 (immediately
+    /// after `ANIMATION_START`=67, immediately before `BUFF_APPLY`=69 --
+    /// hand-counted the same way from the live arcdps EVTC reference,
+    /// `curl https://www.deltaconnected.com/arcdps/evtc/README.txt`,
+    /// 2026-08-09: `CBTS_ANIMATIONSTOP` is the 69th entry (index 68)).
+    /// Cross-checked against GW2EI's `ArcDPSEnums.StateChange.AnimationStop
+    /// = 68` (`ArcDPSEnums.cs:328`). Gated by the SAME
+    /// `ArcDPSBuilds.AnimationAsStateChanges = 20260430` threshold as
+    /// `ANIMATION_START` (subsumed by this project's single
+    /// `is_post_buff_rework` `20260501` gate) -- `CombatItem.
+    /// IsEndCastEvent()` (`GW2EIEvtcParser/CombatItem.cs:417-428`): `if
+    /// (_version.Build >= ArcDPSBuilds.AnimationAsStateChanges) { return
+    /// IsStateChange == StateChange.AnimationStop; }` -- else falls back to
+    /// the pre-era shape: an ordinary `is_statechange == 0` combat event
+    /// with `is_activation` one of `Minimum`(3)/`Cancel`(4)/`Reset`(5)/
+    /// `NoData`(6) (`crate::analysis::rotation`'s era split mirrors this
+    /// exactly).
+    ///
+    /// Payload, per the arcdps reference (`CBTS_ANIMATIONSTOP` block):
+    /// `src_agent`: agent beginning animation; `value`: ms duration spent
+    /// in animation SCALED for speed (i.e. the real wall-clock duration
+    /// after quickness/slows); `buff_dmg`: ms duration spent in animation
+    /// NOT scaled (the nominal/unaccelerated duration); `skillid`: skill id
+    /// of the previous animation start; `is_activation`: "simple progress
+    /// check from cbtanimation" -- per the arcdps reference this is the
+    /// SAME `cbtanimation` byte the pre-era shape's END rows carry
+    /// (`Minimum`/`Cancel`/`Reset`/`NoData`), confirmed load-bearing by
+    /// GW2EI's `AnimatedCastEvent.SetAcceleration` (`ParsedData/
+    /// CombatEvents/CastEvents/AnimatedCastEvent.cs:14-52`), which switches
+    /// on `endItem.IsActivation` identically regardless of which era
+    /// produced the end row -- i.e. `is_activation` is NOT overloaded away
+    /// on this statechange the way it is on `BUFF_APPLY`/etc; it keeps its
+    /// ordinary `cbtanimation` meaning here. `value`/`buff_dmg`'s roles
+    /// (scaled vs unscaled) are what `AnimatedCastEvent`'s ctor reads as
+    /// `ActualDuration = endItem.Value` / `_scaledActualDuration =
+    /// endItem.BuffDmg` -- see `analysis::rotation`'s module doc for the
+    /// full quickness/`TimeGained` derivation these two fields feed.
+    pub const ANIMATION_STOP: u8 = 68;
     /// Post-rework (arcdps build >= 20260501, GW2EI's
     /// `ArcDPSBuilds.BuffAppliesAndRemovesAsStateChanges`) dedicated buff
     /// STACK APPLICATION statechange -- see `BUFF_INITIAL`'s doc comment
