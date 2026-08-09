@@ -194,4 +194,48 @@ mod tests {
         assert!(!html.contains("http://"), "output must not reference external URLs");
         assert!(!html.contains("https://"), "output must not reference external URLs");
     }
+
+    /// Regression test for a render-breaking bug: `report.js`/`report.css`
+    /// are inlined *verbatim* (byte-for-byte) into a `<script>`/`<style>`
+    /// element by [`render`]. The HTML tokenizer's "script data state"
+    /// terminates the element at the very first literal `</script`
+    /// sequence (case-insensitive) it finds in the raw bytes, regardless
+    /// of whether that sequence sits inside a JS string, a comment, or is
+    /// otherwise inert to the JS parser — a doc-comment in `report.js`
+    /// once contained exactly that sequence (as an example of what
+    /// *log-derived* strings are safe against), which silently truncated
+    /// the inlined `<script>` in every real browser, spilling the rest of
+    /// the file into the document body as text and leaving the header
+    /// permanently unrendered — while every purely-structural Rust test
+    /// above kept passing, because the truncation only matters to an
+    /// HTML tokenizer, not to `str::contains`/`serde_json`. Pin it here.
+    #[test]
+    fn inlined_assets_contain_no_literal_script_close_sequence() {
+        for (name, asset) in [("report.js", JS), ("report.css", CSS)] {
+            let lower = asset.to_ascii_lowercase();
+            assert!(
+                !lower.contains("</script"),
+                "{name} contains a literal `</script` sequence (case-insensitive) -- \
+                 inlining it verbatim into the report's <script> element would \
+                 truncate that element in every real browser"
+            );
+        }
+    }
+
+    /// Companion to the regression test above, checked from the other
+    /// direction: the fully-rendered document should contain exactly the
+    /// two `<script>`/`</script>` element pairs the skeleton defines (the
+    /// `axilog-data` JSON block and the inlined `report.js` code block) --
+    /// no more, no fewer, and no stray/unbalanced tag from either the
+    /// inlined assets or (via [`escape_for_script`]) the embedded report
+    /// data.
+    #[test]
+    fn rendered_html_has_exactly_two_balanced_script_tags() {
+        let html = render(&fixture_report());
+        let lower = html.to_ascii_lowercase();
+        let opens = lower.matches("<script").count();
+        let closes = lower.matches("</script").count();
+        assert_eq!(opens, 2, "expected exactly 2 <script openings (data block + code block)");
+        assert_eq!(closes, 2, "expected exactly 2 </script closings (data block + code block)");
+    }
 }

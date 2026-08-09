@@ -9,9 +9,11 @@
  *   `innerHTML`, `insertAdjacentHTML`, or string-concatenated markup for
  *   log-derived values. `textContent` treats the value purely as text —
  *   it cannot be parsed as HTML/script, so it is safe even if the value
- *   contains characters like `<`, `>`, or a literal `</script>` string.
- *   The Rust side additionally makes the raw `<script id="axilog-data">`
- *   payload itself injection-safe (see axilog-html/src/lib.rs), but this
+ *   contains characters like `<`, `>`, or a literal script-close tag
+ *   string (never write that literal sequence in this file itself,
+ *   including in comments — see the note at the bottom of this file).
+ *   The Rust side additionally makes the raw `axilog-data` JSON payload
+ *   itself injection-safe (see axilog-html/src/lib.rs), but this
  *   textContent-only rule is the second, independent line of defense and
  *   must hold regardless of how the data got here.
  *
@@ -180,8 +182,8 @@
     renderTeamChips(byId("axilog-teams"), model.teams);
   }
 
-  /** Parse the embedded `<script id="axilog-data">` JSON payload. Reads
-   * via `textContent` only (never innerHTML) per the XSS contract above —
+  /** Parse the embedded `axilog-data` JSON payload. Reads via
+   * `textContent` only (never innerHTML) per the XSS contract above —
    * `JSON.parse` treats the result as inert data, never as markup/script. */
   function readEmbeddedReport() {
     var node = byId("axilog-data");
@@ -214,3 +216,21 @@
     buildHeaderModel: buildHeaderModel,
   };
 });
+
+// IMPORTANT: this entire file is inlined verbatim (byte-for-byte) into an
+// HTML script element by axilog-html's render() — see
+// crates/axilog-html/src/lib.rs. The HTML tokenizer's "script data state"
+// scans raw script text for the literal ASCII bytes that spell "end tag,
+// open bracket, slash, s-c-r-i-p-t" (deliberately not written out in one
+// piece anywhere in this note, so the note doesn't trip the very rule
+// it's describing — matched case-insensitively) and closes the element
+// the instant it finds that byte sequence, regardless of whether it sits
+// inside a JS string, a comment, or is otherwise inert to the JS parser.
+// So: never write those literal bytes contiguously anywhere in this
+// file, including in comments/prose — spell it out in words, or split it
+// across a concatenation (e.g. a "<" string joined with a "/script>"
+// string) if it must appear in an actual JS string value. A prior
+// regression here (a doc-comment example containing the literal bytes)
+// truncated the whole script element mid-file in real browsers, leaving
+// the header permanently unrendered — `render()`'s Rust-side tests assert
+// this file contains no such sequence specifically to prevent a repeat.
