@@ -37,6 +37,16 @@ pub mod sc {
     pub const HEALTH_UPDATE: u8 = 8;
     pub const MAX_HEALTH: u8 = 12;
     pub const POINT_OF_VIEW: u8 = 13;
+    /// `CBTS_GWBUILD` -- the GW2 game build this log was recorded on, in
+    /// `src_agent`. Decoded starting M16 Task 1 (damage modifiers gate their
+    /// availability on a half-open GW2-build window; see
+    /// `analysis::damage_mods::gw2_build`). Ordinal verified against GW2EI's
+    /// `StateChange` enum (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs`:
+    /// `PointOfView = 13, Language = 14, GWBuild = 15`) and its payload
+    /// against `ParsedData/CombatEvents/MetaDataEvents/Version/
+    /// GW2BuildEvent.cs:12-15` (`return evtcItem.SrcAgent`). GW2EI treats a
+    /// zero build as absent (`EvtcParser.cs:881`).
+    pub const GW2_BUILD: u8 = 15;
     pub const TEAM_CHANGE: u8 = 22;
     pub const MAP_ID: u8 = 25;
     /// Content-local-id -> stable-GUID association (Task 2b). Verified
