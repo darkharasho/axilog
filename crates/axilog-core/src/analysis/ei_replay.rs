@@ -82,10 +82,41 @@
 //!
 //! `SingleActor.cs`, `TrimCombatReplay`:
 //! ```csharp
+//! var actives = GetActiveSegmentsForCRTrim(log);   // VIRTUAL -- see below
 //! long trimStart = FirstAware; long trimEnd = LastAware;
 //! ... // trimStart = actives[0].Start, trimEnd = actives[^1].End, when actives is non-empty
 //! replay.Trim(Math.Max(trimStart, FirstAware), Math.Min(trimEnd, LastAware));
 //! ```
+//! `GetActiveSegmentsForCRTrim` is VIRTUAL. The base implementation
+//! (`SingleActor.cs:319-323`) returns just `actives`, but `PlayerActor`
+//! OVERRIDES it (`GW2EIEvtcParser/EIData/Actors/PlayerActor.cs:57-66`):
+//! ```csharp
+//! protected override IReadOnlyList<Segment> GetActiveSegmentsForCRTrim(ParsedEvtcLog log)
+//! {
+//!     var (deads, downs, _, actives) = GetStatus(log);
+//!     List<Segment> segments = [.. deads, .. downs, .. actives];
+//!     segments.Sort((x, y) => x.Start.CompareTo(y.Start));
+//!     return segments;
+//! }
+//! ```
+//! -- so for PLAYERS (which is every actor this module builds) the trim
+//! window spans dead and down time too, NOT just the active segments.
+//! This is load-bearing: a player downed at `D` and never revived before
+//! last-aware has `actives = [[FirstAware, D]]` but
+//! `downs = [[D, LastAware]]`, so the merged list's highest-`Start`
+//! segment ends at `LastAware` and GW2EI keeps polling to the end of the
+//! fight; trimming on `actives` alone would truncate that player's track
+//! at `D`. Likewise a player dead at the end gets a `dead` tail reaching
+//! `i64::MAX`, which the `Math.Min(trimEnd, LastAware)` at the call site
+//! then clamps back to `LastAware`.
+//!
+//! (`List<T>.Sort` is an UNSTABLE introsort, but two of these segments can
+//! never share a `Start`: `FillStatus` emits a contiguous, non-degenerate
+//! partition of `[FirstAware, LastAware]` plus at most one
+//! `[LastAware, i64::MAX]` tail, so the ordering is total. This module
+//! uses a stable `sort_by_key` anyway, keeping GW2EI's own
+//! deads-then-downs-then-actives concatenation order as the tiebreak.)
+//!
 //! and `CombatReplay.Trim`:
 //! ```csharp
 //! _start = Math.Max(start, _start);                    // _start starts at LogData.LogStart
@@ -97,11 +128,11 @@
 //! exactly this trimmed `replay.TimeOffsets`.
 //!
 //! In this project's log-relative frame `LogStart = 0` and
-//! `LogEnd = duration_ms`, and the `actives` segments (step 4) always
-//! begin at or after `FirstAware` and end at or before `LastAware`, so
-//! this reduces to: `start = max(0, actives_start)`,
-//! `end = max(start, min(actives_end, duration_ms))`, with `actives_start`
-//! / `actives_end` defaulting to first/last aware. Verified against all 48
+//! `LogEnd = duration_ms`, so this reduces to
+//! `start = max(0, first_segment_start.max(first_aware))` and
+//! `end = max(start, last_segment_end.min(last_aware).min(duration_ms))`,
+//! with the segment bounds defaulting to first/last aware when the merged
+//! list is empty. Verified against all 48
 //! players of the reference export (`fixtures/local/wvw-postrework.ei.json`):
 //! every `combatReplayData.start` equals that player's first-aware time and
 //! every `.end` its last-aware time, and the resulting sample count
@@ -110,7 +141,42 @@
 //! first-aware is in `1..=300`, 1160 for the 3 whose first-aware is exactly
 //! `0`, 1032 for the one who joined at `t=38317`).
 //!
-//! Reproduced by [`trim_bounds`] + [`grid_window`].
+//! Reproduced by [`player_cr_trim_segments`] + [`trim_bounds`] +
+//! [`grid_window`].
+//!
+//! ## 3b. First-aware / last-aware
+//!
+//! Everything in step 3 (and all of step 4) hangs off GW2EI's
+//! `AgentItem.FirstAware`/`LastAware`, which `GW2EIEvtcParser/EvtcParser.cs`
+//! widens from BOTH the source and the destination side of every combat
+//! item (the agent pass at lines ~1149-1214):
+//! ```csharp
+//! foreach (CombatItem c in _combatItems)
+//! {
+//!     if (c.SrcIsAgent()) { ... UpdateAgentData(agent, c.Time, c.SrcInstid, ...) ... }
+//!     if (c.DstIsAgent()) { ... UpdateAgentData(agent, c.Time, c.DstInstid, ...) ... }
+//! }
+//! // UpdateAgentData (EvtcParser.cs:980-1003):
+//! ag.OverrideAwareTimes(Math.Min(ag.FirstAware, logTime), Math.Max(ag.LastAware, logTime));
+//! ```
+//! So a player who is DAMAGED or buffed before their own first src-side
+//! event -- or after their last -- has a correspondingly wider awareness
+//! window, and therefore a wider `start`/`end` and different `dc`
+//! sentinels. Keying off `src_agent` alone (as
+//! [`crate::analysis::replay`]'s M9 `first_aware` scan does) understates
+//! it.
+//!
+//! `SrcIsAgent()` / `DstIsAgent()` (`CombatItem.cs:240-318`) are fixed
+//! statechange whitelists, transcribed into [`src_is_agent`] /
+//! [`dst_is_agent`]. Both include `StateChange.Combat` (id `0` -- an
+//! ordinary non-statechange combat event, whose src/dst are the attacker
+//! and the target), which is what makes the dst side matter at all. Note
+//! this pass calls the PLAIN overloads, not the `SrcIsAgent(extensions)`
+//! ones, so arcdps extension events (`CBTS_EXTENSION` 40 /
+//! `CBTS_EXTENSIONCOMBAT` 49 -- including the healing extension this crate
+//! also parses) do NOT widen awareness here.
+//!
+//! Reproduced by [`collect_movement`].
 //!
 //! ## 4. `dc` (and `down` / `dead`) intervals
 //!
@@ -281,6 +347,102 @@ const SC_SPAWN: u8 = 6;
 /// `CBTS_DESPAWN` -- agent left tracking range. GW2EI's ONLY source of
 /// mid-fight `dc` segments.
 const SC_DESPAWN: u8 = 7;
+
+/// GW2EI's `CombatItem.SrcIsAgent()` (`CombatItem.cs:240-291`): the
+/// statechanges whose `src_agent` field really is an agent address (as
+/// opposed to a map id, a server timestamp, a skill id, ...). Transcribed
+/// id-by-id from that method against `ArcDPSEnums.StateChange`
+/// (`ArcDPSEnums.cs:258-345`); `IsGeographical` (`CombatItem.cs:44-46`)
+/// expands to `Position | Velocity | Rotation` = 19, 20, 21.
+///
+/// `StateChange.Combat = 0` is an ORDINARY combat event (damage,
+/// activation, ...), not a statechange -- it is in both this list and
+/// [`dst_is_agent`]'s.
+///
+/// Used only for the first/last-aware scan (see this module's doc comment,
+/// section 3b). Deliberately NOT the `SrcIsAgent(extensions)` overload:
+/// GW2EI's own awareness pass calls the plain one, so extension events
+/// (`CBTS_EXTENSION` 40 / `CBTS_EXTENSIONCOMBAT` 49) do not widen
+/// awareness.
+fn src_is_agent(statechange: u8) -> bool {
+    matches!(
+        statechange,
+        0     // Combat (an ordinary, non-statechange event)
+        | 1   // EnterCombat
+        | 2   // ExitCombat
+        | 3   // ChangeUp
+        | 4   // ChangeDead
+        | 5   // ChangeDown
+        | 6   // Spawn
+        | 7   // Despawn
+        | 8   // HealthUpdate
+        | 11  // WeaponSwap
+        | 12  // MaxHealthUpdate
+        | 13  // PointOfView
+        | 18  // BuffInitial
+        | 19  // Position      \
+        | 20  // Velocity      | IsGeographical
+        | 21  // Rotation      /
+        | 22  // TeamChange
+        | 23  // AttackTarget
+        | 24  // Targetable
+        | 27  // StackActive
+        | 28  // StackDeactive
+        | 29  // Guild
+        | 34  // BreakbarState
+        | 35  // BreakbarPercent
+        | 37  // Marker
+        | 38  // BarrierUpdate
+        | 44  // Last90BeforeDown
+        | 45  // Effect_45
+        | 51  // Effect_51
+        | 55  // Glider
+        | 56  // StunBreak
+        | 57  // MissileCreate
+        | 58  // MissileLaunch
+        | 59  // MissileRemove
+        | 60  // EffectGroundCreate
+        | 62  // EffectAgentCreate
+        | 67  // AnimationStart
+        | 68  // AnimationStop
+        | 69  // BuffApply
+        | 71  // BuffRemoveSingle
+        | 72  // BuffRemoveAll
+        | 73  // Transformation
+        | 76  // StealthChange
+        | 77  // GadgetAnimation
+        | 78  // GadgetNameVisible
+        | 79  // EffectMissileCreate
+        | 80  // GadgetCaptureOutlineShow
+        | 81  // GadgetCaptureSplitPercent
+        | 82  // GadgetCaptureOutlineHide
+        | 83  // GadgetCaptureOutlinePoint
+    )
+}
+
+/// GW2EI's `CombatItem.DstIsAgent()` (`CombatItem.cs:302-318`): the
+/// statechanges whose `dst_agent` field really is an agent address. Much
+/// shorter than [`src_is_agent`]'s list -- for most statechanges
+/// `dst_agent` is a packed payload (movement coordinates, buff durations,
+/// ...) rather than a second agent.
+fn dst_is_agent(statechange: u8) -> bool {
+    matches!(
+        statechange,
+        0     // Combat (an ordinary, non-statechange event -- dst is the target)
+        | 18  // BuffInitial
+        | 23  // AttackTarget
+        | 45  // Effect_45
+        | 47  // LogNPCUpdate
+        | 51  // Effect_51
+        | 58  // MissileLaunch
+        | 62  // EffectAgentCreate
+        | 67  // AnimationStart
+        | 69  // BuffApply
+        | 70  // BuffChange
+        | 71  // BuffRemoveSingle
+        | 72  // BuffRemoveAll
+    )
+}
 
 /// One decoded movement point: log-relative time plus a 3-vector. Mirrors
 /// GW2EI's `ParametricPoint3D`.
@@ -712,7 +874,12 @@ fn build_world_track(
     let (first_aware, last_aware) = aware.unwrap_or((0, 0));
 
     let status = fill_status(&statuses, first_aware, last_aware);
-    let (start, end) = trim_bounds(&status.actives, first_aware, last_aware, log_duration);
+    // Every actor this module builds is a PLAYER actor, so the trim uses
+    // `PlayerActor`'s override of `GetActiveSegmentsForCRTrim` (deads U
+    // downs U actives), NOT the `actives`-only base implementation -- see
+    // this module's doc comment, section 3.
+    let cr_segments = player_cr_trim_segments(&status);
+    let (start, end) = trim_bounds(&cr_segments, first_aware, last_aware, log_duration);
 
     // `AgentItem.Type == Player` for every roster entry here (squad players
     // and enemy-player representatives alike), so GW2EI's `forcePolling` is
@@ -768,17 +935,34 @@ fn collect_movement(
     let mut last_aware = i64::MIN;
     let mut any = false;
 
-    for e in raw.events.iter().filter(|e| addr_set.contains(&e.src_agent)) {
+    for e in raw.events.iter() {
         let t = time_rel(e, t0);
-        any = true;
-        first_aware = first_aware.min(t);
-        last_aware = last_aware.max(t);
+        // Awareness widens from BOTH sides -- see this module's doc
+        // comment, section 3b. A player damaged before their own first
+        // src-side event is "aware" from that damage on, and GW2EI's
+        // `start`/`end`/`dc` all follow from that.
+        let is_src = src_is_agent(e.is_statechange) && addr_set.contains(&e.src_agent);
+        let is_dst = dst_is_agent(e.is_statechange) && addr_set.contains(&e.dst_agent);
+        if is_src || is_dst {
+            any = true;
+            first_aware = first_aware.min(t);
+            last_aware = last_aware.max(t);
+        }
+        if !is_src {
+            continue; // movement + status telemetry is src-keyed
+        }
         match e.is_statechange {
             sc::POSITION => {
                 let p = decode_point(e, t);
                 // `PositionEvent.AddPoint3D`: drop all-zero, non-finite, or
                 // |xy| > 40000 points.
                 let zero = p.x == 0.0 && p.y == 0.0 && p.z == 0.0;
+                // GW2EI evaluates `XY().LengthSquared() > 16e8` in `f32`;
+                // this widens to `f64` first, which is strictly more
+                // accurate. The two can only disagree for a point whose
+                // squared length is within an `f32` ULP of 16e8 (|xy| =
+                // 40000 to ~5 significant figures) -- i.e. a point already
+                // 40000 units from the origin, far outside any real WvW map.
                 let far = f64::from(p.x) * f64::from(p.x) + f64::from(p.y) * f64::from(p.y) > 16e8;
                 if !zero && p.is_finite() && !far {
                     positions.push(p);
@@ -910,13 +1094,37 @@ fn fill_status(statuses: &[(i64, StatusKind)], first_aware: i64, last_aware: i64
     s
 }
 
+/// GW2EI's `PlayerActor.GetActiveSegmentsForCRTrim`
+/// (`GW2EIEvtcParser/EIData/Actors/PlayerActor.cs:57-66`): the segments
+/// `TrimCombatReplay` measures a PLAYER's replay window against, which is
+/// `deads ++ downs ++ actives` sorted by start -- see this module's doc
+/// comment, section 3, for why the dead/down segments must be included.
+///
+/// GW2EI concatenates in that order and then `List<T>.Sort`s (an unstable
+/// introsort) by `Start`; this uses a stable `sort_by_key`, which agrees
+/// because no two of these segments can share a `Start` (and if a future
+/// GW2EI change made that possible, keeping their concatenation order is
+/// the closest match available).
+fn player_cr_trim_segments(status: &Status) -> Vec<EiInterval> {
+    let mut segments: Vec<EiInterval> = status
+        .dead
+        .iter()
+        .chain(&status.down)
+        .chain(&status.actives)
+        .copied()
+        .collect();
+    segments.sort_by_key(|iv| iv[0]);
+    segments
+}
+
 /// GW2EI's `SingleActor.TrimCombatReplay` + `CombatReplay.Trim`, reduced to
 /// the `[start, end]` window they produce -- see this module's doc comment,
-/// section 3. `log_start` is `0` in this project's log-relative frame and
+/// section 3. `segments` is [`player_cr_trim_segments`]' output (NOT bare
+/// `actives`). `log_start` is `0` in this project's log-relative frame and
 /// `log_end` is the log duration.
-fn trim_bounds(actives: &[EiInterval], first_aware: i64, last_aware: i64, log_end: i64) -> (i64, i64) {
-    let trim_start = actives.first().map(|a| a[0]).unwrap_or(first_aware);
-    let trim_end = actives.last().map(|a| a[1]).unwrap_or(last_aware);
+fn trim_bounds(segments: &[EiInterval], first_aware: i64, last_aware: i64, log_end: i64) -> (i64, i64) {
+    let trim_start = segments.first().map(|a| a[0]).unwrap_or(first_aware);
+    let trim_end = segments.last().map(|a| a[1]).unwrap_or(last_aware);
     let start = trim_start.max(first_aware).max(0);
     let end = start.max(trim_end.min(last_aware).min(log_end));
     (start, end)
@@ -1068,6 +1276,13 @@ fn handle_position(
         if next.t - last.t > ARCDPS_POLL_MS + rate && vel_len < 1e-3 {
             out.push(pos.with_time(t));
         } else if next.t == last.t {
+            // GW2EI divides by `nextPos.Time - last.Time` unguarded. That
+            // is safe there for the same reason it is here -- `last` is
+            // either `pos` (and `next.t >= t > pos.t`) or the previous
+            // polled point at `t - rate` (and `next.t >= t > t - rate`), so
+            // the denominator is always positive. This arm only exists so a
+            // future caller feeding an out-of-contract track (unsorted, or
+            // negative times) gets the sensible endpoint instead of a NaN.
             out.push(next.with_time(t));
         } else {
             let ratio = (t - last.t) as f32 / (next.t - last.t) as f32;
@@ -1099,6 +1314,9 @@ fn handle_rotation(t: i64, rotations: &[Point3], out: &mut Vec<Point3>, rot_i: &
         if next.t - last.t > ARCDPS_POLL_MS + rate {
             out.push(rot.with_time(t));
         } else if next.t == last.t {
+            // Unreachable for the same reason as in `handle_position`
+            // (see the note there); kept as NaN insurance, not as GW2EI
+            // parity -- GW2EI's `HandleRotation` divides unguarded.
             out.push(next.with_time(t));
         } else {
             let ratio = (t - last.t) as f32 / (next.t - last.t) as f32;
@@ -1325,6 +1543,52 @@ mod tests {
         assert!((at_300.x - 300.0).abs() < 1e-3, "non-zero velocity must interpolate: {at_300:?}");
     }
 
+    /// REGRESSION: `HandlePosition` anchors the interpolation at the
+    /// PREVIOUS POLLED point whenever that is later than the current raw
+    /// point -- `_PolledPositions[i-1].Time > pos.Time ? _PolledPositions[i-1] : pos`.
+    /// While the bracketing segment is unchanged this is algebraically the
+    /// same as anchoring at the raw point, so only a run that exits a HOLD
+    /// can tell them apart: the track must ease out of where it was frozen,
+    /// not snap onto the raw `A -> B` line.
+    ///
+    /// Setup: `A@0` and `B@3000` (a 3000ms gap, over the 600ms stale
+    /// threshold), velocity zero at `t=0` and non-zero from `t=1000`. Grid
+    /// points 300/600/900 hold at `A`; `t=1200` is the first to interpolate,
+    /// and it must do so from the held point at `t=900` -- ratio
+    /// `(1200-900)/(3000-900) = 1/7`, giving `x = 3000/7 = 428.57`, NOT the
+    /// `1200` a `last = pos` anchor would give.
+    #[test]
+    fn interpolation_anchors_at_the_previous_polled_point_after_a_hold() {
+        let pos = [p(0, 0.0, 0.0), p(3000, 3000.0, 0.0)];
+        let vels = [
+            Point3 { t: 0, x: 0.0, y: 0.0, z: 0.0 },
+            Point3 { t: 1000, x: 9.0, y: 0.0, z: 0.0 },
+        ];
+        let (pp, _) = poll(&pos, &vels, &[], 2000, true, 300);
+        let at = |t: i64| pp.iter().find(|q| q.t == t).unwrap_or_else(|| panic!("t={t}")).x;
+
+        assert_eq!(at(300), 0.0, "zero velocity + 3000ms gap -> hold at A");
+        assert_eq!(at(900), 0.0, "still held (the velocity burst starts at t=1000)");
+
+        let x1200 = at(1200);
+        assert!(
+            (x1200 - 3000.0 / 7.0).abs() < 1e-2,
+            "must interpolate from the HELD polled point at t=900, got {x1200} (want ~428.57)"
+        );
+        assert!(
+            (x1200 - 1200.0).abs() > 1.0,
+            "a `last = pos` anchor would have produced 1200 here -- the previous-polled-point \
+             semantic is not being exercised"
+        );
+
+        // ...and it keeps easing from each successive polled point: the
+        // anchor is the t=1200 sample, so the denominator is
+        // `3000 - 1200 = 1800`, not `3000 - 1500`.
+        let x1500 = at(1500);
+        let expect1500 = x1200 + (3000.0 - x1200) * (300.0 / 1800.0);
+        assert!((x1500 - expect1500).abs() < 1e-2, "got {x1500}, want ~{expect1500}");
+    }
+
     /// A velocity sample only counts once its own timestamp is at or
     /// before the grid point (GW2EI's `UpdateVelocityIndex` reports the
     /// last velocity strictly BEFORE `t`), so a movement burst that starts
@@ -1408,7 +1672,8 @@ mod tests {
     }
 
     /// Down/up cycles land on `down` and leave `dc` at just the two
-    /// sentinels -- reproducing `harasho.4281`'s reference shape
+    /// sentinels -- reproducing the two-down-cycle shape one of the
+    /// reference export's players has
     /// (`down = [[183019, 185181], [188193, 199231]]`).
     #[test]
     fn down_up_cycles_fill_down_not_dc() {
@@ -1423,7 +1688,8 @@ mod tests {
         assert_eq!(s.dc, vec![[i64::MIN, 0], [347_977, i64::MAX]]);
     }
 
-    /// `doodlejump.4250`'s reference shape: down -> dead -> respawn.
+    /// The reference export's down -> dead -> respawn shape (the one
+    /// player in that log who died and came back).
     #[test]
     fn down_then_dead_then_respawn() {
         let st = [
@@ -1519,6 +1785,53 @@ mod tests {
     fn trim_bounds_spans_a_mid_fight_dc_gap() {
         let actives = [[0, 1000], [9000, 20_000]];
         assert_eq!(trim_bounds(&actives, 0, 20_000, 30_000), (0, 20_000));
+    }
+
+    /// REGRESSION: `PlayerActor.GetActiveSegmentsForCRTrim` merges
+    /// `deads ++ downs ++ actives`, so a player who goes down at `D` and is
+    /// NEVER revived before last-aware keeps their track to the END of the
+    /// fight. Trimming on `actives` alone (the `SingleActor` BASE
+    /// implementation, which does not apply to players) would truncate at
+    /// `D` -- the second assertion pins exactly that difference.
+    #[test]
+    fn trim_bounds_keeps_a_player_who_is_still_down_at_last_aware() {
+        let status = fill_status(&[(1000, StatusKind::Down)], 0, 5000);
+        assert_eq!(status.actives, vec![[0, 1000]]);
+        assert_eq!(status.down, vec![[1000, 5000]]);
+
+        let segments = player_cr_trim_segments(&status);
+        assert_eq!(segments, vec![[0, 1000], [1000, 5000]], "deads U downs U actives, sorted by start");
+        assert_eq!(
+            trim_bounds(&segments, 0, 5000, 10_000),
+            (0, 5000),
+            "still-down player must be polled to last-aware"
+        );
+        assert_eq!(
+            trim_bounds(&status.actives, 0, 5000, 10_000),
+            (0, 1000),
+            "actives-only (the base-class rule) would truncate at the down -- \
+             this is the bug the PlayerActor override prevents"
+        );
+    }
+
+    /// Same, for a player DEAD at the end of the log: `FillStatus` gives
+    /// `dead` an `[LastAware, i64::MAX]` tail, which becomes the
+    /// highest-start segment; the `Math.Min(trimEnd, LastAware)` at GW2EI's
+    /// call site clamps it back to last-aware rather than letting the
+    /// sentinel escape.
+    #[test]
+    fn trim_bounds_keeps_a_player_who_is_dead_at_last_aware() {
+        let status = fill_status(&[(1000, StatusKind::Down), (2000, StatusKind::Dead)], 0, 5000);
+        assert_eq!(status.dead, vec![[2000, 5000], [5000, i64::MAX]]);
+
+        let segments = player_cr_trim_segments(&status);
+        assert_eq!(segments, vec![[0, 1000], [1000, 2000], [2000, 5000], [5000, i64::MAX]]);
+        assert_eq!(trim_bounds(&segments, 0, 5000, 10_000), (0, 5000), "i64::MAX must be clamped away");
+        assert_eq!(
+            trim_bounds(&status.actives, 0, 5000, 10_000),
+            (0, 1000),
+            "actives-only would truncate at the down"
+        );
     }
 
     // -- bounding-box fallback --
@@ -1763,6 +2076,90 @@ mod tests {
         assert_eq!(tracks[0].positions.len(), 3, "grid 0, 300, 600 within [0, 800]");
         assert!(tracks[0].positions.iter().all(|q| q[0].is_finite() && q[1].is_finite()));
         assert!(tracks[0].orientations.is_empty(), "no facing events -> no orientations");
+    }
+
+    /// REGRESSION, end to end: a player who goes down at t=600 and is never
+    /// revived must still be polled to their last-aware time, because
+    /// `PlayerActor`'s CR-trim override counts down time.
+    #[test]
+    fn player_still_down_at_the_end_is_polled_to_last_aware() {
+        let enc = enc_with(vec![player(1, "Alice")], vec![], 3000);
+        let raw = raw_from(vec![
+            mov_event(0, 1, sc::POSITION, 100.0, 100.0, 1.0),
+            state_event(600, 1, sc::CHANGE_DOWN),
+            mov_event(2400, 1, sc::POSITION, 200.0, 100.0, 1.0),
+        ]);
+        let map = MapTransform::for_map_id(96).unwrap();
+        let tracks = build_ei_replay(&raw, &enc, &map);
+        assert_eq!((tracks[0].start, tracks[0].end), (0, 2400));
+        assert_eq!(tracks[0].positions.len(), 9, "grid 0..=2400 step 300");
+        assert_eq!(tracks[0].down, vec![[600, 2400]]);
+        assert_eq!(tracks[0].dc, vec![[i64::MIN, 0], [2400, i64::MAX]]);
+    }
+
+    /// REGRESSION: first/last-aware widen from the DESTINATION side too, so
+    /// a player who is damaged before their own first event (and after
+    /// their last) has a correspondingly wider `start`/`end`/`dc`.
+    /// `sc::NONE` (statechange 0) is an ordinary combat event, which is in
+    /// both `SrcIsAgent` and `DstIsAgent`.
+    #[test]
+    fn awareness_widens_from_destination_side_events() {
+        let enc = enc_with(vec![player(2, "Victim")], vec![], 3000);
+        let mut hit_early = blank();
+        hit_early.time = 0;
+        hit_early.src_agent = 1; // some attacker
+        hit_early.dst_agent = 2; // our player, as the TARGET
+        let mut hit_late = blank();
+        hit_late.time = 2400;
+        hit_late.src_agent = 1;
+        hit_late.dst_agent = 2;
+
+        let raw = raw_from(vec![
+            hit_early,
+            mov_event(900, 2, sc::POSITION, 100.0, 100.0, 1.0),
+            hit_late,
+        ]);
+        let map = MapTransform::for_map_id(96).unwrap();
+        let tracks = build_ei_replay(&raw, &enc, &map);
+        assert_eq!(
+            (tracks[0].start, tracks[0].end),
+            (0, 2400),
+            "dst-side hits at 0 and 2400 must widen awareness beyond the lone src event at 900"
+        );
+        assert_eq!(tracks[0].dc, vec![[i64::MIN, 0], [2400, i64::MAX]]);
+    }
+
+    /// ...but only for statechanges whose `dst_agent` really IS an agent.
+    /// A `CBTS_POSITION` event's `dst_agent` is packed x/y floats, so it
+    /// must never be read as an agent address (here those packed bytes are
+    /// chosen to collide with a real roster addr).
+    #[test]
+    fn packed_movement_payloads_are_not_mistaken_for_destination_agents() {
+        assert!(!dst_is_agent(sc::POSITION));
+        assert!(!dst_is_agent(sc::VELOCITY));
+        assert!(!dst_is_agent(sc::FACING));
+        // Non-agent-src statechanges must not widen awareness either: a
+        // `CBTS_MAPID` event carries the map id in `src_agent`.
+        assert!(!src_is_agent(sc::MAP_ID));
+        assert!(!src_is_agent(sc::LOG_START));
+        assert!(!src_is_agent(sc::WVW_TEAMS));
+        // ...while the ones the engine actually consumes are all in.
+        for scx in [sc::POSITION, sc::VELOCITY, sc::FACING, sc::CHANGE_UP, sc::CHANGE_DEAD,
+                    sc::CHANGE_DOWN, SC_SPAWN, SC_DESPAWN] {
+            assert!(src_is_agent(scx), "statechange {scx} must be src-agent");
+        }
+
+        // End to end: a MAP_ID event whose `src_agent` (95) collides with a
+        // roster addr must not drag that player's first-aware to t=0.
+        let enc = enc_with(vec![player(95, "Collide")], vec![], 3000);
+        let mut map_id = blank();
+        map_id.time = 0;
+        map_id.src_agent = 95;
+        map_id.is_statechange = sc::MAP_ID;
+        let raw = raw_from(vec![map_id, mov_event(900, 95, sc::POSITION, 100.0, 100.0, 1.0)]);
+        let map = MapTransform::for_map_id(96).unwrap();
+        let tracks = build_ei_replay(&raw, &enc, &map);
+        assert_eq!(tracks[0].start, 900, "the MAP_ID event's src_agent is a map id, not an agent");
     }
 
     #[test]
