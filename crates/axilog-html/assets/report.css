@@ -211,8 +211,186 @@ table {
   color: var(--team-muted);
 }
 
-/* ---- main / views (populated in later milestone tasks) ------------ */
+/* ---- main / views ---------------------------------------------------- */
 
 #axilog-main {
   padding: 20px 28px 40px;
+}
+
+/* ---- tab bar -------------------------------------------------------- */
+
+#axilog-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.axilog-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 10px 14px 8px;
+  cursor: pointer;
+}
+
+.axilog-tab:hover {
+  color: var(--text);
+}
+
+.axilog-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.axilog-tab[aria-selected="true"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.axilog-view[hidden] {
+  display: none;
+}
+
+/* ---- data tables ------------------------------------------------------ */
+
+.axilog-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.axilog-table th,
+.axilog-table td {
+  padding: 7px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--border-soft);
+  white-space: nowrap;
+}
+
+.axilog-table th:first-child,
+.axilog-table td:first-child,
+.axilog-table th:nth-child(2),
+.axilog-table td:nth-child(2),
+.axilog-table th:nth-child(3),
+.axilog-table td:nth-child(3) {
+  text-align: left;
+}
+
+.axilog-table thead th {
+  background: var(--bg-inset);
+  padding: 0;
+  font-weight: 600;
+}
+
+.axilog-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.axilog-table th:first-child .axilog-sort-btn,
+.axilog-table th:nth-child(2) .axilog-sort-btn,
+.axilog-table th:nth-child(3) .axilog-sort-btn {
+  justify-content: flex-start;
+}
+
+.axilog-sort-btn:hover {
+  color: var(--text);
+}
+
+.axilog-sort-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.axilog-sort-btn[aria-sort] {
+  color: var(--accent);
+}
+
+.axilog-sort-arrow {
+  font-size: 10px;
+}
+
+.axilog-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.axilog-table tbody tr:hover td {
+  background: var(--bg-inset);
+}
+
+.axilog-row-muted td {
+  color: var(--text-faint);
+}
+
+.axilog-badge-elite-cell {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.axilog-foot-row td {
+  background: var(--bg-inset);
+  font-weight: 700;
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+  color: var(--text);
+}
+
+/* ---- boons generation-mode segmented control -------------------------- */
+
+.axilog-segmented {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px;
+  margin-bottom: 12px;
+}
+
+.axilog-segmented-btn {
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.axilog-segmented-btn:hover {
+  color: var(--text);
+}
+
+.axilog-segmented-btn.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.axilog-segmented-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }

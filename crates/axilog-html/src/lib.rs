@@ -156,6 +156,74 @@ mod tests {
         }
     }
 
+    /// Task 2: the tab bar and the three view containers (Damage/Support/
+    /// Boons) must be present in the skeleton so `report.js`'s `initTabs`
+    /// has something to wire up, regardless of report content -- the
+    /// tables themselves are built client-side from the embedded data, so
+    /// this is a structural (container-id) check, not a data check.
+    #[test]
+    fn contains_view_containers_and_tab_bar() {
+        let html = render(&fixture_report());
+        for id in [
+            "axilog-tabs",
+            "axilog-tab-damage",
+            "axilog-tab-support",
+            "axilog-tab-boons",
+            "axilog-view-damage",
+            "axilog-view-support",
+            "axilog-view-boons",
+        ] {
+            assert!(
+                html.contains(&format!(r#"id="{id}""#)),
+                "missing container/tab id {id}"
+            );
+        }
+        // Keyboard-accessible: real <button role="tab"> elements, not divs
+        // with click handlers.
+        assert!(html.contains(r#"role="tablist""#));
+        assert!(html.matches(r#"role="tab""#).count() == 3);
+        assert!(html.matches(r#"role="tabpanel""#).count() == 3);
+    }
+
+    /// Task 2: `report.js` is static, so the column layout for each view
+    /// is pinned by asserting the inlined asset text contains every
+    /// column's data key / label, per the plan's "tests assert the asset
+    /// contains the column definitions" requirement. This is a text-
+    /// containment check on the source, not a rendered-output check (the
+    /// tables themselves only exist after client-side JS runs against the
+    /// embedded data, see the node-based pure-function tests in
+    /// `tests/js_units.rs` for behavior-level coverage).
+    #[test]
+    fn report_js_contains_column_definitions() {
+        // Damage view: account, character, profession(+elite), damage,
+        // DPS, downs, kills, deaths, down-contrib, dmg taken.
+        for needle in [
+            "\"account\"", "\"character\"", "\"professionDisplay\"", "\"damage\"", "\"dps\"",
+            "\"downs\"", "\"kills\"", "\"deaths\"", "\"downContribution\"", "\"damageTaken\"",
+            "DAMAGE_DEFAULT_SORT", "buildDamageTotals",
+        ] {
+            assert!(JS.contains(needle), "report.js missing damage column marker {needle}");
+        }
+        // Support view: cleanses/self-cleanses/strips/resurrects/
+        // stunbreaks/removed-stun seconds.
+        for needle in [
+            "\"cleanses\"", "cleansesSelf", "\"strips\"", "\"resurrects\"", "stunBreaks",
+            "removedStunSeconds",
+        ] {
+            assert!(JS.contains(needle), "report.js missing support column marker {needle}");
+        }
+        // Boons view: Might avg stacks, presence % for the six named
+        // boons, and the self/group/squad generation-mode toggle over
+        // Might/Quickness/Alacrity/Stability.
+        for needle in [
+            "mightAvg", "PRESENCE_BOON_NAMES", "GENERATION_BOON_NAMES", "GENERATION_MODES",
+            "\"Quickness\"", "\"Alacrity\"", "\"Stability\"", "\"Protection\"", "\"Fury\"",
+            "\"Resistance\"", "\"self\"", "\"group\"", "\"squad\"",
+        ] {
+            assert!(JS.contains(needle), "report.js missing boons column marker {needle}");
+        }
+    }
+
     #[test]
     fn deterministic_output() {
         let report = fixture_report();

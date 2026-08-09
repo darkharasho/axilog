@@ -21,7 +21,16 @@
   </div>
   <div id="axilog-teams"></div>
 </header>
-<main id="axilog-main"></main>
+<main id="axilog-main">
+  <nav id="axilog-tabs" role="tablist" aria-label="Report views">
+    <button id="axilog-tab-damage" class="axilog-tab" type="button" role="tab" aria-controls="axilog-view-damage">Damage</button>
+    <button id="axilog-tab-support" class="axilog-tab" type="button" role="tab" aria-controls="axilog-view-support">Support</button>
+    <button id="axilog-tab-boons" class="axilog-tab" type="button" role="tab" aria-controls="axilog-view-boons">Boons</button>
+  </nav>
+  <section id="axilog-view-damage" class="axilog-view" role="tabpanel" aria-labelledby="axilog-tab-damage"></section>
+  <section id="axilog-view-support" class="axilog-view" role="tabpanel" aria-labelledby="axilog-tab-support" hidden></section>
+  <section id="axilog-view-boons" class="axilog-view" role="tabpanel" aria-labelledby="axilog-tab-boons" hidden></section>
+</main>
 <script id="axilog-data" type="application/json">__AXILOG_DATA__</script>
 <script>__AXILOG_JS__</script>
 </body>
