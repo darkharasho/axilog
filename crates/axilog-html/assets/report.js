@@ -380,21 +380,25 @@
     return "gen" + name;
   }
 
-  var BOON_COLUMNS = [
-    { key: "account", label: "Account" },
-    { key: "professionDisplay", label: "Profession" },
-    { key: "mightAvg", label: "Might (avg)" },
-  ]
-    .concat(
-      PRESENCE_BOON_NAMES.map(function (name) {
-        return { key: boonColumnKey(name), label: name };
-      })
-    )
-    .concat(
-      GENERATION_BOON_NAMES.map(function (name) {
-        return { key: generationColumnKey(name), label: name + " Gen." };
-      })
-    );
+  function boonColumns(mode) {
+    var tag = mode.charAt(0).toUpperCase() + mode.slice(1);
+    return [
+      { key: "account", label: "Account" },
+      { key: "professionDisplay", label: "Profession" },
+      { key: "mightAvg", label: "Might (avg)" },
+    ]
+      .concat(
+        PRESENCE_BOON_NAMES.map(function (name) {
+          return { key: boonColumnKey(name), label: name };
+        })
+      )
+      .concat(
+        GENERATION_BOON_NAMES.map(function (name) {
+          return { key: generationColumnKey(name), label: name + " Gen \u00b7 " + tag };
+        })
+      );
+  }
+  var BOON_COLUMNS = boonColumns(GENERATION_DEFAULT_MODE);
 
   var BOON_DEFAULT_SORT = { key: "account", direction: "asc" };
 
@@ -741,11 +745,8 @@
 
     var thead = document.createElement("thead");
     var headRow = document.createElement("tr");
-    // `headerCells` pairs each column's <th> (the ARIA-correct home for
-    // `aria-sort` -- see the WAI-ARIA 1.2 spec's `aria-sort` entry, which
-    // defines the attribute on a columnheader/th, not an inner button)
-    // with its sort button/arrow, so `updateSortIndicators` below doesn't
-    // need a DOM query round-trip per rebuild.
+    // Pairs each th (ARIA-correct home for aria-sort per WAI-ARIA 1.2)
+    // with its button/arrow so updateSortIndicators avoids DOM queries.
     var headerCells = [];
     columns.forEach(function (col) {
       var th = document.createElement("th");
@@ -914,7 +915,7 @@
     function rebuildTable() {
       renderSortableTable(
         tableWrap,
-        BOON_COLUMNS,
+        boonColumns(mode),
         BOON_FORMATTERS,
         function () {
           return buildBoonRows(report.players, mode);
