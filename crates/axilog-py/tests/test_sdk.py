@@ -171,6 +171,13 @@ class ParseBytesTests(unittest.TestCase):
         from_bytes = axilog.parse_bytes(data)
         self.assertEqual(from_bytes, from_file)
 
+    def test_parse_bytes_rejects_bytearray(self):
+        """Verify parse_bytes only accepts bytes, not bytearray."""
+        with open(FIXTURE, "rb") as f:
+            data = bytearray(f.read())
+        with self.assertRaises(TypeError):
+            axilog.parse_bytes(data)
+
 
 class ParseFileEiTests(unittest.TestCase):
     def test_axibridge_key_shapes(self):

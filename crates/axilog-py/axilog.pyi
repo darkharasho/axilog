@@ -46,7 +46,7 @@ Any]` here -- typing it faithfully is out of scope for this task, mirrors
 `axilog-node/types.d.ts`'s same call for `parseFileEi`.
 """
 
-from typing import Any, Dict, List, Optional, TypedDict, Union
+from typing import Any, Dict, List, Optional, TypedDict
 
 __all__ = [
     "parse_file",
@@ -236,7 +236,7 @@ def parse_file(path: str) -> Report:
     """
     ...
 
-def parse_bytes(data: Union[bytes, bytearray]) -> Report:
+def parse_bytes(data: bytes) -> Report:
     """Parse an already-read `.evtc`/`.zevtc` buffer into the native `Report` shape.
 
     Raises `ValueError` if `data` is not a decodable/parseable arcdps log.
