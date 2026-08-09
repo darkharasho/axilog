@@ -59,22 +59,32 @@ fn interval_json(iv: &Interval) -> Value {
 /// Two steps, both load-bearing:
 ///
 /// 1. **Narrow, then re-parse.** `f32::to_string` gives the shortest decimal
-///    `d` that round-trips the `f32` -- byte-for-byte what .NET writes. The
-///    nearest `f64` to `d` then prints as exactly `d` again: `d` has at most
-///    9 significant digits, while any *other* decimal inside that `f64`'s
-///    ~1e-16-relative rounding interval needs ~17, so `d` is also the
-///    shortest round-trip for the `f64` and `ryu` re-emits it verbatim.
+///    `d` that round-trips the `f32`. For magnitudes roughly in
+///    `[1e-4, 1e7)` -- the only range validated here, and the only range the
+///    combat-replay surface's values (map-pixel coordinates, degrees, inch-
+///    to-pixel ratios) actually fall in -- this is byte-for-byte what .NET
+///    writes; .NET switches to `E`-notation outside that range (e.g.
+///    `1E-05`, `1E+08`) while `f32::to_string` never does, so the two
+///    diverge there and this function is not validated for it. Within the
+///    validated range, the nearest `f64` to `d` then prints as exactly `d`
+///    again: `d` has at most 9 significant digits, while any *other* decimal
+///    inside that `f64`'s ~1e-16-relative rounding interval needs ~17, so
+///    `d` is also the shortest round-trip for the `f64` and `ryu` re-emits
+///    it verbatim.
 /// 2. **Integral values become JSON integers.** .NET (like JavaScript, which
 ///    is what re-serialized the reference export this crate calibrates
 ///    against) prints a whole-valued float as `0` / `247`, never `0.0`;
 ///    serde_json prints an `f64` `247.0` as `247.0`. 585 of the 297k
 ///    reference floats are integral, so this is not a theoretical case.
 ///
-/// Not handled, because the reference never produces them: `-0.0` (emitted
-/// as `0`, where .NET writes `-0`) and non-finite values (emitted as
-/// `null`, which is what `json!` would do anyway -- and the replay engine
+/// Known, non-live divergences from real .NET output -- not fixed, because
+/// the reference export never exercises them (57MB of real EI output
+/// contains neither token): the integral branch below emits negative zero
+/// as `0`, where .NET writes `-0`; and non-finite values are emitted as
+/// `null` (which is what `json!` would do anyway -- the replay engine
 /// already asserts finiteness, see `ei_replay`'s
-/// `assert_track_is_structurally_sound`).
+/// `assert_track_is_structurally_sound`), where .NET would write `NaN`/
+/// `Infinity`/`-Infinity`.
 ///
 /// The input is `f64` rather than `f32` because that is what
 /// `axilog_core::analysis::ei_replay` stores; every value it stores is

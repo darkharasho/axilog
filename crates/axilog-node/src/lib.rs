@@ -204,7 +204,7 @@ pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
 /// the native `Report` this function builds internally; previously this
 /// function always built that `Report` with both flags forced `false`,
 /// silently discarding any M12 detail regardless of what a caller wanted
-/// (axibridge consumes ei-json exclusively through this function). `opts.
+/// (axibridge consumes ei-json exclusively through this function).
 /// `opts.replay` (M15, Task 3) adds GW2EI's own combat-replay surface --
 /// per-actor `combatReplayData.{positions, orientations, dc, iconURL}` plus
 /// the top-level `combatReplayMetaData` (see `axilog_ei::to_ei_json`; it

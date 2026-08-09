@@ -124,7 +124,7 @@ fn ei_json_matches_the_golden_isfake_down_dead_and_active_times() {
 
     assert!(players_checked >= 30, "expected at least 30 matched players, got {players_checked}");
     // The golden fixture's own `_note` documents exactly 2 players (of 41)
-    // with a non-empty down/dead array in this log -- `DaringCanyon.5440`
+    // with a non-empty down/dead array in this log -- `players[35]`/`Anon130.5810`
     // (a real account, reachable through this test's account-based join)
     // and `Non Squad Player 10` (one of the 4 rows with no real account to
     // join through at all, per the same `_note` -- unreachable here, same

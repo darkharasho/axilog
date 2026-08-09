@@ -391,7 +391,7 @@ Calibrated against a real dps.report EI export for one WvW log (Green Alpine Bor
 | Squad total damage | Exact | matches EI's `squadTotalDamage` |
 | CC applied (count / duration) | Exact | `34` events / `50460`ms, matches EI's `squadAppliedCrowdControl(Duration)` |
 | Stun breaks (count / duration) | Exact | `20` / `16907`ms, matches EI's `squadStunBreak`/`squadRemovedStunDuration` |
-| Professions (incl. elite specs) | Exact | EI-style naming (elite-spec name wins when active), joined by account across 37+ players |
+| Professions (incl. elite specs) | Exact | EI-style naming (elite-spec name wins when active), joined by account across 37+ players. Post-SotO spec ids 73/75/80/81 (Troubadour/Amalgam/Evoker/Luminary) and 74 (Paragon) are named by elimination — not sourced from GW2's public API — by matching this project's unmapped elite-spec ids against EI's own exported `profession` string for the same account/profession on a calibration log; id 74 in particular was grounded against a forced 48-player bijection between this project's and EI's exports of the same post-rework capture (see `crates/axilog-core/src/model/mod.rs`). Because this mapping is applied unconditionally, it changes always-on output for any post-era log containing that spec, not just the calibration fixture |
 | Map name | Exact | resolved from the log's `MAP_ID` event |
 | Team colors / team IDs | Exact | prefers the log's own `CBTS_WVWTEAMS` event when present (recent arcdps builds); falls back to a static id→color table (sourced from axibridge, itself reconciled from two community EVTC tools) for older logs without it |
 | Friendly player count | Approximate | within ±2 of EI's count (one known relog straggler with a blank account, contributes 0 to every metric) |
