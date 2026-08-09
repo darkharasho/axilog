@@ -86,11 +86,15 @@ fn map_name(map_id: u32) -> &'static str {
 // defaulted to "green" (the pre-M2 placeholder bug), since that would
 // mislabel neutral/unrecognized agents (e.g. team id 0 on non-WvW-team
 // agents) as friendly-colored.
-const RED_TEAM_IDS: &[u16] = &[697, 705, 706, 707, 882, 885, 886, 2520, 2543];
-const GREEN_TEAM_IDS: &[u16] = &[39, 2739, 2741, 2752, 2763, 2767];
-const BLUE_TEAM_IDS: &[u16] = &[432, 433, 1277, 1282, 1989];
+// M10 Task 3: widened u16 -> u32 alongside every other WvW team id -- these
+// fixed ids are all small (well under u16::MAX today), but keeping the
+// table's element type in lockstep with `Team::team_id`/`agent_team` avoids
+// a truncating cast at every comparison site below.
+const RED_TEAM_IDS: &[u32] = &[697, 705, 706, 707, 882, 885, 886, 2520, 2543];
+const GREEN_TEAM_IDS: &[u32] = &[39, 2739, 2741, 2752, 2763, 2767];
+const BLUE_TEAM_IDS: &[u32] = &[432, 433, 1277, 1282, 1989];
 
-fn team_color(team_id: u16) -> String {
+fn team_color(team_id: u32) -> String {
     if RED_TEAM_IDS.contains(&team_id) {
         "red".into()
     } else if GREEN_TEAM_IDS.contains(&team_id) {
@@ -136,14 +140,13 @@ fn parse_wvw_teams_event(e: &RawEvent) -> DynamicWvwTeamIds {
 /// red/blue/green ids (from CBTS_WVWTEAMS) when available, falling back to
 /// the static table for any id the dynamic event doesn't cover (or when the
 /// event is absent entirely).
-fn team_color_with(team_id: u16, dynamic: Option<&DynamicWvwTeamIds>) -> String {
+fn team_color_with(team_id: u32, dynamic: Option<&DynamicWvwTeamIds>) -> String {
     if let Some(d) = dynamic {
-        let id = team_id as u32;
-        if id == d.red {
+        if team_id == d.red {
             return "red".into();
-        } else if id == d.blue {
+        } else if team_id == d.blue {
             return "blue".into();
-        } else if id == d.green {
+        } else if team_id == d.green {
             return "green".into();
         }
     }
@@ -153,8 +156,8 @@ fn team_color_with(team_id: u16, dynamic: Option<&DynamicWvwTeamIds>) -> String 
 /// Parse per-agent WvW team ids and the POINT_OF_VIEW (recording) agent from
 /// raw combat events. Shared by `apply` (friend/foe partition, below) and by
 /// the analysis layer (pet/minion damage attribution in `analysis::damage`).
-pub fn resolve_teams(raw: &RawLog) -> (BTreeMap<u64, u16>, Option<u64>) {
-    let mut agent_team: BTreeMap<u64, u16> = BTreeMap::new();
+pub fn resolve_teams(raw: &RawLog) -> (BTreeMap<u64, u32>, Option<u64>) {
+    let mut agent_team: BTreeMap<u64, u32> = BTreeMap::new();
     let mut recorded_by: Option<u64> = None;
     for e in &raw.events {
         if e.is_statechange == sc::TEAM_CHANGE {
@@ -162,7 +165,12 @@ pub fn resolve_teams(raw: &RawLog) -> (BTreeMap<u64, u16>, Option<u64>) {
             // 24), not `dst_agent` — verified against the golden fixture's
             // teamID (Task 16A). Every agent (players, NPCs, gadgets) gets
             // exactly one TEAM_CHANGE event.
-            agent_team.insert(e.src_agent, e.value as u16);
+            //
+            // M10 Task 3: widened to `u32` (was a lossy `as u16` truncation)
+            // -- dynamic WVWTEAMS ids (`DynamicWvwTeamIds`, parsed below)
+            // are already u32, so a team id large enough to lose bits in the
+            // old cast would have silently mismatched against them.
+            agent_team.insert(e.src_agent, e.value as u32);
         } else if e.is_statechange == sc::POINT_OF_VIEW {
             recorded_by = Some(e.src_agent);
         }
@@ -189,13 +197,15 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         .map(parse_wvw_teams_event);
 
     // CBTS_IDTOGUID (sc=46) TEAM mappings: team id -> stable content GUID
-    // (Task 2b).
-    let team_guids: BTreeMap<u16, String> = raw.guid_map.iter()
+    // (Task 2b). M10 Task 3: `local_id` is already `u32` on `GuidMapping` --
+    // this used to truncate it to u16 for no reason (never a real precision
+    // issue for team ids, but a lossy cast all the same).
+    let team_guids: BTreeMap<u32, String> = raw.guid_map.iter()
         .filter(|g| g.content_type == ContentType::Team)
-        .map(|g| (g.local_id as u16, g.guid_hex()))
+        .map(|g| (g.local_id, g.guid_hex()))
         .collect();
 
-    let mut team_ids: Vec<u16> = agent_team.values().copied().collect();
+    let mut team_ids: Vec<u32> = agent_team.values().copied().collect();
     team_ids.sort_unstable(); team_ids.dedup();
     enc.teams = team_ids.iter().map(|&id| Team {
         color: team_color_with(id, dynamic.as_ref()),
@@ -349,7 +359,7 @@ mod tests {
             toughness: 0, concentration: 0, healing: 0, hitbox_width: 0,
             condition: 0, hitbox_height: 0, name_raw: name.to_vec() }
     }
-    fn team_change(addr: u64, team: u16) -> RawEvent {
+    fn team_change(addr: u64, team: u32) -> RawEvent {
         RawEvent { time: 0, src_agent: addr, dst_agent: 0, value: team as i32, buff_dmg: 0,
             overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,

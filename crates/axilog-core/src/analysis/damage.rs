@@ -146,8 +146,8 @@ pub fn accumulate(
 pub fn accumulate_pet_credit(
     raw: &RawLog,
     squad: &BTreeSet<u64>,
-    friendly_team: Option<u16>,
-    agent_team: &BTreeMap<u64, u16>,
+    friendly_team: Option<u32>,
+    agent_team: &BTreeMap<u64, u32>,
 ) -> BTreeMap<u64, (u64, BTreeMap<u64, u64>)> {
     let mut out: BTreeMap<u64, (u64, BTreeMap<u64, u64>)> = BTreeMap::new();
     for (_time, owner, dst, dmg) in pet_credit_events(raw, squad, friendly_team, agent_team) {
@@ -167,8 +167,8 @@ pub fn accumulate_pet_credit(
 pub fn pet_credit_events(
     raw: &RawLog,
     squad: &BTreeSet<u64>,
-    friendly_team: Option<u16>,
-    agent_team: &BTreeMap<u64, u16>,
+    friendly_team: Option<u32>,
+    agent_team: &BTreeMap<u64, u32>,
 ) -> Vec<(u64, u64, u64, u64)> {
     let registry = InstidRegistry::build(raw);
 
@@ -254,9 +254,9 @@ mod tests {
     #[test]
     fn pet_credit_resolves_instid_reuse_by_era() {
         let squad: BTreeSet<u64> = [1u64, 2u64].into_iter().collect();
-        let friendly_team = Some(10u16);
-        let agent_team: BTreeMap<u64, u16> =
-            [(1u64, 10u16), (2u64, 10u16), (300u64, 10u16)].into_iter().collect();
+        let friendly_team = Some(10u32);
+        let agent_team: BTreeMap<u64, u32> =
+            [(1u64, 10u32), (2u64, 10u32), (300u64, 10u32)].into_iter().collect();
 
         fn ev(time: u64, src: u64, src_instid: u16, master: u16, dst: u64, v: i32) -> RawEvent {
             RawEvent { time, src_agent: src, dst_agent: dst, value: v, buff_dmg: 0,

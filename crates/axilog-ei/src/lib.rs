@@ -76,7 +76,15 @@ pub fn to_ei_json(report: &Report) -> Value {
         // in the same order, `0` when this player dealt no damage to that
         // target. Everything else in real EI's per-target stats block would
         // have to be invented, so it's left out rather than faked.
-        let stats_targets: Vec<Value> = report.enemies.iter().map(|e| {
+        //
+        // M10 Task 3: reads `report.all_enemies` (the FULL, unfiltered
+        // roster), not `report.enemies` (which is now filtered to combat
+        // participants for the native/HTML consumers) -- real EI's own
+        // `targets[]` keeps every enumerated target regardless of
+        // interaction, and `statsTargets[][]` is positionally keyed to
+        // `targets[]` below, so both must stay in lockstep off the same
+        // unfiltered list to preserve that faithfulness.
+        let stats_targets: Vec<Value> = report.all_enemies.iter().map(|e| {
             let dmg = p.damage.per_enemy.iter().find(|pe| pe.enemy_id == e.id)
                 .map(|pe| pe.total).unwrap_or(0);
             json!([ { "totalDmg": dmg } ])
@@ -198,7 +206,10 @@ pub fn to_ei_json(report: &Report) -> Value {
         }
         v
     }).collect();
-    let targets: Vec<Value> = report.enemies.iter().map(|e| json!({
+    // M10 Task 3: `all_enemies`, not `enemies` -- see the `stats_targets`
+    // comment above for why (positional lockstep with `statsTargets[][]`,
+    // and EI parity: real EI keeps every enumerated target).
+    let targets: Vec<Value> = report.all_enemies.iter().map(|e| json!({
         "id": e.id, "name": e.name, "enemyPlayer": e.is_player,
         "teamID": team_id_for(&e.team)
     })).collect();
@@ -263,7 +274,14 @@ mod tests {
             timeline:Timeline{resolution_ms:1000,squad_damage:vec![800],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default()};
+            has_healing_extension: Default::default(),
+            // M10 Task 3: enemy 9 (player) took damage -- a real combat
+            // participant; enemy 10 (gadget) never interacted, matching what
+            // `analyze()` would actually compute for this exact scenario.
+            // `to_ei_json` reads `report.all_enemies` (unfiltered) though,
+            // so this doesn't change `maps_core_ei_fields`'s `targets[]`
+            // assertions below -- it's set for realism, not correctness.
+            combat_participant_enemies: [9u64].into_iter().collect()};
         axilog_schema::build_report(&enc,&m,"0.1.0", None, None)
     }
     #[test]
@@ -302,6 +320,18 @@ mod tests {
         assert_eq!(v["targets"][0]["enemyPlayer"], true, "player enemy should have enemyPlayer: true");
         assert_eq!(v["targets"][1]["id"], 10);
         assert_eq!(v["targets"][1]["enemyPlayer"], false, "NPC enemy should have enemyPlayer: false");
+        // M10 Task 3: EI-parity divergence check -- `report.enemies` (native/
+        // HTML) is filtered down to the one combat participant (enemy 9;
+        // enemy 10 never interacted per `sample_report`'s `Metrics::
+        // combat_participant_enemies`), but `targets[]` above still lists
+        // BOTH, because `to_ei_json` reads `report.all_enemies` (unfiltered)
+        // -- real EI keeps every enumerated target regardless of
+        // interaction, and this project's ei-json output stays faithful to
+        // that even though the native output no longer does.
+        let report = sample_report();
+        assert_eq!(report.enemies.len(), 1, "native enemies[] is filtered to the one participant");
+        assert_eq!(report.all_enemies.len(), 2, "all_enemies (EI adapter's source) keeps both");
+        assert_eq!(v["targets"].as_array().unwrap().len(), 2, "ei-json targets[] stays unfiltered");
     }
 
     /// M3 Task 5: `buffMap`, `buffUptimes[]`, and the four new `support[0]`
@@ -335,6 +365,7 @@ mod tests {
             boons: Default::default(), boon_uptime, boon_generation,
             warnings: Default::default(),
             has_healing_extension: Default::default(),
+            combat_participant_enemies: Default::default(),
         };
         axilog_schema::build_report(&enc,&m,"0.1.0", None, None)
     }
@@ -421,6 +452,7 @@ mod tests {
                 base_player(":B.1", None),
             ],
             enemies: vec![],
+            all_enemies: vec![],
             timeline: TimelineOut { resolution_ms: 1000, per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![] } },
             warnings: vec![],
             replay: None,

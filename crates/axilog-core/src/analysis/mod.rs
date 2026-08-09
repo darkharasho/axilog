@@ -86,7 +86,37 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// schema uses this to omit the `healing` block entirely (rather than
     /// emit a block of misleading zeros) and `warnings` carries a matching
     /// "healing extension not present" note in that case.
-    pub has_healing_extension: bool }
+    pub has_healing_extension: bool,
+    /// Combat-participant enemy ids (M10 Task 3), keyed by `Enemy::id`
+    /// (representative addr) -- the subset of `enc.enemies` that actually
+    /// interacted with the squad in some way. Real WvW logs enumerate every
+    /// nearby lootable/tactivator/chest as an "enemy" NPC even though
+    /// nothing in the fight ever targets them (a user report against a real
+    /// log: "unknown · 391 enemies" was mostly Bags of Loot) -- this is the
+    /// data the native `enemies[]` output and HTML team chips filter down
+    /// to, so that count reflects real combat participants instead.
+    ///
+    /// An id is included when the corresponding enemy: (a) is a player
+    /// (always kept -- a real opponent this recording just never landed a
+    /// hit on is still real, unlike an untouched loot bag), (b) received
+    /// nonzero damage from the squad (read directly off `dmg_by_rep` below,
+    /// which already folds in squad-pet/minion credit -- so an enemy that
+    /// only ever took pet damage still counts, with zero risk of a dangling
+    /// `PerEnemyOut.enemy_id` reference, since this is literally the same
+    /// data `per_enemy` serializes), (c) dealt nonzero damage to the squad
+    /// (e.g. an enemy catapult/siege that hit squad members), or (d)
+    /// received CC from the squad. (c) and (d) are cheap direct scans over
+    /// `raw.events` purely for list-membership purposes -- they don't feed
+    /// any calibrated sum, so they can't move a golden metric.
+    ///
+    /// Deliberately does NOT touch `enc.enemies` itself, and the EI adapter
+    /// (`axilog_ei::to_ei_json`) deliberately does NOT filter by this set --
+    /// real EI's own `targets[]` keeps every enumerated target regardless of
+    /// interaction, so `axilog_schema::build_report`'s `Report::all_enemies`
+    /// (unfiltered, EI-adapter-only) preserves that faithfulness while
+    /// `Report::enemies` (native output + HTML chips) uses this set. See
+    /// `build_report`'s doc comment for the full design-choice writeup.
+    pub combat_participant_enemies: BTreeSet<u64> }
 
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // A friendly account can own several raw agent addrs (relog / build
@@ -140,6 +170,43 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             *entry.1.entry(dst_rep).or_default() += d;
         }
     }
+    // M10 Task 3: combat-participant enemy filter -- see `Metrics::
+    // combat_participant_enemies`'s doc comment for the full design
+    // writeup. Built from `dmg_by_rep` (already-folded, pet-credit-inclusive
+    // "received damage") plus two cheap list-membership-only raw scans
+    // ("dealt damage"/"received CC") that don't feed any calibrated sum.
+    let mut combat_participant_enemies: BTreeSet<u64> = enc.enemies.iter()
+        .filter(|e| e.is_player)
+        .map(|e| e.id)
+        .collect();
+    for (_total, per) in dmg_by_rep.values() {
+        for (&dst_rep, &total) in per {
+            if total > 0 {
+                combat_participant_enemies.insert(dst_rep);
+            }
+        }
+    }
+    for e in &raw.events {
+        if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }
+        if e.result == crate::evtc::result::CROWD_CONTROL {
+            // Received CC: squad -> enemy.
+            if squad.contains(&e.src_agent) {
+                if let Some(&rep) = enemy_addr_to_rep.get(&e.dst_agent) {
+                    combat_participant_enemies.insert(rep);
+                }
+            }
+            continue;
+        }
+        let d = if e.buff == 1 { e.buff_dmg.max(0) } else { e.value.max(0) };
+        if d == 0 { continue; }
+        // Dealt damage: enemy -> squad.
+        if squad.contains(&e.dst_agent) {
+            if let Some(&rep) = enemy_addr_to_rep.get(&e.src_agent) {
+                combat_participant_enemies.insert(rep);
+            }
+        }
+    }
+
     let damage_taken = damage::accumulate_damage_taken(&raw.events, &squad);
     let mut taken_by_rep: BTreeMap<u64, u64> = BTreeMap::new();
     for (addr, total) in damage_taken {
@@ -209,7 +276,8 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     if !has_healing_extension {
         warnings.push("healing extension not present in this log".to_string());
     }
-    Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings, has_healing_extension }
+    Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings, has_healing_extension,
+        combat_participant_enemies }
 }
 
 #[cfg(test)]
@@ -316,6 +384,64 @@ mod tests {
         assert_eq!(metrics.players[0].damage_total, 350, "both addrs' damage counted");
         assert_eq!(metrics.players[0].per_enemy.len(), 1, "folded into one per_enemy entry");
         assert_eq!(metrics.players[0].per_enemy[0], (9, 350), "keyed by the representative enemy id");
+    }
+
+    /// M10 Task 3: `Metrics::combat_participant_enemies` keeps every enemy
+    /// that interacted with the squad in any of the three documented ways
+    /// (received damage, dealt damage, received CC), keeps enemy players
+    /// unconditionally, and drops a zero-interaction NPC/gadget (the
+    /// "unknown · 391 enemies was mostly Bags of Loot" bug this task
+    /// fixes). Five enemies, one per case (plus the always-kept player).
+    #[test]
+    fn combat_participant_enemies_keeps_only_interacting_npcs_and_all_players() {
+        use crate::evtc::result;
+        let player = Player {
+            agent_addr: 1, account: ":A.1".into(), character: "A".into(),
+            profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            agent_addrs: vec![1],
+        };
+        let enc = Encounter {
+            kind: "wvw".into(), map: "".into(), duration_ms: 2000,
+            build: "".into(), revision: 1, recorded_by: None, teams: vec![],
+            players: vec![player],
+            enemies: vec![
+                // Received damage from the squad.
+                Enemy { id: 9, instid: 0, name: "TookDamage".into(), team: "blue".into(),
+                    is_player: false, marker: None, agent_addrs: vec![9] },
+                // Dealt damage to the squad (e.g. an enemy catapult).
+                Enemy { id: 10, instid: 0, name: "DealtDamage".into(), team: "blue".into(),
+                    is_player: false, marker: None, agent_addrs: vec![10] },
+                // Received CC from the squad, no damage either direction.
+                Enemy { id: 11, instid: 0, name: "TookCc".into(), team: "blue".into(),
+                    is_player: false, marker: None, agent_addrs: vec![11] },
+                // Zero interaction -- the loot-bag/tactivator/chest case.
+                Enemy { id: 12, instid: 0, name: "LootBag".into(), team: "blue".into(),
+                    is_player: false, marker: None, agent_addrs: vec![12] },
+                // Zero interaction, but a real enemy PLAYER -- always kept.
+                Enemy { id: 13, instid: 0, name: "UntouchedFoe".into(), team: "blue".into(),
+                    is_player: true, marker: None, agent_addrs: vec![13] },
+            ],
+            markers: vec![], tick_rate: None,
+        };
+        fn cc_strike(src: u64, dst: u64, duration_ms: i32) -> RawEvent {
+            let mut e = strike(src, dst, duration_ms);
+            e.result = result::CROWD_CONTROL;
+            e
+        }
+        let raw = raw_from(vec![
+            strike(1, 9, 500),   // squad -> enemy 9: received damage
+            strike(10, 1, 300),  // enemy 10 -> squad: dealt damage
+            cc_strike(1, 11, 1500), // squad -> enemy 11: received CC
+        ]);
+        let metrics = analyze(&enc, &raw);
+        let ids = &metrics.combat_participant_enemies;
+        assert!(ids.contains(&9), "received damage must count");
+        assert!(ids.contains(&10), "dealt damage must count");
+        assert!(ids.contains(&11), "received CC must count");
+        assert!(!ids.contains(&12), "zero-interaction NPC must be excluded");
+        assert!(ids.contains(&13), "enemy players are always kept, even at zero interaction");
+        assert_eq!(ids.len(), 4);
     }
 
     fn empty_enc() -> Encounter {

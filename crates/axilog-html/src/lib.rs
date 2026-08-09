@@ -104,6 +104,7 @@ mod tests {
                 healing: None,
             }],
             enemies: vec![],
+            all_enemies: vec![],
             timeline: TimelineOut {
                 resolution_ms: 1000,
                 per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![] },

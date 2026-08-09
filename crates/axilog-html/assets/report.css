@@ -491,7 +491,13 @@ table {
 .axilog-replay-marker.team-green { --team-color: var(--team-green); }
 .axilog-replay-marker.team-unknown { --team-color: var(--team-unknown); }
 .axilog-replay-marker { fill: var(--team-color, var(--team-unknown)); stroke: var(--bg-raised); stroke-width: 1.5; }
-.axilog-replay-marker.is-enemy { fill: var(--bg); stroke: var(--team-color, var(--team-unknown)); stroke-width: 2; }
+/* M10 Task 3: contrast bump -- `var(--bg)` used to fill this hollow ring
+ * almost exactly matching the stage's own `var(--bg-inset)` background in
+ * both themes, so an enemy dot was barely visible (little more than a thin
+ * team-colored ring against near-identical dark). `var(--bg-raised)` is a
+ * real step lighter than the stage background in both themes, and the
+ * thicker stroke widens that colored ring itself. */
+.axilog-replay-marker.is-enemy { fill: var(--bg-raised); stroke: var(--team-color, var(--team-unknown)); stroke-width: 3; }
 .axilog-replay-commander-ring { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .axilog-replay-down-ring { fill: none; stroke: var(--danger); stroke-width: 2; animation: axilog-replay-pulse 1s ease-out infinite; }
 .axilog-replay-down-ring[hidden] { display: none; }

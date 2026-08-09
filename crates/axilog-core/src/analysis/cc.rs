@@ -174,8 +174,8 @@ fn pet_credit_cc_events(
     raw: &RawLog,
     squad: &BTreeSet<u64>,
     enemies: &BTreeSet<u64>,
-    friendly_team: Option<u16>,
-    agent_team: &std::collections::BTreeMap<u64, u16>,
+    friendly_team: Option<u32>,
+    agent_team: &std::collections::BTreeMap<u64, u32>,
 ) -> Vec<(u64, u64, u64)> {
     let post_era = raw.header.is_post_buff_rework();
     let registry = crate::analysis::damage::InstidRegistry::build(raw);

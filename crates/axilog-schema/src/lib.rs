@@ -10,7 +10,32 @@ pub struct Report {
     pub axilog_version: String,
     pub encounter: EncounterOut,
     pub players: Vec<PlayerOut>,
+    /// Combat-participant enemies only (M10, Task 3) -- the enemy stayed if
+    /// it dealt damage to the squad, received damage from the squad, or
+    /// received CC from the squad (any nonzero interaction), or is an enemy
+    /// player (always kept). A real WvW log enumerates every nearby
+    /// lootable/tactivator/chest as an "enemy" NPC even though nothing in
+    /// the fight ever targets them -- this is what the native output and
+    /// HTML team chips show. See `axilog_core::analysis::Metrics::
+    /// combat_participant_enemies`'s doc comment for the exact criteria.
+    ///
+    /// **Deliberately narrower than `all_enemies` below** -- see that
+    /// field's doc comment for why the EI adapter needs the full,
+    /// unfiltered list instead of this one.
     pub enemies: Vec<EnemyOut>,
+    /// Every enemy `wvw::apply` resolved, unfiltered by combat
+    /// participation (M10, Task 3). `#[serde(skip)]`: never part of the
+    /// native JSON output -- this exists purely so `axilog_ei::to_ei_json`
+    /// can build its `targets[]`/`statsTargets[]` from the SAME full roster
+    /// real EI's own output does (EI keeps every enumerated target
+    /// regardless of interaction; filtering `targets[]` down to combat
+    /// participants would be a real divergence from EI's own shape, not
+    /// just a cosmetic one, since `statsTargets[playerIndex][targetIndex]`
+    /// is positionally keyed to `targets[]`). `enemies` above is the
+    /// filtered list every other consumer (native JSON, HTML team chips)
+    /// should use.
+    #[serde(skip)]
+    pub all_enemies: Vec<EnemyOut>,
     pub timeline: TimelineOut,
     /// Structured, user-facing analysis warnings (final-review fix wave) --
     /// see `axilog_core::analysis::Metrics::warnings`'s doc comment. Omitted
@@ -171,9 +196,22 @@ pub fn build_replay_out(replay: &Replay) -> ReplayOut {
         }
     }
     // No samples anywhere (e.g. a log with no position telemetry at all) --
-    // fall back to a degenerate zero-sized bounds rather than emit
-    // infinities.
-    if !min_x.is_finite() {
+    // or, since M10 Task 3, ANY single one of the four bounds ending up
+    // non-finite -- falls back to a degenerate zero-sized bounds rather
+    // than emit an infinity/NaN into the JSON. Checking `min_x` alone (the
+    // pre-Task-3 guard) misses a real gap: `f64::min`/`f64::max` treat NaN
+    // as "not comparable" and just keep the other operand, so a track whose
+    // x samples are all NaN (but y samples are ordinary finite floats)
+    // leaves `min_x`/`max_x` stuck at their `INFINITY`/`NEG_INFINITY`
+    // sentinels while `min_y`/`max_y` go finite from the real y data --
+    // `min_x` alone still catches that particular case. But a single
+    // literal-`Infinity` sample mixed in among otherwise-finite samples on
+    // the SAME axis does not: `max_x.max(f64::INFINITY)` locks `max_x` at
+    // `Infinity` forever after that one bad sample, while `min_x` (fed by
+    // the surrounding finite samples) stays perfectly finite -- so the old
+    // `min_x`-only check would have let `max_x: inf` reach the embedded
+    // JSON silently. Checking all four closes that gap.
+    if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
         min_x = 0.0;
         min_y = 0.0;
         max_x = 0.0;
@@ -211,7 +249,7 @@ pub struct CommanderTagOut { pub variant: String, pub guid: String }
 #[derive(Serialize)]
 pub struct TeamOut {
     pub color: String,
-    pub team_id: u16,
+    pub team_id: u32,
     /// Stable content GUID for this team (Task 2b), when known. Omitted
     /// entirely from the JSON when absent, rather than serialized as null.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -388,7 +426,15 @@ pub fn build_report(
             markers: enc.markers.iter().map(|m| MarkerAssignmentOut{agent_addr:m.agent_addr,marker:m.marker.clone(),time_ms:m.time_ms}).collect(),
             tick_rate: enc.tick_rate.as_ref().map(|t| TickRateOut{avg:t.avg,min:t.min,per_second:t.per_second.clone()}) },
         players,
-        enemies: enc.enemies.iter().map(|e| EnemyOut{id:e.id,name:e.name.clone(),
+        // M10 Task 3: `enemies` (native/HTML) is filtered to combat
+        // participants; `all_enemies` (EI-adapter-only, `#[serde(skip)]`)
+        // stays the full roster -- see both fields' doc comments above.
+        enemies: enc.enemies.iter()
+            .filter(|e| metrics.combat_participant_enemies.contains(&e.id))
+            .map(|e| EnemyOut{id:e.id,name:e.name.clone(),
+                team:e.team.clone(),is_player:e.is_player,marker:e.marker.clone()})
+            .collect(),
+        all_enemies: enc.enemies.iter().map(|e| EnemyOut{id:e.id,name:e.name.clone(),
             team:e.team.clone(),is_player:e.is_player,marker:e.marker.clone()}).collect(),
         timeline: TimelineOut { resolution_ms: metrics.timeline.resolution_ms,
             per_second: PerSecondOut { squad_damage: metrics.timeline.squad_damage.clone(),
@@ -405,6 +451,41 @@ mod tests {
     use super::*;
     use axilog_core::model::{Encounter, Player};
     use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
+
+    /// M10 Task 3: `enemies` is filtered to `Metrics::
+    /// combat_participant_enemies`, while `all_enemies` (the `#[serde(skip)]`
+    /// field the EI adapter reads) always carries the full roster --
+    /// verifies both halves of the design choice documented on `Report::
+    /// enemies`/`Report::all_enemies`.
+    #[test]
+    fn enemies_filtered_to_combat_participants_but_all_enemies_stays_full() {
+        use axilog_core::model::Enemy;
+        let enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:1000,
+            build:"".into(), revision:1, recorded_by:None, teams:vec![], players:vec![],
+            enemies: vec![
+                Enemy { id: 9, instid: 0, name: "Participant".into(), team: "blue".into(),
+                    is_player: false, marker: None, agent_addrs: vec![9] },
+                Enemy { id: 10, instid: 0, name: "LootBag".into(), team: "blue".into(),
+                    is_player: false, marker: None, agent_addrs: vec![10] },
+            ],
+            markers:vec![], tick_rate:None };
+        let m = Metrics { players: vec![],
+            timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![]},
+            boons: Default::default(), boon_uptime: Default::default(),
+            boon_generation: Default::default(), warnings: Default::default(),
+            has_healing_extension: Default::default(),
+            combat_participant_enemies: [9u64].into_iter().collect() };
+        let report = build_report(&enc, &m, "0.1.0", None, None);
+        assert_eq!(report.enemies.len(), 1, "only the participant enemy stays in the filtered list");
+        assert_eq!(report.enemies[0].id, 9);
+        assert_eq!(report.all_enemies.len(), 2, "all_enemies keeps the full roster, including the loot bag");
+
+        // `all_enemies` must not leak into the native JSON (`#[serde(skip)]`).
+        let v = serde_json::to_value(&report).unwrap();
+        assert!(v.get("all_enemies").is_none(), "all_enemies must not appear in the serialized JSON");
+        assert_eq!(v["enemies"].as_array().unwrap().len(), 1);
+    }
+
     #[test]
     fn serializes_report_with_versions() {
         let enc = Encounter { kind:"wvw".into(), map:"Eternal Battlegrounds".into(),
@@ -419,7 +500,7 @@ mod tests {
             cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default() };
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.1");
@@ -463,7 +544,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: true };
+            has_healing_extension: true, combat_participant_enemies: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["players"][0]["healing"]["healing_out_total"], 500);
@@ -475,6 +556,47 @@ mod tests {
         // -- their `healing` block must still be present, all-zero.
         assert_eq!(v["players"][1]["healing"]["healing_out_total"], 0);
         assert!(v["players"][1]["healing"].is_object(), "healing block present even when all-zero, since the extension is present overall");
+    }
+
+    /// M10 Task 3: a single non-finite (`Infinity`) sample coordinate mixed
+    /// in among otherwise-ordinary finite samples must not leak an
+    /// `Infinity`/`NaN` bound into `ReplayBoundsOut` -- see
+    /// `build_replay_out`'s doc comment above the finiteness guard for why
+    /// checking `min_x` alone (the pre-Task-3 guard) misses this: a single
+    /// `Infinity` sample locks `max_x` at `Infinity` via `f64::max` while
+    /// `min_x`/`min_y`/`max_y` all stay perfectly finite off the surrounding
+    /// real samples.
+    #[test]
+    fn replay_bounds_fall_back_to_zero_when_any_side_is_non_finite() {
+        use axilog_core::analysis::replay::{Replay, Sample, Track};
+        let replay = Replay {
+            poll_ms: 300,
+            tracks: vec![Track {
+                agent_addr: 1,
+                name: "Alice".into(),
+                team: "red".into(),
+                commander: false,
+                is_squad: true,
+                samples: vec![
+                    Sample { t_ms: 0, x: 10.0, y: 20.0, z: 0.0 },
+                    // A single corrupt/degenerate sample: x is Infinity,
+                    // y/z stay ordinary finite values.
+                    Sample { t_ms: 300, x: f32::INFINITY, y: 25.0, z: 0.0 },
+                    Sample { t_ms: 600, x: 12.0, y: 22.0, z: 0.0 },
+                ],
+                down_intervals: vec![],
+                dead_intervals: vec![],
+            }],
+        };
+        let out = build_replay_out(&replay);
+        assert_eq!(out.bounds.min_x, 0.0, "any non-finite bound resets ALL FOUR to the degenerate zero fallback");
+        assert_eq!(out.bounds.min_y, 0.0);
+        assert_eq!(out.bounds.max_x, 0.0);
+        assert_eq!(out.bounds.max_y, 0.0);
+        // The samples themselves are untouched (Infinity is a legitimate
+        // f32 -> the fallback only applies to the summary `bounds`, not the
+        // per-sample data) -- rounding an Infinity stays Infinity.
+        assert!(out.tracks[0].samples[1].1.is_infinite());
     }
 
     #[test]
@@ -512,7 +634,7 @@ mod tests {
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default() };
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
         let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
         let report = build_report(&enc, &m, "0.1.0", Some(&replay), None);
         assert!(report.replay.is_some());
@@ -564,7 +686,7 @@ mod tests {
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default() };
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default() };
         let missiles = build_missiles(&raw, &enc);
         let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles));
         assert!(report.missiles.is_some());
