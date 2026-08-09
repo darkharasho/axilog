@@ -45,7 +45,7 @@ fn ei_json_matches_the_golden_isfake_down_dead_and_active_times() {
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
-    let ei = axilog_ei::to_ei_json(&report, &activity);
+    let ei = axilog_ei::to_ei_json(&report, &activity, None);
 
     // -- isFake: every target, no exceptions --
     let targets = ei["targets"].as_array().expect("targets must be an array");
@@ -181,7 +181,7 @@ fn ei_json_per_skill_and_per_second_blocks_match_the_golden() {
     // gate-respecting omission-when-absent behavior is covered by
     // `axilog-ei`'s own unit tests, not this golden-fixture test).
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true, false);
-    let ei = axilog_ei::to_ei_json(&report, &[]);
+    let ei = axilog_ei::to_ei_json(&report, &[], None);
 
     let mut joined = 0usize;
     let mut dist_mismatches: Vec<String> = Vec::new();
@@ -298,7 +298,7 @@ fn ei_json_rotation_cast_counts_match_the_golden() {
     // omission-when-absent behavior is covered by `axilog-ei`'s own unit
     // tests, not this golden-fixture test).
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, true);
-    let ei = axilog_ei::to_ei_json(&report, &[]);
+    let ei = axilog_ei::to_ei_json(&report, &[], None);
 
     let mut joined = 0usize;
     let mut count_mismatches: Vec<String> = Vec::new();
@@ -389,7 +389,7 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
     let enc = resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
-    let ei = axilog_ei::to_ei_json(&report, &[]);
+    let ei = axilog_ei::to_ei_json(&report, &[], None);
 
     // (ei-json statsAll[0] key, golden hitStats key) EXACT count/sum pairs.
     const HIT_STATS_FIELDS: &[&str] = &[
@@ -539,5 +539,345 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
         "ei_json_stats_all_hit_quality_and_defenses_match_the_golden: {joined_hit_stats} hitStats \
          accounts + {joined_defenses} defenses accounts joined, all fields EXACT except the \
          intentional lifeLeechDamageTakenCount divergence (ours=derived-true, asserted correct)"
+    );
+}
+
+/// M15 Task 3: the whole opt-in combat-replay surface -- per-player
+/// `combatReplayData.{positions, orientations, dc, iconURL}` plus the
+/// top-level `combatReplayMetaData` -- against the committed golden's own
+/// copy of the reference export's values.
+///
+/// ## Golden provenance / regeneration (the M13 pattern)
+///
+/// The four per-player arrays and the metadata object in
+/// `fixtures/wvw-small.ei.json` are VERBATIM from the same source every
+/// prior task extracted from: axibridge's
+/// `test-fixtures/boon/20260117-181030.json`, the real dps.report EI export
+/// for this same log (see the golden's `_note`, "Task 3 (M15)" entry, for
+/// the join method, the single `dc`-sentinel normalization, and the
+/// no-PII note). Regenerated with:
+///
+/// ```python
+/// # python3, from the repo root
+/// src = json.load(open('.../axibridge/test-fixtures/boon/20260117-181030.json'))
+/// dst = json.load(open('fixtures/wvw-small.ei.json'))            # index-order join
+/// for sp, dp in zip(src['players'], dst['players']):
+///     sc, dc = sp['combatReplayData'], dp['combatReplayData']
+///     assert dc['start'] == sc['start'] and dc['end'] == sc['end']  # join sanity
+///     dc['iconURL'], dc['positions'] = sc['iconURL'], sc['positions']
+///     dc['orientations'] = sc['orientations']
+///     dc['dc'] = [[fix_sentinel(a), fix_sentinel(b)] for a, b in sc['dc']]
+/// dst['combatReplayMetaData'] = src['combatReplayMetaData']
+/// # ... json.dumps(indent=2), then re-collapse the four numeric arrays
+/// # onto single lines (size/readability only, no value change).
+/// ```
+///
+/// `fix_sentinel` maps the source's `-/+9223372036854776000` back to
+/// `i64::MIN`/`i64::MAX`: that file was round-tripped through JavaScript,
+/// whose `Number` cannot hold C# `long.MinValue`/`long.MaxValue`. GW2EI's
+/// own writer emits the exact bounds, and so does axilog.
+///
+/// ## Why the comparison is TEXTUAL
+///
+/// EI serializes these as C# `float`s, so its JSON text is the shortest
+/// decimal that round-trips through SINGLE precision (`0.009`, `246.672`).
+/// `serde_json::Value` holds only `f64`, and a widened `f32` prints its own
+/// much longer shortest-round-trip (`0.008999999612569809`,
+/// `246.6719970703125`) -- a diff that is INVISIBLE to a parsed-`f64`
+/// comparison with a tolerance, and even to an exact one after both sides
+/// are narrowed to `f32`. So every assertion below compares
+/// `serde_json::to_string(...)` of our value against
+/// `serde_json::to_string(...)` of the golden's, which for numbers is
+/// exactly a comparison of the emitted decimal text (serde_json's `ryu`
+/// output is a pure function of the `f64`, and it preserves the
+/// integer-vs-float distinction the golden file's own text carries). See
+/// `axilog_ei`'s `ei_float`.
+#[test]
+fn ei_json_combat_replay_matches_the_golden() {
+    use axilog_core::analysis::ei_replay::build_ei_replay_auto;
+    use axilog_core::evtc::anon_account;
+    use std::collections::HashMap;
+
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let golden_text = std::fs::read_to_string(GOLDEN_JSON_PATH)
+        .unwrap_or_else(|e| panic!("read {GOLDEN_JSON_PATH}: {e}"));
+    let golden: serde_json::Value = serde_json::from_str(&golden_text).expect("parse golden");
+
+    // Raw-file evidence that the golden itself carries EI's `float` text
+    // (not a widened `f64`) -- if a future regeneration widened it, this
+    // fires before any of the value comparisons below.
+    assert!(
+        golden_text.contains("\"inchToPixel\": 0.009"),
+        "the golden's combatReplayMetaData.inchToPixel must be the literal text 0.009"
+    );
+
+    let mut golden_by_account: HashMap<String, &serde_json::Value> = HashMap::new();
+    for p in golden["players"].as_array().expect("players array") {
+        golden_by_account.insert(p["account"].as_str().expect("account").to_string(), p);
+    }
+
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let activity = build_activity_intervals(&raw, &enc);
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
+    let ei_replay = build_ei_replay_auto(&raw, &enc);
+    let ei = axilog_ei::to_ei_json(&report, &activity, Some(&ei_replay));
+
+    // -- combatReplayMetaData: EXACT, field by field, as text --
+    let meta = &ei["combatReplayMetaData"];
+    let golden_meta = &golden["combatReplayMetaData"];
+    for field in ["inchToPixel", "pollingRate", "sizes", "maps"] {
+        assert_eq!(
+            serde_json::to_string(&meta[field]).unwrap(),
+            serde_json::to_string(&golden_meta[field]).unwrap(),
+            "combatReplayMetaData.{field}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_string(meta).unwrap(),
+        "{\"inchToPixel\":0.009,\"maps\":[{\"interval\":[0,49285],\"position\":[0,0],\
+         \"url\":\"https://i.imgur.com/nVu2ivF.png\"}],\"pollingRate\":300,\"sizes\":[523,750]}",
+        "combatReplayMetaData must serialize to EI's own float TEXT (0.009, not \
+         0.008999999612569809; [0,0], not [0.0,0.0])"
+    );
+
+    let mut joined = 0usize;
+    let mut samples = 0usize;
+    let mut mismatches: Vec<String> = Vec::new();
+
+    for (i, agent) in raw.agents.iter().enumerate() {
+        if !agent.is_player() {
+            continue;
+        }
+        let key = anon_account(i).trim_start_matches(':').to_string();
+        let Some(golden_p) = golden_by_account.get(&key) else { continue };
+        let golden_crd = &golden_p["combatReplayData"];
+        if golden_crd.get("positions").is_none() {
+            continue;
+        }
+        let Some(player_idx) = enc.players.iter().position(|p| p.agent_addrs.contains(&agent.addr))
+        else {
+            continue;
+        };
+        joined += 1;
+
+        let our_player = &ei["players"][player_idx];
+        assert_eq!(
+            our_player["account"].as_str().map(|s| s.trim_start_matches(':')),
+            Some(key.as_str()),
+            "positional join sanity: ei-json players[{player_idx}] must be this same account"
+        );
+        let ours = &our_player["combatReplayData"];
+
+        // EXACT scalars/intervals (integers -- no float text involved).
+        for field in ["start", "end", "dc", "iconURL"] {
+            if ours[field] != golden_crd[field] {
+                mismatches.push(format!(
+                    "{key} combatReplayData.{field}: ours={} golden={}",
+                    ours[field], golden_crd[field]
+                ));
+            }
+        }
+        samples += ours["positions"].as_array().map(|a| a.len()).unwrap_or(0);
+
+        // TEXT-EXACT float arrays.
+        for field in ["positions", "orientations"] {
+            let a = serde_json::to_string(&ours[field]).unwrap();
+            let b = serde_json::to_string(&golden_crd[field]).unwrap();
+            if a != b {
+                let first = a
+                    .chars()
+                    .zip(b.chars())
+                    .position(|(x, y)| x != y)
+                    .unwrap_or(0)
+                    .saturating_sub(30);
+                mismatches.push(format!(
+                    "{key} combatReplayData.{field} TEXT differs near offset {first}:\n  ours  ...{}\n  golden...{}",
+                    &a[first..(first + 120).min(a.len())],
+                    &b[first..(first + 120).min(b.len())],
+                ));
+            }
+        }
+    }
+
+    assert!(joined >= 30, "expected at least 30 accounts to join, got {joined}");
+    assert!(
+        mismatches.is_empty(),
+        "{} combat-replay mismatch(es) across {joined} accounts:\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
+    println!(
+        "ei_json_combat_replay_matches_the_golden: {joined} accounts joined, {samples} position \
+         samples, positions/orientations/dc/iconURL/start/end all EXACT (text-level), \
+         combatReplayMetaData EXACT"
+    );
+}
+
+/// M15 Task 3, the always-on regression gate: turning replay ON must ADD
+/// fields and change NOTHING else. M11's `combatReplayData.{start, end,
+/// down, dead}` and `activeTimes` are always-on and byte-exact against this
+/// same golden (`ei_json_matches_the_golden_isfake_down_dead_and_active_times`
+/// above); this asserts that the M15 surface is purely additive by
+/// stripping the five new keys off the replay-on document and demanding it
+/// be BYTE-IDENTICAL to the replay-off one.
+#[test]
+fn ei_json_replay_fields_do_not_disturb_the_always_on_surface() {
+    use axilog_core::analysis::ei_replay::build_ei_replay_auto;
+
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let activity = build_activity_intervals(&raw, &enc);
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
+
+    let without = axilog_ei::to_ei_json(&report, &activity, None);
+    let ei_replay = build_ei_replay_auto(&raw, &enc);
+    let mut with = axilog_ei::to_ei_json(&report, &activity, Some(&ei_replay));
+
+    // Sanity: the replay-on document really does carry the new surface
+    // (otherwise this test would pass vacuously).
+    assert!(with.get("combatReplayMetaData").is_some());
+    assert!(with["players"][0]["combatReplayData"]["positions"].as_array().is_some_and(|a| !a.is_empty()));
+    assert!(without.get("combatReplayMetaData").is_none(), "replay-off must omit combatReplayMetaData");
+    assert!(
+        without["players"][0]["combatReplayData"].get("positions").is_none(),
+        "replay-off must omit combatReplayData.positions"
+    );
+
+    let root = with.as_object_mut().expect("root object");
+    root.remove("combatReplayMetaData");
+    for p in root["players"].as_array_mut().expect("players").iter_mut() {
+        let crd = p["combatReplayData"].as_object_mut().expect("combatReplayData");
+        for k in ["positions", "orientations", "dc", "iconURL"] {
+            crd.remove(k);
+        }
+    }
+    for t in root["targets"].as_array_mut().expect("targets").iter_mut() {
+        t.as_object_mut().expect("target object").remove("combatReplayData");
+    }
+
+    assert_eq!(
+        serde_json::to_string(&with).unwrap(),
+        serde_json::to_string(&without).unwrap(),
+        "enabling replay must be PURELY additive to the ei-json surface"
+    );
+    println!(
+        "ei_json_replay_fields_do_not_disturb_the_always_on_surface: replay-on minus the 5 new \
+         keys is byte-identical to replay-off"
+    );
+}
+
+/// M15 Task 3, post-era spot check (local-only, gitignored): the same
+/// ei-json wiring, run end-to-end on the real post-rework capture and
+/// compared against GW2EI's own export for it -- the era the committed
+/// fixture cannot cover. `axilog_core`'s `ei_replay_golden.rs` calibrates
+/// the ENGINE against this pair; this asserts the ADAPTER carries it
+/// through unchanged, including the `f32` text.
+///
+/// Point `AXILOG_LOCAL_FIXTURES` at the primary checkout's
+/// `fixtures/local/` to run it from a worktree (the captures are PII and
+/// are never committed or copied); it prints `skip:` and passes otherwise.
+#[test]
+fn ei_json_combat_replay_matches_the_local_postrework_export() {
+    use axilog_core::analysis::ei_replay::build_ei_replay_auto;
+    use std::collections::HashMap;
+
+    let dir = std::env::var("AXILOG_LOCAL_FIXTURES")
+        .unwrap_or_else(|_| format!("{}/../../fixtures/local", env!("CARGO_MANIFEST_DIR")));
+    let (zevtc, json_path) =
+        (format!("{dir}/wvw-postrework.zevtc"), format!("{dir}/wvw-postrework.ei.json"));
+    let (Ok(bytes), Ok(golden_text)) =
+        (std::fs::read(&zevtc), std::fs::read_to_string(&json_path))
+    else {
+        println!("skip: {dir}/wvw-postrework.* absent (M15 ei-json post-era spot check)");
+        return;
+    };
+    let golden: serde_json::Value = serde_json::from_str(&golden_text).expect("parse local export");
+
+    let raw = decode_raw(&bytes).expect("decode postrework fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let activity = build_activity_intervals(&raw, &enc);
+    let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false);
+    let ei_replay = build_ei_replay_auto(&raw, &enc);
+    let ei = axilog_ei::to_ei_json(&report, &activity, Some(&ei_replay));
+
+    // metaData: text-exact against the export's own object.
+    let want_meta = &golden["combatReplayMetaData"];
+    for field in ["inchToPixel", "pollingRate", "sizes", "maps"] {
+        assert_eq!(
+            serde_json::to_string(&ei["combatReplayMetaData"][field]).unwrap(),
+            serde_json::to_string(&want_meta[field]).unwrap(),
+            "postrework combatReplayMetaData.{field}"
+        );
+    }
+
+    // Players join by account (the export anonymizes non-squad players).
+    let account_by_addr: HashMap<u64, String> = raw
+        .agents
+        .iter()
+        .filter(|a| a.is_player())
+        .map(|a| {
+            let (_, account, _) = a.name_parts();
+            (a.addr, account.trim_start_matches(':').to_string())
+        })
+        .collect();
+    let golden_by_account: HashMap<&str, &serde_json::Value> = golden["players"]
+        .as_array()
+        .expect("players")
+        .iter()
+        .filter_map(|p| p["account"].as_str().map(|a| (a.trim_start_matches(':'), p)))
+        .collect();
+
+    let (mut joined, mut pos_text_exact, mut ang_text_exact, mut samples) = (0, 0, 0, 0usize);
+    let mut scalar_mismatches: Vec<String> = Vec::new();
+    for (idx, p) in enc.players.iter().enumerate() {
+        let Some(account) = account_by_addr.get(&p.agent_addr) else { continue };
+        let Some(gp) = golden_by_account.get(account.as_str()) else { continue };
+        let want = &gp["combatReplayData"];
+        let ours = &ei["players"][idx]["combatReplayData"];
+        joined += 1;
+        samples += ours["positions"].as_array().map(|a| a.len()).unwrap_or(0);
+        for field in ["start", "end", "dc", "iconURL"] {
+            if ours[field] != want[field] {
+                scalar_mismatches.push(format!("{account}.{field}"));
+            }
+        }
+        if serde_json::to_string(&ours["positions"]).unwrap()
+            == serde_json::to_string(&want["positions"]).unwrap()
+        {
+            pos_text_exact += 1;
+        }
+        if serde_json::to_string(&ours["orientations"]).unwrap()
+            == serde_json::to_string(&want["orientations"]).unwrap()
+        {
+            ang_text_exact += 1;
+        }
+    }
+
+    println!(
+        "ei_json_combat_replay_matches_the_local_postrework_export: {joined} players joined, \
+         {samples} position samples; positions TEXT-exact for {pos_text_exact}/{joined} players, \
+         orientations for {ang_text_exact}/{joined}"
+    );
+    assert!(joined >= 40, "expected ~44 squad players to join, got {joined}");
+    assert!(
+        scalar_mismatches.is_empty(),
+        "start/end/dc/iconURL must be exact: {scalar_mismatches:?}"
+    );
+    // Whole-array text equality per player is an all-or-nothing bar over
+    // ~1200 samples each; `ei_replay_golden.rs` reports the per-SAMPLE
+    // numbers (100.00% f32-exact positions, >=99.9% orientations -- the
+    // stragglers are platform `atan2` ULP noise), so a handful of players
+    // can legitimately miss the whole-array bar on orientations.
+    assert_eq!(pos_text_exact, joined, "every player's positions must be text-exact");
+    assert!(
+        ang_text_exact * 10 >= joined * 9,
+        "orientations text-exact for only {ang_text_exact}/{joined} players"
     );
 }

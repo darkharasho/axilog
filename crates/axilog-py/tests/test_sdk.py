@@ -308,6 +308,33 @@ class ParseFileEiOptInTests(unittest.TestCase):
     back-compat requirement. Mirrors `crates/axilog-node/__test__/
     sdk.test.mjs`'s equivalent test."""
 
+    def test_replay_adds_gw2ei_combat_replay_positions_and_metadata(self):
+        """M15 Task 3: `replay=True` adds GW2EI's own combat-replay surface
+        -- per-actor `combatReplayData.{positions, orientations, dc,
+        iconURL}` plus the top-level `combatReplayMetaData` -- and leaves
+        M11's always-on `start`/`end`/`down`/`dead` untouched. Mirrors
+        `crates/axilog-node/__test__/sdk.test.mjs`'s equivalent test."""
+        ei = axilog.parse_file_ei(FIXTURE, replay=True)
+
+        meta = ei["combatReplayMetaData"]
+        self.assertEqual(meta["pollingRate"], 300)
+        self.assertEqual(meta["sizes"], [523, 750])
+        # The f32-text contract: EI writes a C# float, so this is exactly
+        # 0.009 -- a widened f64 would arrive as 0.008999999612569809.
+        self.assertEqual(meta["inchToPixel"], 0.009)
+        self.assertEqual(len(meta["maps"]), 1)
+
+        crd = ei["players"][0]["combatReplayData"]
+        self.assertGreater(len(crd["positions"]), 0)
+        self.assertEqual(len(crd["positions"]), len(crd["orientations"]))
+        self.assertEqual(len(crd["positions"][0]), 2)
+        self.assertGreater(len(crd["dc"]), 0)
+        self.assertTrue(crd["iconURL"].startswith("https://"))
+
+        plain = axilog.parse_file_ei(FIXTURE)["players"][0]["combatReplayData"]
+        for key in ("start", "end", "down", "dead"):
+            self.assertEqual(crd[key], plain[key], key)
+
     def test_skill_damage_and_timeseries_surface_only_when_requested(self):
         without_opts = axilog.parse_file_ei(FIXTURE)
         p0_without = without_opts["players"][0]
@@ -397,7 +424,11 @@ class ParseFileEiTests(unittest.TestCase):
         self.assertIsInstance(p0["combatReplayData"]["dead"], list)
         self.assertNotIn(
             "positions", p0["combatReplayData"],
-            "positions must stay absent (deferred to M15)",
+            "positions must stay absent without replay=True",
+        )
+        self.assertNotIn(
+            "combatReplayMetaData", ei,
+            "combatReplayMetaData must stay absent without replay=True",
         )
 
         self.assertIn("wvWMapData", ei)

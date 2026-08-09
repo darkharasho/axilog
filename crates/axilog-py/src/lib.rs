@@ -99,7 +99,11 @@ fn build_report_and_activity_from_bytes(
     want_timeseries: bool,
     want_missiles: bool,
     want_rotation: bool,
-) -> PyResult<(axilog_schema::Report, Vec<axilog_core::analysis::replay::ActivityIntervals>)> {
+) -> PyResult<(
+    axilog_schema::Report,
+    Vec<axilog_core::analysis::replay::ActivityIntervals>,
+    Option<axilog_core::analysis::ei_replay::EiReplay>,
+)> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(value_err)?;
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
@@ -113,11 +117,16 @@ fn build_report_and_activity_from_bytes(
     let missiles = want_missiles
         .then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    // M15 Task 3: `replay=True` now DOES affect the ei-json -- it adds
+    // `combatReplayData.{positions, orientations, dc, iconURL}` and the
+    // top-level `combatReplayMetaData` (see `axilog_ei::to_ei_json`).
+    let ei_replay = want_replay
+        .then(|| axilog_core::analysis::ei_replay::build_ei_replay_auto(&raw, &enc));
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation,
     );
-    Ok((report, activity))
+    Ok((report, activity, ei_replay))
 }
 
 fn report_to_value(report: &axilog_schema::Report) -> PyResult<Value> {
@@ -185,10 +194,13 @@ fn parse_bytes(
 /// `axilog_ei::to_ei_json` reads them straight off the native `Report`
 /// this function builds internally; previously this function always built
 /// that `Report` with both flags forced `False`, silently discarding any
-/// M12 detail regardless of what a caller wanted. `replay=True`/
-/// `missiles=True` are accepted for signature parity with `parse_file` but
-/// have no effect on the output -- EI's JSON shape has no comparable field
-/// for either (see `axilog_ei::to_ei_json`'s module doc). All four default
+/// M12 detail regardless of what a caller wanted. `replay=True` (M15,
+/// Task 3) adds GW2EI's own combat-replay surface -- per-actor
+/// `combatReplayData.{positions, orientations, dc, iconURL}` plus the
+/// top-level `combatReplayMetaData` (it roughly triples the payload, hence
+/// opt-in). `missiles=True` is accepted for signature parity with
+/// `parse_file` but has no effect on the output -- EI's JSON shape has no
+/// comparable field for it. All four default
 /// to `False`, keeping the existing zero-arg call shape's behavior
 /// unchanged.
 #[pyfunction]
@@ -198,9 +210,9 @@ fn parse_file_ei(
     rotation: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let (report, activity) =
+    let (report, activity, ei_replay) =
         build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation)?;
-    let ei = axilog_ei::to_ei_json(&report, &activity);
+    let ei = axilog_ei::to_ei_json(&report, &activity, ei_replay.as_ref());
     value_to_py(py, &ei)
 }
 

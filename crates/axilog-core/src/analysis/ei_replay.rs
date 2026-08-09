@@ -565,12 +565,7 @@ impl MapTransform {
     /// `Encounter::map`. `None` when the log has no map-id event or the id
     /// isn't one GW2EI has an image for.
     pub fn from_log(raw: &RawLog) -> Option<Self> {
-        let map_id = raw
-            .events
-            .iter()
-            .find(|e| e.is_statechange == sc::MAP_ID)
-            .map(|e| e.src_agent as u32)?;
-        Self::for_map_id(map_id)
+        Self::for_map_id(map_id_from_log(raw)?)
     }
 
     /// GW2EI's exported `combatReplayMetaData.sizes`.
@@ -831,6 +826,86 @@ pub fn build_ei_replay(raw: &RawLog, enc: &Encounter, map: &MapTransform) -> Vec
         .into_iter()
         .map(|w| w.into_ei_track(map))
         .collect()
+}
+
+/// Everything `axilog-ei` needs to emit GW2EI's whole combat-replay
+/// surface for one log (M15 Task 3): the per-actor tracks plus the
+/// top-level `combatReplayMetaData` that describes the arena image they're
+/// drawn on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EiReplay {
+    /// Per-actor tracks, in [`build_ei_replay`]'s order (every
+    /// `enc.players` entry, then the `is_player` entries of `enc.enemies`).
+    pub tracks: Vec<EiTrack>,
+    /// The log's WvW map id (`CBTS_MAPID`), when it has one at all.
+    pub map_id: Option<u32>,
+    /// GW2EI's `combatReplayMetaData`, or `None` when the map id isn't one
+    /// GW2EI ships an arena image for -- see [`combat_replay_meta`]. The
+    /// `tracks` above are still fully populated in that case (via
+    /// [`bounding_box_transform`]); only the metadata is unavailable, and
+    /// the EI-JSON field is nullable, so consumers omit it.
+    pub meta: Option<CombatReplayMeta>,
+}
+
+/// The log's WvW map id, from the `CBTS_MAPID` (`sc::MAP_ID`, 25)
+/// statechange's `src_agent` -- the same lookup [`crate::wvw::apply`] does
+/// for [`Encounter::map`]. `None` when the log carries no map-id event.
+pub fn map_id_from_log(raw: &RawLog) -> Option<u32> {
+    raw.events
+        .iter()
+        .find(|e| e.is_statechange == sc::MAP_ID)
+        .map(|e| e.src_agent as u32)
+}
+
+/// One-call combat replay for a whole log: picks the world -> map-pixel
+/// transform the way GW2EI itself does, applies it to every polled track,
+/// and pairs the result with the matching `combatReplayMetaData`.
+///
+/// Transform selection mirrors `LogLogic.GetCombatReplayMap`:
+///
+/// 1. The log's map id has a built-in `CombatReplayMap`
+///    ([`crate::wvw::maps::WVW_MAPS`]) -> use it, and export
+///    [`combat_replay_meta`] alongside.
+/// 2. Otherwise GW2EI falls back to `new CombatReplayMap((800, 800), (0, 0,
+///    0, 0))` + `ComputeBoundingBox(log)` -> [`bounding_box_transform`],
+///    with NO arena image and therefore no metadata (`meta: None`).
+/// 3. If even that is unavailable, the tracks keep their grid/interval
+///    data but their `positions`/`orientations` are emptied rather than
+///    filled with the NaNs a degenerate zero-area rect would produce.
+///    GW2EI has no equivalent guard because it never renders such a log;
+///    axilog serializes unconditionally, so it needs one. This branch is
+///    narrow: `forcePolling` gives every SQUAD player a sentinel position
+///    even with no position event anywhere in the log, so one squad member
+///    is enough for the box, and only a squad-less roster (enemy players
+///    only) reaches it.
+///
+/// Deterministic; see [`build_ei_replay`].
+pub fn build_ei_replay_auto(raw: &RawLog, enc: &Encounter) -> EiReplay {
+    let world = build_world_tracks(raw, enc);
+    let map_id = map_id_from_log(raw);
+    let built_in = map_id.and_then(MapTransform::for_map_id);
+    let meta = built_in
+        .is_some()
+        .then(|| combat_replay_meta(map_id.expect("built-in transform implies a map id"), enc.duration_ms as i64))
+        .flatten();
+    let transform = match built_in {
+        Some(m) => Some(m),
+        None => bounding_box_transform(&world),
+    };
+    let tracks = match transform {
+        Some(m) => world.into_iter().map(|w| w.into_ei_track(&m)).collect(),
+        None => world
+            .into_iter()
+            .map(|mut w| {
+                w.positions.clear();
+                w.rotations.clear();
+                // Any transform works now that both sample lists are empty;
+                // the unit square keeps the arithmetic finite.
+                w.into_ei_track(&MapTransform::new((1, 1), (0.0, 0.0, 1.0, 1.0)))
+            })
+            .collect(),
+    };
+    EiReplay { tracks, map_id, meta }
 }
 
 /// The pre-transform half of [`build_ei_replay`]: polled tracks still in
@@ -2140,6 +2215,86 @@ mod tests {
             markers: vec![],
             tick_rate: None,
         }
+    }
+
+    /// M15 Task 3: `build_ei_replay_auto` on a log whose map GW2EI ships an
+    /// image for -- the transform comes from the map table, and the
+    /// metadata is exported alongside.
+    #[test]
+    fn auto_replay_uses_the_built_in_map_and_exports_metadata() {
+        let enc = enc_with(vec![player(1, "Alice")], vec![], 1200);
+        let mut events = vec![state_event(0, 96, sc::MAP_ID)];
+        events.push(mov_event(0, 1, sc::POSITION, 0.0, 0.0, 1.0));
+        events.push(mov_event(600, 1, sc::POSITION, 15360.0, 21504.0, 1.0));
+        let raw = raw_from(events);
+
+        let auto = build_ei_replay_auto(&raw, &enc);
+        assert_eq!(auto.map_id, Some(96));
+        let meta = auto.meta.expect("mapID 96 has an arena image");
+        assert_eq!(meta.sizes, [523, 750]);
+        assert_eq!(meta.inch_to_pixel, 0.009);
+        assert_eq!(meta.maps.len(), 1);
+        assert_eq!(meta.maps[0].interval, [0, 1200]);
+        // Same tracks the explicit-transform entry point produces.
+        let explicit = build_ei_replay(&raw, &enc, &MapTransform::for_map_id(96).unwrap());
+        assert_eq!(auto.tracks, explicit);
+    }
+
+    /// M15 Task 3: a map id GW2EI has no image for (Obsidian Sanctum, 899)
+    /// still gets full tracks -- via the computed bounding box, exactly as
+    /// GW2EI does -- but NO metadata, so the ei-json omits
+    /// `combatReplayMetaData` while keeping `combatReplayData`.
+    #[test]
+    fn auto_replay_falls_back_to_the_bounding_box_without_metadata() {
+        let enc = enc_with(vec![player(1, "Alice")], vec![], 1200);
+        let raw = raw_from(vec![
+            state_event(0, 899, sc::MAP_ID),
+            mov_event(0, 1, sc::POSITION, 100.0, 100.0, 1.0),
+            mov_event(600, 1, sc::POSITION, 900.0, 500.0, 1.0),
+        ]);
+
+        let auto = build_ei_replay_auto(&raw, &enc);
+        assert_eq!(auto.map_id, Some(899));
+        assert!(auto.meta.is_none(), "no arena image => no combatReplayMetaData");
+        assert!(!auto.tracks[0].positions.is_empty(), "positions still come out, via the bounding box");
+        for xy in &auto.tracks[0].positions {
+            assert!(xy[0].is_finite() && xy[1].is_finite());
+            assert!((0.0..=750.0).contains(&xy[0]) && (0.0..=750.0).contains(&xy[1]));
+        }
+    }
+
+    /// M15 Task 3: no map image AND no SQUAD player to bound the box with
+    /// (an enemy-only roster) -- there is nothing to compute a transform
+    /// from, so the coordinates are dropped rather than emitted as the NaNs
+    /// a zero-area rect would produce. Everything else about the track
+    /// survives.
+    ///
+    /// Note how narrow this branch is: GW2EI's `forcePolling` gives every
+    /// squad PLAYER a sentinel position even when the log holds no position
+    /// event for them at all, so a single squad member is enough for
+    /// `bounding_box_transform` to succeed (it centres the sentinel, see
+    /// `auto_replay_falls_back_to_the_bounding_box_without_metadata`).
+    #[test]
+    fn auto_replay_drops_coordinates_when_no_transform_can_be_derived() {
+        let enc = enc_with(
+            vec![],
+            vec![Enemy {
+                id: 9, instid: 0, name: "Foe".into(), team: "blue".into(),
+                is_player: true, marker: None, agent_addrs: vec![9],
+            }],
+            1200,
+        );
+        let raw = raw_from(vec![
+            state_event(0, 899, sc::MAP_ID),
+            mov_event(0, 9, sc::POSITION, 100.0, 100.0, 1.0),
+        ]);
+
+        let auto = build_ei_replay_auto(&raw, &enc);
+        assert!(auto.meta.is_none());
+        assert_eq!(auto.tracks.len(), 1);
+        assert!(auto.tracks[0].positions.is_empty(), "no transform => no coordinates, and no NaNs");
+        assert!(auto.tracks[0].orientations.is_empty());
+        assert!(!auto.tracks[0].dc.is_empty(), "the dc sentinel bracketing still applies");
     }
 
     #[test]

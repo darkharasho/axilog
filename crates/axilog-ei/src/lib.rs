@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use serde_json::{json, Value};
 use axilog_core::analysis::buffs::BOON_IDS;
+use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::analysis::replay::{ActivityIntervals, Interval};
+use axilog_core::icons::prof_icon_url;
 use axilog_schema::Report;
 
 // Representative real WvW team ids per color (Task 2, M2) — one id drawn
@@ -35,6 +37,88 @@ fn detected_team_ids(report: &Report) -> BTreeMap<&str, u64> {
 /// shape (`combatReplayData.down`/`.dead`).
 fn interval_json(iv: &Interval) -> Value {
     json!([iv.start_ms, iv.end_ms])
+}
+
+/// One GW2EI-serialized floating point number (M15, Task 3).
+///
+/// **Every float on the combat-replay surface must go through this.** GW2EI
+/// declares all of them (`combatReplayMetaData.inchToPixel`/`maps[].position`,
+/// `combatReplayData.positions`/`orientations`) as C# `float`s, and .NET
+/// writes a `float` as the SHORTEST decimal that round-trips through SINGLE
+/// precision -- `0.009`, `246.672`, `-75.179`. `serde_json::Value` has no
+/// `f32` variant: it stores every number as `f64`, and the `f64` you get by
+/// widening `0.009f32` is a different real number whose own shortest
+/// round-trip is `0.008999999612569809`. Feeding a widened `f32` straight
+/// into `json!` therefore produces JSON TEXT that no longer matches EI's,
+/// even though the two parse to values a hair apart. (This crate builds its
+/// entire output through `json!`/`Value`, so there is no
+/// `serde_json::to_string(&f32)` fast path available -- that one DOES print
+/// `0.009`, because serde_json's string serializer has an `f32`-specific
+/// `ryu` call the `Value` serializer lacks.)
+///
+/// Two steps, both load-bearing:
+///
+/// 1. **Narrow, then re-parse.** `f32::to_string` gives the shortest decimal
+///    `d` that round-trips the `f32` -- byte-for-byte what .NET writes. The
+///    nearest `f64` to `d` then prints as exactly `d` again: `d` has at most
+///    9 significant digits, while any *other* decimal inside that `f64`'s
+///    ~1e-16-relative rounding interval needs ~17, so `d` is also the
+///    shortest round-trip for the `f64` and `ryu` re-emits it verbatim.
+/// 2. **Integral values become JSON integers.** .NET (like JavaScript, which
+///    is what re-serialized the reference export this crate calibrates
+///    against) prints a whole-valued float as `0` / `247`, never `0.0`;
+///    serde_json prints an `f64` `247.0` as `247.0`. 585 of the 297k
+///    reference floats are integral, so this is not a theoretical case.
+///
+/// Not handled, because the reference never produces them: `-0.0` (emitted
+/// as `0`, where .NET writes `-0`) and non-finite values (emitted as
+/// `null`, which is what `json!` would do anyway -- and the replay engine
+/// already asserts finiteness, see `ei_replay`'s
+/// `assert_track_is_structurally_sound`).
+///
+/// The input is `f64` rather than `f32` because that is what
+/// `axilog_core::analysis::ei_replay` stores; every value it stores is
+/// itself an exactly-widened `f32` (see that module's `round_ei`), so the
+/// narrowing here is lossless.
+fn ei_float(v: f64) -> Value {
+    let f = v as f32;
+    if !f.is_finite() {
+        return Value::Null;
+    }
+    if f.fract() == 0.0 && f.abs() < 9.0e18 {
+        return Value::from(f as i64);
+    }
+    // `f32::to_string` -> shortest round-tripping decimal; re-parsing as
+    // `f64` keeps that exact text (see step 1 above). The parse cannot fail:
+    // the input is a finite decimal literal we just printed.
+    Value::from(f.to_string().parse::<f64>().expect("f32 decimal re-parses as f64"))
+}
+
+/// `combatReplayData.positions`: `[[x, y], ...]` in map pixels, every
+/// component through [`ei_float`].
+fn ei_positions_json(positions: &[[f64; 2]]) -> Value {
+    Value::Array(
+        positions
+            .iter()
+            .map(|p| Value::Array(vec![ei_float(p[0]), ei_float(p[1])]))
+            .collect(),
+    )
+}
+
+/// `combatReplayData.orientations`: degrees, every value through
+/// [`ei_float`].
+fn ei_orientations_json(orientations: &[f64]) -> Value {
+    Value::Array(orientations.iter().map(|a| ei_float(*a)).collect())
+}
+
+/// `combatReplayData.dc`: `[[start, end], ...]`, including GW2EI's
+/// `long.MinValue`/`long.MaxValue` sentinel bracketing (serialized as the
+/// exact `i64` bounds, which is what GW2EI's own C# writer emits -- note
+/// that a reference export which has been round-tripped through JavaScript
+/// will show them rounded to `-9223372036854776000`/`9223372036854776000`,
+/// since they exceed `Number.MAX_SAFE_INTEGER`).
+fn ei_intervals_json(intervals: &[[i64; 2]]) -> Value {
+    Value::Array(intervals.iter().map(|iv| json!([iv[0], iv[1]])).collect())
 }
 
 /// One skill entry's EI-shaped JSON row (M12, Task 3) -- mirrors real EI's
@@ -77,7 +161,50 @@ fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
 /// `enc.players` in the same order -- see `build_activity_intervals`'s doc
 /// comment); pass an empty slice if unavailable (every field this powers is
 /// then a harmless zero/empty default, not a panic).
-pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
+///
+/// `replay` (M15 Task 3): the GW2EI-shape fixed-rate combat replay from
+/// `axilog_core::analysis::ei_replay::build_ei_replay_auto`, or `None`. This
+/// is the OPT-IN gate for `combatReplayData.{positions, orientations, dc,
+/// iconURL}` and the top-level `combatReplayMetaData`: every caller
+/// (CLI/Node/Python) computes it exactly when `--replay`/SDK `replay: true`
+/// was requested -- i.e. the same request that populates
+/// `axilog_schema::Report::replay` -- so the presence of this argument is
+/// the "was replay requested" signal, mirroring how the `skill_damage`/
+/// `timeseries`/`rotation` blocks key off `PlayerOut`'s own `Option`
+/// presence rather than a separate flag.
+///
+/// It arrives as a side-channel argument rather than a `Report` field for
+/// the same reason `activity` does: it is EI-shape data (map PIXELS on
+/// GW2EI's own 300ms grid, GW2EI's sentinel-bracketed `dc`), which the
+/// native schema deliberately does not carry -- `Report::replay` is this
+/// project's own narrower world-unit shape, computed by a different engine
+/// (`axilog_core::analysis::replay`), and widening it would change the
+/// native `--replay` JSON.
+///
+/// Positionally joined to `report.players` (GW2EI-shape tracks are built by
+/// iterating `enc.players` then the `is_player` entries of `enc.enemies`,
+/// exactly the orders `report.players`/`report.all_enemies` use), and
+/// ignored entirely if that length invariant does not hold.
+///
+/// **Size (measured, `fixtures/wvw-small.anon.zevtc`: 41 players, 32
+/// enemy-player targets, 49s):** `axilog parse --format ei-json` grows
+/// 544,372 -> 1,548,945 bytes pretty-printed (+184%), 216,173 -> 524,056
+/// bytes compact (+142%), for 6,894 player + 4,662 enemy position samples
+/// (and as many orientations). It scales with `players x fight_seconds /
+/// 0.3`, so a 6-minute 50-player fight is an order of magnitude bigger --
+/// which is why it stays opt-in.
+pub fn to_ei_json(
+    report: &Report,
+    activity: &[ActivityIntervals],
+    replay: Option<&EiReplay>,
+) -> Value {
+    // Positional join guard: the tracks must be `report.players` followed by
+    // the enemy-PLAYER subset of `report.all_enemies`, in those orders. A
+    // caller that hand-builds a `Report` (every unit test below) can violate
+    // it; rather than mis-attribute one player's movement to another, drop
+    // the whole replay surface.
+    let enemy_player_count = report.all_enemies.iter().filter(|e| e.is_player).count();
+    let replay = replay.filter(|r| r.tracks.len() == report.players.len() + enemy_player_count);
     let detected = detected_team_ids(report);
     let team_id_for = |color: &str| -> u64 {
         detected.get(color).copied().unwrap_or_else(|| representative_team_id(color))
@@ -319,10 +446,16 @@ pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
         // `.end` mirror GW2EI's `AgentItem.FirstAware`/`LastAware`;
         // `.down`/`.dead` are `[[start_ms, end_ms], ...]` arrays verified
         // byte-exact against the committed EI golden
-        // (`crates/axilog-ei/tests/ei_golden.rs`) -- `.positions`/
-        // `.orientations`/`.iconURL`/`.dc` are real EI fields NOT computed
-        // here, omitted rather than faked (same "don't fake absent data"
-        // convention as `statsTargets`/`support` above).
+        // (`crates/axilog-ei/tests/ei_golden.rs`).
+        //
+        // M15 Task 3: `.positions`/`.orientations`/`.dc`/`.iconURL` join
+        // this object when -- and only when -- `replay` was requested (see
+        // `to_ei_json`'s `replay` argument). The four M11 fields above stay
+        // ALWAYS-ON and are still sourced from `activity`, unchanged, in
+        // both modes: `ei_golden.rs`'s
+        // `ei_json_replay_fields_do_not_disturb_the_always_on_surface`
+        // asserts the two objects are byte-identical apart from the four
+        // added keys.
         {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             let (active_ms, start_ms, end_ms, down, dead) = match act {
@@ -336,15 +469,29 @@ pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
                 None => (0, 0, 0, Vec::new(), Vec::new()),
             };
             obj.insert("activeTimes".to_string(), json!([active_ms]));
-            obj.insert(
-                "combatReplayData".to_string(),
-                json!({
-                    "start": start_ms,
-                    "end": end_ms,
-                    "down": down,
-                    "dead": dead
-                }),
-            );
+            let mut crd = json!({
+                "start": start_ms,
+                "end": end_ms,
+                "down": down,
+                "dead": dead
+            });
+            if let Some(track) = replay.map(|r| &r.tracks[player_idx]) {
+                let crd = crd.as_object_mut().expect("combatReplayData is a JSON object");
+                crd.insert("positions".to_string(), ei_positions_json(&track.positions));
+                crd.insert("orientations".to_string(), ei_orientations_json(&track.orientations));
+                crd.insert("dc".to_string(), ei_intervals_json(&track.dc));
+                // GW2EI's `SingleActorCombatReplayDescription.Img =
+                // actor.GetIcon(true)`, i.e. always the BASE-resolution
+                // profession/elite-spec icon -- see
+                // `axilog_core::icons`'s module doc for the full
+                // `GetIcon`/`GetProfIcon`/`BaseResProfIcons` chain and the
+                // 16-spec exact calibration against the local reference.
+                crd.insert(
+                    "iconURL".to_string(),
+                    json!(prof_icon_url(&p.profession, &p.elite_spec)),
+                );
+            }
+            obj.insert("combatReplayData".to_string(), crd);
         }
         // `totalDamageDist`/`targetDamageDist`/`totalDamageTaken` (M12,
         // Task 3): only present when this player's native `skill_damage`
@@ -563,10 +710,51 @@ pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
     // contract violation for any future/less-defensive consumer that reads
     // `t.isFake` directly rather than through the truthy-check pattern
     // every current call site happens to use.
-    let targets: Vec<Value> = report.all_enemies.iter().map(|e| json!({
-        "id": e.id, "name": e.name, "enemyPlayer": e.is_player,
-        "teamID": team_id_for(&e.team), "isFake": false
-    })).collect();
+    //
+    // M15 Task 3: real EI gives its `targets[]` the SAME `combatReplayData`
+    // object it gives `players[]` (verified in the local reference export:
+    // 56 of its 57 targets carry a full `{start, end, iconURL, positions,
+    // orientations, dead, down, dc}`), so an enemy PLAYER target gets one
+    // here too when replay was requested -- `axilog_core::analysis::
+    // ei_replay` tracks them alongside squad players for exactly this. NPC
+    // targets get nothing: this project's replay engine only tracks player
+    // actors (see `build_world_tracks`).
+    //
+    // `iconURL` is the one field that cannot match EI here. EI takes it
+    // from the enemy's own `Spec` (its `players[]`-style profession), which
+    // axilog does not resolve for enemies at all -- `model::Enemy` has no
+    // profession/elite-spec field, only a display name -- so every enemy
+    // player gets `icons::UNKNOWN_PROFESSION_ICON`, EI's OWN fallback for
+    // an unrecognized spec (`ParserHelper.GetProfIcon`), rather than a
+    // guess parsed out of the name string. Documented as a parity gap in
+    // the README rather than faked. (EI's exported `targets[]` has no
+    // `profession` field either, so the reference cannot be joined on spec
+    // the way `players[]` can.)
+    let mut enemy_track = replay.map(|r| r.tracks[report.players.len()..].iter());
+    let targets: Vec<Value> = report.all_enemies.iter().map(|e| {
+        let mut t = json!({
+            "id": e.id, "name": e.name, "enemyPlayer": e.is_player,
+            "teamID": team_id_for(&e.team), "isFake": false
+        });
+        if e.is_player {
+            if let Some(track) = enemy_track.as_mut().and_then(|it| it.next()) {
+                t.as_object_mut().expect("target is a JSON object").insert(
+                    "combatReplayData".to_string(),
+                    json!({
+                        "start": track.start,
+                        "end": track.end,
+                        "iconURL": axilog_core::icons::UNKNOWN_PROFESSION_ICON,
+                        "positions": ei_positions_json(&track.positions),
+                        "orientations": ei_orientations_json(&track.orientations),
+                        "dead": ei_intervals_json(&track.dead),
+                        "down": ei_intervals_json(&track.down),
+                        "dc": ei_intervals_json(&track.dc),
+                    }),
+                );
+            }
+        }
+        t
+    }).collect();
     // `buffMap` (M3 Task 5): a subset covering only the 12 tracked boons,
     // keyed `"b<id>"` per real EI's convention (verified against
     // axibridge's `test-fixtures/boon/20260117-181030.json`,
@@ -610,7 +798,7 @@ pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
             "canCrit": e.can_crit,
         }))
     }).collect();
-    json!({
+    let mut out = json!({
         "fightName": format!("Detailed WvW - {}", report.encounter.map),
         "durationMS": report.encounter.duration_ms,
         "recordedBy": report.encounter.recorded_by,
@@ -625,7 +813,37 @@ pub fn to_ei_json(report: &Report, activity: &[ActivityIntervals]) -> Value {
             "blueTeamID": team_id_for("blue"),
             "greenTeamID": team_id_for("green")
         }
-    })
+    });
+    // `combatReplayMetaData` (M15, Task 3): the arena image every
+    // `combatReplayData.positions` pair is a pixel coordinate ON -- present
+    // only when replay was requested AND the log's map is one GW2EI ships
+    // an image for (`axilog_core::analysis::ei_replay::combat_replay_meta`
+    // returns `None` otherwise: Obsidian Sanctum, Armistice Bastion, and
+    // any non-WvW map id). EI's own field is nullable, and OMITTING it is
+    // the honest encoding of "these coordinates are on a computed bounding
+    // box, not on a published image" -- the `positions` themselves are
+    // still emitted in that case, via
+    // `ei_replay::bounding_box_transform`, exactly as GW2EI does.
+    //
+    // Every float here goes through `ei_float` -- `inchToPixel` is the
+    // canonical trap (`0.009` as a C# `float`; widened to `f64` its
+    // shortest round-trip becomes `0.008999999612569809`).
+    if let Some(meta) = replay.and_then(|r| r.meta.as_ref()) {
+        out.as_object_mut().expect("ei-json root is an object").insert(
+            "combatReplayMetaData".to_string(),
+            json!({
+                "inchToPixel": ei_float(f64::from(meta.inch_to_pixel)),
+                "pollingRate": meta.polling_rate,
+                "sizes": meta.sizes,
+                "maps": meta.maps.iter().map(|m| json!({
+                    "url": m.url,
+                    "interval": m.interval,
+                    "position": [ei_float(m.position[0]), ei_float(m.position[1])],
+                })).collect::<Vec<_>>(),
+            }),
+        );
+    }
+    out
 }
 
 #[cfg(test)]
@@ -672,7 +890,7 @@ mod tests {
     }
     #[test]
     fn maps_core_ei_fields() {
-        let v = to_ei_json(&sample_report(), &[]);
+        let v = to_ei_json(&sample_report(), &[], None);
         assert_eq!(v["durationMS"], 1000);
         assert_eq!(v["recordedBy"], ":A.1");
         assert_eq!(v["players"][0]["account"], ":A.1");
@@ -759,7 +977,7 @@ mod tests {
 
     #[test]
     fn buff_map_covers_the_12_tracked_boons_with_computed_fields_only() {
-        let v = to_ei_json(&sample_report_with_boons(), &[]);
+        let v = to_ei_json(&sample_report_with_boons(), &[], None);
         let buff_map = v["buffMap"].as_object().expect("buffMap must be an object");
         assert_eq!(buff_map.len(), 12, "exactly the 12 tracked boons");
         // Known value: Might (740) is Intensity-type -> stacking: true.
@@ -772,7 +990,7 @@ mod tests {
 
     #[test]
     fn buff_uptimes_map_intensity_and_duration_boons_to_ei_field_meanings() {
-        let v = to_ei_json(&sample_report_with_boons(), &[]);
+        let v = to_ei_json(&sample_report_with_boons(), &[], None);
         let entries = v["players"][0]["buffUptimes"].as_array().expect("buffUptimes must be an array");
         assert_eq!(entries.len(), 12, "one entry per tracked boon");
         let might = entries.iter().find(|e| e["id"] == 740).expect("Might entry present");
@@ -792,7 +1010,7 @@ mod tests {
 
     #[test]
     fn support_block_carries_the_four_new_computed_fields() {
-        let v = to_ei_json(&sample_report_with_boons(), &[]);
+        let v = to_ei_json(&sample_report_with_boons(), &[], None);
         let support = &v["players"][0]["support"][0];
         assert_eq!(support["condiCleanse"], 5);
         assert_eq!(support["condiCleanseSelf"], 2);
@@ -854,7 +1072,7 @@ mod tests {
             missiles: None,
             skill_map: Default::default(),
         };
-        let v = to_ei_json(&report, &[]);
+        let v = to_ei_json(&report, &[], None);
         let healing = &v["players"][0]["extHealingStats"]["outgoingHealing"][0];
         assert_eq!(healing["healing"], 5000);
         assert_eq!(healing["downedHealing"], 500);
@@ -881,7 +1099,7 @@ mod tests {
     /// ei_golden.rs`) asserts the same against a real multi-target log.
     #[test]
     fn every_target_is_marked_not_fake() {
-        let v = to_ei_json(&sample_report(), &[]);
+        let v = to_ei_json(&sample_report(), &[], None);
         let targets = v["targets"].as_array().expect("targets must be an array");
         assert_eq!(targets.len(), 2, "sample_report has 2 enemies (see all_enemies above)");
         for t in targets {
@@ -894,7 +1112,7 @@ mod tests {
     /// caller passes no `activity` data at all (`&[]`).
     #[test]
     fn active_times_and_combat_replay_data_default_to_zero_when_no_activity_supplied() {
-        let v = to_ei_json(&sample_report(), &[]);
+        let v = to_ei_json(&sample_report(), &[], None);
         assert_eq!(v["players"][0]["activeTimes"], json!([0]));
         assert_eq!(v["players"][0]["combatReplayData"]["start"], 0);
         assert_eq!(v["players"][0]["combatReplayData"]["end"], 0);
@@ -922,7 +1140,7 @@ mod tests {
                 down_intervals: vec![], dead_intervals: vec![],
             },
         ];
-        let v = to_ei_json(&sample_report(), &activity);
+        let v = to_ei_json(&sample_report(), &activity, None);
         assert_eq!(v["players"][0]["combatReplayData"]["start"], 100);
         assert_eq!(v["players"][0]["combatReplayData"]["end"], 10_100);
         assert_eq!(v["players"][0]["combatReplayData"]["down"], json!([[2_000, 3_000]]));
@@ -1007,7 +1225,7 @@ mod tests {
         let player = skill_and_timeseries_player(Some(sd), None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[]);
+        let v = to_ei_json(&report, &[], None);
         let p = &v["players"][0];
 
         // totalDamageDist: [phase][skillEntry], only the computed fields.
@@ -1045,7 +1263,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[]);
+        let v = to_ei_json(&report, &[], None);
         let p = &v["players"][0];
         assert!(p.get("totalDamageDist").is_none(), "totalDamageDist must be omitted, not emitted empty");
         assert!(p.get("totalDamageTaken").is_none());
@@ -1072,7 +1290,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, Some(ps), dps_targets);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[]);
+        let v = to_ei_json(&report, &[], None);
         let p = &v["players"][0];
 
         // damage1S/damageTaken1S: [phase][second], cumulative, final ==
@@ -1108,7 +1326,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[]);
+        let v = to_ei_json(&report, &[], None);
         let p = &v["players"][0];
         assert!(p.get("damage1S").is_none(), "damage1S must be omitted, not emitted empty");
         assert!(p.get("damageTaken1S").is_none());
@@ -1135,7 +1353,7 @@ mod tests {
         }]);
         let report = report_with_players(vec![], vec![player]);
 
-        let v = to_ei_json(&report, &[]);
+        let v = to_ei_json(&report, &[], None);
         let rotation = &v["players"][0]["rotation"];
         assert_eq!(rotation.as_array().unwrap().len(), 1, "one entry per cast skill id, no phase wrapper");
         assert_eq!(rotation[0]["id"], 5008);
@@ -1159,7 +1377,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]); // rotation: None inside the builder
         let report = report_with_players(vec![], vec![player]);
 
-        let v = to_ei_json(&report, &[]);
+        let v = to_ei_json(&report, &[], None);
         assert!(v["players"][0].get("rotation").is_none(), "rotation must be omitted, not emitted empty");
     }
 
@@ -1186,7 +1404,7 @@ mod tests {
             can_crit: true,
         });
 
-        let v = to_ei_json(&report, &[]);
+        let v = to_ei_json(&report, &[], None);
         let skill_map = v["skillMap"].as_object().expect("skillMap must be an object");
         assert_eq!(skill_map.len(), 2);
         assert_eq!(v["skillMap"]["s5492"]["name"], "Fire Attunement");
@@ -1207,8 +1425,137 @@ mod tests {
     /// matching `buffMap`'s own unconditional presence above.
     #[test]
     fn skill_map_ei_json_present_and_empty_when_report_skill_map_empty() {
-        let v = to_ei_json(&sample_report(), &[]);
+        let v = to_ei_json(&sample_report(), &[], None);
         assert!(v.get("skillMap").is_some(), "skillMap key must always be present");
         assert_eq!(v["skillMap"].as_object().unwrap().len(), 0, "sample_report's Metrics::skill_map is Default::default() (empty)");
+    }
+
+    /// M15 Task 3: the `f32`-text contract. Each of these is a value GW2EI
+    /// really emits (`inchToPixel`, a real position component, a real
+    /// orientation, an integral coordinate); the assertion is on the JSON
+    /// TEXT, which is the whole point -- the naive `json!(v)` on the
+    /// widened `f64` produces the long form shown in the third column.
+    #[test]
+    fn ei_float_emits_gw2ei_float_text_not_widened_f64_text() {
+        // (f32 value, EI's text)
+        let cases: &[(f32, &str)] = &[
+            (0.009, "0.009"),
+            (246.672, "246.672"),
+            (-75.179, "-75.179"),
+            (295.81, "295.81"),
+            (0.0, "0"),
+            (247.0, "247"),
+            (-3.148, "-3.148"),
+        ];
+        for &(v, want) in cases {
+            let widened = f64::from(v);
+            assert_eq!(
+                serde_json::to_string(&ei_float(widened)).unwrap(),
+                want,
+                "ei_float({v}) text"
+            );
+        }
+        // The trap itself, spelled out: the same values through `json!`.
+        assert_eq!(
+            serde_json::to_string(&json!(f64::from(0.009f32))).unwrap(),
+            "0.008999999612569809",
+            "this is what the naive path emits -- the reason ei_float exists"
+        );
+        assert_eq!(
+            serde_json::to_string(&json!(f64::from(246.672f32))).unwrap(),
+            "246.6719970703125"
+        );
+        // Non-finite never reaches this in practice (the replay engine
+        // asserts finiteness); it must not panic if it ever did.
+        assert_eq!(ei_float(f64::NAN), Value::Null);
+        assert_eq!(ei_float(f64::INFINITY), Value::Null);
+    }
+
+    /// M15 Task 3: the replay surface is OMITTED entirely (not emitted
+    /// empty) when replay was not requested -- the gate-respecting
+    /// requirement, keyed off the `replay` argument's `Option` presence.
+    #[test]
+    fn combat_replay_surface_omitted_when_replay_absent() {
+        let v = to_ei_json(&sample_report(), &[], None);
+        assert!(v.get("combatReplayMetaData").is_none());
+        let crd = &v["players"][0]["combatReplayData"];
+        for k in ["positions", "orientations", "dc", "iconURL"] {
+            assert!(crd.get(k).is_none(), "combatReplayData.{k} must be omitted");
+        }
+        // ... while M11's always-on four stay put.
+        for k in ["start", "end", "down", "dead"] {
+            assert!(crd.get(k).is_some(), "combatReplayData.{k} must stay always-on");
+        }
+        assert!(v["targets"][0].get("combatReplayData").is_none());
+    }
+
+    /// M15 Task 3: `combatReplayMetaData` is omitted -- while
+    /// `combatReplayData` is still emitted -- when the log's map has no
+    /// GW2EI arena image (unknown/imageless map id, so
+    /// `ei_replay::combat_replay_meta` returned `None` and the coordinates
+    /// came from the computed bounding box instead).
+    #[test]
+    fn combat_replay_meta_omitted_but_positions_kept_on_an_unmapped_log() {
+        use axilog_core::analysis::ei_replay::{EiReplay, EiTrack};
+        let report = sample_report();
+        let track = |name: &str, is_squad: bool| EiTrack {
+            agent_addr: 1,
+            name: name.to_string(),
+            is_squad,
+            start: 0,
+            end: 600,
+            positions: vec![[1.5, 2.5], [3.0, 4.0]],
+            orientations: vec![90.0, -0.5],
+            dc: vec![[i64::MIN, 0], [600, i64::MAX]],
+            down: vec![],
+            dead: vec![],
+        };
+        // `sample_report()` has 2 players and 1 enemy PLAYER (id 9).
+        let replay = EiReplay {
+            tracks: vec![track("A", true), track("B", true), track("E", false)],
+            map_id: Some(899), // Obsidian Sanctum: named by GW2EI, no image
+            meta: None,
+        };
+        let v = to_ei_json(&report, &[], Some(&replay));
+        assert!(
+            v.get("combatReplayMetaData").is_none(),
+            "no arena image => no metadata, even with replay on"
+        );
+        let crd = &v["players"][0]["combatReplayData"];
+        assert_eq!(serde_json::to_string(&crd["positions"]).unwrap(), "[[1.5,2.5],[3,4]]");
+        assert_eq!(serde_json::to_string(&crd["orientations"]).unwrap(), "[90,-0.5]");
+        assert_eq!(
+            crd["dc"],
+            json!([[i64::MIN, 0], [600, i64::MAX]]),
+            "GW2EI's long.MinValue/MaxValue sentinels survive as exact i64s"
+        );
+        assert_eq!(crd["iconURL"], "https://i.imgur.com/RiCJalE.png", "Daredevil");
+        // The enemy PLAYER target gets the unknown-spec icon (axilog has no
+        // profession for enemies); the NPC target gets no replay block.
+        let enemy = v["targets"].as_array().unwrap().iter().find(|t| t["enemyPlayer"] == true).unwrap();
+        assert_eq!(
+            enemy["combatReplayData"]["iconURL"],
+            axilog_core::icons::UNKNOWN_PROFESSION_ICON
+        );
+        let npc = v["targets"].as_array().unwrap().iter().find(|t| t["enemyPlayer"] == false).unwrap();
+        assert!(npc.get("combatReplayData").is_none());
+    }
+
+    /// M15 Task 3: a track list that does not line up with the report's own
+    /// roster is DROPPED rather than mis-attributed (the positional-join
+    /// guard at the top of `to_ei_json`).
+    #[test]
+    fn mismatched_replay_track_count_is_ignored_not_misattributed() {
+        use axilog_core::analysis::ei_replay::{EiReplay, EiTrack};
+        let replay = EiReplay {
+            tracks: vec![EiTrack {
+                agent_addr: 1, name: "A".into(), is_squad: true, start: 0, end: 0,
+                positions: vec![], orientations: vec![], dc: vec![], down: vec![], dead: vec![],
+            }],
+            map_id: Some(38),
+            meta: None,
+        };
+        let v = to_ei_json(&sample_report(), &[], Some(&replay));
+        assert!(v["players"][0]["combatReplayData"].get("positions").is_none());
     }
 }

@@ -80,6 +80,8 @@
 //! this project's linear interpolation vs. GW2EI's own velocity-aware
 //! hold/interpolate branch in `HandlePosition`, not a systematic offset).
 
+mod common;
+
 use axilog_core::analysis::ei_replay::MapTransform;
 use axilog_core::analysis::replay::build_replay;
 use axilog_core::evtc::{anon_account, decode_raw};
@@ -88,14 +90,6 @@ use axilog_core::model::resolve;
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
 const GOLDEN_JSON_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.ei.json");
-const LOCAL_POSTREWORK_ZEVTC: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/local/wvw-postrework.zevtc"
-);
-const LOCAL_POSTREWORK_JSON: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/local/wvw-postrework.ei.json"
-);
 
 /// GW2EI's Alpine Borderland (Green mapID=95 / Blue mapID=96)
 /// combat-replay geometry, per this file's module doc citation.
@@ -295,21 +289,22 @@ fn replay_calibrated_against_ei_combat_replay_data() {
 /// `combatReplayData`. Skips gracefully when either local file is absent
 /// (dev-only extra, mirrors `postrework_golden.rs`'s pattern) -- nothing
 /// from these files is extracted into any committed fixture.
+///
+/// M15 Task 3: resolved through `common::local_fixture`, so
+/// `AXILOG_LOCAL_FIXTURES` points it at the primary checkout's captures
+/// (this file used to hard-code the in-tree relative path, which silently
+/// `skip:`ped -- i.e. dropped this 99.77% gate -- for any work done in a
+/// `git worktree`, whose `fixtures/local/` is empty because the captures
+/// are PII and are never copied).
 #[test]
 fn replay_calibrated_against_ei_combat_replay_data_local_postrework_when_present() {
-    let bytes = match std::fs::read(LOCAL_POSTREWORK_ZEVTC) {
-        Ok(b) => b,
-        Err(_) => {
-            println!("skip: {LOCAL_POSTREWORK_ZEVTC} absent (local-only extra check)");
-            return;
-        }
+    let zevtc = common::local_fixture("wvw-postrework.zevtc");
+    let json_path = common::local_fixture("wvw-postrework.ei.json");
+    let Some(bytes) = common::read_bytes_or_skip(&zevtc, "local-only extra check") else {
+        return;
     };
-    let golden = match std::fs::read_to_string(LOCAL_POSTREWORK_JSON) {
-        Ok(s) => serde_json::from_str::<serde_json::Value>(&s).expect("parse local golden JSON"),
-        Err(_) => {
-            println!("skip: {LOCAL_POSTREWORK_JSON} absent (local-only extra check)");
-            return;
-        }
+    let Some(golden) = common::read_json_or_skip(&json_path, "local-only extra check") else {
+        return;
     };
     let golden_players = golden["players"].as_array().expect("players array");
     assert_eq!(golden["mapID"].as_i64(), Some(96), "expected Blue Alpine Borderlands (mapID 96)");
