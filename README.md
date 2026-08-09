@@ -32,7 +32,7 @@ cargo run -p axilog-cli -- parse <log.zevtc> --format table
 ### Parse a log
 
 ```sh
-axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json] [--view default|support|boons]
+axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons] [-o FILE]
 ```
 
 - `json` (default) — axilog's own native schema (`axilog_schema::Report`): encounter info, teams,
@@ -44,6 +44,10 @@ axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json] [--view defa
 - `csv` — same per-player fields as the default `table` view, machine-readable.
 - `ei-json` — a subset of the real Elite Insights / dps.report JSON shape, for tools that already
   consume EI's format. See **EI-JSON parity** below for exactly what is and isn't populated.
+- `html` — a single, self-contained interactive report (see **HTML report** below).
+
+`-o/--output FILE` writes the rendered output to `FILE` instead of stdout — works with every
+`--format`, not just `html`.
 
 `--view` (M3) selects the `table` format's column layout — ignored for every other `--format`:
 
@@ -84,6 +88,50 @@ account                  profession   Might(avg)  Quick%   Alac%   Stab%   Prot%
 :Anon107.4959            Mesmer             8.64    63.8     0.0    72.8    87.6
 :Anon163.7031            Mesmer             8.60    29.0    37.4    77.8    66.2
 ```
+
+### HTML report
+
+```sh
+axilog parse <log.zevtc|log.evtc> --format html -o report.html
+```
+
+Renders a single, self-contained dark-theme (with a light-mode toggle) HTML document — open
+`report.html` directly in a browser, no server or network access needed. Built by the
+`axilog-html` crate (`axilog_html::render(&Report) -> String`): the CSS, JS, and the report's own
+JSON data are all inlined into one file (`<style>`/`<script>` blocks), so it's safe to email, drop
+in a chat, or archive next to the source log — there are no external requests (fonts, CDNs,
+analytics, or otherwise) and no other files to ship alongside it.
+
+The report contains:
+
+- **Header** — map name, fight duration, recorded-by account, commander (with commander-tag
+  variant when present), a warnings banner (only shown when `Report.warnings` is non-empty), and
+  one color-coded chip per team (`red`/`blue`/`green`) with a squad or enemy player count.
+- **Damage / Support / Boons tabs** — sortable tables (click a column header to sort, click again
+  to reverse) with a squad-totals footer row on the Damage tab:
+  - *Damage*: account, character, profession (elite-spec name when active), damage, DPS, downs,
+    kills, deaths, down contribution, damage taken.
+  - *Support*: cleanses (total/self), boon strips, resurrects, stun breaks, removed-stun seconds.
+  - *Boons*: Might average stacks, presence % for Quickness/Alacrity/Stability/Protection/Fury/
+    Resistance, and a self/group/squad toggle for Might/Quickness/Alacrity/Stability *generation*
+    attribution.
+
+  Non-squad players (subgroup 0) render visually muted in every table.
+- **Damage timeline** — an inline SVG chart built from `timeline.per_second`: squad damage as a
+  filled area + line (the primary series), downs plotted as circular markers directly on the
+  damage line at the second they occurred, and CC-applied plotted as a translucent bar overlay
+  normalized to its own scale (a different unit/magnitude than damage, so it intentionally doesn't
+  share the damage y-axis — see `buildTimelinePaths`'s doc comment in `report.js`). Time axis in
+  `mm:ss`, damage axis in `k`-format (e.g. `45k`). The chart uses an SVG `viewBox` with
+  `width: 100%`, so it scales with the browser window rather than being a fixed-size image.
+
+All number/date formatting and interactive behavior (sorting, the theme toggle, the boon
+generation-mode toggle, the timeline) runs client-side in `report.js` against the embedded JSON —
+Rust only builds the skeleton and inlines the data, so there's one source of truth for every value
+shown. See `crates/axilog-html/assets/report.js`'s header comment for the project's XSS contract
+(every log-derived string — player/account names, map name, warnings, ... — reaches the DOM via
+`textContent` only, never `innerHTML`), and `crates/axilog-html/tests/golden_html.rs` for the
+structural/size/determinism tests that gate this format in CI.
 
 ### Anonymize a log for sharing
 
@@ -334,11 +382,25 @@ CLI-parity test against the CLI's own `--format json` output; CI builds the exte
 Linux/Windows/macOS (`maturin build`) and runs `maturin develop` + the unittest suite on Linux (see
 `.github/workflows/ci.yml`). PyPI publishing deferred — see SDKs above.
 
+**M7 (done):** self-contained HTML report (`crates/axilog-html`, `axilog parse --format html`) —
+dark-theme (light-mode toggle) single-file document, zero external requests, built from
+`include_str!`-inlined `report.css`/`report.js` assets around the embedded `Report` JSON; header
+(map/duration/recorder/commander/warnings/team chips); sortable Damage/Support/Boons tabs (keyboard-
+accessible tab bar and column-sort buttons, `aria-sort` on the `<th>` per WAI-ARIA, squad-totals
+footer row, muted non-squad rows, boon generation-mode self/group/squad toggle); an inline responsive
+SVG damage timeline (squad-damage area/line, downs-on-the-line markers, normalized CC-applied bar
+overlay, mm:ss/k-format axes) built by pure, node-tested path-generation functions
+(`buildTimelinePaths`); an XSS contract (log-derived strings via `textContent` only, JSON escaped
+`<`-safe for inline `<script>` embedding) with regression tests for both halves; a golden structural
+test against the real committed fixture (calibrated squad-damage/support sums, all view/timeline
+containers, byte-for-byte determinism, size budgets: <250KB total report, <50KB combined raw CSS+JS).
+`-o/--output FILE` (any `--format`, not just html) added to the CLI alongside it. See **HTML
+report** above.
+
 **Later:** healing/barrier stats, rotation/skill-cast tracking, PvE encounter logic (boss health
 phases, mechanics), npm publishing for `@axi/axilog`, PyPI publishing for `axilog`, HTML report
-output (incl. the tick-rate corner widget and marker-driven combat-replay eye candy — see
-arcdps-dev-notes), real-capture calibration of the M4 post-rework code paths once a fixture is
-available.
+extras (tick-rate corner widget, marker-driven combat-replay eye candy — see arcdps-dev-notes),
+real-capture calibration of the M4 post-rework code paths once a fixture is available.
 
 ## License
 

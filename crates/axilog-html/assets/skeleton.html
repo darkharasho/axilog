@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>axilog WvW report</title>
+<style>__AXILOG_CSS__</style>
+</head>
+<body>
+<header id="axilog-header">
+  <div id="axilog-header-top">
+    <h1 id="axilog-map"></h1>
+    <button id="axilog-theme-toggle" type="button" aria-label="Toggle light/dark theme">&#9789;</button>
+  </div>
+  <div id="axilog-warnings" class="axilog-warnings" hidden></div>
+  <div id="axilog-meta">
+    <span id="axilog-duration" class="axilog-stat"></span>
+    <span id="axilog-recorded-by" class="axilog-stat" hidden></span>
+    <span id="axilog-commander" class="axilog-stat" hidden></span>
+    <span id="axilog-tick-rate" class="axilog-stat" hidden></span>
+  </div>
+  <div id="axilog-teams"></div>
+</header>
+<main id="axilog-main">
+  <nav id="axilog-tabs" role="tablist" aria-label="Report views">
+    <button id="axilog-tab-damage" class="axilog-tab" type="button" role="tab" aria-controls="axilog-view-damage">Damage</button>
+    <button id="axilog-tab-support" class="axilog-tab" type="button" role="tab" aria-controls="axilog-view-support">Support</button>
+    <button id="axilog-tab-boons" class="axilog-tab" type="button" role="tab" aria-controls="axilog-view-boons">Boons</button>
+  </nav>
+  <section id="axilog-view-damage" class="axilog-view" role="tabpanel" aria-labelledby="axilog-tab-damage"></section>
+  <section id="axilog-view-support" class="axilog-view" role="tabpanel" aria-labelledby="axilog-tab-support" hidden></section>
+  <section id="axilog-view-boons" class="axilog-view" role="tabpanel" aria-labelledby="axilog-tab-boons" hidden></section>
+  <section id="axilog-timeline-section" class="axilog-timeline-section">
+    <h2 id="axilog-timeline-heading">Damage Timeline</h2>
+    <div id="axilog-timeline-chart"></div>
+  </section>
+</main>
+<script id="axilog-data" type="application/json">__AXILOG_DATA__</script>
+<script>__AXILOG_JS__</script>
+</body>
+</html>

@@ -16,10 +16,14 @@ enum Cmd {
         #[arg(long, value_enum, default_value_t = Format::Json)]
         format: Format,
         /// Table-format column layout (M3, Task 5). Ignored for every other
-        /// `--format` (json/csv/ei-json keep their existing full-field
+        /// `--format` (json/csv/ei-json/html keep their existing full-field
         /// shape unconditionally).
         #[arg(long, value_enum, default_value_t = View::Default)]
         view: View,
+        /// Write output to FILE instead of stdout. Applies to every
+        /// `--format` (M7, Task 1).
+        #[arg(short = 'o', long = "output", value_name = "FILE")]
+        output: Option<PathBuf>,
     },
     /// Rewrite every player's character/account name in a .zevtc to a
     /// deterministic `Anon<N>` placeholder and write the result as a new
@@ -36,6 +40,9 @@ enum Format {
     Table,
     Csv,
     EiJson,
+    /// Self-contained dark-theme HTML report (M7, Task 1) — see
+    /// `axilog-html`. No external requests; CSS/JS/data are all inlined.
+    Html,
 }
 
 /// Table-format column layout (M3, Task 5).
@@ -53,7 +60,7 @@ enum View {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Parse { path, format, view } => {
+        Cmd::Parse { path, format, view, output } => {
             let bytes = std::fs::read(&path)?;
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
@@ -69,14 +76,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for w in &report.warnings {
                 eprintln!("warning: {w}");
             }
-            match format {
-                Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
-                Format::EiJson => println!(
-                    "{}",
+            // Every format renders to a single `String` (with its own
+            // trailing newline where appropriate) so `-o/--output` (M7,
+            // Task 1) can apply uniformly regardless of `--format`.
+            let rendered = match format {
+                Format::Json => format!("{}\n", serde_json::to_string_pretty(&report)?),
+                Format::EiJson => format!(
+                    "{}\n",
                     serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report))?
                 ),
-                Format::Table => print!("{}", axilog_cli_table(&report, view)),
-                Format::Csv => print!("{}", axilog_cli_csv(&report)),
+                Format::Table => axilog_cli_table(&report, view),
+                Format::Csv => axilog_cli_csv(&report),
+                Format::Html => axilog_html::render(&report),
+            };
+            match output {
+                Some(path) => {
+                    std::fs::write(&path, &rendered)?;
+                    eprintln!("wrote {}", path.display());
+                }
+                None => print!("{rendered}"),
             }
         }
         Cmd::Anonymize { input, output } => {

@@ -13,5 +13,6 @@ path = "src/main.rs"
 axilog-core = { path = "../axilog-core" }
 axilog-schema = { path = "../axilog-schema" }
 axilog-ei = { path = "../axilog-ei" }
+axilog-html = { path = "../axilog-html" }
 clap.workspace = true
 serde_json.workspace = true

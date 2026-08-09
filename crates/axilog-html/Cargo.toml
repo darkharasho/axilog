@@ -1,0 +1,18 @@
+[package]
+name = "axilog-html"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+axilog-schema = { path = "../axilog-schema" }
+serde_json.workspace = true
+
+[dev-dependencies]
+# Only the golden structural test (tests/golden_html.rs, M7 Task 3) needs the
+# full decode -> resolve -> analyze pipeline, to render the committed
+# fixture through the real `axilog_schema::build_report` rather than a
+# hand-built one -- see crates/axilog-core/tests/golden.rs for the same
+# pattern used elsewhere.
+axilog-core = { path = "../axilog-core" }
