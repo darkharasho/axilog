@@ -93,12 +93,13 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   simulator-side -> MBUFFSIM); 69/69 damageModMap identical; 207/207 + 1,978/1,978 rows
   text-identical. NOTE for next MDOCS touch: /axilog/accuracy on the wiki needs a damage-modifier
   row (coverage + bounded-class statement).
-- MATTRIB Orphaned-instid attribution repair: rows with agent addr 0 but live instid are
-  silently dropped by addr-keyed sets in damage/hit_stats/defenses/skill_damage (GW2EI repairs
-  via orphaned-instid rewrite, EvtcParser.cs:1207-1243, ±300ms aware-window bound). Fixed
-  module-locally in damage_mods (M16 Task 1); fixing globally MOVES calibrated outputs — needs
-  its own calibrated milestone. Related hypothesis: M16's one-account -7-incoming-condition-hits
-  residual.
+- MATTRIB COMPLETE (merged 6edb3c0, reviewed SHIP): GW2EI's CompleteAgents orphan repair
+  transcribed exactly (two-probe-point ±300ms, NOT a window) into decode_raw; M16's
+  NonZeroAddrIndex retired byte-identically; 106/121 EI-comparable values toward EI (15 exact),
+  0 previously-exact disturbed. BONUS: the M16 deficit ROOT-CAUSED AND FIXED — a self-damage
+  filter on the incoming modifier pool GW2EI doesn't have (EI filters outgoing only); modifier
+  rows 792/958 exact, ids 38/69, all denominator residuals 0.0. 36 local calibration tests now
+  run from any worktree via AXILOG_LOCAL_FIXTURES.
 
 ## Parked (user-gated — do NOT do autonomously)
 - axibridge's actual cutover from EI CLI to the axilog SDK (both registries now live, so this is
