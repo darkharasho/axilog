@@ -73,10 +73,15 @@ pub struct Report {
     /// `OverrideIsNotInSquadFriendlyPlayer` does), so every `is_player`
     /// entry left in it is exactly EI's "non-squad, non-friendly player".
     ///
-    /// This project emits NO synthetic aggregate row (see `targets[].isFake`
-    /// in `axilog_ei`), and does not yet perform EI's `InstID` regroup of
-    /// enemy-player agents -- both deltas are recorded in the MROSTER
-    /// report and in `axilog_ei`'s `targets[]` block comment.
+    /// EI's `InstID` regroup of enemy-player agents is performed too, in
+    /// the core rather than here: `axilog_core::wvw::dedupe_enemy_players`
+    /// keys the enemy dedupe on instid (MINSTID), so `enc.enemies` already
+    /// carries one row per enemy PERSON and this roster is 56 rows over the
+    /// reference export's exact 56 enemy-player instids. The one remaining
+    /// delta is the synthetic aggregate row, which this project does not
+    /// emit (see `targets[].isFake` in `axilog_ei`); it and the regroup are
+    /// recorded in the MROSTER/MINSTID reports and in `axilog_ei`'s
+    /// `targets[]` block comment.
     ///
     /// Guarded on `enc.kind == "wvw"`, the only encounter kind this project
     /// produces today (same precedent as `axilog_core::analysis::

@@ -402,11 +402,13 @@ const PER_TARGET_FIELDS: &[&str] =
     &["killed", "downed", "connectedDamageCount", "againstDownedCount", "interrupts"];
 
 /// `statsTargets[i][0]` cannot be compared positionally. Post-MROSTER both
-/// sides list the same KIND of actor (enemy players), but GW2EI regroups
-/// agents sharing an `InstID` into one target
-/// (`AgentManipulationHelper.cs:467-474`) and this project does not -- 71
-/// rows here vs GW2EI's 56 -- and the two name spaces do not intersect
-/// either. The join therefore goes through arcdps AGENT IDENTITY --
+/// sides list the same KIND of actor (enemy players) and post-MINSTID the
+/// same GRANULARITY too (both regroup agents sharing an `InstID` into one
+/// target, `AgentManipulationHelper.cs:467-474` /
+/// `axilog_core::wvw::dedupe_enemy_players` -- 56 rows here against GW2EI's
+/// 56). It still cannot be positional: GW2EI carries a 57th synthetic
+/// aggregate target this project does not emit, neither side promises an
+/// order, and the two name spaces do not intersect either. The join therefore goes through arcdps AGENT IDENTITY --
 /// the instid GW2EI encodes into its `"<Spec> pl-<instid>"` placeholder
 /// name -> the addr that instid belonged to -> this project's enemy index
 /// -- exactly the M16 pattern `damage_mods_ei_golden.rs` established (see

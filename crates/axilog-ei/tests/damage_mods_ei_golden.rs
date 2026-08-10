@@ -228,11 +228,14 @@ fn ei_json_damage_modifiers_match_the_reference_export_text_when_available() {
     // (`WvWLogic.cs:307`). MROSTER curated this project's `targets[]` to
     // the same KIND of actor -- enemy players only, per
     // `axilog_schema::Report::ei_targets` -- which closed the 624-vs-57
-    // gulf this comment used to describe. Two differences remain, both
-    // documented on that field: no synthetic aggregate row, and no
-    // `InstID` regroup of enemy-player agents
-    // (`AgentManipulationHelper.cs:467-474`), so 71 rows here against
-    // GW2EI's 56. Their name spaces do not intersect either.
+    // gulf this comment used to describe, and MINSTID added the `InstID`
+    // regroup of enemy-player agents
+    // (`AgentManipulationHelper.cs:467-474`, see
+    // `axilog_core::wvw::dedupe_enemy_players`), which closed the
+    // granularity gap too: 56 rows here against GW2EI's 56, over the same
+    // 56 instids. One difference remains, documented on that field: no
+    // synthetic aggregate row (GW2EI's 57th target). Their name spaces do
+    // not intersect either.
     //
     // So the index means something different on each side, and a positional
     // comparison would be nonsense. Nor do the NAMES join: this capture's
