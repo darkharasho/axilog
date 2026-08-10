@@ -1,43 +1,44 @@
 # axilog
 
-A cross-platform, CLI-first reimplementation of
-[Elite Insights](https://github.com/baaron4/GW2-Elite-Insights-Parser) for parsing Guild Wars 2
-arcdps combat logs. Part of the axi suite.
+A fast, cross-platform combat-log parser for Guild Wars 2 arcdps logs. Part of the axi suite.
 
-axilog is a Rust parsing core (`axilog-core`) with a CLI, a Node SDK ([napi-rs](https://napi.rs))
-and a Python SDK ([PyO3](https://pyo3.rs)) layered on it as native extension modules — not
-subprocess wrappers. It emits its own native JSON, a subset of Elite Insights' JSON shape, CSV, a
-terminal table, or a single-file interactive HTML report.
+A Rust parsing core (`axilog-core`) with a CLI, a Node SDK ([napi-rs](https://napi.rs)) and a
+Python SDK ([PyO3](https://pyo3.rs)) built on it as native extension modules — not subprocess
+wrappers. Point it at a `.zevtc` and get back structured JSON, a terminal table, CSV, or a
+single-file interactive HTML report.
 
-- **Cross-platform.** EI is a Windows-targeted C# application. axilog ships prebuilt binaries for
-  Linux (x86-64/aarch64), Windows and macOS (Intel/Apple Silicon).
-- **Fast and light.** A real 583k-event WvW log parses and fully analyzes in ~174 ms, single
-  threaded, with no `unsafe` — 20× faster and 10× lighter than EI. See [Performance](#performance).
-- **Calibrated, not approximated.** Every metric it covers is asserted against a real dps.report EI
-  export in CI on every run. See [Accuracy](#accuracy).
-- **Closer to the arcdps spec where EI diverges.** Down contribution follows the methodology
-  relayed by the arcdps developer rather than EI's own algorithm; CC and damage exist as real
-  per-second timelines; the life-leech-taken count is the true one rather than a reproduction of
-  EI's verified counting bug.
-- **WvW-first.** Every calibrated number was validated against real WvW logs, on both arcdps log
-  eras (pre- and post-`20260501`). PvE encounter logic — boss health phases, mechanics, phase
-  splits — is not implemented; the report exposes a single whole-fight phase.
+- **Fast.** A real 583k-event WvW log parses and fully analyzes in **~174 ms**, single threaded,
+  with no `unsafe`. Small logs land in **60 ms**. Fixed startup cost is effectively zero, so
+  per-log tooling pays nothing per invocation. See [Speed](#speed).
+- **Deep analysis, not just DPS.** Damage and down contribution, CC and stun breaks, boon uptime
+  with self/group/squad generation attribution, condi cleanses and boon strips, healing and
+  barrier, per-skill distributions, per-second timelines, hit quality, defenses, cast rotations,
+  damage-modifier attribution over a 205-definition catalog, and combat-replay position tracks.
+- **Three ways to use it.** A single static binary, `npm install @axiapps/axilog`, or
+  `pip install axilog` — the same core behind all three, no runtime to install alongside.
+- **Calibrated, not approximated.** Every metric is asserted against a real reference export in CI
+  on every run; divergences are documented with a traced cause, never a loosened tolerance. See
+  [Accuracy](#accuracy).
+- **WvW-first.** Validated against real WvW logs on both arcdps log eras (pre- and
+  post-`20260501`). PvE encounter logic — boss health phases, mechanics, phase splits — is not
+  implemented; the report exposes a single whole-fight phase.
 
 ## Speed
 
-Head-to-head against the Elite Insights CLI v3.27 (plus its bundled .NET 8 runtime), same machine,
-medians of 3 after a warmup. "Matched" is axibridge's production EI configuration (detailed WvW,
-damage modifiers, combat replay, raw timeline arrays, phases) against axilog's equivalent flag set.
+Release build, Ryzen 9 7900X3D, end to end (decode → resolve → analyze → serialize):
 
-| | Real 5:48 zerg (583k events, 48 players) | 49 s skirmish (120k events, 42 players) |
-| --- | --- | --- |
-| Elite Insights CLI | 7.25 s · 857 MiB peak | 2.43 s · 373 MiB peak |
-| **axilog, matched surface** | **2.49 s (2.9×) · 117 MiB (7.3× less)** | **0.25 s (9.7×) · 24 MiB (15× less)** |
-| **axilog, default native JSON** | **0.36 s (20×) · 86 MiB (10× less)** | **0.06 s (40×) · 20 MiB (18× less)** |
+| Log | Events | Players | Full parse | Peak memory |
+| --- | --- | --- | --- | --- |
+| 49 s skirmish | 120,435 | 42 | **60 ms** | 20 MiB |
+| Real 5:48 zerg fight | 583,194 | 48 | **360 ms** | 86 MiB |
 
-axilog leads every cell. EI pays ~2 s of .NET startup and JIT *per spawned parse*, so for
-per-log tooling the small-log column is the ratio that matters; axilog's fixed cost is
-effectively zero. [Methodology, raw samples and the full history →](#performance)
+That is every metric listed above computed on a whole zerg fight in about a third of a second, on
+one thread. Emitting the full Elite Insights-compatible document instead — the heaviest thing
+axilog can produce, replay tracks and all — takes 2.49 s at 117 MiB.
+
+For scale against the reference implementation it is calibrated on, axilog is 2.9–9.7× faster on
+matched output and 20–40× faster in its default configuration, at 7–18× less memory —
+[full head-to-head and methodology](#vs-elite-insights).
 
 ## Install
 
@@ -133,29 +134,38 @@ filing a bug report, sharing a log, or committing a fixture.
 
 ## Performance
 
-End to end (decode → resolve → analyze → build the native report), release build, Ryzen 9 7900X3D:
+The [Speed](#speed) figures are whole-process wall clock. Broken down by stage — decode → resolve
+→ analyze → build the native report, release build, Ryzen 9 7900X3D:
 
 | Log | Events | Full parse | of which `analyze` |
 | --- | --- | --- | --- |
 | Committed fixture (`fixtures/wvw-small.anon.zevtc`) | 120,435 | **28.9 ms** | 18.9 ms |
 | Real WvW zerg log (48 players, 5:48 fight) | 583,194 | **174 ms** | 93.7 ms |
 
-That is a whole 583k-event log fully analyzed — damage, downs/CC, down contribution, boons and
-generation, support, healing, per-skill damage, per-second series, hit quality, defenses, rotation.
+Analysis is roughly half the budget and every pass is single-scan where the data allows; the
+benchmark harness (`crates/axilog-cli/benches/pipeline.rs`, criterion) and every optimization that
+was *declined*, with reasons, are in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
-### vs Elite Insights — methodology
+### vs Elite Insights
 
-The table [above](#speed) was measured 2026-08-10 on axilog **v0.3.0**. It is the closest honest
-apples-to-apples available: EI additionally computes phases and its full skill-DB surface, while
-axilog emits its documented WvW parity surface.
+axilog is calibrated against [Elite Insights](https://github.com/baaron4/GW2-Elite-Insights-Parser),
+so a like-for-like timing is worth recording. Measured 2026-08-10 on axilog v0.3.0 against the EI
+CLI v3.27 plus its bundled .NET 8 runtime, same machine, medians of 3 after a warmup. "Matched" is
+a production EI configuration (detailed WvW, damage modifiers, combat replay, raw timeline arrays,
+phases) against axilog's equivalent flag set:
 
-Memory used to be EI's one win — axilog
-peaked at 2.4 GiB building the whole `ei-json` document in RAM — until MSTREAM's streaming
-serializer removed it (−95% peak, byte-identical across 96 flag/output combinations). Since that
-run, MROSTER curated the `ei-json` enemy roster to GW2EI's own WvW rule, cutting the matched
-surface further on the real log to **1.70 s · 92 MiB** on the same harness. Full methodology, raw
-samples and every optimization that was *declined* are in
-[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+| | Real 5:48 zerg (583k events) | 49 s skirmish (120k events) |
+| --- | --- | --- |
+| Elite Insights CLI | 7.25 s · 857 MiB peak | 2.43 s · 373 MiB peak |
+| **axilog, matched surface** | **2.49 s (2.9×) · 117 MiB (7.3× less)** | **0.25 s (9.7×) · 24 MiB (15× less)** |
+| **axilog, default native JSON** | **0.36 s (20×) · 86 MiB (10× less)** | **0.06 s (40×) · 20 MiB (18× less)** |
+
+Not a feature-identical comparison: EI additionally computes phases and its full skill-DB surface,
+while axilog emits its documented WvW parity surface. Two structural notes — EI pays ~2 s of .NET
+startup and JIT *per spawned parse* (axilog's fixed cost is effectively zero), and memory was once
+EI's one win, until axilog's streaming serializer cut peak RSS 95% (byte-identical across 96
+flag/output combinations). Curating the `ei-json` enemy roster afterwards brought the matched
+surface to **1.70 s · 92 MiB** on the same harness.
 
 ## Accuracy
 
