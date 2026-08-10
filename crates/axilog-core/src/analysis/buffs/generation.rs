@@ -77,6 +77,13 @@ pub struct GenerationStats {
     /// Same average, but over the whole squad excluding self
     /// (`GetBuffsForPlayers`, `BuffEnum.Squad`).
     pub squad_pct: f64,
+    /// WASTED counterpart of [`Self::self_pct`] (MSMALL item 2):
+    /// `GetBuffsForSelf`'s `uptime.Wasted`.
+    pub self_wasted: f64,
+    /// WASTED counterpart of [`Self::group_pct`].
+    pub group_wasted: f64,
+    /// WASTED counterpart of [`Self::squad_pct`].
+    pub squad_wasted: f64,
 }
 
 // ---------------------------------------------------------------------
@@ -100,6 +107,72 @@ pub struct HeldSegment {
     pub end: u64,
 }
 
+/// One stack's worth of WASTED boon duration, credited to the source that
+/// applied it (MSMALL item 2).
+///
+/// GW2EI's `BuffSimulationItemWasted`. "Waste" is boon-time a source
+/// generated that the target never got to spend: the stack was destroyed
+/// while it still had duration left. There are exactly THREE sites that
+/// produce it, all in `BuffSimulatorNoID`:
+///
+/// 1. **Capacity-overflow eviction** -- `StackingLogic.FindLowestValue`,
+///    reached from `BuffSimulator.Add` when `IsFull`
+///    (`BuffSimulator.cs:56-69`). Each logic subclass picks its own victim
+///    (`QueueLogic.cs:12-30`, `HealingLogic.cs:31-60`,
+///    `OverrideLogic.cs:14-31`) and then:
+///    `wastes.Add(new BuffSimulationItemWasted(toRemove.Src,
+///    toRemove.Duration, toRemove.Start))`.
+/// 2. **`BuffRemove.Single`** -- the matched stack
+///    (`BuffSimulator.cs:110-127`).
+/// 3. **`BuffRemove.All`** -- EVERY held stack (`BuffSimulator.cs:93-108`).
+///
+/// In all three the credited amount is the victim's CURRENT remaining
+/// `Duration` (post-`Shift`), attributed to that stack's own `Src` --
+/// followed by one further record per entry in its `Extensions` list,
+/// each credited to the EXTENDER rather than the original applier.
+///
+/// **Extensions are deliberately folded, not modelled separately.**
+/// `BuffStackItem.Extensions` is only ever populated by a `BuffExtension`
+/// event, and those are vanishingly rare in practice: measured over this
+/// project's fixtures, `fixtures/wvw-small.anon.zevtc` has **0** extend
+/// events out of 11,359 boon events, and the local post-rework capture has
+/// **160** out of 68,593 (0.23%). This module therefore keeps the
+/// pre-existing folded representation (an extension adds straight onto the
+/// slot's remaining duration) and credits the whole of a wasted stack to
+/// its original `Src`. The bounded consequence: for a stack that was BOTH
+/// extended and later wasted, the extension's share of the waste lands on
+/// the applier instead of the extender. That is an attribution split
+/// within one stack, never a change to the TOTAL waste, and it can only
+/// affect the <=160 extended stacks in either fixture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WasteRecord {
+    /// The stack's `Src` -- the account-representative addr that applied it.
+    pub source: u64,
+    /// The remaining `Duration` (ms) destroyed with the stack.
+    pub ms: u64,
+}
+
+/// Both reductions of one (target, buff) simulation: the held segments that
+/// become GENERATION, and the destroyed remainders that become WASTE. They
+/// are produced by one pass so they can never describe different
+/// simulations -- the same single-sourcing argument
+/// [`simulate_boon_held_segments`] already makes for segments alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SimOutput {
+    pub segments: Vec<HeldSegment>,
+    pub wastes: Vec<WasteRecord>,
+}
+
+/// Sums [`WasteRecord`]s into a per-source wasted-ms map, exactly as
+/// [`segments_to_gen_ms`] does for generation.
+fn wastes_to_ms(wastes: &[WasteRecord]) -> BTreeMap<u64, u64> {
+    let mut out: BTreeMap<u64, u64> = BTreeMap::new();
+    for w in wastes {
+        *out.entry(w.source).or_default() += w.ms;
+    }
+    out
+}
+
 /// A duration-type (Queue) boon's held stack, carrying its source alongside
 /// the remaining-ms value `simulator::run_duration`'s `DurationStack`
 /// already tracks (see that function's doc comment for the frozen-queue
@@ -108,6 +181,16 @@ pub struct HeldSegment {
 struct DSlot {
     remaining: u64,
     source: u64,
+    /// Insertion sequence number, used ONLY to re-find this exact slot
+    /// after `HealingLogic.Sort` may have moved it (GW2EI holds the
+    /// `BuffStackItem` reference across `Add` -> `Activate`; we hold an
+    /// index, which a sort invalidates).
+    ///
+    /// Never read by any ordering or matching rule. For the eleven
+    /// non-Regeneration boons nothing sorts, so the lookup provably returns
+    /// the same index the pre-MSMALL code used literally -- which is what
+    /// keeps their generation output byte-identical.
+    seq: u64,
 }
 
 /// Sums [`HeldSegment`]s into the per-source generated-ms map every
@@ -167,11 +250,43 @@ fn run_duration_segments(
     mut events: Vec<BuffEvent>,
     capacity: u32,
     log_end_ms: u64,
-) -> Vec<HeldSegment> {
+    is_regeneration: bool,
+    healing_of: &dyn Fn(u64) -> i16,
+) -> SimOutput {
     events.sort_by_key(|e| e.time);
     let mut stack: Vec<DSlot> = Vec::new();
     let mut clock = events.first().map(|e| e.time).unwrap_or(0);
     let mut segments: Vec<HeldSegment> = Vec::new();
+    let mut wastes: Vec<WasteRecord> = Vec::new();
+    let mut seq: u64 = 0;
+
+    /// Index of the slot with this insertion sequence number. Always
+    /// present at every call site (the slot was just written).
+    fn locate(stack: &[DSlot], seq: u64) -> usize {
+        stack.iter().position(|s| s.seq == seq).unwrap_or(0)
+    }
+
+    // `HealingLogic.Sort` (`HealingLogic.cs:23-30`): Regeneration's stack
+    // list is kept sorted by SeedSrc.Healing DESCENDING, re-applied on every
+    // `StackingLogic.Add`. See `run_sim`'s doc comment for why a STABLE sort
+    // is the faithful choice here.
+    //
+    // **Measured inert on real arcdps data, and kept anyway.** Both this
+    // project's fixtures report `healing == 0` for EVERY player agent (74
+    // of 74 committed, 119 of 119 local) -- the agent table's healing field
+    // carries the recording player's own relative stats, not a populated
+    // per-agent healing-power figure. With all keys equal, a stable sort is
+    // by definition a no-op, which is confirmed end-to-end: sorting and not
+    // sorting produce byte-identical waste numbers on both fixtures. It is
+    // implemented because it is what GW2EI does and because a log that DOES
+    // carry healing values would need it -- not because it is currently
+    // doing any work. The eviction rule below is the half of HealingLogic
+    // that actually moves numbers.
+    let resort = |stack: &mut Vec<DSlot>| {
+        if is_regeneration {
+            stack.sort_by_key(|s| std::cmp::Reverse(healing_of(s.source)));
+        }
+    };
 
     for e in &events {
         advance_duration_ms(&mut stack, &mut clock, e.time, &mut segments);
@@ -179,16 +294,33 @@ fn run_duration_segments(
             BuffEventKind::Apply { duration_ms, is_shields } => {
                 let duration_ms = duration_ms as u64;
                 let was_full = stack.len() as u32 >= capacity;
+                seq += 1;
+                let new_slot = DSlot { remaining: duration_ms, source: e.agent, seq };
                 let inserted_idx = if !was_full {
-                    stack.push(DSlot { remaining: duration_ms, source: e.agent });
-                    stack.len() - 1
+                    stack.push(new_slot);
+                    resort(&mut stack);
+                    locate(&stack, seq)
                 } else if stack.len() > 1 {
-                    let (idx, _) =
-                        stack.iter().enumerate().skip(1).min_by_key(|&(_, s)| s.remaining).unwrap();
-                    stack[idx] = DSlot { remaining: duration_ms, source: e.agent };
-                    idx
+                    // Capacity overflow -> `FindLowestValue`: waste site 1.
+                    // `QueueLogic` evicts the min-TotalDuration NON-active
+                    // stack; `HealingLogic` (Regeneration) instead takes
+                    // `stacks.Last()` -- the LOWEST-healing source, by the
+                    // descending sort invariant above
+                    // (`HealingLogic.cs:44-45`: `toRemove ??= stacks.Last()`,
+                    // reached whenever the NoID path leaves both
+                    // `overridenStackID` and `overridenDuration` at 0).
+                    let idx = if is_regeneration {
+                        stack.len() - 1
+                    } else {
+                        stack.iter().enumerate().skip(1).min_by_key(|&(_, s)| s.remaining).unwrap().0
+                    };
+                    wastes.push(WasteRecord { source: stack[idx].source, ms: stack[idx].remaining });
+                    stack[idx] = new_slot;
+                    resort(&mut stack);
+                    locate(&stack, seq)
                 } else {
-                    stack[0] = DSlot { remaining: duration_ms, source: e.agent };
+                    wastes.push(WasteRecord { source: stack[0].source, ms: stack[0].remaining });
+                    stack[0] = new_slot;
                     0
                 };
                 if is_shields {
@@ -197,15 +329,20 @@ fn run_duration_segments(
                 }
             }
             BuffEventKind::RemoveSingle { removed_duration_ms } => {
+                // Waste site 2: the matched stack's remaining duration.
                 if let Some(idx) = find_single_removal_match(
                     stack.iter().map(|s| s.remaining as i64),
                     removed_duration_ms as i64,
                 ) {
+                    wastes.push(WasteRecord { source: stack[idx].source, ms: stack[idx].remaining });
                     stack.remove(idx);
                 }
             }
             BuffEventKind::RemoveAll => {
-                stack.clear();
+                // Waste site 3: EVERY held stack.
+                for slot in stack.drain(..) {
+                    wastes.push(WasteRecord { source: slot.source, ms: slot.remaining });
+                }
             }
             BuffEventKind::Extend { extended_ms, new_duration_ms } => {
                 let extended = extended_ms as i64;
@@ -217,15 +354,18 @@ fn run_duration_segments(
                     }
                 } else {
                     let duration_ms = (old_value + extended).max(0) as u64;
-                    stack.push(DSlot { remaining: duration_ms, source: e.agent });
-                    let val = stack.pop().unwrap();
-                    stack.insert(0, val);
+                    seq += 1;
+                    stack.insert(0, DSlot { remaining: duration_ms, source: e.agent, seq });
                 }
             }
         }
     }
     advance_duration_ms(&mut stack, &mut clock, log_end_ms, &mut segments);
-    segments
+    // Anything still held at log end is NOT waste: GW2EI only records waste
+    // where a stack is actively destroyed, and `AfterSimulate` just releases
+    // the remaining pool entries without touching `WasteSimulationResult`
+    // (`BuffSimulator.cs:50-54`).
+    SimOutput { segments, wastes }
 }
 
 /// An intensity-type (Might, Stability) boon's held stack, carrying its
@@ -286,10 +426,11 @@ fn run_intensity_segments(
     mut events: Vec<BuffEvent>,
     capacity: u32,
     log_end_ms: u64,
-) -> Vec<HeldSegment> {
+) -> SimOutput {
     events.sort_by_key(|e| e.time);
     let mut stacks: Vec<IStack> = Vec::new();
     let mut segments: Vec<HeldSegment> = Vec::new();
+    let mut wastes: Vec<WasteRecord> = Vec::new();
 
     for e in &events {
         flush_expiries_ms(&mut stacks, &mut segments, e.time);
@@ -301,8 +442,14 @@ fn run_intensity_segments(
                 } else if let Some((i, _)) =
                     stacks.iter().enumerate().min_by_key(|(_, s)| s.remaining_at(e.time))
                 {
+                    // Waste site 1 (`OverrideLogic.FindLowestValue`): the
+                    // evicted stack's remaining duration is destroyed.
                     let evicted = stacks[i];
                     credit(&mut segments, &evicted, e.time);
+                    wastes.push(WasteRecord {
+                        source: evicted.source,
+                        ms: evicted.remaining_at(e.time).max(0) as u64,
+                    });
                     stacks[i] = new_stack;
                 }
             }
@@ -313,13 +460,23 @@ fn run_intensity_segments(
                     order.iter().map(|&i| stacks[i].remaining_at(e.time)),
                     removed_duration_ms as i64,
                 ) {
+                    // Waste site 2.
                     let s = stacks.remove(order[pos]);
                     credit(&mut segments, &s, e.time);
+                    wastes.push(WasteRecord {
+                        source: s.source,
+                        ms: s.remaining_at(e.time).max(0) as u64,
+                    });
                 }
             }
             BuffEventKind::RemoveAll => {
+                // Waste site 3: EVERY held stack.
                 for s in stacks.drain(..) {
                     credit(&mut segments, &s, e.time);
+                    wastes.push(WasteRecord {
+                        source: s.source,
+                        ms: s.remaining_at(e.time).max(0) as u64,
+                    });
                 }
             }
             BuffEventKind::Extend { extended_ms, new_duration_ms } => {
@@ -349,7 +506,8 @@ fn run_intensity_segments(
     for s in &stacks {
         credit(&mut segments, s, log_end_ms);
     }
-    segments
+    // Still-held stacks at log end are not waste -- see the duration path.
+    SimOutput { segments, wastes }
 }
 
 /// Simulates every tracked boon's generated-ms breakdown for every squad
@@ -407,17 +565,51 @@ pub(crate) fn simulate_boon_generation_ms_with_inputs(
     inputs: &super::BoonInputs,
     enc: &Encounter,
 ) -> BTreeMap<(u64, u32), BTreeMap<u64, u64>> {
+    simulate_boon_generation_and_waste_ms(raw, inputs, enc).0
+}
+
+/// `(target rep addr, buff id) -> (source rep addr -> ms)` -- the shape both
+/// halves of [`simulate_boon_generation_and_waste_ms`] return.
+pub type PerTargetSourceMs = BTreeMap<(u64, u32), BTreeMap<u64, u64>>;
+
+/// Per-source GENERATED-ms and WASTED-ms for every (target, buff), from ONE
+/// simulation pass (MSMALL item 2).
+///
+/// Returns `(generated, wasted)`, both keyed `(target rep addr, buff id) ->
+/// (source rep addr -> ms)`. The generated half is bit-for-bit what
+/// [`simulate_boon_generation_ms_with_inputs`] always returned; the wasted
+/// half is the new one. See [`WasteRecord`] for what waste is and the three
+/// GW2EI sites that produce it.
+pub(crate) fn simulate_boon_generation_and_waste_ms(
+    raw: &RawLog,
+    inputs: &super::BoonInputs,
+    enc: &Encounter,
+) -> (PerTargetSourceMs, PerTargetSourceMs) {
     let log_end_ms = log_end_of(raw);
-    grouped_boon_events(inputs, enc)
-        .into_iter()
-        .map(|((rep, buff_id), evs)| {
-            let (capacity, is_intensity) = capacity_and_kind(inputs, buff_id);
-            (
-                (rep, buff_id),
-                segments_to_gen_ms(&run_segments(evs, capacity, is_intensity, log_end_ms)),
-            )
-        })
-        .collect()
+    // `HealingLogic` sorts on the SOURCE's healing power, and the event
+    // stream has already been folded onto account representatives, so the
+    // lookup has to accept a representative addr. A representative IS one of
+    // the account's raw addrs, so the raw table resolves it directly; an
+    // unknown source (enemy/NPC) falls back to 0, which sorts last -- the
+    // same "evict the least-healing stack" outcome an unrecognized applier
+    // should get.
+    let healing_of = |addr: u64| inputs.healing_power.get(&addr).copied().unwrap_or(0);
+    let mut gen_out = BTreeMap::new();
+    let mut waste_out = BTreeMap::new();
+    for ((rep, buff_id), evs) in grouped_boon_events(inputs, enc) {
+        let (capacity, is_intensity) = capacity_and_kind(inputs, buff_id);
+        let out = run_sim(
+            evs,
+            capacity,
+            is_intensity,
+            log_end_ms,
+            buff_id == super::REGENERATION,
+            &healing_of,
+        );
+        gen_out.insert((rep, buff_id), segments_to_gen_ms(&out.segments));
+        waste_out.insert((rep, buff_id), wastes_to_ms(&out.wastes));
+    }
+    (gen_out, waste_out)
 }
 
 /// The log's final absolute event time -- the window both simulations tick
@@ -483,10 +675,56 @@ pub fn run_segments(
     is_intensity: bool,
     log_end_ms: u64,
 ) -> Vec<HeldSegment> {
+    run_sim(events, capacity, is_intensity, log_end_ms, false, &|_| 0).segments
+}
+
+/// The full [`SimOutput`] (segments AND wastes) behind [`run_segments`].
+///
+/// `is_regeneration` selects GW2EI's `HealingLogic` instead of the default
+/// `QueueLogic` -- `BuffSimulator.cs:24-43` dispatches on
+/// `buff.StackType`, and `BuffStackType.Regeneration` is the ONLY value
+/// mapped to `_healingLogic`. `healing_of` resolves a source's
+/// `SeedSrc.Healing` (the arcdps agent-table healing-power attribute),
+/// which is the only thing that logic sorts on.
+///
+/// `HealingLogic` differs from its `QueueLogic` base in exactly two ways
+/// that matter to a no-stack-ID (NoID) simulation:
+///
+/// * `Sort` (`HealingLogic.cs:23-30`) keeps the stack list ordered by
+///   `SeedSrc.Healing` DESCENDING, re-applied on every `Add`. Implemented
+///   with a STABLE `sort_by`: .NET's `List.Sort` is an introsort, but for
+///   the <=9 elements a boon capacity ever reaches it takes the insertion-
+///   sort path, which preserves the relative order of equal keys -- and
+///   equal keys are the common case here (any two sources with the same
+///   healing power). An unstable sort would make the result depend on
+///   pivot choice, which is not something to reproduce.
+/// * `FindLowestValue` (`HealingLogic.cs:31-60`) evicts by stack ID, else
+///   by nearest `TotalDuration` to `overridenDuration`, else
+///   `stacks.Last()`. In NoID mode both overrides are 0 (they are only ever
+///   set by `BuffDictionary.AddRegen` threading a `BuffStackActiveEvent`'s
+///   instance, which requires stack IDs), so the live branch is
+///   `stacks.Last()` -- the LOWEST-healing source, by the sort invariant.
+///   That is a genuinely different victim from `QueueLogic`'s
+///   min-`TotalDuration`-among-non-active, and it is why Regeneration waste
+///   needs this logic rather than the Queue default.
+///
+/// `BuffStackActiveEvent` compliance in NoID mode
+/// (`BuffStackActiveEvent.cs:12-15`: `BuffInstance != 0 && base && (useBuff
+/// InstanceSimulator || BuffID == Regeneration)`) is deliberately NOT
+/// modelled -- it drives `Activate(stackID)`/`_noSort`, which this
+/// project's stack-ID-less pipeline has no input for.
+fn run_sim(
+    events: Vec<BuffEvent>,
+    capacity: u32,
+    is_intensity: bool,
+    log_end_ms: u64,
+    is_regeneration: bool,
+    healing_of: &dyn Fn(u64) -> i16,
+) -> SimOutput {
     if is_intensity {
         run_intensity_segments(events, capacity, log_end_ms)
     } else {
-        run_duration_segments(events, capacity, log_end_ms)
+        run_duration_segments(events, capacity, log_end_ms, is_regeneration, healing_of)
     }
 }
 
@@ -590,6 +828,24 @@ pub fn rollup(
     log_start_ms: u64,
     log_end_ms: u64,
 ) -> BTreeMap<(u64, u32), GenerationStats> {
+    rollup_with_waste(target_gen, &BTreeMap::new(), enc, log_start_ms, log_end_ms)
+}
+
+/// [`rollup`] plus the WASTED half (MSMALL item 2).
+///
+/// `target_waste` has the identical shape to `target_gen` and is reduced
+/// through the identical scaling -- verified: `BuffStatistics.cs` applies
+/// exactly the same `/phaseDuration`, `/playerCount` and `*100`-only-for-
+/// duration treatment to `wasted` as to `generation`, in BOTH
+/// `GetBuffsForPlayers` (lines 116-141) and `GetBuffsForSelf` (lines
+/// 190-216). So this reuses `avg_pct`/`ms_to_pct` rather than restating it.
+pub fn rollup_with_waste(
+    target_gen: &BTreeMap<(u64, u32), BTreeMap<u64, u64>>,
+    target_waste: &BTreeMap<(u64, u32), BTreeMap<u64, u64>>,
+    enc: &Encounter,
+    log_start_ms: u64,
+    log_end_ms: u64,
+) -> BTreeMap<(u64, u32), GenerationStats> {
     let phase_ms = (log_end_ms.saturating_sub(log_start_ms) as f64).max(1.0);
     let squad_players: Vec<&Player> = enc.players.iter().filter(|p| p.subgroup != 0).collect();
 
@@ -618,7 +874,24 @@ pub fn rollup(
             let squad_pct =
                 avg_pct(&squad_targets, boon_id, source_addr, target_gen, phase_ms, is_intensity);
 
-            out.insert((source_addr, boon_id), GenerationStats { self_pct, group_pct, squad_pct });
+            let self_wasted_ms = target_waste
+                .get(&(source_addr, boon_id))
+                .and_then(|m| m.get(&source_addr))
+                .copied()
+                .unwrap_or(0);
+            let self_wasted = ms_to_pct(self_wasted_ms, phase_ms, is_intensity);
+            let group_wasted =
+                avg_pct(&group_targets, boon_id, source_addr, target_waste, phase_ms, is_intensity);
+            let squad_wasted =
+                avg_pct(&squad_targets, boon_id, source_addr, target_waste, phase_ms, is_intensity);
+
+            out.insert(
+                (source_addr, boon_id),
+                GenerationStats {
+                    self_pct, group_pct, squad_pct,
+                    self_wasted, group_wasted, squad_wasted,
+                },
+            );
         }
     }
     out

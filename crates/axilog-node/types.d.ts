@@ -186,6 +186,19 @@ export interface GenerationOut {
   self_pct: number
   group_pct: number
   squad_pct: number
+  /**
+   * WASTED counterparts (MSMALL item 2), identical scale: boon-time this
+   * source generated that was destroyed before the target could spend it --
+   * a stack overwritten at capacity, or stripped/cleansed with duration
+   * left. GW2EI's `BuffStatistics.Wasted`.
+   *
+   * Rounded to 3 decimals (GW2EI's own `BuffDigit` precision, the most the
+   * reference format carries) and OMITTED when exactly zero -- read them as
+   * 0 when absent.
+   */
+  self_wasted?: number
+  group_wasted?: number
+  squad_wasted?: number
 }
 
 /**

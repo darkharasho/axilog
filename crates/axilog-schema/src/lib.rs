@@ -486,8 +486,58 @@ pub struct CcOut { pub applied_total: u32, pub applied_duration_ms: u64,
 /// `GetBuffsForPlayers` 1:1). Same 0-100 (duration boons) / raw
 /// average-concurrent-stack-count (intensity boons, no `*100`) scale as
 /// `BoonOut.presence_pct`/`avg_stacks`.
+///
+/// `self_wasted`/`group_wasted`/`squad_wasted` (MSMALL item 2) are the
+/// WASTED counterparts, on the identical scale: boon-time this source
+/// generated that was destroyed before the target could spend it (a stack
+/// overwritten at capacity, or stripped/cleansed with duration left).
+/// GW2EI's `BuffStatistics.Wasted`, emitted as `buffData[0].wasted` in
+/// `selfBuffs`/`groupBuffs`/`squadBuffs`.
 #[derive(Serialize)]
-pub struct GenerationOut { pub self_pct: f64, pub group_pct: f64, pub squad_pct: f64 }
+pub struct GenerationOut {
+    pub self_pct: f64,
+    pub group_pct: f64,
+    pub squad_pct: f64,
+    /// The three WASTED fields are rounded to 3 decimals and OMITTED when
+    /// exactly zero.
+    ///
+    /// Both choices are size control, and neither loses information.
+    /// Rounding: GW2EI itself only ever emits these to 3 decimals
+    /// (`Math.Round(x, ParserHelper.BuffDigit)`, `BuffDigit = 3`), so a
+    /// 3-decimal value is already the full precision the reference format
+    /// carries -- serializing a raw f64's ~17 significant digits would
+    /// store noise. Omitting zeros: a source that wasted none of a boon is
+    /// the common case, and `0.0` is the documented default on read.
+    ///
+    /// Measured: emitting all three at full f64 precision grew the rendered
+    /// HTML report by 47,102 bytes (+18%, ~31 bytes per value across 1,512
+    /// values) and pushed both `golden_html`'s size budgets over. With
+    /// rounding + zero-omission the same data costs a small fraction of
+    /// that. The three `*_pct` fields above are deliberately NOT changed --
+    /// they are an existing serialized surface and reshaping them is not
+    /// this milestone's business.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub self_wasted: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub group_wasted: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub squad_wasted: f64,
+}
+
+/// `skip_serializing_if` predicate for the omit-when-zero numeric fields.
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+/// Rounds to 3 decimals -- GW2EI's `ParserHelper.BuffDigit` precision, the
+/// most any buff percentage in the reference format ever carries.
+fn round_buff3(v: f64) -> f64 {
+    if v.is_finite() {
+        (v * 1000.0).round() / 1000.0
+    } else {
+        0.0
+    }
+}
 /// One tracked boon's whole-fight summary for one player (M3, Tasks 1-4).
 /// `presence_pct` is EI's "% of the fight with >=1 held stack" for every
 /// boon (0-100). `avg_stacks` (time-weighted mean held-stack count) is only
@@ -1114,7 +1164,12 @@ pub fn build_report(
                 BoonOut {
                     id, name: name.to_string(), presence_pct: u.presence_pct,
                     avg_stacks: if is_intensity { Some(u.avg_stacks) } else { None },
-                    generation: GenerationOut { self_pct: g.self_pct, group_pct: g.group_pct, squad_pct: g.squad_pct },
+                    generation: GenerationOut {
+                        self_pct: g.self_pct, group_pct: g.group_pct, squad_pct: g.squad_pct,
+                        self_wasted: round_buff3(g.self_wasted),
+                        group_wasted: round_buff3(g.group_wasted),
+                        squad_wasted: round_buff3(g.squad_wasted),
+                    },
                 }
             }).collect(),
             per_target: if !include_skill_damage {

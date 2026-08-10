@@ -240,12 +240,28 @@ class DpsTargetOut(TypedDict):
 
 # --- boons / support ------------------------------------------------------
 
-class GenerationOut(TypedDict):
+class _GenerationOutRequired(TypedDict):
     """Self/group/squad boon-generation attribution, 0-100 scale."""
 
     self_pct: float
     group_pct: float
     squad_pct: float
+
+class GenerationOut(_GenerationOutRequired, total=False):
+    """`self_wasted`/`group_wasted`/`squad_wasted` (MSMALL item 2) are the
+    WASTED counterparts, identical scale: boon-time this source generated
+    that was destroyed before the target could spend it -- a stack
+    overwritten at capacity, or stripped/cleansed with duration left.
+    GW2EI's `BuffStatistics.Wasted`.
+
+    Rounded to 3 decimals (GW2EI's own `BuffDigit` precision, the most the
+    reference format carries) and OMITTED when exactly zero -- read them as
+    0.0 when absent.
+    """
+
+    self_wasted: float
+    group_wasted: float
+    squad_wasted: float
 
 class _BoonOutRequired(TypedDict):
     id: int

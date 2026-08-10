@@ -471,6 +471,7 @@ fn ei_states_json(states: &[(u64, u32)]) -> Value {
 fn buff_generation_json(
     boons: &[axilog_schema::BoonOut],
     pick: fn(&axilog_schema::GenerationOut) -> f64,
+    pick_wasted: fn(&axilog_schema::GenerationOut) -> f64,
     keep_zero: bool,
 ) -> Value {
     Value::Array(
@@ -480,7 +481,18 @@ fn buff_generation_json(
             .map(|b| {
                 json!({
                     "id": b.id,
-                    "buffData": [ { "generation": ei_buff_pct(pick(&b.generation)) } ],
+                    "buffData": [ {
+                        "generation": ei_buff_pct(pick(&b.generation)),
+                        // MSMALL item 2: `BuffStatistics.Wasted`, the same
+                        // rounding/scale as `generation` (verified: the
+                        // duration/intensity branches at
+                        // `BuffStatistics.cs:116-141` and `:190-216` treat
+                        // the two identically). See
+                        // `axilog_core::analysis::buffs::generation::
+                        // WasteRecord` for the three GW2EI sites that
+                        // produce it.
+                        "wasted": ei_buff_pct(pick_wasted(&b.generation)),
+                    } ],
                 })
             })
             .collect(),
@@ -1427,9 +1439,9 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
             // rejected: the zero rows carry no information and cost 39.4%
             // of these arrays' bytes (see the MEIGAP Task 1 report's
             // always-on size decision).
-            "selfBuffs": buff_generation_json(&p.boons, |g| g.self_pct, true),
-            "groupBuffs": buff_generation_json(&p.boons, |g| g.group_pct, false),
-            "squadBuffs": buff_generation_json(&p.boons, |g| g.squad_pct, false)
+            "selfBuffs": buff_generation_json(&p.boons, |g| g.self_pct, |g| g.self_wasted, true),
+            "groupBuffs": buff_generation_json(&p.boons, |g| g.group_pct, |g| g.group_wasted, false),
+            "squadBuffs": buff_generation_json(&p.boons, |g| g.squad_pct, |g| g.squad_wasted, false)
         });
         // `activeTimes`/`combatReplayData` (M11 Task 3): unlike every other
         // block on this player, these are ALWAYS present -- not gated on
@@ -2452,7 +2464,7 @@ mod tests {
         // Quickness (duration): presence_pct=42.0 (avg_stacks meaningless/0).
         boon_uptime.insert((1u64, buffs::QUICKNESS), BoonUptime { presence_pct: 42.0, avg_stacks: 0.0 });
         let mut boon_generation = std::collections::BTreeMap::new();
-        boon_generation.insert((1u64, buffs::MIGHT), GenerationStats { self_pct: 1.5, group_pct: 2.0, squad_pct: 3.0 });
+        boon_generation.insert((1u64, buffs::MIGHT), GenerationStats { self_pct: 1.5, group_pct: 2.0, squad_pct: 3.0, self_wasted: 0.5, group_wasted: 0.25, squad_wasted: 0.125 });
         let m = Metrics{ instance_ids: Default::default(), enemy_damage_out: Default::default(),
             players: vec![PlayerMetrics{agent_addr:1,
                 support: SupportMetrics { cleanses: 5, cleanses_self: 2, strips: 7, strips_duration_ms: 12345, resurrects: 1 },

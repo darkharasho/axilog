@@ -468,3 +468,152 @@ fn boon_generation_matches_ei_golden_local_raw_when_present() {
     let golden = read_golden_json();
     check_boon_generation_matches_ei_golden(&bytes, &golden);
 }
+
+// ---------------------------------------------------------------------
+// MSMALL item 2: boon-generation WASTE calibration.
+// ---------------------------------------------------------------------
+
+/// Waste tolerance for the ELEVEN boons GW2EI simulates with `QueueLogic`
+/// or `OverrideLogic` -- i.e. everything except Regeneration.
+///
+/// Measured against the local post-rework capture's own EI export, over all
+/// three scopes (`selfBuffs`/`groupBuffs`/`squadBuffs`, 1,022 cells total):
+/// the worst non-Regeneration cell is **0.163pp** (one Aegis `groupBuffs`
+/// entry), with everything else at or under 0.141pp and the overwhelming
+/// majority inside EI's own 0.0005 rounding floor. `0.5` keeps ~3x margin.
+const WASTED_TOLERANCE_PP: f64 = 0.5;
+
+/// Waste tolerance for REGENERATION specifically, which is the one boon
+/// GW2EI routes to `HealingLogic` (`BuffSimulator.cs:29-31`).
+///
+/// This is a KNOWN, BOUNDED GAP, not a passing grade. Measured worst cell
+/// is 10.94pp (`selfBuffs`), 9.02 (`groupBuffs`), 3.98 (`squadBuffs`).
+///
+/// What IS modelled (and what it bought): `HealingLogic.FindLowestValue`
+/// evicts `stacks.Last()` rather than `QueueLogic`'s min-`TotalDuration`
+/// non-active stack. Switching Regeneration onto that rule roughly HALVES
+/// the error -- measured across the three scopes, mean 0.317 -> 0.176
+/// (`selfBuffs`), 0.406 -> 0.242 (`groupBuffs`), and worst cell 21.57 ->
+/// 10.94. `HealingLogic.Sort` is implemented too but is provably inert
+/// here: arcdps reports `healing == 0` for every player agent in both
+/// fixtures, so all sort keys are equal (see
+/// `buffs::generation::run_duration_segments`).
+///
+/// What is NOT modelled, and is the residual's cause: GW2EI's
+/// stack-INSTANCE threading for Regeneration.
+/// `BuffStackActiveEvent.IsBuffSimulatorCompliant` (`:12-15`) admits stack-
+/// active events in NoID mode for Regeneration ALONE, and
+/// `BuffDictionary.AddRegen` (`:98-119`) uses them to set a
+/// `BuffApplyEvent`'s `OverridenRegenDuration`/`OverridenRegenInstance`,
+/// which `HealingLogic.FindLowestValue` then prefers over `stacks.Last()`
+/// when choosing its victim. Both require per-stack instance IDs, which
+/// this project's simulator does not carry. Closing this means adding
+/// stack-instance tracking to the whole buff pipeline -- a milestone of its
+/// own, not a tolerance to tighten.
+const REGEN_WASTED_TOLERANCE_PP: f64 = 12.0;
+
+/// MSMALL item 2: `selfBuffs`/`groupBuffs`/`squadBuffs` `buffData[0].wasted`
+/// against the local post-rework capture's own EI export.
+///
+/// The committed `fixtures/wvw-small.ei.json` extract carries only
+/// `generation`, so this check is local-fixture-gated (it prints `skip:`
+/// and passes in CI, the same convention every other local-only check
+/// here uses).
+#[test]
+fn boon_waste_matches_local_postrework_ei_json() {
+    let Some(bytes) = read_local_fixture_or_skip_named("wvw-postrework.zevtc") else { return };
+    let Some(golden) = read_local_json_or_skip_named("wvw-postrework.ei.json") else { return };
+
+    let raw = decode_raw(&bytes).expect("decode postrework fixture");
+    let enc = resolve(&raw);
+    let metrics = analyze(&enc, &raw);
+
+    let mut checked = 0usize;
+    let mut joined = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+    let mut worst_non_regen = 0.0f64;
+    let mut worst_regen = 0.0f64;
+
+    for (scope, pick) in [
+        ("selfBuffs", 0usize),
+        ("groupBuffs", 1),
+        ("squadBuffs", 2),
+    ] {
+        let mut g_by: HashMap<(String, u32), f64> = HashMap::new();
+        for p in golden["players"].as_array().expect("players") {
+            let acct = p["account"].as_str().unwrap_or("").trim_start_matches(':').to_string();
+            for e in p[scope].as_array().map(|v| v.as_slice()).unwrap_or(&[]) {
+                let Some(id) = e["id"].as_u64() else { continue };
+                let w = e["buffData"][0]["wasted"].as_f64().unwrap_or(0.0);
+                g_by.insert((acct.clone(), id as u32), w);
+            }
+        }
+        for p in &enc.players {
+            let acct = p.account.trim_start_matches(':').to_string();
+            let mut any = false;
+            for &(boon_id, name, _) in BOON_IDS.iter() {
+                let Some(&g) = g_by.get(&(acct.clone(), boon_id)) else { continue };
+                any = true;
+                let st = metrics.boon_generation.get(&(p.agent_addr, boon_id)).copied()
+                    .unwrap_or_default();
+                let ours = match pick {
+                    0 => st.self_wasted,
+                    1 => st.group_wasted,
+                    _ => st.squad_wasted,
+                };
+                checked += 1;
+                let delta = (ours - g).abs();
+                let is_regen = boon_id == axilog_core::analysis::buffs::REGENERATION;
+                let tol = if is_regen { REGEN_WASTED_TOLERANCE_PP } else { WASTED_TOLERANCE_PP };
+                if is_regen {
+                    worst_regen = worst_regen.max(delta);
+                } else {
+                    worst_non_regen = worst_non_regen.max(delta);
+                }
+                if delta > tol {
+                    failures.push(format!(
+                        "  {scope} {acct} {name}: ours={ours:.3} ei={g:.3} delta={delta:.3}pp (tol {tol})"
+                    ));
+                }
+            }
+            if any && pick == 0 {
+                joined += 1;
+            }
+        }
+    }
+
+    assert!(joined >= 30, "expected >=30 accounts to join for the waste check, got {joined}");
+    assert!(
+        failures.is_empty(),
+        "{} waste cell(s) out of tolerance (checked {checked}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    println!(
+        "boon_waste_matches_local_postrework_ei_json: {checked} cells across {joined} players, \
+         worst non-Regeneration {worst_non_regen:.3}pp (tol {WASTED_TOLERANCE_PP}), \
+         worst Regeneration {worst_regen:.3}pp (tol {REGEN_WASTED_TOLERANCE_PP}, known gap)"
+    );
+}
+
+fn read_local_fixture_or_skip_named(name: &str) -> Option<Vec<u8>> {
+    let path = common::local_fixture(name);
+    match std::fs::read(&path) {
+        Ok(b) => Some(b),
+        Err(_) => {
+            println!("skip: {path} absent (MSMALL waste calibration)");
+            None
+        }
+    }
+}
+
+fn read_local_json_or_skip_named(name: &str) -> Option<serde_json::Value> {
+    let path = common::local_fixture(name);
+    match std::fs::read_to_string(&path) {
+        Ok(s) => Some(serde_json::from_str(&s).unwrap_or_else(|e| panic!("parse {path}: {e}"))),
+        Err(_) => {
+            println!("skip: {path} absent (MSMALL waste calibration)");
+            None
+        }
+    }
+}

@@ -655,9 +655,21 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // module docs) -- re-simulated with per-stack source tracking rather
     // than derived from `boons` (which only tracks stack COUNT, not WHICH
     // source's stack is held).
-    let target_gen =
-        buffs::generation::simulate_boon_generation_ms_with_inputs(raw, &boon_inputs, enc);
-    let boon_generation = buffs::generation::rollup(&target_gen, enc, log_start_ms, log_end_ms);
+    //
+    // MSMALL item 2: the SAME pass now also returns per-source WASTED ms
+    // (boon-time a source generated that was destroyed before the target
+    // could spend it) -- see `buffs::generation::WasteRecord` for the three
+    // GW2EI sites that produce it. One pass, so generation and waste can
+    // never describe different simulations.
+    let (target_gen, target_waste) =
+        buffs::generation::simulate_boon_generation_and_waste_ms(raw, &boon_inputs, enc);
+    let boon_generation = buffs::generation::rollup_with_waste(
+        &target_gen,
+        &target_waste,
+        enc,
+        log_start_ms,
+        log_end_ms,
+    );
     // M4 Task 3 (downgraded from the final-review fix wave's unconditional
     // warning): post-era extraction now works (M4 Tasks 1-2 era-gated
     // `events::extract_buff_events`/`support::apply` -- see `Metrics::
