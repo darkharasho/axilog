@@ -124,6 +124,38 @@ impl BuffStates {
     /// `BuffGraph.GetStackCount(time)`: the value of the last transition at
     /// or before `t` (0 before the first one, or when the buff was never
     /// seen on this agent).
+    ///
+    /// # Known divergence for DURATION-type buffs (ledgered, not fixed)
+    ///
+    /// GW2EI's buff graph does not carry the held-stack count for a
+    /// duration-type buff -- it carries a constant `1`. The graph is built
+    /// from `simulator.GenerationSimulation` via `simul.ToSegment()`
+    /// (`GW2EIEvtcParser/EIData/Actors/ActorsHelper/
+    /// SingleActorBuffsHelper.cs:1010`), `ToSegment` uses
+    /// `GetActiveStacks()` (`BuffSimulationItems/BuffSimulationItem.cs:43-46`),
+    /// and `BuffSimulationItemDuration.GetActiveStacks()` is literally
+    /// `return 1;` (`BuffSimulationItemDuration.cs:23-26`) -- only the
+    /// INTENSITY item returns the real count
+    /// (`BuffSimulationItemIntensity.cs:55-58`, `return GetStacks();`).
+    /// `BuffsTrackerSingle.GetStack` reads that graph, so to a GW2EI damage
+    /// modifier a Queue/Regeneration/Force buff is 0-or-1, never 7.
+    ///
+    /// This returns the full held count (active + queued), because
+    /// `simulator::run` produces a genuine stack-count timeline for both
+    /// stack types.
+    ///
+    /// **Harmless today, deliberately:** every catalogued definition that
+    /// reads a duration-type buff is `ByPresence` or `ByMultiPresence`, and
+    /// both only ask `> 0`. It becomes a live defect the moment a `ByStack`
+    /// (or `ByExactNumberOfBuffsPresent`) definition over a Queue buff is
+    /// catalogued -- it would multiply the gain by the queue depth. The fix
+    /// is one line HERE (clamp to 1 unless
+    /// `buffs::stack_type_for(buff_id)` is intensity), not in the
+    /// simulator, whose full count is correct and is what the boon-uptime
+    /// surface wants. Left unimplemented rather than speculatively applied
+    /// because there is nothing to calibrate it against until such a
+    /// definition exists. See the MBUFFSIM Task 1 report, "secondary
+    /// findings" #2.
     pub fn stack_at(&self, actor_key: u64, buff_id: u32, t: u64) -> u32 {
         let Some(states) = self.timelines.get(&(actor_key, buff_id)) else { return 0 };
         let idx = states.partition_point(|&(time, _)| time <= t);

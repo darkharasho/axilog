@@ -57,6 +57,15 @@ const TARGETS: &[(u32, &str, &str)] = &[
     (26980, "Resistance", "D"),
 ];
 
+/// A stable, PII-FREE label for a joined account: its 0-based position in
+/// `Encounter::players`, which `model::resolve` derives deterministically
+/// from the agent table. Never print `Player::account` from these tests —
+/// the local reference capture is a real WvW log and its account names are
+/// the exact thing `fixtures/local/` is gitignored to keep out of the repo.
+fn slot(i: usize) -> String {
+    format!("#{i:02}")
+}
+
 struct Row {
     account: String,
     ours_presence: f64,
@@ -194,7 +203,7 @@ fn diag_buff_uptimes_vs_ei() {
     for &(id, name, class) in TARGETS {
         let intensity = buff_stack::is_intensity(id);
         let mut rows: Vec<Row> = Vec::new();
-        for p in &enc.players {
+        for (i, p) in enc.players.iter().enumerate() {
             let key = common::account_key(&p.account).to_string();
             let ours = timelines
                 .get(&(p.agent_addr, id))
@@ -206,7 +215,7 @@ fn diag_buff_uptimes_vs_ei() {
             let o = ours.unwrap_or(uptime::BoonUptime { presence_pct: 0.0, avg_stacks: 0.0 });
             let (gu, gp) = g.copied().unwrap_or((0.0, 0.0));
             rows.push(Row {
-                account: key,
+                account: slot(i),
                 ours_presence: o.presence_pct,
                 ours_avg: o.avg_stacks,
                 ei_uptime: gu,
@@ -396,7 +405,7 @@ fn diag_three_way_axilog_vs_eiref_vs_ei() {
             });
         let mut printed = false;
         let (mut n, mut sum_a, mut sum_r) = (0usize, 0.0f64, 0.0f64);
-        for p in &enc.players {
+        for (i, p) in enc.players.iter().enumerate() {
             let key = common::account_key(&p.account).to_string();
             let Some(group) = grouped.get(&(p.agent_addr, id)) else { continue };
             let Some(&(ei_uptime, ei_presence)) = ei.get(&(key.clone(), id)) else { continue };
@@ -427,7 +436,7 @@ fn diag_three_way_axilog_vs_eiref_vs_ei() {
             // presence columns are meaningful there.
             println!(
                 "{:<10} {:>9.3} {:>9.3} {:>9.3} | {:>9.3} {:>9.3} {:>9.3}",
-                key, ours.presence_pct, rp, ei_pres, ours.avg_stacks, ra, ei_avg
+                slot(i), ours.presence_pct, rp, ei_pres, ours.avg_stacks, ra, ei_avg
             );
             n += 1;
             sum_a += (if intensity { ours.avg_stacks - ei_avg } else { ours.presence_pct - ei_pres })
@@ -803,14 +812,14 @@ fn diag_stability_removed_duration_band_aid() {
         "account", "raw", "+filter", "+bandaid", "EI"
     );
     let empty = Vec::new();
-    for p in &enc.players {
+    for (i, p) in enc.players.iter().enumerate() {
         let key = common::account_key(&p.account).to_string();
         let Some(&(ei_avg, _)) = ei.get(&key) else { continue };
         let Some(g0) = raw_ev.get(&p.agent_addr) else { continue };
         let a0 = run(g0);
         let a1 = run(filt_ev.get(&p.agent_addr).unwrap_or(&empty));
         let a2 = run(band_ev.get(&p.agent_addr).unwrap_or(&empty));
-        println!("{key:<12} {a0:>10.3} {a1:>10.3} {a2:>10.3} {ei_avg:>10.3}");
+        println!("{:<12} {a0:>10.3} {a1:>10.3} {a2:>10.3} {ei_avg:>10.3}", slot(i));
         n += 1;
         s0 += (a0 - ei_avg).abs();
         s1 += (a1 - ei_avg).abs();

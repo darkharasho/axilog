@@ -65,13 +65,13 @@ pub enum StackType {
 
 /// One emitted `GenerationSimulation` item, reduced to what a graph needs:
 /// `[start, end)` and the value `BuffSimulationItem.ToSegment()` would put
-/// on it (`SingleActorBuffsHelper.cs:1008`, `GetActiveStacks()`).
+/// on it (`SingleActorBuffsHelper.cs:1010`, `GetActiveStacks()`).
 #[derive(Debug, Clone, Copy)]
 pub struct Seg {
     pub start: u64,
     pub end: u64,
     /// `GetActiveStacks()`: `BuffSimulationItemDuration` returns a CONSTANT
-    /// `1` (`BuffSimulationItemDuration.cs:156-159`);
+    /// `1` (`BuffSimulationItemDuration.cs:23-26`);
     /// `BuffSimulationItemIntensity` returns `GetStacks()`
     /// (`BuffSimulationItemIntensity.cs:55-58`).
     pub graph_value: u32,
