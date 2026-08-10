@@ -240,12 +240,28 @@ class DpsTargetOut(TypedDict):
 
 # --- boons / support ------------------------------------------------------
 
-class GenerationOut(TypedDict):
+class _GenerationOutRequired(TypedDict):
     """Self/group/squad boon-generation attribution, 0-100 scale."""
 
     self_pct: float
     group_pct: float
     squad_pct: float
+
+class GenerationOut(_GenerationOutRequired, total=False):
+    """`self_wasted`/`group_wasted`/`squad_wasted` (MSMALL item 2) are the
+    WASTED counterparts, identical scale: boon-time this source generated
+    that was destroyed before the target could spend it -- a stack
+    overwritten at capacity, or stripped/cleansed with duration left.
+    GW2EI's `BuffStatistics.Wasted`.
+
+    Rounded to 3 decimals (GW2EI's own `BuffDigit` precision, the most the
+    reference format carries) and OMITTED when exactly zero -- read them as
+    0.0 when absent.
+    """
+
+    self_wasted: float
+    group_wasted: float
+    squad_wasted: float
 
 class _BoonOutRequired(TypedDict):
     id: int
@@ -300,6 +316,25 @@ class HealingOut(TypedDict):
     downed_healing_out: int
 
 # --- hit-quality stats (M13, Task 1) ---------------------------------------
+
+class AftercastOut(TypedDict):
+    """Aftercast/interrupt cast counters (MSMALL item 3). Always present,
+    like `hit_stats`.
+
+    Mirrors GW2EI's `JsonGameplayStatsAll` aftercast family, which lands in
+    its `statsAll[0]` as `saved`/`timeSaved`/`wasted`/`timeWasted`:
+    `saved_count` is casts that skipped their aftercast, `wasted_count` is
+    casts interrupted before firing. Durations are MILLISECONDS here (EI
+    emits seconds); `wasted_ms` is already the positive "time lost" figure.
+
+    NOTE the name collision: `wasted_count`/`wasted_ms` are CAST-INTERRUPT
+    counters, unrelated to boon-generation waste. Both names are EI's.
+    """
+
+    saved_count: int
+    saved_ms: int
+    wasted_count: int
+    wasted_ms: int
 
 class HitStatsOut(TypedDict):
     """Outgoing hit-quality stats -- mirrors EI's `statsAll[0]`.
@@ -479,6 +514,7 @@ class _PlayerOutRequired(TypedDict):
     boons: List[BoonOut]
     support: SupportOut
     hit_stats: HitStatsOut
+    aftercast: AftercastOut
     defenses: DefensesOut
 
 class PlayerOut(_PlayerOutRequired, total=False):

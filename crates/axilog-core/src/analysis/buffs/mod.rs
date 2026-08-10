@@ -220,6 +220,16 @@ pub struct BoonInputs {
     /// `sc::BUFF_INFO` rows for the tracked boons -- preferred over
     /// `simulator::capacity_for`'s hardcoded table.
     pub capacities: BTreeMap<u32, u32>,
+    /// Per-agent healing power, straight off the arcdps agent table
+    /// (`RawAgent::healing`) -- GW2EI's `AgentItem.Healing`.
+    ///
+    /// Needed by exactly one thing: `HealingLogic`'s stack sort, which is
+    /// how Regeneration (`BuffStackType.Regeneration`, the only buff GW2EI
+    /// routes there) chooses its capacity-overflow eviction victim. See
+    /// `generation::run_sim`'s doc comment. Keyed by RAW agent addr; the
+    /// generation pass folds sources onto account representatives before
+    /// simulating, so it looks up through the same fold.
+    pub healing_power: BTreeMap<u64, i16>,
 }
 
 /// Build the [`BoonInputs`] both boon simulations consume, from a
@@ -236,6 +246,7 @@ pub fn extract_boon_inputs_with_registry(
     BoonInputs {
         events: events::extract_buff_events_with_registry(raw, registry, &boon_ids),
         capacities: events::extract_buff_capacities(raw, &boon_ids),
+        healing_power: raw.agents.iter().map(|a| (a.addr, a.healing)).collect(),
     }
 }
 

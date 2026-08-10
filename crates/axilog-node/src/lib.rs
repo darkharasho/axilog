@@ -313,6 +313,15 @@ pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
 /// function always built that `Report` with both flags forced `false`,
 /// silently discarding any M12 detail regardless of what a caller wanted
 /// (axibridge consumes ei-json exclusively through this function).
+/// As of MEIGAP2 those two flags gate three more GW2EI surfaces:
+/// `opts.skill_damage` additionally carries the player distributions'
+/// outcome columns (`connectedHits`/`glance`/`missed`/`evaded`/`blocked`/
+/// `invulned`/`interrupted`/`indirectDamage`, plus per-skill
+/// `downContribution` on the outgoing one), and `opts.timeseries`
+/// additionally carries `healthPercents` and `boonsStates` -- GW2EI's own
+/// `RawFormatTimelineArrays` gate on both. `instanceID`,
+/// `dpsAll[0].breakbarDamage` and `targets[].dpsAll` need no flag, matching
+/// GW2EI, which always emits them.
 /// `opts.replay` (M15, Task 3) adds GW2EI's own combat-replay surface --
 /// per-actor `combatReplayData.{positions, orientations, dc, iconURL}` plus
 /// the top-level `combatReplayMetaData` (see `axilog_ei::to_ei_json`; it

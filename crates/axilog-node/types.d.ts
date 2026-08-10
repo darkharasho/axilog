@@ -186,6 +186,19 @@ export interface GenerationOut {
   self_pct: number
   group_pct: number
   squad_pct: number
+  /**
+   * WASTED counterparts (MSMALL item 2), identical scale: boon-time this
+   * source generated that was destroyed before the target could spend it --
+   * a stack overwritten at capacity, or stripped/cleansed with duration
+   * left. GW2EI's `BuffStatistics.Wasted`.
+   *
+   * Rounded to 3 decimals (GW2EI's own `BuffDigit` precision, the most the
+   * reference format carries) and OMITTED when exactly zero -- read them as
+   * 0 when absent.
+   */
+  self_wasted?: number
+  group_wasted?: number
+  squad_wasted?: number
 }
 
 /**
@@ -276,6 +289,30 @@ export interface HitStatsOut {
   above90_power_damage: number
   above90_condition_count: number
   above90_condition_damage: number
+}
+
+/**
+ * Aftercast/interrupt cast counters (MSMALL item 3). Always present,
+ * same as `hit_stats`.
+ *
+ * Mirrors GW2EI's `JsonGameplayStatsAll` aftercast family, which lands in
+ * its `statsAll[0]` as `saved`/`timeSaved`/`wasted`/`timeWasted`:
+ * `saved_count` is casts that skipped their aftercast, `wasted_count` is
+ * casts interrupted before firing. Durations are MILLISECONDS here (EI
+ * emits seconds); `wasted_ms` is already the positive "time lost" figure.
+ *
+ * NOTE the name collision: `wasted_count`/`wasted_ms` are CAST-INTERRUPT
+ * counters, unrelated to boon-generation waste. Both names are EI's.
+ */
+export interface AftercastOut {
+  /** EI `statsAll[0].saved`: casts that skipped their aftercast. */
+  saved_count: number
+  /** EI `statsAll[0].timeSaved`, in MILLISECONDS (EI emits seconds). */
+  saved_ms: number
+  /** EI `statsAll[0].wasted`: casts interrupted before firing. */
+  wasted_count: number
+  /** EI `statsAll[0].timeWasted`, in MILLISECONDS (EI emits seconds). */
+  wasted_ms: number
 }
 
 /**
@@ -407,6 +444,11 @@ export interface PlayerOut {
    * `skill_damage`/`per_second`/`dps_targets`. See `HitStatsOut`.
    */
   hit_stats: HitStatsOut
+  /**
+   * Aftercast/interrupt cast counters (MSMALL item 3). Always present,
+   * same as `hit_stats`. See `AftercastOut`.
+   */
+  aftercast: AftercastOut
   /**
    * Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
    * Task 2). Always present, same as `hit_stats`. See `DefensesOut`.

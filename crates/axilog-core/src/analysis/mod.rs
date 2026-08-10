@@ -444,6 +444,24 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // drop it. Recorded so the two definitions of "countable damage" in
     // this crate are not silent; see also `contribution::credit_window`,
     // the other carve-out.
+    //
+    // **MSMALL item 5 re-examined this and DELIBERATELY KEPT IT.** Measured
+    // by applying `is_health_damage_result` here and diffing the full
+    // `parse` output: ZERO changed bytes on `fixtures/wvw-small.anon.zevtc`
+    // AND zero on the local post-rework capture. So no fixture
+    // discriminates between the two readings, and there is no measurement
+    // pushing either way -- which leaves the semantic argument, and that
+    // argument favours keeping it: this set answers "did the squad interact
+    // with this agent", and a defiance-bar hit is interaction. Adding the
+    // filter would change behaviour only on some future log where an enemy
+    // is struck for breakbar damage and nothing else -- exactly the case
+    // the carve-out exists to get right -- in exchange for no present
+    // benefit. Unlike `contribution::credit_window` (which MSMALL DID
+    // sweep, because health damage is causally required for a down), the
+    // two definitions of countable damage differ here for a reason.
+    //
+    // The two carve-outs therefore resolved differently, and that is the
+    // point: "countable damage" is not one question.
     // MEIGAP2 row 5: enemy OUTGOING health damage, folded into this same
     // scan -- see `Metrics::enemy_damage_out`'s doc comment for the GW2EI
     // definition (minion-inclusive, `iff`-filtered).
@@ -637,9 +655,21 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // module docs) -- re-simulated with per-stack source tracking rather
     // than derived from `boons` (which only tracks stack COUNT, not WHICH
     // source's stack is held).
-    let target_gen =
-        buffs::generation::simulate_boon_generation_ms_with_inputs(raw, &boon_inputs, enc);
-    let boon_generation = buffs::generation::rollup(&target_gen, enc, log_start_ms, log_end_ms);
+    //
+    // MSMALL item 2: the SAME pass now also returns per-source WASTED ms
+    // (boon-time a source generated that was destroyed before the target
+    // could spend it) -- see `buffs::generation::WasteRecord` for the three
+    // GW2EI sites that produce it. One pass, so generation and waste can
+    // never describe different simulations.
+    let (target_gen, target_waste) =
+        buffs::generation::simulate_boon_generation_and_waste_ms(raw, &boon_inputs, enc);
+    let boon_generation = buffs::generation::rollup_with_waste(
+        &target_gen,
+        &target_waste,
+        enc,
+        log_start_ms,
+        log_end_ms,
+    );
     // M4 Task 3 (downgraded from the final-review fix wave's unconditional
     // warning): post-era extraction now works (M4 Tasks 1-2 era-gated
     // `events::extract_buff_events`/`support::apply` -- see `Metrics::

@@ -486,8 +486,58 @@ pub struct CcOut { pub applied_total: u32, pub applied_duration_ms: u64,
 /// `GetBuffsForPlayers` 1:1). Same 0-100 (duration boons) / raw
 /// average-concurrent-stack-count (intensity boons, no `*100`) scale as
 /// `BoonOut.presence_pct`/`avg_stacks`.
+///
+/// `self_wasted`/`group_wasted`/`squad_wasted` (MSMALL item 2) are the
+/// WASTED counterparts, on the identical scale: boon-time this source
+/// generated that was destroyed before the target could spend it (a stack
+/// overwritten at capacity, or stripped/cleansed with duration left).
+/// GW2EI's `BuffStatistics.Wasted`, emitted as `buffData[0].wasted` in
+/// `selfBuffs`/`groupBuffs`/`squadBuffs`.
 #[derive(Serialize)]
-pub struct GenerationOut { pub self_pct: f64, pub group_pct: f64, pub squad_pct: f64 }
+pub struct GenerationOut {
+    pub self_pct: f64,
+    pub group_pct: f64,
+    pub squad_pct: f64,
+    /// The three WASTED fields are rounded to 3 decimals and OMITTED when
+    /// exactly zero.
+    ///
+    /// Both choices are size control, and neither loses information.
+    /// Rounding: GW2EI itself only ever emits these to 3 decimals
+    /// (`Math.Round(x, ParserHelper.BuffDigit)`, `BuffDigit = 3`), so a
+    /// 3-decimal value is already the full precision the reference format
+    /// carries -- serializing a raw f64's ~17 significant digits would
+    /// store noise. Omitting zeros: a source that wasted none of a boon is
+    /// the common case, and `0.0` is the documented default on read.
+    ///
+    /// Measured: emitting all three at full f64 precision grew the rendered
+    /// HTML report by 47,102 bytes (+18%, ~31 bytes per value across 1,512
+    /// values) and pushed both `golden_html`'s size budgets over. With
+    /// rounding + zero-omission the same data costs a small fraction of
+    /// that. The three `*_pct` fields above are deliberately NOT changed --
+    /// they are an existing serialized surface and reshaping them is not
+    /// this milestone's business.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub self_wasted: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub group_wasted: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub squad_wasted: f64,
+}
+
+/// `skip_serializing_if` predicate for the omit-when-zero numeric fields.
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+/// Rounds to 3 decimals -- GW2EI's `ParserHelper.BuffDigit` precision, the
+/// most any buff percentage in the reference format ever carries.
+fn round_buff3(v: f64) -> f64 {
+    if v.is_finite() {
+        (v * 1000.0).round() / 1000.0
+    } else {
+        0.0
+    }
+}
 /// One tracked boon's whole-fight summary for one player (M3, Tasks 1-4).
 /// `presence_pct` is EI's "% of the fight with >=1 held stack" for every
 /// boon (0-100). `avg_stacks` (time-weighted mean held-stack count) is only
@@ -578,6 +628,35 @@ pub struct HitStatsOut {
     pub above90_condition_count: u32,
     pub above90_condition_damage: u64,
 }
+/// GW2EI's aftercast/interrupt cast counters (MSMALL item 3), mirroring
+/// `axilog_core::analysis::rotation::AftercastStats` field-for-field --
+/// see that struct's doc comment for the `GameplayStatistics.cs:81-99`
+/// transcription.
+///
+/// These land in EI's `statsAll[0]` as `saved`/`timeSaved`/`wasted`/
+/// `timeWasted`. Always present (not gated), same convention as
+/// `hit_stats`/`defenses`: the rotation pass that produces them is
+/// unconditional in `analyze()`, so there is no cost to gate.
+///
+/// NOTE the name collision: `statsAll[0].wasted` (a CAST-INTERRUPT count)
+/// is a completely different quantity from the boon-generation `wasted`
+/// in `selfBuffs`/`groupBuffs`/`squadBuffs`. Both names are EI's.
+///
+/// Durations are milliseconds here; EI emits them as seconds with 3
+/// decimals, which the ei-json adapter applies.
+#[derive(Serialize, Default)]
+pub struct AftercastOut {
+    /// EI `statsAll[0].saved`: casts that skipped their aftercast.
+    pub saved_count: u32,
+    /// EI `statsAll[0].timeSaved`, in MILLISECONDS (EI emits seconds).
+    pub saved_ms: i64,
+    /// EI `statsAll[0].wasted`: casts interrupted before firing.
+    pub wasted_count: u32,
+    /// EI `statsAll[0].timeWasted`, in MILLISECONDS (EI emits seconds).
+    /// Already the positive "time lost" figure.
+    pub wasted_ms: i64,
+}
+
 /// Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
 /// Task 2) -- mirrors `axilog_core::analysis::defenses::DefenseStats`
 /// field-for-field. See that module's doc comment for the exact EI
@@ -752,6 +831,9 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// Outgoing hit-quality stats (M13, Task 1). See `HitStatsOut`'s doc
     /// comment.
     pub hit_stats: HitStatsOut,
+    /// Aftercast/interrupt cast counters (MSMALL item 3). Always present,
+    /// same convention as `hit_stats`. See `AftercastOut`'s doc comment.
+    pub aftercast: AftercastOut,
     /// Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
     /// Task 2). Always present, same convention as `hit_stats`. See
     /// `DefensesOut`'s doc comment.
@@ -1082,7 +1164,12 @@ pub fn build_report(
                 BoonOut {
                     id, name: name.to_string(), presence_pct: u.presence_pct,
                     avg_stacks: if is_intensity { Some(u.avg_stacks) } else { None },
-                    generation: GenerationOut { self_pct: g.self_pct, group_pct: g.group_pct, squad_pct: g.squad_pct },
+                    generation: GenerationOut {
+                        self_pct: g.self_pct, group_pct: g.group_pct, squad_pct: g.squad_pct,
+                        self_wasted: round_buff3(g.self_wasted),
+                        group_wasted: round_buff3(g.group_wasted),
+                        squad_wasted: round_buff3(g.squad_wasted),
+                    },
                 }
             }).collect(),
             per_target: if !include_skill_damage {
@@ -1184,6 +1271,13 @@ pub fn build_report(
                 above90_power_count: h.above90_power_count, above90_power_damage: h.above90_power_damage,
                 above90_condition_count: h.above90_condition_count, above90_condition_damage: h.above90_condition_damage,
             }}).unwrap_or_default(),
+            aftercast: m.map(|m| {
+                let a = axilog_core::analysis::rotation::aftercast_stats(&m.rotation);
+                AftercastOut {
+                    saved_count: a.saved_count, saved_ms: a.saved_ms,
+                    wasted_count: a.wasted_count, wasted_ms: a.wasted_ms,
+                }
+            }).unwrap_or_default(),
             defenses: m.map(|m| { let d = m.defenses; DefensesOut {
                 blocked_count: d.blocked_count, evaded_count: d.evaded_count, dodge_count: d.dodge_count,
                 missed_count: d.missed_count, interrupted_count: d.interrupted_count, invulned_count: d.invulned_count,
@@ -1527,7 +1621,8 @@ mod tests {
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 rotation: vec![SkillRotation { skill_id: 500, casts: vec![
-                    Cast { cast_time_ms: 100, duration_ms: 700, time_gained_ms: 300, quickness: 0.0 },
+                    Cast { cast_time_ms: 100, duration_ms: 700, time_gained_ms: 300, quickness: 0.0,
+                        status: axilog_core::analysis::rotation::AnimationStatus::Reduced },
                 ]}],
                 ..Default::default()},
         ],

@@ -108,6 +108,7 @@ mod tests {
                 per_second: None,
                 dps_targets: vec![],
                 hit_stats: HitStatsOut::default(),
+                aftercast: Default::default(),
                 defenses: DefensesOut::default(),
                 rotation: None,
                 damage_mods: None,

@@ -149,6 +149,32 @@ jobs:
         working-directory: crates/axilog-node
         run: npm run build
 
+      # MSMALL item 7: `npm run build` REGENERATES index.d.ts (napi's dts
+      # generator, then scripts/patch-dts.mjs). Nothing downstream compared
+      # the result against the committed file, so a napi-cli release that
+      # changed the generated shape -- e.g. by dropping the doc comments
+      # propagated from the Rust `///`s -- would have landed silently and
+      # left the repo's copy stale.
+      #
+      # @napi-rs/cli is exact-pinned (3.8.2 in both package.json and
+      # package-lock.json), so this should never fire through the normal
+      # path; it fires when someone bumps the CLI, hand-edits the spec, or
+      # deletes the lockfile. That is exactly when a human needs to look at
+      # the diff, so failing loudly beats a stale committed file.
+      #
+      # If this fails legitimately (an intended napi bump), commit the
+      # regenerated index.d.ts in the same change as the bump.
+      - name: Node SDK - index.d.ts is regen-clean
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: crates/axilog-node
+        run: |
+          if ! git diff --exit-code -- index.d.ts; then
+            echo "::error::crates/axilog-node/index.d.ts differs from the committed copy after 'npm run build'."
+            echo "The generated .d.ts has drifted (most likely a @napi-rs/cli version change)."
+            echo "Review the diff above and commit the regenerated file if the change is intended."
+            exit 1
+          fi
+
       - name: Node SDK - test (linux only, see comment above)
         if: matrix.os == 'ubuntu-latest'
         working-directory: crates/axilog-node

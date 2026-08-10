@@ -468,19 +468,56 @@ fn ei_states_json(states: &[(u64, u32)]) -> Value {
 /// `buffUptimes` carries (zeros included), `groupBuffs`/`squadBuffs` are
 /// filtered to buffs this player is a recorded source for
 /// (`BuffStatistics.cs:66,100`'s `hasGeneration`).
+///
+/// **What "a recorded source for" means, corrected by the MSMALL review.**
+/// `hasGeneration` is `buffDistribution.HasSrc(boon.ID, srcAgentItem)`, and
+/// `HasSrc` is a bare key-presence test on the per-buff
+/// `Dictionary<AgentItem, BuffDistributionItem>`
+/// (`BuffDistribution.cs:78-81`) -- NOT a test that the source generated
+/// any held time. `SimulationItem.AddWaste` registers a source with
+/// `new BuffDistributionItem(0, 0, value, 0, 0, 0)`, i.e. `Value == 0` and
+/// `Waste == value` (`SimulationItem.cs:99-116`). So a WASTE-ONLY source --
+/// one whose every stack was overwritten or stripped before it held any
+/// time -- is a recorded source, and EI emits its row.
+///
+/// This filter therefore keeps a row when EITHER the generation or the
+/// wasted value is non-zero. Filtering on generation alone (what it did
+/// before) silently dropped real EI rows: measured on
+/// `fixtures/wvw-small.anon.zevtc`, 9 `groupBuffs`/`squadBuffs` cells with
+/// `generation == 0` but substantial waste, including an Aegis
+/// `groupBuffs` entry at `wasted = 18.247`.
+///
+/// The two channels this project does NOT model (overstack, extension) can
+/// also register a source in EI. A source visible to EI through ONLY those
+/// is still missed here -- unavoidable while those channels are unmodelled,
+/// and unchanged by this fix.
 fn buff_generation_json(
     boons: &[axilog_schema::BoonOut],
     pick: fn(&axilog_schema::GenerationOut) -> f64,
+    pick_wasted: fn(&axilog_schema::GenerationOut) -> f64,
     keep_zero: bool,
 ) -> Value {
     Value::Array(
         boons
             .iter()
-            .filter(|b| keep_zero || pick(&b.generation) > 0.0)
+            .filter(|b| {
+                keep_zero || pick(&b.generation) > 0.0 || pick_wasted(&b.generation) > 0.0
+            })
             .map(|b| {
                 json!({
                     "id": b.id,
-                    "buffData": [ { "generation": ei_buff_pct(pick(&b.generation)) } ],
+                    "buffData": [ {
+                        "generation": ei_buff_pct(pick(&b.generation)),
+                        // MSMALL item 2: `BuffStatistics.Wasted`, the same
+                        // rounding/scale as `generation` (verified: the
+                        // duration/intensity branches at
+                        // `BuffStatistics.cs:116-141` and `:190-216` treat
+                        // the two identically). See
+                        // `axilog_core::analysis::buffs::generation::
+                        // WasteRecord` for the three GW2EI sites that
+                        // produce it.
+                        "wasted": ei_buff_pct(pick_wasted(&b.generation)),
+                    } ],
                 })
             })
             .collect(),
@@ -774,13 +811,41 @@ pub struct EiInputs<'a> {
 /// points below do.
 struct LazySeq<'f, 'a> {
     len: usize,
-    f: &'f std::cell::RefCell<Box<dyn FnMut(usize) -> Value + 'a>>,
+    rows: &'f LazyRows<'a>,
+}
+
+/// A stateful row builder plus its take-once guard (MSTREAM review).
+///
+/// The guard has to live HERE, next to the `FnMut`, rather than on
+/// [`LazySeq`]: `LazySeq` values are constructed fresh inside
+/// [`EiDoc::serialize`], so a flag on them would reset on every
+/// serialization and never catch the bug it exists to catch. The closure
+/// (owned by [`EiDoc`]) is the actual once-consumable resource.
+struct LazyRows<'a> {
+    f: std::cell::RefCell<Box<dyn FnMut(usize) -> Value + 'a>>,
+    /// Set on first consumption; a second one would silently resume the
+    /// partly-consumed builder and emit garbage rather than the same array
+    /// again. Debug-only -- release builds keep the (correct,
+    /// single-serialization) path with no added behaviour.
+    consumed: std::cell::Cell<bool>,
+}
+
+impl<'a> LazyRows<'a> {
+    fn new(f: Box<dyn FnMut(usize) -> Value + 'a>) -> Self {
+        LazyRows { f: std::cell::RefCell::new(f), consumed: std::cell::Cell::new(false) }
+    }
 }
 
 impl serde::Serialize for LazySeq<'_, '_> {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeSeq;
-        let mut f = self.f.borrow_mut();
+        debug_assert!(
+            !self.rows.consumed.replace(true),
+            "LazySeq is take-once: its FnMut element builder is stateful, so a \
+             second serialization would resume a partly-consumed builder \
+             instead of re-emitting the array (see LazyRows' doc comment)"
+        );
+        let mut f = self.rows.f.borrow_mut();
         let mut seq = s.serialize_seq(Some(self.len))?;
         for i in 0..self.len {
             // `f(i)` is built, handed to the serializer, and dropped before
@@ -813,9 +878,9 @@ struct EiDoc<'a> {
     duration_ms: u64,
     recorded_by: Option<&'a str>,
     player_count: usize,
-    player_json: std::cell::RefCell<Box<dyn FnMut(usize) -> Value + 'a>>,
+    player_json: LazyRows<'a>,
     target_count: usize,
-    target_json: std::cell::RefCell<Box<dyn FnMut(usize) -> Value + 'a>>,
+    target_json: LazyRows<'a>,
     buff_map: BTreeMap<String, Value>,
     skill_map: BTreeMap<String, Value>,
     damage_mod_map: Option<BTreeMap<String, Value>>,
@@ -840,14 +905,14 @@ impl serde::Serialize for EiDoc<'_> {
         m.serialize_entry("fightName", &self.fight_name)?;
         m.serialize_entry(
             "players",
-            &LazySeq { len: self.player_count, f: &self.player_json },
+            &LazySeq { len: self.player_count, rows: &self.player_json },
         )?;
         m.serialize_entry("recordedBy", &self.recorded_by)?;
         m.serialize_entry("skillMap", &self.skill_map)?;
         m.serialize_entry("success", &true)?;
         m.serialize_entry(
             "targets",
-            &LazySeq { len: self.target_count, f: &self.target_json },
+            &LazySeq { len: self.target_count, rows: &self.target_json },
         )?;
         m.serialize_entry("wvWMapData", &self.wvw_map_data)?;
         m.end()
@@ -986,7 +1051,36 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
             "connectedPowerAbove90HPCount": p.hit_stats.above90_power_count,
             "connectedPowerAbove90HPDamage": p.hit_stats.above90_power_damage,
             "connectedConditionAbove90HPCount": p.hit_stats.above90_condition_count,
-            "connectedConditionAbove90HPDamage": p.hit_stats.above90_condition_damage
+            "connectedConditionAbove90HPDamage": p.hit_stats.above90_condition_damage,
+            // MSMALL item 3: the `JsonGameplayStatsAll` aftercast/interrupt
+            // family, from `p.aftercast` (`AftercastOut`, mirroring
+            // `axilog_core::analysis::rotation::AftercastStats` -- see that
+            // struct's doc comment for the full
+            // `GameplayStatistics.cs:81-99` transcription and the
+            // `GetCastEvents` window filter that makes it exact).
+            //
+            // Field names and units from `JsonStatisticsBuilder.
+            // BuildJsonGameplayStatsAll` (`GW2EIBuilders/JsonModels/
+            // JsonActorUtilities/JsonStatisticsBuilder.cs:149-152`):
+            //   Wasted     = gameStats.SkillAnimationInterruptedCount
+            //   TimeWasted = gameStats.SkillAnimationInterruptedDuration
+            //   Saved      = gameStats.SkillAnimationAfterCastInterruptedCount
+            //   TimeSaved  = gameStats.SkillAnimationAfterCastInterruptedDuration
+            // The two counts are plain ints; the two durations are SECONDS
+            // (`Math.Round(ms / 1000.0, ParserHelper.TimeDigit)`, TimeDigit
+            // = 3) -- `ei_time_secs`' exact convention.
+            //
+            // `wasted`/`timeWasted` here are CAST-INTERRUPT counters and
+            // have nothing to do with the boon-generation `wasted` in
+            // selfBuffs/groupBuffs/squadBuffs. Both names are real EI's.
+            //
+            // Calibrated on `fixtures/local/wvw-postrework.zevtc` against
+            // that log's own EI export: all FOUR fields exact for all 44
+            // players.
+            "saved": p.aftercast.saved_count,
+            "timeSaved": ei_time_secs(p.aftercast.saved_ms.max(0) as u64),
+            "wasted": p.aftercast.wasted_count,
+            "timeWasted": ei_time_secs(p.aftercast.wasted_ms.max(0) as u64)
         } ]);
         // Real EI's `statsTargets[targetIndex][phaseIndex]` carries a large
         // per-target breakdown (including its own per-target
@@ -1327,21 +1421,24 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
             // `BuffStatistics.cs:116-121`/`:135-141` term for term:
             // duration boons `*100`, intensity boons raw average stacks).
             //
-            // Emitted fields: `generation` ONLY. Real EI's sibling fields
-            // on the same object -- `generationPresence`, `overstack`
-            // (which is really overstack+generation, `BuffStatistics.cs:117`),
-            // `wasted`, `unknownExtended`, `byExtension`, `extended` --
-            // come from the simulator's WASTE/OVERSTACK/EXTENSION channels
+            // Emitted fields: `generation` and `wasted` (MSMALL item 2 added
+            // the latter -- the one axibridge also reads). Real EI's
+            // remaining sibling fields on the same object --
+            // `generationPresence`, `overstack` (which is really
+            // overstack+generation, `BuffStatistics.cs:117`),
+            // `unknownExtended`, `byExtension`, `extended` -- come from the
+            // simulator's OVERSTACK/EXTENSION channels
             // (`GW2EIEvtcParser/EIData/Buffs/BuffSimulators/SimulationItem.cs:81-115`,
-            // `BuffSimulatorNoID/BuffSimulator.cs:67,99,104,117,122`), which
-            // this project's own generation simulator does not model: it
-            // accumulates only the HELD (generation) ms per source. They're
-            // omitted rather than faked, the same "don't fake absent data"
+            // `BuffSimulatorNoID/BuffSimulator.cs:67,117,122`), which this
+            // project's simulator still does not model. They're omitted
+            // rather than faked, the same "don't fake absent data"
             // convention `statsTargets`/`support`/`extHealingStats` above
-            // already follow. (`wasted` is the one axibridge also reads;
-            // absent, its reader's `wasted ?? 0` yields a zero wasted-time
-            // column while the generation column -- the metric that matters
-            // -- is fully populated.)
+            // already follow.
+            //
+            // Because `wasted` is now populated, it also participates in the
+            // group/squad id-set filter -- a waste-only source is a real EI
+            // row. See `buff_generation_json`'s doc comment for the
+            // `HasSrc`/`AddWaste` citation and the measured cell count.
             //
             // Id sets, following EI's own two DIFFERENT rules:
             //
@@ -1370,9 +1467,9 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
             // rejected: the zero rows carry no information and cost 39.4%
             // of these arrays' bytes (see the MEIGAP Task 1 report's
             // always-on size decision).
-            "selfBuffs": buff_generation_json(&p.boons, |g| g.self_pct, true),
-            "groupBuffs": buff_generation_json(&p.boons, |g| g.group_pct, false),
-            "squadBuffs": buff_generation_json(&p.boons, |g| g.squad_pct, false)
+            "selfBuffs": buff_generation_json(&p.boons, |g| g.self_pct, |g| g.self_wasted, true),
+            "groupBuffs": buff_generation_json(&p.boons, |g| g.group_pct, |g| g.group_wasted, false),
+            "squadBuffs": buff_generation_json(&p.boons, |g| g.squad_pct, |g| g.squad_wasted, false)
         });
         // `activeTimes`/`combatReplayData` (M11 Task 3): unlike every other
         // block on this player, these are ALWAYS present -- not gated on
@@ -2226,9 +2323,9 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
         duration_ms: report.encounter.duration_ms,
         recorded_by: report.encounter.recorded_by.as_deref(),
         player_count: report.players.len(),
-        player_json: std::cell::RefCell::new(player_json),
+        player_json: LazyRows::new(player_json),
         target_count: report.all_enemies.len(),
-        target_json: std::cell::RefCell::new(target_json),
+        target_json: LazyRows::new(target_json),
         buff_map,
         skill_map,
         damage_mod_map,
@@ -2395,7 +2492,7 @@ mod tests {
         // Quickness (duration): presence_pct=42.0 (avg_stacks meaningless/0).
         boon_uptime.insert((1u64, buffs::QUICKNESS), BoonUptime { presence_pct: 42.0, avg_stacks: 0.0 });
         let mut boon_generation = std::collections::BTreeMap::new();
-        boon_generation.insert((1u64, buffs::MIGHT), GenerationStats { self_pct: 1.5, group_pct: 2.0, squad_pct: 3.0 });
+        boon_generation.insert((1u64, buffs::MIGHT), GenerationStats { self_pct: 1.5, group_pct: 2.0, squad_pct: 3.0, self_wasted: 0.5, group_wasted: 0.25, squad_wasted: 0.125 });
         let m = Metrics{ instance_ids: Default::default(), enemy_damage_out: Default::default(),
             players: vec![PlayerMetrics{agent_addr:1,
                 support: SupportMetrics { cleanses: 5, cleanses_self: 2, strips: 7, strips_duration_ms: 12345, resurrects: 1 },
@@ -2485,6 +2582,7 @@ mod tests {
                 per_second: None,
                 dps_targets: vec![],
                 hit_stats: HitStatsOut::default(),
+                aftercast: Default::default(),
                 defenses: DefensesOut::default(),
                 rotation: None,
                 damage_mods: None,
@@ -2617,6 +2715,7 @@ mod tests {
             healing: None,
             skill_damage, per_second, dps_targets,
             hit_stats: HitStatsOut::default(),
+            aftercast: Default::default(),
             defenses: DefensesOut::default(),
             rotation: None,
             damage_mods: None,

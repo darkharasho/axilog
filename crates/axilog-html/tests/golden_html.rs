@@ -155,14 +155,29 @@ fn render_is_deterministic_for_the_real_fixture() {
 /// block in this schema was measured against before being gated, so this
 /// stays a budget adjustment, not a new opt-in flag (see `axilog_core::
 /// analysis::skill_map`'s module doc for the full scoping/size writeup).
-/// 275,000 keeps ~14.5KB of headroom above the current measured 260,520.
+/// 275,000 kept ~14.5KB of headroom above the then-measured 260,520.
+///
+/// **MSMALL raised this to 300,000 (measured 282,488).** Two new data
+/// surfaces landed: the per-boon `wasted` attribution on `GenerationOut`
+/// (item 2) and the per-player `aftercast` block (item 3). Growth is
+/// +21,968 bytes (+8.4%) over the 260,520 baseline -- well inside the ~30%
+/// guideline this budget's own note cites for deciding whether a block
+/// needs an opt-in flag, so both stay always-on.
+///
+/// That is AFTER size control on the new fields: serialized at full f64
+/// precision the `wasted` trio alone cost 47,102 bytes and pushed the
+/// report to 307,622. Rounding them to GW2EI's own 3-decimal `BuffDigit`
+/// precision and omitting exact zeros (see `axilog_schema::GenerationOut`)
+/// recovered 25,134 of that without losing anything the reference format
+/// carries. 300,000 keeps ~17.5KB of headroom, the same proportion the
+/// previous budget held.
 #[test]
 fn total_report_size_stays_under_budget() {
     let report = fixture_report();
     let html = axilog_html::render(&report);
     assert!(
-        html.len() < 275_000,
-        "fixture report is {} bytes, must stay under the 275KB total-file budget",
+        html.len() < 300_000,
+        "fixture report is {} bytes, must stay under the 300KB total-file budget",
         html.len()
     );
 }
