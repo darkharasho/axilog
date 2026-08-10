@@ -12,6 +12,10 @@ The consolidated end-of-milestone numbers (baseline -> Task 2 -> Task 3, for
 both the committed fixture and a real 583k-event log) are in
 [MPERF final results](#mperf-final-results-baseline---task-2---task-3).
 
+Later milestones that add work to a measured stage record their delta here
+too, against the MPERF tip:
+[After MATTRIB Task 1](#after-mattrib-task-1--the-orphaned-instid-repair-pre-pass).
+
 ## Harness
 
 - Location: `crates/axilog-cli/benches/pipeline.rs`, wired via
@@ -454,6 +458,38 @@ Only counts and timings are ever recorded here. The log itself stays under
 `fixtures/local/` (gitignored) and is never committed, so these numbers are
 not independently reproducible by a third party the way the fixture arm is —
 which is exactly why the committed fixture arm exists alongside them.
+
+## After MATTRIB Task 1 — the orphaned-instid repair pre-pass
+
+MATTRIB Task 1 adds a decode post-pass (`evtc::repair`, GW2EI's
+`EvtcParser.CompleteAgents` orphaned-instid rewrite) that runs inside
+`decode_raw`, so it is the first change since MPERF to add work to a
+measured stage. One extra full scan of the event stream, with two agent-slot
+lookups per row; the repair loops themselves are proportional to the orphan
+count (43 rows on the fixture, 725 on the real log), not to the stream.
+
+Same machine and harness as the baseline above. Measured 2026-08-09 against
+`bd8b3d5`.
+
+| Stage | Before (`bd8b3d5`) | After | Δ |
+|---|---|---|---|
+| fixture `decode_raw` | 9.006 ms | 9.851 ms | +9.4% (+0.85 ms) |
+| fixture `model::resolve` | 694.2 µs | 709.9 µs | +2.3% (noise) |
+| fixture `analysis::analyze` | 20.293 ms | 20.240 ms | −0.3% (noise) |
+| fixture `full_pipeline` | 30.175 ms | 31.434 ms | +4.2% (+1.26 ms) |
+| real-log `decode_raw` | 77.40 ms | 81.73 ms | +5.6% (+4.3 ms) |
+| real-log `model::resolve` | 4.451 ms | 4.419 ms | −0.7% (noise) |
+| real-log `analysis::analyze` | 96.89 ms | 96.65 ms | −0.2% (noise) |
+| real-log `full_pipeline` | 183.75 ms | 183.88 ms | +0.07% (noise) |
+
+The bounded cost is entirely in `decode_raw`; `full_pipeline` absorbs it into
+noise on the real log. Worth recording how it got there: the first
+implementation keyed the addr -> agent-slot map with a `BTreeMap<u64,
+usize>` and cost **+33.6% / +19.6%** on `decode_raw` — ~2.4x the final
+figure. Replacing it with a `HashMap` behind a three-instruction
+multiply-shift hasher (`repair::AddrHasher`; the map is looked up, never
+iterated, so this cannot affect ordering or determinism) is the whole
+difference. Per-row hashing on a 583k-row scan is not a micro-optimisation.
 
 ## CI
 

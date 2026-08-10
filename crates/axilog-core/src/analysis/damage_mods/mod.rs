@@ -546,7 +546,6 @@ pub fn evaluate_full(
     let scope = Scope {
         registry,
         states: BuffStates::build(raw, registry, &addr_to_rep, &wanted_buffs(&active)),
-        addr_index: NonZeroAddrIndex::build(raw),
         post_era: raw.header.is_post_buff_rework(),
         squad,
         addr_to_rep,
@@ -762,14 +761,13 @@ struct Scope<'a> {
     addr_to_rep: BTreeMap<u64, u64>,
     enemies: BTreeSet<u64>,
     states: BuffStates,
-    addr_index: NonZeroAddrIndex,
     post_era: bool,
 }
 
 /// Turn one raw event into a [`Hit`], or `None` if it isn't a connected
 /// squad-relevant damage row.
 fn classify_hit<'a>(ev: &'a RawEvent, scope: &Scope<'_>) -> Option<Hit<'a>> {
-    let Scope { registry, squad, addr_to_rep, enemies, states, addr_index, post_era } = scope;
+    let Scope { registry, squad, addr_to_rep, enemies, states, post_era } = scope;
     let post_era = *post_era;
     if ev.is_statechange != 0 || ev.is_activation != 0 || ev.is_buffremove != 0 {
         return None;
@@ -783,23 +781,18 @@ fn classify_hit<'a>(ev: &'a RawEvent, scope: &Scope<'_>) -> Option<Hit<'a>> {
     // already-calibrated era-gated predicate verbatim.
     let c = hit_stats::classify(ev, post_era)?;
 
-    // Zero-addr repair (M16 Task 1, found by the `Moving Bonus`
-    // calibration): a handful of real damage rows carry `dst_agent == 0`
-    // (or `src_agent == 0`) with a perfectly good instid. GW2EI never sees
-    // these -- its whole parser is instid-driven, so the row lands on the
-    // right actor regardless -- while this project keys friend/foe sets by
-    // ADDR and would silently drop the hit. Resolving the missing addr
-    // through the same time-aware `InstidRegistry` every other pass already
-    // uses recovers it.
-    //
-    // Deliberately scoped to the `== 0` case and to THIS module: the shared
-    // `damage`/`hit_stats`/`defenses` predicates are calibrated as they
-    // stand and must not move. Measured impact on the reference capture:
-    // exactly one hit, on one account, which is the difference between
-    // `Moving Bonus` matching that account's four fields exactly and being
-    // off by 1 hit / 1430 damage.
-    let src_agent = resolve_zero_addr(ev.src_agent, ev.src_instid, ev.time, addr_index);
-    let dst_agent = resolve_zero_addr(ev.dst_agent, ev.dst_instid, ev.time, addr_index);
+    // Zero-addr rows (found by M16 Task 1's `Moving Bonus` calibration: a
+    // handful of real damage rows carry `dst_agent == 0` -- or
+    // `src_agent == 0` -- with a perfectly good instid) are repaired for
+    // EVERY pass by `evtc::repair`, GW2EI's `EvtcParser.CompleteAgents`
+    // orphaned-instid rewrite, run as a `decode_raw` post-pass (MATTRIB
+    // Task 1). This module therefore reads the addresses straight off the
+    // row, exactly like `damage`/`hit_stats`/`defenses`: M16's module-local
+    // `NonZeroAddrIndex` was retired with that milestone, since keeping a
+    // second, differently-bounded repair here would make the modifier
+    // engine see a different event stream than the metrics it annotates.
+    let src_agent = ev.src_agent;
+    let dst_agent = ev.dst_agent;
     let src_in_squad = squad.contains(&src_agent);
     let dst_in_squad = squad.contains(&dst_agent);
     // `AgentItem.GetFinalMaster()` stand-in: an agent's owner, via the same
@@ -885,85 +878,6 @@ fn classify_hit<'a>(ev: &'a RawEvent, scope: &Scope<'_>) -> Option<Hit<'a>> {
         has_shield_damage: ev.is_shields != 0
             && if c.is_direct_hit { ev.overstack > 0 } else { c.dmg > 0 },
     })
-}
-
-/// Time-aware `instid -> NON-ZERO agent addr` index, used only to repair
-/// damage rows that carry a zeroed `src_agent`/`dst_agent`.
-///
-/// [`InstidRegistry`] cannot serve this: it registers every observed
-/// `(instid, addr)` pair INCLUDING the zeroed ones, so on exactly the rows
-/// that need repairing it resolves the instid straight back to `0`.
-/// Registration follows the same rules as `InstidRegistry::build`
-/// (chronological, out-of-order-safe insert, `sc::EXTENSION`/
-/// `EXTENSION_COMBAT` rows excluded because their addr fields are
-/// untrustworthy -- see that function's doc comment), minus the zeros.
-///
-/// **Two known follow-ups, deliberately deferred (M16 Task 1 review):**
-/// this duplicates ~25 lines of `InstidRegistry`'s registration logic
-/// (mergeable once that type can be asked to skip zero addrs without
-/// changing its existing consumers' output), and [`Self::resolve_at`]'s
-/// fallback has UNBOUNDED lookback -- it will happily attribute a zeroed row
-/// to an addr first seen minutes later, where GW2EI bounds agent identity by
-/// each `AgentItem`'s own `FirstAware`/`LastAware` window
-/// (`ParsedData/Agents/AgentItem.cs:310-313`). Neither matters at the one
-/// observed occurrence on the reference capture, but a large catalog leaning
-/// harder on the repair should tighten both.
-#[derive(Debug, Default)]
-struct NonZeroAddrIndex {
-    by_instid: BTreeMap<u16, Vec<(u64, u64)>>,
-}
-
-impl NonZeroAddrIndex {
-    fn build(raw: &RawLog) -> Self {
-        let mut idx = NonZeroAddrIndex::default();
-        for e in &raw.events {
-            if e.is_statechange == sc::EXTENSION || e.is_statechange == sc::EXTENSION_COMBAT {
-                continue;
-            }
-            if e.src_instid != 0 && e.src_agent != 0 {
-                idx.register(e.src_instid, e.time, e.src_agent);
-            }
-            if e.dst_instid != 0 && e.dst_agent != 0 {
-                idx.register(e.dst_instid, e.time, e.dst_agent);
-            }
-        }
-        idx
-    }
-
-    fn register(&mut self, instid: u16, time: u64, addr: u64) {
-        let entries = self.by_instid.entry(instid).or_default();
-        if let Some(&(last_time, last_addr)) = entries.last() {
-            if last_addr == addr {
-                return;
-            }
-            if time < last_time {
-                let pos = entries.partition_point(|&(t, _)| t <= time);
-                entries.insert(pos, (time, addr));
-                return;
-            }
-        }
-        entries.push((time, addr));
-    }
-
-    /// The latest non-zero addr registered at or before `t`, falling back to
-    /// the EARLIEST known one when the instid is only ever seen later (a
-    /// zeroed row can precede the agent's first properly-addressed row).
-    fn resolve_at(&self, instid: u16, t: u64) -> Option<u64> {
-        let entries = self.by_instid.get(&instid)?;
-        let i = entries.partition_point(|&(time, _)| time <= t);
-        if i == 0 { entries.first().map(|&(_, a)| a) } else { Some(entries[i - 1].1) }
-    }
-}
-
-/// A damage row with a zeroed `src_agent`/`dst_agent` but a live instid,
-/// repaired through [`NonZeroAddrIndex`]. Non-zero addrs are returned
-/// untouched, and an unresolvable instid leaves the zero in place (the hit
-/// is then dropped by the membership tests, exactly as before).
-fn resolve_zero_addr(addr: u64, instid: u16, t: u64, index: &NonZeroAddrIndex) -> u64 {
-    if addr != 0 {
-        return addr;
-    }
-    index.resolve_at(instid, t).unwrap_or(0)
 }
 
 /// `GetDamageEvents`: direction + `dmg_src` + `src_type`.

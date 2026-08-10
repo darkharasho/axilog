@@ -90,7 +90,14 @@ pub fn decode_raw(bytes: &[u8]) -> Result<RawLog, EvtcError> {
     off += skill_count * SKILL_SIZE;
     let remaining = data.len() - off;
     let event_count = remaining / EVENT_SIZE_REV1;
-    let events = decode_events(&data[off..], event_count)?;
+    let mut events = decode_events(&data[off..], event_count)?;
+    // MATTRIB: GW2EI repairs addr-0/live-instid rows inside the parser
+    // (`EvtcParser.CompleteAgents`), between reading the agent table and any
+    // analysis. This is the same seam: every consumer of `RawLog` -- the
+    // metrics pass, the standalone `replay`/`missiles`/`health` builders, the
+    // SDKs, the ei-json exporter -- reads the repaired stream. See
+    // `super::repair` for the transcription.
+    super::repair::repair_orphaned_agents(&agents, &mut events);
     let guid_map = decode_guid_mappings(&events);
     Ok(RawLog { header, agents, skills, events, guid_map })
 }

@@ -7,6 +7,11 @@ pub mod event;
 pub mod ext_healing;
 pub mod guid;
 pub mod header;
+/// Orphaned-instid attribution repair (MATTRIB Task 1) -- GW2EI's
+/// `EvtcParser.CompleteAgents` addr-0 rewrite, run as a [`decode_raw`]
+/// post-pass so every consumer sees the repaired stream. See the module doc
+/// for the rule-by-rule transcription.
+pub mod repair;
 pub mod skill;
 
 pub use agent::{decode_agents, RawAgent};
@@ -19,6 +24,7 @@ pub use ext_healing::{
 };
 pub use guid::{decode_guid_mappings, ContentType, GuidMapping};
 pub use header::{decode_header, is_post_buff_rework, RawHeader};
+pub use repair::{dst_is_agent, repair_orphaned_agents, src_is_agent, RepairStats};
 pub use skill::{decode_skills, RawSkill};
 
 pub const HEADER_SIZE: usize = 16;
