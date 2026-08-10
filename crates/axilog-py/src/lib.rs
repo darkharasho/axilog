@@ -100,6 +100,8 @@ type EiPipelineOutputs = (
     Option<axilog_core::analysis::target_conditions::TargetConditionStates>,
     Option<axilog_core::analysis::healing_detail::HealingDetail>,
     Option<axilog_core::analysis::minions::MinionRollups>,
+    Option<std::collections::BTreeMap<u64, axilog_core::analysis::dist_outcomes::DistOutcomes>>,
+    Option<std::collections::BTreeMap<u64, Vec<(u64, f64)>>>,
 );
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
@@ -207,6 +209,13 @@ fn build_report_and_activity_from_bytes(
         .flatten();
     let minion_rollups =
         want_skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
+    // MEIGAP2 rows 1 and 2 -- same gates the CLI uses (`--skill-damage`
+    // for the distributions' outcome columns, `--timeseries` for the
+    // health series, GW2EI's own `RawFormatTimelineArrays`).
+    let dist_outcomes =
+        want_skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
+    let health_percents =
+        want_timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
     Ok((
         report,
         activity,
@@ -218,6 +227,8 @@ fn build_report_and_activity_from_bytes(
         target_conditions,
         healing_detail,
         minion_rollups,
+        dist_outcomes,
+        health_percents,
     ))
 }
 
@@ -309,7 +320,7 @@ fn parse_file_ei(
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
     let (report, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist,
-         target_conditions, healing_detail, minion_rollups) =
+         target_conditions, healing_detail, minion_rollups, dist_outcomes, health_percents) =
         build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     let ei = axilog_ei::to_ei_json(
         &report,
@@ -325,6 +336,8 @@ fn parse_file_ei(
             healing_series: timeseries,
             healing_dist: skill_damage,
             minions: minion_rollups.as_ref(),
+            dist_outcomes: dist_outcomes.as_ref(),
+            health_percents: health_percents.as_ref(),
         },
     );
     value_to_py(py, &ei)

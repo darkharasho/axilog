@@ -257,6 +257,64 @@ pub fn build(
     BoonStates { total, per_source }
 }
 
+/// GW2EI's `boonsStates` (MEIGAP2 row 4): the "number of boons present"
+/// step function for one player, in the same `[[time_ms_from_log_start,
+/// count], ...]` shape as `buffUptimes[].states`.
+///
+/// ## What GW2EI counts
+///
+/// `JsonActorBuilder.cs:93` emits `GetBuffStates(buffGraphs[SkillIDs.
+/// NumberOfBoons])`, and that graph is built in
+/// `SingleActorBuffsHelper.SimulateBuffsAndComputeGraphs` (`:963-1040`) by
+/// merging every tracked buff classified `BuffClassification.Boon`
+/// (`CommonBuffs.cs:14-29`) through `BuffGraph.MergePresenceInto`
+/// (`BuffGraph.cs:81-96`). That method is explicit that a stack count is
+/// NOT what is summed:
+///
+/// ```text
+/// int presence = seg.Value > 0 ? 1 : 0;
+/// ```
+///
+/// So a 25-stack Might segment contributes exactly 1, the same as a single
+/// stack of Protection: the value is the number of DISTINCT boons up at
+/// that instant, capped by the boon set's size. This project's
+/// [`BOON_IDS`] is that same set for every era this project supports
+/// (GW2EI's list adds only Retaliation, build-gated out below the May-2021
+/// balance patch, and this project supports no such log).
+///
+/// ## Why it is a reduction, not a new simulation
+///
+/// The per-boon timelines in [`BoonStates::total`] are already GW2EI-shaped
+/// (relative, fused, leading `[0, 0]`) and already calibrated as
+/// `buffUptimes[].states` -- clamping each to presence and summing them
+/// cannot describe a different simulation than the one that field reports.
+/// The intensity clamp is applied HERE rather than in [`build`] because
+/// `buffUptimes[].states` genuinely wants Might's stack count while this
+/// field genuinely wants its presence.
+///
+/// Returns an empty timeline for a player with no tracked boon data at all
+/// (GW2EI's `GetBuffStates` likewise returns `[]` for an empty graph).
+///
+/// The consumer this exists for derives a single scalar from it -- axibridge
+/// sums the positive DELTAS of the second column into `boonsAppliedCount`
+/// (`src/main/detailsProcessing.ts:128-142,167-170`) and then prunes the
+/// array itself.
+pub fn boon_count_states(states: &BoonStates, player: u64) -> StateTimeline {
+    let mut out: StateTimeline = vec![(0, 0)];
+    let mut any = false;
+    for &(id, _, _) in BOON_IDS.iter() {
+        let Some(tl) = states.total.get(&(player, id)) else { continue };
+        let presence: StateTimeline = tl.iter().map(|&(t, v)| (t, v.min(1))).collect();
+        // Always folded through `merge_step_timelines`, even for the first
+        // boon: clamping a stack count to presence can leave two
+        // consecutive pairs with the same value (Might 1 -> 2 stacks
+        // becomes 1 -> 1), and that merge is also the fuse.
+        out = merge_step_timelines(&out, &presence);
+        any = true;
+    }
+    if any { out } else { Vec::new() }
+}
+
 /// Pointwise sum of two already-relative step timelines (both start with
 /// the mandatory `[0, 0]`), used only to collapse several unresolved
 /// sources onto the single [`UNKNOWN_SOURCE`] key.

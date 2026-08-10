@@ -800,7 +800,30 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// native output" role `Report::all_enemies` already plays -- see that
     /// field's doc comment.
     #[serde(skip)]
-    pub agent_addr: u64 }
+    pub agent_addr: u64,
+    /// The player's arcdps instid -- GW2EI's `players[].instanceID`
+    /// (MEIGAP2 row 3). `#[serde(skip)]`, same EI-adapter-only role as
+    /// `agent_addr` above: the native schema identifies a player by
+    /// account, and adding a second identity key to it would be new
+    /// public surface for no native consumer. `None` for an agent that
+    /// never appeared on a row carrying an instid.
+    #[serde(skip)]
+    pub instid: Option<u16>,
+    /// Raw-unit sum of the defiance-bar damage this player DEALT --
+    /// GW2EI's `dpsAll[0].breakbarDamage` (MEIGAP2 row 6). `#[serde(skip)]`
+    /// and adapter-only for the same reason; the `/10` to GW2EI's own
+    /// units is applied at that boundary (see
+    /// `axilog_core::analysis::defenses::DefenseStats::
+    /// breakbar_damage_dealt`).
+    #[serde(skip)]
+    pub breakbar_damage_dealt: u64,
+    /// `skill id -> down-contribution damage` (MEIGAP2 row 1), the
+    /// per-skill split of `downs_contribution.damage`, for GW2EI's
+    /// `totalDamageDist[][].downContribution`. `#[serde(skip)]`: the native
+    /// schema already publishes both the scalar and the per-target split,
+    /// and this third slicing exists only to annotate the EI dist rows.
+    #[serde(skip)]
+    pub downs_contribution_per_skill: std::collections::BTreeMap<u32, u64> }
 /// One `(player, damage modifier)` row -- GW2EI's `JsonDamageModifierItem`
 /// (`GW2EIJSON/JsonActorUtilities/JsonPlayerUtilities/
 /// JsonDamageModifierData.cs:12-33`) plus the modifier id, flattened.
@@ -883,7 +906,19 @@ pub struct EnemyOut { pub id: u64, pub name: String, pub team: String, pub is_pl
     /// The enemy's current squad marker, mirroring `PlayerOut.marker`
     /// (Task 7, M2). Omitted when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub marker: Option<String> }
+    pub marker: Option<String>,
+    /// The enemy's arcdps instid -- GW2EI's `targets[].instanceID`
+    /// (MEIGAP2 row 3). `#[serde(skip)]`, EI-adapter-only (see
+    /// `PlayerOut::instid`).
+    #[serde(skip)]
+    pub instid: Option<u16>,
+    /// Total OUTGOING health damage this enemy dealt, minion-inclusive --
+    /// GW2EI's `targets[].dpsAll[0].damage` (MEIGAP2 row 5). See
+    /// `axilog_core::analysis::Metrics::enemy_damage_out` for the exact
+    /// event set. `#[serde(skip)]`, EI-adapter-only: the native
+    /// `enemies[]` list is a roster, not a stats block.
+    #[serde(skip)]
+    pub damage_out: u64 }
 #[derive(Serialize)]
 pub struct TimelineOut { pub resolution_ms: u64, pub per_second: PerSecondOut }
 #[derive(Serialize)]
@@ -1176,6 +1211,11 @@ pub fn build_report(
             },
             damage_mods: damage_mods.map(|d| damage_mods_out(d, p.agent_addr)),
             agent_addr: p.agent_addr,
+            instid: metrics.instance_ids.get(&p.agent_addr).copied(),
+            breakbar_damage_dealt: m.map(|m| m.defenses.breakbar_damage_dealt).unwrap_or(0),
+            downs_contribution_per_skill: m
+                .map(|m| m.downs_contribution_per_skill.clone())
+                .unwrap_or_default(),
         }
     }).collect();
     Report {
@@ -1197,10 +1237,14 @@ pub fn build_report(
         enemies: enc.enemies.iter()
             .filter(|e| metrics.combat_participant_enemies.contains(&e.id))
             .map(|e| EnemyOut{id:e.id,name:e.name.clone(),
-                team:e.team.clone(),is_player:e.is_player,marker:e.marker.clone()})
+                team:e.team.clone(),is_player:e.is_player,marker:e.marker.clone(),
+                instid: metrics.instance_ids.get(&e.id).copied(),
+                damage_out: metrics.enemy_damage_out.get(&e.id).copied().unwrap_or(0)})
             .collect(),
         all_enemies: enc.enemies.iter().map(|e| EnemyOut{id:e.id,name:e.name.clone(),
-            team:e.team.clone(),is_player:e.is_player,marker:e.marker.clone()}).collect(),
+            team:e.team.clone(),is_player:e.is_player,marker:e.marker.clone(),
+            instid: metrics.instance_ids.get(&e.id).copied(),
+            damage_out: metrics.enemy_damage_out.get(&e.id).copied().unwrap_or(0)}).collect(),
         timeline: TimelineOut { resolution_ms: metrics.timeline.resolution_ms,
             per_second: PerSecondOut { squad_damage: metrics.timeline.squad_damage.clone(),
                 cc_applied: metrics.timeline.cc_applied.clone(),
@@ -1270,7 +1314,7 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(),
-            combat_participant_enemies: [9u64].into_iter().collect(), skill_map: Default::default() };
+            combat_participant_enemies: [9u64].into_iter().collect(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         assert_eq!(report.enemies.len(), 1, "only the participant enemy stays in the filtered list");
         assert_eq!(report.enemies[0].id, 9);
@@ -1296,7 +1340,7 @@ mod tests {
             cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.2");
@@ -1340,7 +1384,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: true, combat_participant_enemies: Default::default(), skill_map: Default::default() };
+            has_healing_extension: true, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["players"][0]["healing"]["healing_out_total"], 500);
@@ -1384,7 +1428,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
+            has_healing_extension: false, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&omitted).unwrap();
@@ -1438,7 +1482,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0,0],cc_applied:vec![0,0],downs:vec![0,0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
+            has_healing_extension: false, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&omitted).unwrap();
@@ -1490,7 +1534,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
+            has_healing_extension: false, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&omitted).unwrap();
@@ -1582,7 +1626,7 @@ mod tests {
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
         let report = build_report(&enc, &m, "0.1.0", Some(&replay), None, false, false, false, None);
         assert!(report.replay.is_some());
@@ -1634,7 +1678,7 @@ mod tests {
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
+            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let missiles = build_missiles(&raw, &enc);
         let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles), false, false, false, None);
         assert!(report.missiles.is_some());

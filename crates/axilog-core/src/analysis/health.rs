@@ -94,6 +94,7 @@
 //! log-start default.
 
 use crate::evtc::{sc, RawLog};
+use crate::model::Encounter;
 use std::collections::BTreeMap;
 
 /// One health-percent step: at `t_ms` (raw `RawEvent::time`), the agent's
@@ -185,6 +186,123 @@ impl HealthTracker {
             .find(|s| s.percent >= threshold_pct)
             .map(|s| s.t_ms)
     }
+}
+
+/// GW2EI's `players[].healthPercents` (MEIGAP2 row 2): the per-actor
+/// health-percent STEP FUNCTION, in GW2EI's own `[[time_ms_from_log_start,
+/// percent], ...]` shape, keyed by account representative addr.
+///
+/// ## Why this does not reuse [`HealthTracker`]
+///
+/// `HealthTracker` is the M11 contribution engine's query index and its
+/// decode is deliberately defensive: rows reading above 200% are DROPPED as
+/// garbage, and the value is kept as an `f32`. GW2EI's own decode is
+/// different in both respects (`HealthUpdateEvent.cs:5-21`):
+/// `HealthPercent = Math.Round(evtcItem.DstAgent / 100.0, 2)`, then
+/// `if (HealthPercent > 100.0) HealthPercent = 100;` -- every row is kept,
+/// an out-of-range one is CLAMPED to 100, and the value is a `double`
+/// rounded to 2 decimals. Reproducing the export exactly therefore needs
+/// GW2EI's rule, and changing `HealthTracker`'s would silently move the
+/// already-calibrated `downs_contribution` family. So the two decodes stay
+/// separate and each is documented against its own source.
+///
+/// ## The step function: `ListFromStates`, transcribed
+///
+/// `SingleActorGraphsHelper.ListFromStates` (`:81-108`) turns the raw
+/// update list into segments and `JsonActorBuilder.cs:100` emits
+/// `[Segment.Start, Segment.Value]` for each. Transcribed literally:
+///
+/// - `lastValue` is seeded with the FIRST state's value, so the opening
+///   segment is `[logStart, t0]` carrying `v0` -- the first observed
+///   percent is back-extended to log start (which is why every reference
+///   series begins `[0, <first percent>]`, not `[0, 100]` by fiat).
+/// - each subsequent segment is `[previous end, clamp(t_i)]` carrying
+///   `v_{i-1}`, so state `i`'s value takes effect at `t_i`.
+/// - a trailing `[last end, logEnd]` segment carries the last value.
+/// - timestamps are clamped into `[logStart, logEnd]`, then EMPTY segments
+///   (`Start >= End`) are removed and `FuseConsecutive` merges neighbours
+///   with equal values. Both matter: two updates on the same millisecond
+///   collapse to the later one, and a percent that is re-reported unchanged
+///   emits no pair.
+///
+/// ## Fold
+///
+/// Keyed by `addr_to_rep`'s representative addr. A relogged account is ONE
+/// player in this project where GW2EI emits two `players[]` entries, so
+/// both agents' update rows are concatenated in time order and run through
+/// one `ListFromStates` -- the natural continuation of that account's
+/// health, and identical to GW2EI's series for the (overwhelmingly common)
+/// single-agent case.
+///
+/// Opt-in, not wired into `analyze()`: GW2EI gates the field on
+/// `RawFormatTimelineArrays` (`JsonActorBuilder.cs:90`), which this project
+/// maps to `--timeseries`, so nothing is paid for by default.
+pub fn ei_health_percents(raw: &RawLog, enc: &Encounter) -> BTreeMap<u64, Vec<(u64, f64)>> {
+    // The same log window every other GW2EI-shaped timeline in this crate
+    // uses (`buffs::states::build`'s `log_start`, `analyze()`'s
+    // `log_start_ms`/`log_end_ms`): GW2EI shifts its whole event stream so
+    // that `LogData.LogStart == 0`, and this project keeps arcdps absolute
+    // times and subtracts at the adapter boundary instead.
+    let log_start = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let log_end = raw.events.last().map(|e| e.time).unwrap_or(log_start);
+    let addr_to_rep: BTreeMap<u64, u64> = enc
+        .players
+        .iter()
+        .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
+        .collect();
+    let mut states: BTreeMap<u64, Vec<(u64, f64)>> = BTreeMap::new();
+    for e in &raw.events {
+        if e.is_statechange != sc::HEALTH_UPDATE {
+            continue;
+        }
+        let Some(&rep) = addr_to_rep.get(&e.src_agent) else { continue };
+        // GW2EI's decode, byte for byte: `Math.Round(DstAgent / 100.0, 2)`
+        // then clamp ABOVE at 100 (there is no lower clamp and no garbage
+        // filter -- see this function's doc comment). The rounding step is
+        // an exact no-op on this input and is therefore not reimplemented:
+        // `dst_agent` is an integer, so `dst_agent / 100.0` already has at
+        // most two decimal digits and both languages evaluate it to the
+        // same nearest `double`.
+        let pct = (e.dst_agent as f64 / 100.0).min(100.0);
+        states.entry(rep).or_default().push((e.time, pct));
+    }
+    states
+        .into_iter()
+        .map(|(rep, mut rows)| {
+            rows.sort_by_key(|&(t, _)| t);
+            (rep, list_from_states(&rows, log_start, log_end))
+        })
+        .collect()
+}
+
+/// [`ei_health_percents`]'s transcription of
+/// `SingleActorGraphsHelper.ListFromStates` + the `[Start, Value]`
+/// projection -- see that function's doc comment for the line-by-line
+/// citation.
+fn list_from_states(states: &[(u64, f64)], log_start: u64, log_end: u64) -> Vec<(u64, f64)> {
+    if states.is_empty() {
+        return Vec::new();
+    }
+    // (start, end, value)
+    let mut segments: Vec<(u64, u64, f64)> = Vec::with_capacity(states.len() + 1);
+    let mut last_value = states[0].1;
+    for &(t, v) in states {
+        let end = t.clamp(log_start, log_end);
+        let start = segments.last().map(|&(_, e, _)| e).unwrap_or(log_start);
+        segments.push((start, end, last_value));
+        last_value = v;
+    }
+    let last_end = segments.last().map(|&(_, e, _)| e).unwrap_or(log_start);
+    segments.push((last_end, log_end, last_value));
+    segments.retain(|&(s, e, _)| s < e);
+    let mut out: Vec<(u64, f64)> = Vec::with_capacity(segments.len());
+    for (start, _, value) in segments {
+        if out.last().map(|&(_, v)| v == value).unwrap_or(false) {
+            continue; // `FuseConsecutive`
+        }
+        out.push((start.saturating_sub(log_start), value));
+    }
+    out
 }
 
 #[cfg(test)]
