@@ -424,6 +424,49 @@ fn incoming_modifier_measures_damage_taken_under_the_negated_id() {
     assert!(approx(stat.damage_gain, super::round_to_3(800.0 * 10.0 / 110.0)));
 }
 
+/// The incoming pool is source-agnostic (MATTRIB Task 2). GW2EI builds
+/// incoming modifiers from `GetDamageTakenEvents` with no source filter, so
+/// damage a squad member takes from ANOTHER SQUAD MEMBER -- or from
+/// THEMSELVES -- is in the denominator. This was M16's quarantined
+/// "incoming denominator deficit": one account's 7 self-inflicted Bleeding
+/// ticks (239 damage) were dropped because `classify_hit` required
+/// `!src_in_squad`. See `tests/damage_mods_golden.rs`'s tracked-cause-2
+/// note.
+#[test]
+fn incoming_pool_includes_self_and_squad_sourced_damage() {
+    let def = DamageModifierDef { dmg_src: DamageSource::Incoming, ..def_template() };
+    let events = vec![
+        // From a foe: always counted.
+        strike(100, 9, 1, 800),
+        // Self-inflicted Bleeding on player 1 (src == dst == 1).
+        condi_tick(200, 1, 1, 35),
+        // From another squad member.
+        strike(300, 2, 1, 60),
+    ];
+    let log = raw(events, POST_ERA_BUILD);
+    let registry = InstidRegistry::build(&log);
+    let enc = encounter(vec![player(1), player(2)], vec![enemy(9)]);
+    let out = evaluate(&log, &registry, &enc, &[&def]);
+
+    let stat = out[&(1, -9001)];
+    assert_eq!(stat.total_hit_count, 3, "all three rows are damage player 1 TOOK");
+    assert_eq!(stat.total_damage, 895);
+    // Player 2 took nothing, so it has no incoming row at all.
+    assert!(!out.contains_key(&(2, -9001)));
+}
+
+/// ... and the outgoing side is NOT symmetric: a squad-on-squad (or self)
+/// hit is not an outgoing modifier hit, because its destination is not a
+/// foe. Only the incoming branch is source-agnostic.
+#[test]
+fn outgoing_pool_still_requires_a_foe_destination() {
+    let def = def_template(); // outgoing, `DamageSource::NoPets`
+    let events = vec![strike(100, 1, 9, 800), strike(200, 1, 2, 500), condi_tick(300, 1, 1, 35)];
+    let out = run(events, POST_ERA_BUILD, &def);
+    assert_eq!(out[&(1, 9001)].total_hit_count, 1, "only the hit on foe 9 counts");
+    assert_eq!(out[&(1, 9001)].total_damage, 800);
+}
+
 /// `SkillDamageModifier.cs:32-57`: skill-gated, gain hardcoded to 1, so
 /// `damageGain` is RAW damage.
 #[test]
@@ -714,33 +757,51 @@ fn catalog_moving_bonus_evaluates_end_to_end() {
     assert_eq!(catalog::MOVING_BONUS.json_id(), 10);
 }
 
-/// The zero-addr repair: a real capture contains damage rows with
-/// `dst_agent == 0` but a live `dst_instid`. GW2EI attributes them (its
-/// parser is instid-driven); this project's addr-keyed foe set would drop
-/// them, so the engine resolves the missing addr through its own non-zero
-/// instid index. Found by the `Moving Bonus` calibration -- it was the
-/// difference between one account matching exactly and being off by a hit.
+/// The zero-addr repair, seen from this module: a real capture contains
+/// damage rows with `dst_agent == 0` but a live `dst_instid`. Since MATTRIB
+/// Task 1 the repair is `crate::evtc::repair` (GW2EI's
+/// `EvtcParser.CompleteAgents`), applied once at decode for every pass --
+/// this module has no repair of its own any more. Found by the `Moving
+/// Bonus` calibration: it was the difference between one account matching
+/// exactly and being off by a hit.
 #[test]
-fn zero_dst_addr_is_repaired_from_the_instid() {
+fn zero_dst_addr_is_repaired_upstream_by_the_decode_pass() {
     let def = def_template();
-    // First a normally-addressed hit, so instid 9 is registered to addr 9.
-    let normal = strike(100, 1, 9, 1000);
-    // Then the anomalous row: no dst addr, but the same instid.
-    let zeroed = RawEvent { dst_agent: 0, dst_instid: 9, ..strike(200, 1, 0, 430) };
+    // Enemy 9 is aware over [100, 600]; the anomalous row at t = 200 has no
+    // dst addr but the same instid, and its high probe (500) lands inside
+    // that window, so `CompleteAgents` adopts it.
+    let events = vec![
+        strike(100, 1, 9, 1000),
+        RawEvent { dst_agent: 0, dst_instid: 9, ..strike(200, 1, 0, 430) },
+        strike(600, 1, 9, 70),
+    ];
 
-    let out = run(vec![normal, zeroed], PRE_ERA_BUILD, &def);
-    let stat = out[&(1, 9001)];
-    assert_eq!(stat.total_hit_count, 2, "the zeroed row must not be dropped");
-    assert_eq!(stat.total_damage, 1430);
+    // Without the pre-pass (i.e. what a hand-built `RawLog` that never went
+    // through `decode_raw` looks like) the zeroed row is dropped.
+    let out = run(events.clone(), PRE_ERA_BUILD, &def);
+    assert_eq!(out[&(1, 9001)].total_hit_count, 2);
+    assert_eq!(out[&(1, 9001)].total_damage, 1070);
+
+    // With it -- the shipping path -- the row lands on enemy 9.
+    let mut repaired = events;
+    let stats = crate::evtc::repair_orphaned_agents(&[], &mut repaired);
+    assert_eq!(stats.dst_repaired, 1);
+    let out = run(repaired, PRE_ERA_BUILD, &def);
+    assert_eq!(out[&(1, 9001)].total_hit_count, 3, "the zeroed row must not be dropped");
+    assert_eq!(out[&(1, 9001)].total_damage, 1500);
 }
 
 /// ... but an instid that never had a non-zero addr stays unresolved, and
-/// the row is dropped exactly as before (no guessing).
+/// the row is dropped exactly as before (no guessing) -- the repair leaves
+/// the zero in place and the foe set never matches it.
 #[test]
 fn zero_dst_addr_with_no_known_instid_is_still_dropped() {
     let def = def_template();
-    let zeroed = RawEvent { dst_agent: 0, dst_instid: 4242, ..strike(200, 1, 0, 430) };
-    let out = run(vec![strike(100, 1, 9, 1000), zeroed], PRE_ERA_BUILD, &def);
+    let mut events =
+        vec![strike(100, 1, 9, 1000), RawEvent { dst_agent: 0, dst_instid: 4242, ..strike(200, 1, 0, 430) }];
+    let stats = crate::evtc::repair_orphaned_agents(&[], &mut events);
+    assert_eq!(stats, crate::evtc::RepairStats { dst_orphans: 1, ..Default::default() });
+    let out = run(events, PRE_ERA_BUILD, &def);
     let stat = out[&(1, 9001)];
     assert_eq!(stat.total_hit_count, 1);
     assert_eq!(stat.total_damage, 1000);

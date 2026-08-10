@@ -28,10 +28,12 @@ use std::collections::BTreeSet;
 
 const FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
-const LOCAL_POSTREWORK_ZEVTC: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-postrework.zevtc");
-const LOCAL_POSTREWORK_EI_JSON: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-postrework.ei.json");
+fn local_postrework_zevtc() -> String {
+    common::local_fixture("wvw-postrework.zevtc")
+}
+fn local_postrework_ei_json() -> String {
+    common::local_fixture("wvw-postrework.ei.json")
+}
 
 /// Structural calibration against the committed, PII-safe fixture (CI-
 /// gating): every id in `Metrics::skill_map` really is REFERENCED by some
@@ -133,8 +135,8 @@ fn skill_map_scoped_to_referenced_ids_on_committed_fixture() {
 ///   real examples printed side-by-side, not asserted.
 #[test]
 fn skill_map_spot_check_against_real_ei_skillmap_when_available() {
-    let Some(bytes) = read_bytes_or_skip(LOCAL_POSTREWORK_ZEVTC, "skill_map spot-check") else { return };
-    let Some(golden) = read_json_or_skip(LOCAL_POSTREWORK_EI_JSON, "skill_map spot-check") else { return };
+    let Some(bytes) = read_bytes_or_skip(&local_postrework_zevtc(), "skill_map spot-check") else { return };
+    let Some(golden) = read_json_or_skip(&local_postrework_ei_json(), "skill_map spot-check") else { return };
 
     let raw = decode_raw(&bytes).expect("decode postrework fixture");
     let enc = resolve(&raw);
@@ -142,7 +144,7 @@ fn skill_map_spot_check_against_real_ei_skillmap_when_available() {
 
     let golden_skill_map = golden.get("skillMap").and_then(|v| v.as_object());
     let Some(golden_skill_map) = golden_skill_map else {
-        println!("skip: {LOCAL_POSTREWORK_EI_JSON} has no top-level skillMap object (skill_map spot-check)");
+        println!("skip: {} has no top-level skillMap object (skill_map spot-check)", local_postrework_ei_json());
         return;
     };
 

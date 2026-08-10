@@ -32,10 +32,12 @@ use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
 use common::{account_key, rel_close, read_bytes_or_skip, read_json_or_skip, RELATIVE_TOLERANCE};
 
-const ZEVTC_PATH: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-postrework.zevtc");
-const EI_JSON_PATH: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-postrework.ei.json");
+fn zevtc_path() -> String {
+    common::local_fixture("wvw-postrework.zevtc")
+}
+fn ei_json_path() -> String {
+    common::local_fixture("wvw-postrework.ei.json")
+}
 
 /// Prints the "first real capture immediately surfaces numbers" summary
 /// table the brief asks for: players, duration, squad damage, Might average
@@ -86,7 +88,7 @@ fn print_summary(metrics: &axilog_core::analysis::Metrics, enc: &axilog_core::mo
 /// milestone exists to fix.
 #[test]
 fn postrework_fixture_decodes_with_nonzero_boons_and_support() {
-    let Some(bytes) = read_bytes_or_skip(ZEVTC_PATH, "postrework calibration") else { return };
+    let Some(bytes) = read_bytes_or_skip(&zevtc_path(), "postrework calibration") else { return };
 
     let raw = decode_raw(&bytes).expect("decode post-rework WvW fixture");
     assert!(
@@ -158,8 +160,8 @@ fn postrework_fixture_decodes_with_nonzero_boons_and_support() {
 /// expectations, unlike those two files' committed fixtures).
 #[test]
 fn postrework_fixture_matches_ei_json_when_present() {
-    let Some(bytes) = read_bytes_or_skip(ZEVTC_PATH, "postrework EI parity") else { return };
-    let Some(golden) = read_json_or_skip(EI_JSON_PATH, "postrework EI parity") else { return };
+    let Some(bytes) = read_bytes_or_skip(&zevtc_path(), "postrework EI parity") else { return };
+    let Some(golden) = read_json_or_skip(&ei_json_path(), "postrework EI parity") else { return };
 
     let raw = decode_raw(&bytes).expect("decode post-rework WvW fixture");
     let enc = resolve(&raw);
@@ -237,7 +239,7 @@ fn postrework_fixture_matches_ei_json_when_present() {
 /// do NOT invent EI fields").
 #[test]
 fn postrework_fixture_missile_sanity() {
-    let Some(bytes) = read_bytes_or_skip(ZEVTC_PATH, "postrework missile sanity") else { return };
+    let Some(bytes) = read_bytes_or_skip(&zevtc_path(), "postrework missile sanity") else { return };
 
     let raw = decode_raw(&bytes).expect("decode post-rework WvW fixture");
     let enc = resolve(&raw);

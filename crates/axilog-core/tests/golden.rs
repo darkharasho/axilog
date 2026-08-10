@@ -19,12 +19,13 @@ use axilog_core::analysis::analyze;
 use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
 
+mod common;
+
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
-const LOCAL_FIXTURE_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/local/wvw-small.zevtc"
-);
+fn local_fixture_path() -> String {
+    common::local_fixture("wvw-small.zevtc")
+}
 const GOLDEN_JSON_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.ei.json");
 
 const RELATIVE_TOLERANCE: f64 = 0.005; // 0.5%
@@ -48,10 +49,10 @@ fn rel_close_cc(a: f64, b: f64) -> bool {
 }
 
 fn read_local_fixture_or_skip(test_name: &str) -> Option<Vec<u8>> {
-    match std::fs::read(LOCAL_FIXTURE_PATH) {
+    match std::fs::read(local_fixture_path()) {
         Ok(b) => Some(b),
         Err(_) => {
-            println!("skip: {LOCAL_FIXTURE_PATH} absent ({test_name} local-only extra check)");
+            println!("skip: {} absent ({test_name} local-only extra check)", local_fixture_path());
             None
         }
     }

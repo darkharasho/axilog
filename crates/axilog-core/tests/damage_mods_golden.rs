@@ -165,12 +165,16 @@ impl IdBound {
 /// `Tally::residuals` order.
 const FIELD_NAMES: [&str; 4] = ["hitCount", "totalHitCount", "damageGain", "totalDamage"];
 
-/// The measured calibration contract: 69 ids, **31** of them exact on every
-/// row of every account, 38 carrying a residual.
+/// The measured calibration contract: 69 ids, **38** of them exact on every
+/// row of every account, 31 carrying a residual (MATTRIB Task 2 promoted
+/// seven -- `d-389`, `d-368`, `d-336`, `d-126`, `d-62`, `d-59`, `d-54` --
+/// when resolving tracked cause 2, and re-seeded six more whose denominator
+/// half of the residual went to zero).
 ///
-/// The residuals have two distinct, independently tracked causes; neither is
-/// a damage-modifier defect, and conflating them would let a future fix for
-/// one claim credit for the other:
+/// The residuals had two distinct, independently tracked causes; conflating
+/// them would have let a future fix for one claim credit for the other.
+/// Cause 2 is **resolved** (MATTRIB Task 2 -- see the note below this
+/// table); only cause 1 remains:
 ///
 /// 1. **Buff-state fidelity** (36 ids). Buff-gated modifiers are only as
 ///    exact as the per-`(actor, buff)` stack timelines underneath them.
@@ -192,12 +196,16 @@ const FIELD_NAMES: [&str; 4] = ["hitCount", "totalHitCount", "damageGain", "tota
 ///      error against GW2EI's own
 ///      `buffUptimes` is 0.00029pp, so its 3/10 exact rows are hit-boundary
 ///      noise, not a missing rule.
-/// 2. **An incoming-damage attribution gap** (2 ids are dominated by it,
-///    `d-126` and `d-62`, and it perturbs every incoming id slightly). See
-///    [`INCOMING_DEFICIT_ACCOUNTS`] -- it is a denominator/attribution
-///    difference on ONE account, which no buff simulator can cause or fix.
-///    **Untouched by MBUFFSIM, deliberately** -- it is the separately-tracked
-///    MATTRIB account and must not be claimed as fixed here.
+/// 2. ~~**An incoming-damage attribution gap**~~ -- **RESOLVED in MATTRIB
+///    Task 2**; the two ids it dominated (`d-126`, `d-62`) and the slight
+///    perturbation it put on every incoming id are gone, and every id's
+///    aggregate `totalHitCount`/`totalDamage` residual is now `0.0`. It was
+///    a denominator/attribution difference on ONE account -- 7 self-
+///    inflicted Bleeding ticks the incoming branch refused because their
+///    source was also a squad member. See the tracked-cause-2 note above
+///    `ID_BOUNDS` for the full history, including the orphaned-instid
+///    hypothesis it REFUTED. MBUFFSIM deliberately did not touch it, and
+///    correctly did not claim it.
 ///
 /// **MBUFFSIM (Tasks 2-3) re-seeded this whole table.** Two rules in the buff
 /// EVENT PIPELINE -- not the stack simulator -- were ported from GW2EI:
@@ -255,48 +263,46 @@ const FIELD_NAMES: [&str; 4] = ["hitCount", "totalHitCount", "damageGain", "tota
 /// make a red test green without first establishing WHY the number moved.
 #[rustfmt::skip]
 const ID_BOUNDS: &[IdBound] = &[
-    // measured: 0.000398 0.000000 0.001184 0.000069
-    IdBound::within(-431, [0.000478, 0.0, 0.001421, 0.000084]),
-    // measured: 0.002997 0.001265 0.004696 0.000080
-    IdBound::within(-428, [0.003597, 0.001518, 0.005636, 0.000096]),
-    // measured: 0.001197 0.001076 0.002312 0.000069
-    IdBound::within(-427, [0.001437, 0.001292, 0.002775, 0.000084]),
-    // measured: 0.000638 0.001076 0.001366 0.000069
-    IdBound::within(-426, [0.000767, 0.001292, 0.001640, 0.000084]),
-    // measured: 0.001033 0.001076 0.002495 0.000069
-    IdBound::within(-425, [0.001240, 0.001292, 0.002994, 0.000084]),
+    // measured: 0.000398 0.000000 0.001184 0.000000
+    IdBound::within(-431, [0.000478, 0.0, 0.001421, 0.0]),
+    // measured: 0.002997 0.000000 0.004696 0.000000
+    IdBound::within(-428, [0.003597, 0.0, 0.005636, 0.0]),
+    // measured: 0.001197 0.000000 0.002312 0.000000
+    IdBound::within(-427, [0.001437, 0.0, 0.002775, 0.0]),
+    // measured: 0.000638 0.000000 0.001366 0.000000
+    IdBound::within(-426, [0.000767, 0.0, 0.001640, 0.0]),
+    // measured: 0.001033 0.000000 0.002495 0.000000
+    IdBound::within(-425, [0.001240, 0.0, 0.002994, 0.0]),
     IdBound::exact(-411),
     IdBound::exact(-390),
-    // measured: 0.000000 0.002721 0.000000 0.000069
-    IdBound::within(-389, [0.0, 0.003265, 0.0, 0.000084]),
+    IdBound::exact(-389),
     IdBound::exact(-376),
     IdBound::exact(-370),
-    // measured: 0.000000 0.000000 0.000000 0.000312
-    IdBound::within(-368, [0.0, 0.0, 0.0, 0.000375]),
-    // measured: 0.012931 0.016355 0.005230 0.000376
-    IdBound::within(-336, [0.015518, 0.019627, 0.006276, 0.000452]),
+    IdBound::exact(-368),
+    IdBound::exact(-336),
     IdBound::exact(-176),
     // measured: 0.002227 0.000000 0.001043 0.000000
     IdBound::within(-132, [0.002673, 0.0, 0.001253, 0.0]),
     IdBound::exact(-129),
     IdBound::exact(-128),
-    // measured: 0.000000 0.023569 0.000000 0.001174
-    IdBound::within(-126, [0.0, 0.028283, 0.0, 0.001409]),
+    IdBound::exact(-126),
     IdBound::exact(-99),
     IdBound::exact(-94),
     IdBound::exact(-93),
     IdBound::exact(-78),
-    // measured: 0.000000 0.007910 0.000000 0.000174
-    IdBound::within(-62, [0.0, 0.009492, 0.0, 0.000209]),
+    IdBound::exact(-62),
     IdBound::exact(-61),
-    // measured: 0.002643 0.002721 0.001042 0.000069
-    IdBound::within(-59, [0.003172, 0.003265, 0.001251, 0.000084]),
-    // measured: 0.000508 0.000000 0.001996 0.000069
-    IdBound::within(-58, [0.000610, 0.0, 0.002396, 0.000084]),
-    // measured: 0.033191 0.001305 0.059841 0.000071
-    IdBound::within(-57, [0.039829, 0.001566, 0.071810, 0.000085]),
-    // measured: 0.000000 0.000000 0.000000 0.000108
-    IdBound::within(-54, [0.0, 0.0, 0.0, 0.000130]),
+    IdBound::exact(-59),
+    // measured: 0.000508 0.000000 0.001996 0.000000
+    IdBound::within(-58, [0.000610, 0.0, 0.002396, 0.0]),
+    // measured: 0.036403 0.000000 0.059878 0.000000
+    // The only id whose cause-1 residual grew when MATTRIB Task 2 fixed the
+    // incoming denominator: 3 of the account's 7 newly-admitted self-bleed
+    // ticks are simulated with Vulnerability up where GW2EI has 1, so this
+    // account's `hitCount` goes from 1 under GW2EI to 2 over it. The
+    // pre-MATTRIB bounds still cover it and are deliberately NOT loosened.
+    IdBound::within(-57, [0.039829, 0.0, 0.071810, 0.0]),
+    IdBound::exact(-54),
     IdBound::exact(10),
     IdBound::exact(11),
     IdBound::exact(18),
@@ -365,37 +371,56 @@ const ID_BOUNDS: &[IdBound] = &[
 ];
 
 
-/// **Tracked cause 2: an incoming-damage attribution gap on one account.**
-///
-/// Exactly one of the 44 joined accounts is short a fixed slice of the
-/// damage it TOOK, and the shortfall shows up identically on all 14 of that
-/// account's incoming rows -- every row short exactly `239` `totalDamage`,
-/// and the ten rows whose `src_type` admits conditions additionally short
-/// exactly `7` `totalHitCount`. The strike-only rows are short the damage
-/// but not the hits, which pins the missing rows down to **7 incoming
-/// CONDITION ticks totalling 239 damage** that GW2EI attributes to this
-/// player and this project does not.
-///
-/// This is not something a buff simulator can cause or fix: it is the
-/// eligible-hit pool and the denominator, upstream of any gain computation.
-/// It is bounded here rather than fixed because it is not a
-/// damage-modifier defect either -- the same 7 rows are missing from the
-/// underlying damage-taken pool.
-///
-/// **Hypothesis, not a finding:** this smells like the same family as the
-/// `dst_agent == 0` / orphaned-instid rows Task 1's `NonZeroAddrIndex`
-/// repairs (see `analysis::damage_mods`'s zero-addr note, and that type's
-/// own "unbounded lookback" and "no `FirstAware`/`LastAware` window"
-/// follow-ups). It has NOT been traced to those rows, and it should not be
-/// assumed fixed by anything that touches them.
-///
-/// The assertion is deliberately structural rather than by account name:
-/// at most this many accounts may show an incoming denominator deficit, and
-/// no single row may be short more than the measured amounts. No account
-/// identifier is committed.
-const INCOMING_DEFICIT_ACCOUNTS: usize = 1;
-/// Per-row bound for the account above: `7` hits and `239` damage.
-const INCOMING_DEFICIT_PER_ROW: (i64, f64) = (7, 239.0);
+// **Tracked cause 2 (RESOLVED, MATTRIB Task 2): the incoming-damage
+// attribution gap on one account.**
+//
+// Kept as a note rather than a constant, because there is no longer
+// anything to bound. History and verdict, so a future reader does not have
+// to re-derive it:
+//
+// M16 measured exactly one of the 44 joined accounts short a fixed slice
+// of the damage it TOOK, identically on all 14 of that account's incoming
+// rows -- every row short exactly `239` `totalDamage`, and the ten rows
+// whose `src_type` admits conditions additionally short exactly `7`
+// `totalHitCount`. It bounded that structurally
+// (`INCOMING_DEFICIT_ACCOUNTS = 1`, per-row `(7, 239.0)`) and recorded a
+// **hypothesis**: that the missing rows were the same `dst_agent == 0` /
+// orphaned-instid family M16's `NonZeroAddrIndex` repaired.
+//
+// **That hypothesis is REFUTED.** MATTRIB Task 1 landed GW2EI's real
+// orphaned-instid repair (`evtc::repair`, `EvtcParser.CompleteAgents`)
+// globally, and this account's numbers did not move by a single unit. A
+// whole-log census settles it independently: after the repair the local
+// capture contains **zero** damage rows with `dst_agent == 0` at all, so
+// there was no addr-0 reservoir that could have held 7 incoming condition
+// ticks. The repair did fix an off-by-one-hit gap of the same *shape* --
+// on a different account, on the OUTGOING side (one 1430-damage strike) --
+// which is presumably what made the two look related.
+//
+// **The actual cause, found in MATTRIB Task 2:** `classify_hit`'s incoming
+// branch required `dst_in_squad && !src_in_squad`. GW2EI's incoming
+// modifiers run over the actor's whole damage-TAKEN pool
+// (`GetDamageTakenEvents`, no source filter), so a hit a squad member
+// takes from another squad member -- or from THEMSELVES -- belongs in the
+// denominator. The affected account's missing rows are exactly **7
+// self-inflicted Bleeding (skill `736`) ticks, 239 damage, one per second**
+// -- src agent == dst agent == that player. Dropping the `!src_in_squad`
+// requirement makes the account exact.
+//
+// Corroboration that the gap was local to this module and not an upstream
+// pool defect (M16's note guessed the opposite): `defenses` already agreed
+// with GW2EI EXACTLY for that account on `damageTaken` (122772),
+// `conditionDamageTaken` (5699) and `conditionDamageTakenCount` (77) --
+// those 7 ticks were in the pool all along.
+//
+// Result on this suite: rows exact `779 -> 792`, ids exact on every row of
+// every account `31 -> 38`, and **every** id's aggregate `totalHitCount`
+// and `totalDamage` residual is now pinned at `0.0` in `ID_BOUNDS` --
+// i.e. the denominator agrees with GW2EI everywhere, and the only
+// remaining residual anywhere in the table is tracked cause 1 (buff-state
+// fidelity), which lives in `hitCount`/`damageGain`.
+//
+// No account identifier is committed, here or anywhere in this file.
 
 /// Per-id tally over all joined accounts.
 #[derive(Default, Clone, Copy)]
@@ -503,8 +528,10 @@ fn catalog_matches_the_local_reference_export_when_available() {
     let mut mismatches: Vec<String> = Vec::new();
     let mut joined = 0usize;
     let mut moving_bonus_rows = 0usize;
-    // Tracked cause 2: the worst per-ROW incoming denominator deficit seen
-    // on each account (see `INCOMING_DEFICIT_ACCOUNTS`).
+    // Tracked cause 2 (resolved in MATTRIB Task 2 -- see the note above
+    // `ID_BOUNDS`): this must now stay EMPTY. It is still measured, so a
+    // regression that reintroduces an incoming denominator gap fails here
+    // instead of quietly widening a bound.
     let mut per_account_incoming: BTreeMap<String, (i64, f64, u32)> = BTreeMap::new();
 
     for p in &enc.players {
@@ -663,31 +690,18 @@ fn catalog_matches_the_local_reference_export_when_available() {
         ID_BOUNDS.len()
     );
 
-    // Tracked cause 2 (see `INCOMING_DEFICIT_ACCOUNTS`): bound the
-    // incoming-damage attribution gap structurally, so it cannot spread to
-    // more accounts or grow on the one it affects.
+    // Tracked cause 2 (RESOLVED, MATTRIB Task 2 -- see the note above
+    // `ID_BOUNDS`): the incoming denominator now agrees with GW2EI on every
+    // account, so this is a hard zero, not a bound. Any row that shows up
+    // here is a regression in the incoming-hit pool.
     let mut deficit_failures: Vec<String> = Vec::new();
-    if per_account_incoming.len() > INCOMING_DEFICIT_ACCOUNTS {
+    for (i, (_, (d_hits, d_dmg, rows))) in per_account_incoming.iter().enumerate() {
         deficit_failures.push(format!(
-            "{} account(s) show an incoming denominator deficit, expected at most {}",
-            per_account_incoming.len(),
-            INCOMING_DEFICIT_ACCOUNTS
+            "account #{i}: incoming denominator deficit on {rows} row(s), \
+             worst dTotalHitCount={d_hits}, worst dTotalDamage={d_dmg} -- \
+             expected NONE (see the tracked-cause-2 note above ID_BOUNDS)"
         ));
     }
-    for (i, (_, (d_hits, d_dmg, rows))) in per_account_incoming.iter().enumerate() {
-        println!(
-            "incoming denominator deficit, account #{i}: {rows} row(s), \
-             worst dTotalHitCount={d_hits}, worst dTotalDamage={d_dmg}"
-        );
-        if *d_hits > INCOMING_DEFICIT_PER_ROW.0 || *d_dmg > INCOMING_DEFICIT_PER_ROW.1 {
-            deficit_failures.push(format!(
-                "account #{i}: per-row incoming deficit ({d_hits} hits, {d_dmg} damage) \
-                 exceeds the measured ({}, {})",
-                INCOMING_DEFICIT_PER_ROW.0, INCOMING_DEFICIT_PER_ROW.1
-            ));
-        }
-    }
-
 
     // Guards against the harness silently degrading.
     assert!(joined >= 44, "only {joined} account(s) joined -- expected at least 44");

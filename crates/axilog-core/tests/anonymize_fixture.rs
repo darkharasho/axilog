@@ -17,10 +17,11 @@ use axilog_core::analysis::analyze;
 use axilog_core::evtc::{decode_raw, inflate_zevtc, AGENT_SIZE, HEADER_SIZE};
 use axilog_core::model::resolve;
 
-const LOCAL_FIXTURE_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/local/wvw-small.zevtc"
-);
+mod common;
+
+fn local_fixture_path() -> String {
+    common::local_fixture("wvw-small.zevtc")
+}
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
 
@@ -37,10 +38,10 @@ fn name_buf_range(i: usize) -> std::ops::Range<usize> {
 
 #[test]
 fn anon_fixture_metrics_match_local_and_contains_no_pii() {
-    let local_bytes = match std::fs::read(LOCAL_FIXTURE_PATH) {
+    let local_bytes = match std::fs::read(local_fixture_path()) {
         Ok(b) => b,
         Err(_) => {
-            println!("skip: {LOCAL_FIXTURE_PATH} absent (local-only re-verification)");
+            println!("skip: {} absent (local-only re-verification)", local_fixture_path());
             return;
         }
     };
