@@ -1285,10 +1285,13 @@ fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
 ///
 /// This is the assertion that would have caught review finding 1 in CI:
 /// before the fix, `build_enemy_dist` created a row for any non-statechange
-/// combat item, including pre-rework buff APPLICATION rows, and 208 of 488
-/// emitted rows on this very fixture were all-zero phantoms GW2EI never
-/// emits. Comparing the folded ID SET is what makes that visible; comparing
-/// only values would let a phantom pass as `0 == 0`.
+/// combat item, including pre-rework buff APPLICATION rows, and 143 of the
+/// 488 rows this very fixture emitted were phantoms GW2EI never emits --
+/// 19 skill ids' worth once folded (199 ids vs the reference's 180).
+/// Comparing the folded ID SET is what makes that visible; comparing only
+/// values would let a phantom pass as `0 == 0`. The post-rework local
+/// capture had none, so this pre-era fixture is the only place the class is
+/// observable at all.
 ///
 /// `min` is deliberately not compared: EI's aggregate row carries one `min`
 /// over all enemy players combined, while the consumer's `minTotal/minCount`

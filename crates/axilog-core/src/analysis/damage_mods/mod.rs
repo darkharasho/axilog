@@ -773,7 +773,14 @@ fn classify_hit<'a>(ev: &'a RawEvent, scope: &Scope<'_>) -> Option<Hit<'a>> {
         return None;
     }
     // CC application rows reuse `value`/`buff_dmg` for a duration, not
-    // damage -- excluded by every damage pass in this crate.
+    // damage. (Its sibling non-health result, `DamageResult.BreakbarDamage`,
+    // needs no explicit test here: `hit_stats::classify` below accepts only
+    // NORMAL/CRIT/GLANCE for `buff == 0` and only the buff-damage results
+    // for `buff == 1`, so result 10 never survives it. This pass is
+    // therefore already breakbar-free, unlike `contribution::credit_window`
+    // and `analysis::mod`'s `combat_participant_enemies` scan, which are the
+    // two documented carve-outs from
+    // `damage::is_health_damage_result`.)
     if ev.result == result::CROWD_CONTROL {
         return None;
     }

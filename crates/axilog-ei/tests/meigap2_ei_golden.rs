@@ -437,11 +437,15 @@ fn ei_json_target_series_match_the_reference_export_when_available() {
 ///    reference does not have pass as `0 == 0` -- which is exactly what
 ///    happened: before review fix 1, `build_enemy_dist` created an entry
 ///    for any non-statechange row, including pre-rework buff APPLICATION
-///    rows, and 208 of 488 emitted rows on the committed fixture were
-///    all-zero phantoms GW2EI never emits. Those phantoms are not
-///    cosmetic: axibridge's `precomputeGlobalEnemySkillStats` does
-///    `minTotal += min; minCount += 1` per entry, so each one drags the
-///    `minMitigation` average toward zero.
+///    rows, and 143 of the 488 rows the committed fixture emitted were
+///    phantoms GW2EI never emits (19 skill ids' worth in the enemy-player
+///    aggregate). Those phantoms are not cosmetic: axibridge's
+///    `precomputeGlobalEnemySkillStats` does `minTotal += min;
+///    minCount += 1` per entry, so each one drags the `minMitigation`
+///    average toward zero. **This capture is post-rework and had none**
+///    (546 rows before and after) -- the pre-era coverage lives in
+///    `ei_golden.rs`'s `ei_json_enemy_player_skill_dist_matches_the_golden_aggregate`,
+///    which is also the CI-runnable half.
 /// 2. **Values**, over the union of both id sets, on the six fields both
 ///    sides define identically.
 #[test]

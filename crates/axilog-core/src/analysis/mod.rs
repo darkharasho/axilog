@@ -378,6 +378,18 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             }
         }
     }
+    // DELIBERATE CARVE-OUT from `damage::is_health_damage_result` (MEIGAP
+    // Task 2, review round 1): unlike every health-damage total in this
+    // crate, this scan still treats a `DamageResult.BreakbarDamage` row
+    // (result 10) as participation. That is on purpose -- the question here
+    // is "did the squad interact with this agent at all", not "did it deal
+    // health damage", and a defiance-bar hit is interaction. The visible
+    // consequence is that an enemy struck ONLY for breakbar damage stays in
+    // `Metrics::combat_participant_enemies` (and therefore in the native
+    // `Report::enemies` list) where a strict health-damage reading would
+    // drop it. Recorded so the two definitions of "countable damage" in
+    // this crate are not silent; see also `contribution::credit_window`,
+    // the other carve-out.
     for e in &raw.events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }
         if e.result == crate::evtc::result::CROWD_CONTROL {

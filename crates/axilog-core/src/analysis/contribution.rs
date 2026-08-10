@@ -454,10 +454,35 @@ fn credit_window<'a>(
         }
 
         // damage + cc: an ordinary (non-statechange, non-activation,
-        // non-buffremove) combat event aimed at the target. Damage predicate
-        // mirrors `damage::accumulate` exactly (CC-excluded, buff_dmg vs
-        // value selection); `cc` reuses `cc::is_cc`'s own era-gated
-        // predicate rather than re-deriving it.
+        // non-buffremove) combat event aimed at the target. `cc` reuses
+        // `cc::is_cc`'s own era-gated predicate rather than re-deriving it.
+        //
+        // ## DELIBERATE CARVE-OUT from `damage::is_health_damage_result`
+        //
+        // This predicate used to mirror `damage::accumulate` exactly. As of
+        // MEIGAP Task 2's review round 1 it no longer does, and the
+        // difference is deliberate rather than an oversight: `accumulate`
+        // now also excludes `DamageResult.BreakbarDamage` (result 10),
+        // because GW2EI routes those rows to `brkBarDamage` and none of
+        // their magnitude is health damage
+        // (`CombatEventFactory.cs:799-809`; see
+        // `damage::is_health_damage_result`). **This pass still counts
+        // them.**
+        //
+        // Why it was not swept with the rest: this is the arcdps-methodology
+        // down-contribution family (see this module's doc comment), already
+        // a documented, separately-calibrated divergence from GW2EI's own
+        // 90%-to-downstate-window algorithm -- so "what GW2EI counts as
+        // health damage" is not automatically the right rule here, and
+        // changing the weighting would move `downs_contribution`/`downed_by`
+        // without this round being able to re-run that calibration.
+        //
+        // **Two definitions of countable damage now coexist in this crate
+        // and that must not be silent.** A follow-up should either sweep
+        // this site (and re-run the contribution calibration) or record a
+        // positive reason for defiance-bar damage to count toward a down.
+        // Measured exposure on the local post-rework capture: breakbar rows
+        // exist for 27 of 44 accounts, worst 2,000 raw units.
         if e.is_statechange == 0 && e.is_activation == 0 && e.is_buffremove == 0 && e.dst_agent == target {
             let cc_row = is_cc(e, post_era);
             if cc_row || e.result != result::CROWD_CONTROL {

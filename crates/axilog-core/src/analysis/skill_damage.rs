@@ -478,6 +478,9 @@ pub fn build_enemy_dist(
         // `_iff == IFF.Friend` (`ParsedData/CombatEvents/SkillEvent.cs:17`),
         // i.e. this project's `iff == 0`. Same filter
         // `damage::pet_credit_events` already applies on the friendly side.
+        // Measured: it removes ZERO rows on either fixture, so it is
+        // faithfulness insurance against a log where an enemy does damage a
+        // friendly of its own, not a change with an observed effect.
         if e.iff == 0 {
             continue;
         }
@@ -485,10 +488,17 @@ pub fn build_enemy_dist(
         // create a dist entry -- see `creates_health_damage_event`. Without
         // this gate the entry was created for ANY non-statechange row,
         // including pre-rework-era buff APPLICATION rows, which GW2EI
-        // consumes in an earlier dispatch branch entirely: measured 208 of
-        // 488 emitted rows on the committed fixture and 78 of 546 on the
-        // local post-rework capture were all-zero phantoms that GW2EI never
-        // emits (e.g. Taunt 27705 on a Juvenile Brown Bear).
+        // consumes in an earlier dispatch branch entirely. Measured
+        // (MEIGAP Task 2 review round 1): on the committed PRE-rework
+        // fixture this gate removes **143 of 488** emitted rows -- phantom
+        // skill entries GW2EI never emits, all-zero by construction since
+        // no row behind them was a damage event (e.g. Taunt 27705 on a
+        // Juvenile Brown Bear), worth 19 skill ids in the enemy-player
+        // aggregate (199 -> 180). On the POST-rework local capture it
+        // removes **0 of 546**: there, buff applies are statechanges the
+        // caller already drops, and no row's result byte falls outside the
+        // accepted set. So the defect was pre-era-only in practice, and the
+        // gate is what keeps it that way rather than by luck.
         if !creates_health_damage_event(e, post_era) {
             continue;
         }
@@ -498,6 +508,15 @@ pub fn build_enemy_dist(
         // NonDirectHealthDamageEvent)` -- set from the WHOLE row list, hits
         // and non-hits alike, so it is recorded after the event-creation gate
         // but before the `has_hit` one.
+        //
+        // Known narrowness, deliberately not fixed: post-rework a `buff == 1`
+        // row carrying a MARKER result (`Interrupt`/`KillingBlow`/`Downed`)
+        // becomes a `NoDamageHealthDamageEvent`, NOT a
+        // `NonDirectHealthDamageEvent`, so GW2EI would not let it set
+        // `IndirectDamage` -- this `e.buff == 1` test would. Zero such rows
+        // exist on either fixture (the whole enemy-side calibration is exact
+        // with the test as written), so it is documented rather than split
+        // into a second result-set match that nothing could exercise.
         if e.buff == 1 {
             entry.indirect = true;
         }
@@ -549,7 +568,7 @@ pub fn build_enemy_dist(
 /// reached. Post-rework they are statechanges (`CombatItem.cs:336-338`) and
 /// this pass's caller already drops them, but **pre-rework a buff apply is
 /// an ordinary combat row** -- `IsBuff != 0 && BuffDmg == 0 && Value > 0`
-/// (`CombatItem.cs:341-343`) -- while `IsBuffDamageEvent` pre-rework
+/// (`CombatItem.cs:340-342`) -- while `IsBuffDamageEvent` pre-rework
 /// additionally requires `Value == 0` (`CombatItem.cs:234-238`). That is the
 /// bulk of the phantoms on the committed (pre-rework) fixture.
 ///
@@ -839,9 +858,9 @@ mod tests {
     /// MEIGAP Task 2c, review fix 1: `build_enemy_dist` must create a row
     /// only for rows GW2EI turns into a `HealthDamageEvent`.
     ///
-    /// The pre-rework buff APPLY row is the case that produced 208 of 488
-    /// phantom rows on the committed fixture: `buff == 1, buff_dmg == 0,
-    /// value > 0` is `IsBuffApplyEvent` (`CombatItem.cs:341-343`), consumed
+    /// The pre-rework buff APPLY row is the case behind 143 of the 488 rows
+    /// the committed fixture used to emit: `buff == 1, buff_dmg == 0,
+    /// value > 0` is `IsBuffApplyEvent` (`CombatItem.cs:340-342`), consumed
     /// by an earlier dispatch branch, never a damage event.
     #[test]
     fn enemy_dist_skips_pre_era_buff_apply_rows() {
