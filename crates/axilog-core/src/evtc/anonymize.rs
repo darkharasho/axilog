@@ -109,7 +109,52 @@ pub fn anonymize_raw_evtc(data: &mut [u8]) -> Result<usize, EvtcError> {
         data[name_off..name_off + NAME_BUF_LEN].copy_from_slice(&new_buf);
         anonymized += 1;
     }
+    anonymize_guild_events(data, agent_count)?;
     Ok(anonymized)
+}
+
+/// Zero the GUID payload of every `CBTS_GUILD` (statechange 29) row
+/// (MEIGAP Task 3c).
+///
+/// Until axilog decoded them, guild rows were inert bytes in a committed
+/// fixture. They are not any more: `wvw::guilds` now turns them into
+/// `players[].guildID`, so an anonymized capture would publish the real
+/// guild GUID of every repped squad member alongside their `Anon<N>`
+/// placeholder names -- enough to name the guild the squad belongs to.
+/// GW2EI draws the same line: `GuildEvent.Anonymize()`
+/// (`ParsedData/CombatEvents/MetaDataEvents/GuildEvent.cs`) makes
+/// `APIString` return `""` under its own anonymous mode.
+///
+/// Only the three payload fields the GUID is assembled from -- `dst_agent`
+/// (bytes 16..24), `value` (24..28) and `buff_dmg` (28..32) -- are zeroed.
+/// The row itself, its `src_agent` and its timestamp survive, so the event
+/// count, every offset and every other decode stay byte-compatible. A
+/// zeroed row decodes to the all-zero GUID
+/// `00000000-0000-0000-0000-000000000000`, which is exactly what an
+/// unrepresented player reports on a real capture -- so the anonymized
+/// fixture stays a VALID log rather than a malformed one.
+///
+/// No metric-bearing field is touched (a guild row carries none), so
+/// `tests/anonymize.rs`'s "identical analysis output" invariant is
+/// unaffected.
+fn anonymize_guild_events(data: &mut [u8], agent_count: usize) -> Result<(), EvtcError> {
+    const GUILD_STATECHANGE: u8 = crate::wvw::guilds::GUILD_STATECHANGE;
+    let agents_start = HEADER_SIZE + 4;
+    let skill_count_off = agents_start + agent_count * AGENT_SIZE;
+    let skill_count = data
+        .get(skill_count_off..skill_count_off + 4)
+        .map(|s| u32::from_le_bytes(s.try_into().unwrap()) as usize)
+        .ok_or(EvtcError::Truncated { need: skill_count_off + 4, at: skill_count_off, have: data.len() })?;
+    let events_start = skill_count_off + 4 + skill_count * crate::evtc::SKILL_SIZE;
+    let size = crate::evtc::EVENT_SIZE_REV1;
+    let mut off = events_start;
+    while off + size <= data.len() {
+        if data[off + 56] == GUILD_STATECHANGE {
+            data[off + 16..off + 32].fill(0);
+        }
+        off += size;
+    }
+    Ok(())
 }
 
 /// Writes `data` as the single "stored" (uncompressed, method 0) entry

@@ -203,11 +203,32 @@ pub(crate) struct MarkerResolution {
 ///
 /// Only real assignments (`value != 0`) are pushed into `assignments` --
 /// removals aren't "an assignment".
+#[cfg(test)]
 pub(crate) fn resolve_markers(raw: &RawLog) -> MarkerResolution {
+    let mut guilds: BTreeMap<u64, String> = BTreeMap::new();
+    resolve_markers_and_guilds(raw, &mut guilds)
+}
+
+/// [`resolve_markers`], additionally collecting `CBTS_GUILD` rows into
+/// `guilds` (`agent addr -> guild GUID`, first row per agent) so the two
+/// share one pass over the event stream. MEIGAP Task 3c.
+pub(crate) fn resolve_markers_and_guilds(
+    raw: &RawLog,
+    guilds: &mut BTreeMap<u64, String>,
+) -> MarkerResolution {
     let mut open: BTreeMap<u64, Vec<MarkerInstance>> = BTreeMap::new();
     let mut ever_commander: BTreeMap<u64, MarkerInstance> = BTreeMap::new();
     let mut assignments = Vec::new();
     for e in &raw.events {
+        // MEIGAP Task 3c: `CBTS_GUILD` rides this scan rather than paying
+        // for its own. Guild resolution is otherwise unrelated to markers,
+        // but `wvw::apply` already runs several whole-event passes and a
+        // separate one measured +12% on `model::resolve` for a single
+        // `u8` compare per event -- see `docs/BENCHMARKS.md`.
+        if e.is_statechange == super::guilds::GUILD_STATECHANGE {
+            guilds.entry(e.src_agent).or_insert_with(|| super::guilds::decode_guild_guid(e));
+            continue;
+        }
         if e.is_statechange != sc::MARKER {
             continue;
         }

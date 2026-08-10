@@ -1398,3 +1398,178 @@ fn ei_json_enemy_player_skill_dist_matches_the_golden_aggregate() {
         want.len()
     );
 }
+
+/// MEIGAP Task 3, committed-fixture gate: the healing/barrier detail
+/// families, `minions[]` and `guildID` are ABSENT without their flags,
+/// present and internally consistent with them, and the two figures the
+/// committed golden already carries from REAL EI output are matched
+/// exactly.
+///
+/// This is the half of Task 3's calibration CI can run without the
+/// gitignored local export (`meigap3_ei_golden.rs` holds the exact-vs-EI
+/// half). Two of the assertions below are genuine EI-reference joins, not
+/// self-consistency: `squadHealingSelf` and `squadDownedHealing` in
+/// `fixtures/wvw-small.ei.json` were extracted from the same real export
+/// this fixture came from, and they pin the SELF diagonal of
+/// `outgoingHealingAllies` and the `totalDownedHealing` column of
+/// `totalHealingDist` respectively.
+#[test]
+fn ei_json_meigap3_healing_detail_minions_and_guild_are_gated_and_consistent() {
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let golden = read_json(GOLDEN_JSON_PATH);
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let activity = build_activity_intervals(&raw, &enc);
+
+    // -- gated off --
+    let plain = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
+    );
+    let off = axilog_ei::to_ei_json(&plain, &EiInputs { activity: &activity, ..Default::default() });
+    for p in off["players"].as_array().expect("players") {
+        assert!(p.get("minions").is_none(), "minions[] must ride --skill-damage");
+        let h = &p["extHealingStats"];
+        for k in ["outgoingHealingAllies", "totalHealingDist", "healing1S"] {
+            assert!(h.get(k).is_none(), "extHealingStats.{k} must be gated, not emitted empty");
+        }
+        for k in ["outgoingBarrierAllies", "totalBarrierDist"] {
+            assert!(
+                p["extBarrierStats"].get(k).is_none(),
+                "extBarrierStats.{k} must be gated, not emitted empty"
+            );
+        }
+        // ...while the M10 scalars stay always-on, as they always were.
+        assert!(h["outgoingHealing"][0]["healing"].is_number());
+    }
+
+    // -- gated on --
+    let registry = axilog_core::analysis::damage::InstidRegistry::build(&raw);
+    let detail = axilog_core::analysis::healing_detail::build_with_registry(&raw, &registry, &enc)
+        .expect("the committed fixture carries the healing extension");
+    let minions = axilog_core::analysis::minions::build_with_registry(&raw, &registry, &enc);
+    let full = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
+    );
+    let on = axilog_ei::to_ei_json(
+        &full,
+        &EiInputs {
+            activity: &activity,
+            healing_detail: Some(&detail),
+            healing_series: true,
+            healing_dist: true,
+            minions: Some(&minions),
+            ..Default::default()
+        },
+    );
+    let players = on["players"].as_array().expect("players");
+    let buckets = golden["series1SBuckets"].as_u64().expect("series1SBuckets") as usize;
+
+    let mut self_healing_sum = 0i64;
+    let mut downed_dist_sum = 0i64;
+    let mut minion_groups = 0usize;
+    let mut minion_rows = 0usize;
+    for (i, p) in players.iter().enumerate() {
+        let h = &p["extHealingStats"];
+        let b = &p["extBarrierStats"];
+        let scalar = h["outgoingHealing"][0]["healing"].as_i64().expect("scalar healing");
+
+        // Ally matrices: one row per players[] entry, on both families.
+        let allies = h["outgoingHealingAllies"].as_array().expect("outgoingHealingAllies");
+        let b_allies = b["outgoingBarrierAllies"].as_array().expect("outgoingBarrierAllies");
+        assert_eq!(allies.len(), players.len(), "the ally axis must be one row per player");
+        assert_eq!(b_allies.len(), players.len(), "the barrier ally axis must match too");
+        self_healing_sum += allies[i][0]["healing"].as_i64().unwrap_or(0);
+        let ally_total: i64 = allies.iter().map(|c| c[0]["healing"].as_i64().unwrap_or(0)).sum();
+        assert!(
+            ally_total <= scalar,
+            "the ally matrix can only ever be a SUBSET of the scalar total (heals landing on \
+             non-enumerated friendlies are in the scalar and in no ally row)"
+        );
+
+        // `totalHealingDist` sums to the scalar EXACTLY -- the shared-producer
+        // invariant `healing_detail`'s module doc claims.
+        let dist = h["totalHealingDist"][0].as_array().expect("totalHealingDist");
+        let dist_total: i64 = dist.iter().map(|r| r["totalHealing"].as_i64().unwrap_or(0)).sum();
+        assert_eq!(dist_total, scalar, "totalHealingDist must sum to outgoingHealing[0].healing");
+        downed_dist_sum +=
+            dist.iter().map(|r| r["totalDownedHealing"].as_i64().unwrap_or(0)).sum::<i64>();
+        let ids: Vec<i64> = dist.iter().map(|r| r["id"].as_i64().unwrap_or(-1)).collect();
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "totalHealingDist must be sorted by skill id");
+        for r in dist {
+            assert!(r["hits"].as_i64().unwrap_or(0) > 0, "a dist row exists only for real events");
+            assert!(r["min"].as_i64().unwrap_or(0) <= r["max"].as_i64().unwrap_or(0));
+            assert!(r["indirectHealing"].is_boolean());
+        }
+        let b_dist = b["totalBarrierDist"][0].as_array().expect("totalBarrierDist");
+        let b_total: i64 = b_dist.iter().map(|r| r["totalBarrier"].as_i64().unwrap_or(0)).sum();
+        assert_eq!(
+            b_total,
+            b["outgoingBarrier"][0]["barrier"].as_i64().expect("scalar barrier"),
+            "totalBarrierDist must sum to outgoingBarrier[0].barrier"
+        );
+        let b_ally_total: i64 = b_allies.iter().map(|c| c[0]["barrier"].as_i64().unwrap_or(0)).sum();
+        assert!(b_ally_total <= b_total, "the barrier ally matrix is a subset of the total");
+
+        // `healing1S`: GW2EI's grid length, cumulative, ending at the scalar.
+        let s: Vec<i64> =
+            h["healing1S"][0].as_array().expect("healing1S").iter().map(|v| v.as_i64().unwrap_or(0)).collect();
+        assert_eq!(s.len(), buckets, "healing1S must use GW2EI's InterpolatedGraph length");
+        assert!(s.windows(2).all(|w| w[0] <= w[1]), "healing1S must be cumulative");
+        assert_eq!(*s.last().expect("non-empty grid"), scalar, "healing1S must end at the total");
+
+        // `minions[]`: present only for players who have them, well-formed.
+        if let Some(ms) = p.get("minions") {
+            let ms = ms.as_array().expect("minions array");
+            assert!(!ms.is_empty(), "an empty minions[] must be omitted, not emitted");
+            minion_groups += ms.len();
+            for m in ms {
+                assert!(m["name"].is_string());
+                let rows = m["totalDamageTakenDist"][0].as_array().expect("totalDamageTakenDist");
+                minion_rows += rows.len();
+                let ids: Vec<i64> = rows.iter().map(|r| r["id"].as_i64().unwrap_or(-1)).collect();
+                assert!(ids.windows(2).all(|w| w[0] < w[1]), "minion dist must be sorted by skill id");
+                for r in rows {
+                    let (hits, conn) = (r["hits"].as_i64().unwrap_or(0), r["connectedHits"].as_i64().unwrap_or(0));
+                    assert!(conn <= hits, "connectedHits ({conn}) can never exceed hits ({hits})");
+                    if r["indirectDamage"].as_bool().unwrap_or(false) {
+                        for k in ["blocked", "evaded", "glance", "missed", "interrupted"] {
+                            assert_eq!(r[k], 0, "GW2EI zeroes {k} on an indirect skill");
+                        }
+                    }
+                }
+            }
+        }
+
+        // `guildID`: the committed fixture is anonymized, so every guild
+        // row's payload is zeroed (`evtc::anonymize`'s guild pass) and the
+        // only value that may appear is GW2EI's own all-zero GUID.
+        if let Some(g) = p.get("guildID") {
+            assert_eq!(
+                g.as_str(), Some("00000000-0000-0000-0000-000000000000"),
+                "the committed fixture must never carry a real guild GUID"
+            );
+        }
+    }
+
+    // -- the two real-EI joins --
+    assert_eq!(
+        self_healing_sum,
+        golden["squadHealingSelf"].as_i64().expect("squadHealingSelf"),
+        "the SELF diagonal of outgoingHealingAllies must equal real EI's squad self-healing"
+    );
+    assert_eq!(
+        downed_dist_sum,
+        golden["squadDownedHealing"].as_i64().expect("squadDownedHealing"),
+        "totalHealingDist's downed column must equal real EI's squad downed healing"
+    );
+
+    assert!(minion_groups >= 10, "expected a non-degenerate minion set, got {minion_groups}");
+    assert!(minion_rows >= 50, "expected a non-degenerate minion dist, got {minion_rows}");
+    println!(
+        "ei_json_meigap3: {} players, self-healing {self_healing_sum}, downed {downed_dist_sum}, \
+         {minion_groups} minion groups / {minion_rows} rows",
+        players.len()
+    );
+}

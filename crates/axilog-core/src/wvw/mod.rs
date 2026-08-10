@@ -340,8 +340,8 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     // so the lookup walks `agent_addrs` and takes the first hit in ADDR
     // order (deterministic; `guilds::resolve` already applied GW2EI's
     // per-agent `FirstOrDefault` in event order).
-    let guild_by_addr = guilds::resolve(raw);
-    let marker_res = markers::resolve_markers(raw);
+    let mut guild_by_addr: BTreeMap<u64, String> = BTreeMap::new();
+    let marker_res = markers::resolve_markers_and_guilds(raw, &mut guild_by_addr);
     for p in &mut enc.players {
         p.guild_id =
             p.agent_addrs.iter().find_map(|addr| guild_by_addr.get(addr)).cloned();
