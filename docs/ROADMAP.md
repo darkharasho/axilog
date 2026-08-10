@@ -77,9 +77,22 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   M11 down-contribution row, Later list).
 
 ## Queued (autonomous — build in order; reorder only for dependency)
-- M16 Damage modifiers: trait/sigil/food/rune modifier attribution engine
-  (`damageModifiers`/`incomingDamageModifiers` + maps). Largest; GW2EI DamageModifier defs +
-  decompile for edge cases. Least WvW-critical — can slot late.
+- M16 Damage modifiers (IN FLIGHT, feat/m16-damage-modifiers): engine + EiInputs refactor done
+  (Task 1, reviewed); 205-definition catalog done (Task 2, reviewed — 69/75 reference ids,
+  buff-free ids exact 44/44, buff-gated tolerance ACCEPTED as documented deviation pending
+  MBUFFSIM); fix round then Task 3 emission remain.
+- MBUFFSIM Buff-simulator fidelity: GW2EI's NoID duration simulator has THREE stacking logics
+  (Queue / Healing-Regeneration / ForceOverride) + StackingConditionalLoss eviction; axilog has
+  two models (M3). First-measured on non-boon buffs by M16's calibration (worst residuals:
+  Might-25 saturation d422, Stability eviction ids, Force-override d312/d369 — mechanism not yet
+  isolated). Closing this flips M16's buff-gated rows toward EXACT and may shrink the M3
+  Stability allowlist.
+- MATTRIB Orphaned-instid attribution repair: rows with agent addr 0 but live instid are
+  silently dropped by addr-keyed sets in damage/hit_stats/defenses/skill_damage (GW2EI repairs
+  via orphaned-instid rewrite, EvtcParser.cs:1207-1243, ±300ms aware-window bound). Fixed
+  module-locally in damage_mods (M16 Task 1); fixing globally MOVES calibrated outputs — needs
+  its own calibrated milestone. Related hypothesis: M16's one-account -7-incoming-condition-hits
+  residual.
 
 ## Parked (user-gated — do NOT do autonomously)
 - axibridge's actual cutover from EI CLI to the axilog SDK (both registries now live, so this is
