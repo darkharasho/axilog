@@ -447,15 +447,20 @@ pub fn build_with_registry(
     // `damage1S`/`damageTaken1S`, which are always full-length arrays even
     // for a player who never dealt or took any damage.
     let all_reps: BTreeSet<u64> = addr_to_rep.values().copied().collect();
+    // One shared all-zero row for every "this player/enemy has no series"
+    // fallback below. Hoisted out of the loop deliberately: `per_target`'s
+    // POWER fallback fires once per (player, enemy) PAIR, and on a real
+    // WvW log (44 players x 624 enemies x 350 buckets) a per-call
+    // `vec![0; buckets]` there was measurable in `analyze`.
+    let zeros: Vec<u64> = vec![0u64; buckets];
     let secs = (enc.duration_ms as f64 / 1000.0).max(1.0);
     let mut result: BTreeMap<u64, TimeseriesMetrics> = BTreeMap::new();
     for rep in all_reps {
-        let zero = || vec![0u64; buckets];
-        let damage = cumulative(dmg_by_rep.get(&rep).map(Vec::as_slice).unwrap_or(&zero()));
+        let damage = cumulative(dmg_by_rep.get(&rep).map(Vec::as_slice).unwrap_or(&zeros));
         let damage_taken =
-            cumulative(taken_by_rep.get(&rep).map(Vec::as_slice).unwrap_or(&zero()));
+            cumulative(taken_by_rep.get(&rep).map(Vec::as_slice).unwrap_or(&zeros));
         let power_damage_taken =
-            cumulative(power_taken_by_rep.get(&rep).map(Vec::as_slice).unwrap_or(&zero()));
+            cumulative(power_taken_by_rep.get(&rep).map(Vec::as_slice).unwrap_or(&zeros));
 
         // The power series is keyed by the SAME enemy set as `damage`, not
         // by its own (narrower) key set: GW2EI emits `targetDamage1S` and
@@ -473,7 +478,7 @@ pub fn build_with_registry(
                         enemy_id,
                         damage: cumulative(deltas),
                         power_damage: cumulative(
-                            power_for.get(&enemy_id).map(Vec::as_slice).unwrap_or(&zero()),
+                            power_for.get(&enemy_id).map(Vec::as_slice).unwrap_or(&zeros),
                         ),
                     })
                     .collect()

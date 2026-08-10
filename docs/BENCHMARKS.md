@@ -15,7 +15,8 @@ both the committed fixture and a real 583k-event log) are in
 Later milestones that add work to a measured stage record their delta here
 too, against the MPERF tip:
 [After MATTRIB Task 1](#after-mattrib-task-1--the-orphaned-instid-repair-pre-pass),
-[After MEIGAP Task 1](#after-meigap-task-1--incoming-ccstrips-and-the-per-target-split).
+[After MEIGAP Task 1](#after-meigap-task-1--incoming-ccstrips-and-the-per-target-split),
+[After MEIGAP Task 2](#after-meigap-task-2--the-power-series-split).
 
 ## Harness
 
@@ -621,3 +622,47 @@ release build, matched surface: `--format ei-json --replay --skill-damage --time
   axilog computes its documented WvW parity surface (see README's EI-JSON parity table). The
   matched-flag config is the closest apples-to-apples available and is exactly the
   axibridge-production shape.
+
+## After MEIGAP Task 2 — the POWER series split
+
+Same machine and harness as the baseline above, measured 2026-08-10 against
+`eb57bef` (the MEIGAP Task 1 tip). Same method as Task 1's section above:
+the MEDIAN of **three alternating base/tip pairs**, run back to back from
+two prebuilt bench binaries so no rebuild sits between the halves of a pair.
+
+**Only one of this task's four families costs anything here.** The three
+`targets[]` mirrors (`build_enemy_series`, `build_enemy_dist`,
+`target_conditions::build`) are STANDALONE passes, not part of `analyze()` —
+they run only when the ei-json adapter's corresponding flag is set, so
+`analyze()` and every native/table/csv path are untouched by them. What
+`analyze()` gained is family (a): the POWER split inside the existing
+`timeseries::build` pass — one `condition_catalog::is_condition_damage_based`
+probe per already-filtered damage row, plus a second per-bucket delta series
+for `damage_taken` and for each (player, enemy) pair. The 1S-grid fix adds
+at most one extra bucket per series.
+
+| Stage | Before (`eb57bef`) | After | Δ |
+|---|---|---|---|
+| fixture `analysis::analyze` | 19.363 ms | 20.113 ms | +3.9% |
+| fixture `full_pipeline` | 29.613 ms | 30.619 ms | **+3.4%** |
+| real-log `analysis::analyze` | 89.737 ms | 93.353 ms | +4.0% |
+| real-log `full_pipeline` | 170.27 ms | 175.51 ms | **+3.1%** |
+
+The gate is `full_pipeline` ("no >5% pipeline regression") and both arms
+clear it.
+
+**Noise disclosure.** This machine's spread is large relative to the effect:
+across the three base runs in this session the real-log `analysis::analyze`
+median-of-run values were 89.737 / 82.398 / 92.668 ms — a 12% span for the
+*same binary*. The medians above are the honest summary, but the real-log
+`analyze` delta in particular should be read as "a few percent", not as
+4.0% ± something small.
+
+One allocation cleanup was made and re-measured: the per-(player, enemy)
+POWER fallback in `timeseries::build_with_registry` originally built a fresh
+`vec![0; buckets]` per call, which on a real log fires 44 × 624 times. It is
+now a single hoisted `zeros` row. The re-measurement above is the post-hoist
+code; the difference versus the pre-hoist numbers (fixture `full_pipeline`
++1.1%, real-log +3.4% in the first session) sits inside the spread just
+described, so the hoist is recorded as an allocation correctness cleanup,
+not as a measured win.
