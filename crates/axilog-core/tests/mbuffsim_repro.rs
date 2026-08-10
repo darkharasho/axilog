@@ -137,14 +137,10 @@ fn extract(log: &RawLog, buff: u32) -> Vec<axilog_core::analysis::buffs::events:
 // removals over the 14 diagnosed buffs are of this kind.
 // ---------------------------------------------------------------------
 
-/// A natural-expiry SINGLE removal is currently EXTRACTED and fed to the
-/// simulator.
-///
-/// **MBUFFSIM Task 2 flips this**: `extract_buff_events*` must drop
-/// `BUFF_REMOVE_SINGLE` rows with `dst_agent == 0 && iff == IFF::Unknown`
-/// (both eras), exactly as `BuffDictionary.Add` does.
+/// A natural-expiry SINGLE removal is DROPPED before it reaches the
+/// simulator (MBUFFSIM Task 2, rule 1 — flipped).
 #[test]
-fn overstack_or_natural_end_removal_is_currently_extracted() {
+fn overstack_or_natural_end_removal_is_dropped() {
     let log = raw(vec![
         apply(0, FIREWORKS, 1, 9, 6000, 7),
         // arcdps's "this stack was overstacked" notification: no remover
@@ -152,14 +148,13 @@ fn overstack_or_natural_end_removal_is_currently_extracted() {
         remove_single(0, FIREWORKS, 1, 0, 6000, IFF_UNKNOWN, 7),
     ]);
     let evs = extract(&log, FIREWORKS);
-    assert_eq!(evs.len(), 2, "both rows extracted today: {evs:?}");
-    assert!(
-        matches!(evs[1].kind, BuffEventKind::RemoveSingle { removed_duration_ms: 6000 }),
-        // MBUFFSIM Task 2 flips this: the second event must not exist at
-        // all (`evs.len() == 1`).
-        "MBUFFSIM Task 2 flips this -- GW2EI drops OverstackOrNaturalEnd \
-         removals before they reach the simulator (BuffRemoveSingleEvent.cs:11,26-38)"
+    assert_eq!(
+        evs.len(),
+        1,
+        "GW2EI drops OverstackOrNaturalEnd removals before they reach the simulator \
+         (BuffRemoveSingleEvent.cs:11,26-38 + BuffDictionary.cs:83-86): {evs:?}"
     );
+    assert!(matches!(evs[0].kind, BuffEventKind::Apply { duration_ms: 6000, .. }));
 }
 
 /// The behavioural consequence for a `BuffStackType.Force` buff (`d312`
@@ -167,12 +162,9 @@ fn overstack_or_natural_end_removal_is_currently_extracted() {
 /// pair the game emits on every re-trigger currently CANCELS the buff, so
 /// its presence collapses. Measured on the reference capture: mean presence
 /// error 8.38pp on `b69855` (ours 38.6% vs EI 51.0% on the worst account),
-/// which drops to 0.0003pp once the removal is dropped.
-///
-/// **MBUFFSIM Task 2 flips this**: the expected timeline becomes
-/// `[(0, 1), (6000, 0)]` — the stack survives its own overstack report.
+/// which is 0.00029pp after the fix (axilog-measured, not extrapolated).
 #[test]
-fn force_buff_currently_loses_its_stack_to_the_overstack_removal() {
+fn force_buff_survives_its_own_overstack_removal() {
     let log = raw(vec![
         apply(0, FIREWORKS, 1, 9, 6000, 7),
         remove_single(0, FIREWORKS, 1, 0, 6000, IFF_UNKNOWN, 7),
@@ -181,9 +173,8 @@ fn force_buff_currently_loses_its_stack_to_the_overstack_removal() {
     let states = simulator::run(evs, 1, false, 20_000);
     assert_eq!(
         states,
-        vec![(0, 1), (0, 0)],
-        "MBUFFSIM Task 2 flips this -- expected [(0, 1), (6000, 0)]: the buff must \
-         survive its own overstack notification"
+        vec![(0, 1), (6000, 0)],
+        "the buff must survive its own overstack notification and expire on its own"
     );
 }
 
@@ -197,10 +188,11 @@ fn force_buff_currently_loses_its_stack_to_the_overstack_removal() {
 /// stack A (5s) is still up: presence is unchanged either way, but the
 /// integral of the stack count is not.
 ///
-/// **MBUFFSIM Task 2 flips this**: the expected timeline becomes
-/// `[(0, 1), (0, 2), (5000, 1), (10000, 0)]`.
+/// Fixed: Might's mean relative average-stack error on the committed
+/// fixture went 0.007259 -> 0.000035, and 0.15542 -> 0.00411 on the local
+/// post-era capture.
 #[test]
-fn intensity_buff_currently_drops_a_stack_on_its_natural_end_report() {
+fn intensity_buff_keeps_its_stack_through_a_natural_end_report() {
     let log = raw(vec![
         apply(0, MIGHT, 1, 9, 5000, 1),  // A
         apply(0, MIGHT, 1, 9, 10_000, 2), // B
@@ -210,11 +202,7 @@ fn intensity_buff_currently_drops_a_stack_on_its_natural_end_report() {
     ]);
     let evs = extract(&log, MIGHT);
     let states = simulator::run(evs, 25, true, 20_000);
-    assert_eq!(
-        states,
-        vec![(0, 1), (0, 2), (1000, 1), (5000, 0)],
-        "MBUFFSIM Task 2 flips this -- expected [(0, 1), (0, 2), (5000, 1), (10000, 0)]"
-    );
+    assert_eq!(states, vec![(0, 1), (0, 2), (5000, 1), (10_000, 0)]);
 }
 
 /// A REAL strip (a remover agent is present, so `_byShouldntBeUnknown`) must

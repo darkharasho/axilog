@@ -647,6 +647,22 @@ pub mod buff_remove {
     /// this by not extracting Manual removals as simulator events at all.
     pub const MANUAL: u8 = 3;
 }
+
+/// `iff` enum values (arcdps `enum iff`). Verified against GW2EI's
+/// `ArcDPSEnums.IFF` (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:618-624`):
+/// `Friend = 0, Foe = 1, Unknown` (i.e. `2`; the enum's last member is
+/// implicitly `Foe + 1`), with `ArcDPSEnums.GetIFF` clamping anything else
+/// to `Unknown`.
+pub mod iff {
+    pub const FRIEND: u8 = 0;
+    pub const FOE: u8 = 1;
+    /// arcdps could not attribute the event to a friend or a foe. On a
+    /// `BuffRemove.Single` row this is half of GW2EI's
+    /// `BuffRemoveSingleEvent.OverstackOrNaturalEnd` test (the other half
+    /// being `dst_agent == 0`) -- see `analysis::buffs::events`'s
+    /// `is_overstack_or_natural_end`.
+    pub const UNKNOWN: u8 = 2;
+}
 pub mod result {
     // combat result values (`enum cbtresult`) -- verified by hand-counting
     // every enumerator, in order, from the live arcdps EVTC reference

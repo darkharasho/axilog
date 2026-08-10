@@ -197,6 +197,31 @@ const FIELD_NAMES: [&str; 4] = ["hitCount", "totalHitCount", "damageGain", "tota
 ///    `d-126` and `d-62`, and it perturbs every incoming id slightly). See
 ///    [`INCOMING_DEFICIT_ACCOUNTS`] -- it is a denominator/attribution
 ///    difference on ONE account, which no buff simulator can cause or fix.
+///
+/// **MBUFFSIM Task 2, rule 1** (`BuffRemoveSingleEvent.OverstackOrNaturalEnd`
+/// — see `analysis::buffs::events::is_overstack_or_natural_end`) moved this
+/// table's inputs for the first time since M16 seeded it. Row-exactness went
+/// **682/958 -> 730/958**, and no id lost a single exact row:
+///
+/// | id | name | exact rows before | after |
+/// |---|---|---|---|
+/// | `d422` | Might 25 | 0/44 | **36/44** |
+/// | `d423` | Might >= 20 | 27/44 | 32/44 |
+/// | `d424` | Might <= 15 | 27/44 | 29/44 |
+/// | `d312` | Relic of Fireworks | 0/44 | 3/44 |
+/// | `d369` | Chant of Action | 0/44 | 1/44 |
+/// | `d-425` | Stability >= 1 | 36/44 | 37/44 |
+///
+/// Two ids nevertheless needed their bound RE-SEEDED UPWARD (`d75`
+/// `damageGain`, `d423` `hitCount`+`damageGain`), which looks like a
+/// regression and is not: [`Tally::residuals`] is an AGGREGATE over all 44
+/// accounts, so per-row errors of opposite sign CANCEL in it. `d423` gained
+/// five exact rows while its aggregate grew, because the remaining rows'
+/// errors stopped cancelling as neatly. Row-exactness is the strong metric
+/// and the aggregate is the weak one; both are recorded above so the trade
+/// is visible. Only these two entries were touched — **re-seeding the ids
+/// that are now far too LOOSE, and promoting the newly-exact ones to
+/// [`IdBound::exact`], is MBUFFSIM Task 3's job**, deliberately not done here.
 #[rustfmt::skip]
 const ID_BOUNDS: &[IdBound] = &[
     // measured: 0.000398 0.000000 0.001184 0.000069
@@ -253,8 +278,9 @@ const ID_BOUNDS: &[IdBound] = &[
     IdBound::within(67, [0.002856, 0.0, 0.062127, 0.0]),
     // measured: 0.006051 0.000000 0.013848 0.000000
     IdBound::within(74, [0.007262, 0.0, 0.016618, 0.0]),
-    // measured: 0.006818 0.000000 0.000573 0.000000
-    IdBound::within(75, [0.008182, 0.0, 0.000688, 0.0]),
+    // MBUFFSIM Task 2 (rule 1) re-seed. was: 0.006818 0.000000 0.000573 0.000000
+    // measured: 0.007955 0.000000 0.000722 0.000000
+    IdBound::within(75, [0.009546, 0.0, 0.000866, 0.0]),
     IdBound::exact(93),
     IdBound::exact(98),
     // measured: 0.015158 0.000000 0.033767 0.000000
@@ -301,8 +327,9 @@ const ID_BOUNDS: &[IdBound] = &[
     IdBound::exact(403),
     // measured: 0.642352 0.018953 0.649957 0.003220
     IdBound::within(422, [0.770823, 0.022744, 0.779949, 0.003865]),
-    // measured: 0.001363 0.000000 0.002842 0.000000
-    IdBound::within(423, [0.001636, 0.0, 0.003411, 0.0]),
+    // MBUFFSIM Task 2 (rule 1) re-seed. was: 0.001363 0.000000 0.002842 0.000000
+    // measured: 0.002272 0.000000 0.003727 0.000000
+    IdBound::within(423, [0.002726, 0.0, 0.004472, 0.0]),
     // measured: 0.004245 0.000000 0.011645 0.000000
     IdBound::within(424, [0.005094, 0.0, 0.013974, 0.0]),
     // measured: 0.001134 0.000000 0.003709 0.000000

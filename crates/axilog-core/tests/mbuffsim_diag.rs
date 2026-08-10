@@ -248,6 +248,78 @@ fn diag_buff_uptimes_vs_ei() {
     }
 }
 
+/// **Cell-by-cell ledger for the ALWAYS-ON committed fixture**, through
+/// axilog's REAL pipeline (`analyze` -> `Metrics::boon_uptime`), not the
+/// `eiref` port. Prints one stable, PII-free line per
+/// `(agent index, boon, field)` golden cell with `ours`, `EI` and
+/// `|ours - EI|`, so a before/after run of this test can be diffed
+/// mechanically and every moved cell justified individually.
+///
+/// This is the instrument MBUFFSIM Task 2's "any moved cell must be an
+/// improvement" gate is measured with.
+#[test]
+#[ignore = "MBUFFSIM diagnosis instrumentation; prints the committed-fixture boon cell ledger"]
+fn diag_committed_fixture_boon_cell_ledger() {
+    const ANON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
+    const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.ei.json");
+    let bytes = std::fs::read(ANON).expect("committed fixture");
+    let golden: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(GOLDEN).expect("golden")).expect("json");
+
+    let raw = decode_raw(&bytes).expect("decode");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let by_addr: BTreeMap<u64, u64> = enc.players.iter().map(|p| (p.agent_addr, p.agent_addr)).collect();
+
+    let mut boons_by_account: BTreeMap<String, &serde_json::Value> = BTreeMap::new();
+    for p in golden["players"].as_array().expect("players") {
+        if let (Some(a), Some(b)) = (p["account"].as_str(), p.get("boons")) {
+            boons_by_account.insert(a.to_string(), b);
+        }
+    }
+
+    println!("\n# committed-fixture boon cell ledger (agent-table index, no PII)");
+    for (i, agent) in raw.agents.iter().enumerate() {
+        if !agent.is_player() {
+            continue;
+        }
+        let key = axilog_core::evtc::anon_account(i).trim_start_matches(':').to_string();
+        let Some(&boons) = boons_by_account.get(&key) else { continue };
+        if !by_addr.contains_key(&agent.addr) {
+            continue;
+        }
+        for &(boon_id, name, is_intensity) in axilog_core::analysis::buffs::BOON_IDS.iter() {
+            let Some(g) = boons.get(boon_id.to_string().as_str()) else { continue };
+            let g_uptime = g["uptime"].as_f64().unwrap_or(0.0);
+            let g_presence = g["presence"].as_f64().unwrap_or(0.0);
+            let ours = metrics
+                .boon_uptime
+                .get(&(agent.addr, boon_id))
+                .copied()
+                .unwrap_or(uptime::BoonUptime { presence_pct: 0.0, avg_stacks: 0.0 });
+            let (ei_pres, ei_avg) =
+                if is_intensity { (g_presence, g_uptime) } else { (g_uptime, f64::NAN) };
+            println!(
+                "cell a{i:03} {name:<12} presence ours={:.6} ei={:.6} d={:.6}",
+                ours.presence_pct,
+                ei_pres,
+                (ours.presence_pct - ei_pres).abs()
+            );
+            if is_intensity {
+                let rel = if ei_avg.abs() > 1e-9 {
+                    (ours.avg_stacks - ei_avg).abs() / ei_avg.abs()
+                } else {
+                    (ours.avg_stacks - ei_avg).abs()
+                };
+                println!(
+                    "cell a{i:03} {name:<12} avgstack ours={:.6} ei={:.6} rel={:.6}",
+                    ours.avg_stacks, ei_avg, rel
+                );
+            }
+        }
+    }
+}
+
 /// The decisive experiment: run the SAME extracted event stream through
 /// (a) `analysis::buffs::simulator` and (b) [`eiref`], a literal port of
 /// GW2EI's NoID simulator family, and compare BOTH against GW2EI's own

@@ -30,7 +30,7 @@
 //! uptimes, generation) works unchanged regardless of era.
 
 use crate::analysis::damage::InstidRegistry;
-use crate::evtc::{buff_remove, sc, RawLog};
+use crate::evtc::{buff_remove, iff, sc, RawLog};
 use std::collections::BTreeSet;
 
 /// One extracted apply/remove/initial event for a tracked boon.
@@ -153,6 +153,51 @@ pub fn extract_buff_events(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEv
 /// every non-extension row regardless of `is_statechange`), so the pre- and
 /// post-era extractors were already building bit-identical maps. The
 /// `raw`-only wrapper above stays for standalone/test callers.
+/// GW2EI's `BuffRemoveSingleEvent.OverstackOrNaturalEnd` (MBUFFSIM Task 2,
+/// rule 1) -- `GW2EIEvtcParser/ParsedData/CombatEvents/BuffEvents/
+/// BuffRemoves/BuffRemoveSingleEvent.cs`:
+///
+/// ```csharp
+/// :11   internal bool OverstackOrNaturalEnd =>
+///           (IFF == IFF.Unknown && CreditedBy.IsUnknown && !_byShouldntBeUnknown);
+/// :16   _byShouldntBeUnknown = evtcItem.DstAgent != 0;   // ctor
+/// :26-38 internal override bool IsBuffSimulatorCompliant(bool useBuffInstanceSimulator) {
+///           if (!base.IsBuffSimulatorCompliant(...)) return false;
+///           if (useBuffInstanceSimulator) return true;
+///           return !OverstackOrNaturalEnd;
+///        }
+/// ```
+///
+/// and `GW2EIEvtcParser/EIData/Buffs/BuffDictionary.cs:83-86` drops any
+/// non-compliant event before it ever reaches a simulator. The
+/// `useBuffInstanceSimulator` escape hatch is unreachable: GW2EI hard-codes
+/// `UseBuffInstanceSimulator = false` (`ParsedData/CombatData.cs:611`), so
+/// the NoID family -- and this predicate -- is always the arbiter.
+///
+/// **Three conjuncts reduce to two.** `CreditedBy` derives from `By =
+/// agentData.GetAgent(evtcItem.DstAgent, ...)`
+/// (`AbstractBuffRemoveEvent.cs:72`), and `GetAgent(0, _)` is exactly what
+/// yields the unknown agent -- so `CreditedBy.IsUnknown` is IMPLIED by
+/// `!_byShouldntBeUnknown` (`dst_agent == 0`), not merely correlated with
+/// it. (The converse doesn't hold -- a nonzero addr that isn't in the agent
+/// pool also resolves to unknown -- which is precisely why GW2EI carries
+/// `_byShouldntBeUnknown` separately, per its own ctor comment: "Sometimes
+/// there is a dstAgent value but the agent itself is not in the pool, such
+/// cases should not trigger _overstackOrNaturalEnd".) So the pair below is
+/// EQUIVALENT to the C#, not just sufficient.
+///
+/// Semantically: such a row is arcdps REPORTING that a stack ended on its
+/// own (natural expiry) or was overstacked by a re-application -- nothing
+/// stripped it. The simulator already models that expiry from the apply's
+/// own duration, so replaying the row would strip a stack twice. On the
+/// post-era WvW reference capture, 51863 of 52116 (99.5%) of SINGLE
+/// removals over the calibrated buffs are of this kind; feeding them to the
+/// simulator was the entire cause of MBUFFSIM's classes A, C and D (see
+/// `.superpowers/sdd/2026-08-09-mbuffsim/task-1-report.md`).
+fn is_overstack_or_natural_end(e: &crate::evtc::RawEvent) -> bool {
+    e.dst_agent == 0 && e.iff == iff::UNKNOWN
+}
+
 pub fn extract_buff_events_with_registry(
     raw: &RawLog,
     registry: &InstidRegistry,
@@ -259,14 +304,21 @@ pub fn extract_buff_events_with_registry(
                     agent,
                     kind: BuffEventKind::RemoveAll,
                 }),
-                buff_remove::SINGLE => out.push(BuffEvent {
+                // MBUFFSIM Task 2, rule 1: an OverstackOrNaturalEnd row is
+                // arcdps reporting an expiry the simulator already models,
+                // and GW2EI never feeds it to a simulator -- see
+                // `is_overstack_or_natural_end`.
+                buff_remove::SINGLE if !is_overstack_or_natural_end(e) => out.push(BuffEvent {
                     time: e.time,
                     buff_id: e.skillid,
                     owner: e.src_agent,
                     agent,
                     kind: BuffEventKind::RemoveSingle { removed_duration_ms: e.value.max(0) as u32 },
                 }),
-                _ => {} // MANUAL or unknown: not simulator-compliant, skip (see buff_remove::MANUAL docs).
+                // MANUAL or unknown: not simulator-compliant, skip (see
+                // `buff_remove::MANUAL` docs). Same for the
+                // OverstackOrNaturalEnd SINGLE rows the arm above rejects.
+                _ => {}
             }
         }
     }
@@ -356,7 +408,14 @@ fn extract_buff_events_post_era(
             // same as pre-era, via the shared `AbstractBuffRemoveEvent`
             // ctor).
             sc::BUFF_REMOVE_SINGLE => {
-                if e.is_buffremove == buff_remove::SINGLE {
+                // MBUFFSIM Task 2, rule 1: same `OverstackOrNaturalEnd`
+                // drop as the pre-era branch -- GW2EI's
+                // `BuffRemoveSingleEvent` is era-agnostic (the era split in
+                // `CombatEventFactory.AddBuffRemoveEvent` only changes WHICH
+                // rows become one), so the filter belongs on both branches.
+                if e.is_buffremove == buff_remove::SINGLE
+                    && !is_overstack_or_natural_end(e)
+                {
                     out.push(BuffEvent {
                         time: e.time,
                         buff_id: e.skillid,
