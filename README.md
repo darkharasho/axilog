@@ -1,778 +1,232 @@
 # axilog
 
-axilog is a cross-platform, CLI-first reimplementation of Elite Insights for parsing GW2 arcdps
-combat logs, part of the axi suite. It has a reusable Rust parsing core (`crates/axilog-core`)
-with a Node SDK (`crates/axilog-node`, native [napi-rs](https://napi.rs) bindings) and a Python SDK
-(`crates/axilog-py`, native [PyO3](https://pyo3.rs) bindings) on top, matches standard Elite
-Insights (EI) functionality for the metrics it currently covers, and follows the arcdps spec more
-closely than EI in a few places — notably down
-contribution, CC-over-time, and full per-second timeline support. Unlike the original EI, it isn't
-tied to a single OS.
+A cross-platform, CLI-first reimplementation of
+[Elite Insights](https://github.com/baaron4/GW2-Elite-Insights-Parser) for parsing Guild Wars 2
+arcdps combat logs. Part of the axi suite.
 
-Current focus is WvW logs. Per-player rotation (cast tracking) and a best-effort skill map are
-implemented (M14, opt-in `--rotation` for the former, always-on for the latter), as is
-damage-modifier attribution (M16, opt-in `--modifiers` — see **Usage**
-below). PvE encounter logic (boss health phases, mechanics) is not implemented yet (see Milestones
-below).
+axilog is a Rust parsing core (`axilog-core`) with a CLI, a Node SDK ([napi-rs](https://napi.rs))
+and a Python SDK ([PyO3](https://pyo3.rs)) layered on it as native extension modules — not
+subprocess wrappers. It emits its own native JSON, a subset of Elite Insights' JSON shape, CSV, a
+terminal table, or a single-file interactive HTML report.
+
+- **Cross-platform.** EI is a Windows-targeted C# application. axilog ships prebuilt binaries for
+  Linux (x86-64/aarch64), Windows and macOS (Intel/Apple Silicon).
+- **Fast and light.** A real 583k-event WvW log parses and fully analyzes in ~174 ms, single
+  threaded, with no `unsafe` — 20× faster and 10× lighter than EI. See [Performance](#performance).
+- **Calibrated, not approximated.** Every metric it covers is asserted against a real dps.report EI
+  export in CI on every run. See [Accuracy](#accuracy).
+- **Closer to the arcdps spec where EI diverges.** Down contribution follows the methodology
+  relayed by the arcdps developer rather than EI's own algorithm; CC and damage exist as real
+  per-second timelines; the life-leech-taken count is the true one rather than a reproduction of
+  EI's verified counting bug.
+- **WvW-first.** Every calibrated number was validated against real WvW logs, on both arcdps log
+  eras (pre- and post-`20260501`). PvE encounter logic — boss health phases, mechanics, phase
+  splits — is not implemented; the report exposes a single whole-fight phase.
+
+## Speed
+
+Head-to-head against the Elite Insights CLI v3.27 (plus its bundled .NET 8 runtime), same machine,
+medians of 3 after a warmup. "Matched" is axibridge's production EI configuration (detailed WvW,
+damage modifiers, combat replay, raw timeline arrays, phases) against axilog's equivalent flag set.
+
+| | Real 5:48 zerg (583k events, 48 players) | 49 s skirmish (120k events, 42 players) |
+| --- | --- | --- |
+| Elite Insights CLI | 7.25 s · 857 MiB peak | 2.43 s · 373 MiB peak |
+| **axilog, matched surface** | **2.49 s (2.9×) · 117 MiB (7.3× less)** | **0.25 s (9.7×) · 24 MiB (15× less)** |
+| **axilog, default native JSON** | **0.36 s (20×) · 86 MiB (10× less)** | **0.06 s (40×) · 20 MiB (18× less)** |
+
+axilog leads every cell. EI pays ~2 s of .NET startup and JIT *per spawned parse*, so for
+per-log tooling the small-log column is the ratio that matters; axilog's fixed cost is
+effectively zero. [Methodology, raw samples and the full history →](#performance)
 
 ## Install
 
-Every option below is produced by the same tag-triggered release pipeline
-(`.github/workflows/release.yml` — see `RELEASING.md`) and attached to one GitHub Release per
-version, alongside a consolidated `SHA256SUMS`.
-
-### CLI binary (GitHub Release)
-
-Download the archive for your platform from the
-[Releases page](https://github.com/darkharasho/axilog/releases) — e.g.
-`axilog-X.Y.Z-x86_64-unknown-linux-gnu.tar.gz` (`.zip` on Windows) — then verify its checksum
-against the release's `SHA256SUMS` before extracting:
+Every artifact comes from one tag-triggered release pipeline, attached to a single GitHub Release
+per version alongside a consolidated `SHA256SUMS`.
 
 ```sh
-sha256sum -c axilog-X.Y.Z-<target>.tar.gz.sha256
-tar xzf axilog-X.Y.Z-<target>.tar.gz
-./axilog parse <log.zevtc> --format table
-```
-
-Targets published per release: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
-`x86_64-pc-windows-msvc`, `x86_64-apple-darwin`, `aarch64-apple-darwin`.
-
-### Node SDK (npm)
-
-`@axiapps/axilog` is published to the npm registry (platform binaries resolve automatically
-via optionalDependencies):
-
-```sh
+# Node SDK — https://www.npmjs.com/package/@axiapps/axilog
 npm install @axiapps/axilog
-```
 
-```js
-const { parseFile } = require('@axiapps/axilog')
-console.log(parseFile('./fight.zevtc').players.length)
-```
-
-### Python SDK (pip)
-
-`axilog` is published to PyPI (`cp39-abi3` — one wheel per platform covers every
-CPython ≥3.9):
-
-```sh
+# Python SDK — https://pypi.org/project/axilog/ (cp39-abi3, one wheel per platform)
 pip install axilog
 ```
 
-```python
-import axilog
-print(len(axilog.parse_file("./fight.zevtc")["players"]))
-```
-
-### Building from source
-
-Requires a Rust toolchain (see `rust-toolchain.toml`).
+For the CLI, take the archive for your platform from the
+[Releases page](https://github.com/darkharasho/axilog/releases) and verify it before extracting:
 
 ```sh
-cargo build --workspace --release
-# binary at target/release/axilog
+sha256sum -c axilog-X.Y.Z-<target>.tar.gz.sha256   # .zip on Windows
+tar xzf axilog-X.Y.Z-<target>.tar.gz
+./axilog parse fight.zevtc --format table
 ```
 
-Or run directly via cargo during development:
-
-```sh
-cargo run -p axilog-cli -- parse <log.zevtc> --format table
-```
-
-See **SDKs** below for building the Node/Python bindings from source instead of a packaged
-release artifact.
+Published targets: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+`x86_64-pc-windows-msvc`, `x86_64-apple-darwin`, `aarch64-apple-darwin`. From source, with the
+toolchain in `rust-toolchain.toml`: `cargo build --workspace --release`.
 
 ## Usage
 
-### Parse a log
-
 ```sh
-axilog parse <log.zevtc|log.evtc> [--format json|table|csv|ei-json|html] [--view default|support|boons|healing|defense|rotation] [-o FILE] [--replay] [--missiles] [--skill-damage] [--timeseries] [--rotation] [--modifiers]
+axilog parse <log.zevtc|log.evtc> [--format FORMAT] [--view VIEW] [-o FILE] [FLAGS...]
+axilog anonymize <in.zevtc> <out.zevtc>
 ```
 
-- `json` (default) — axilog's own native schema (`axilog_schema::Report`): encounter info, teams,
-  per-player metrics (damage, downs/kills, down contribution, CC, stun breaks, boons, support), and
-  a per-second timeline. This is the richest, most accurate representation — the other formats are
-  lossy views of it.
-- `table` — human-readable summary, one row per player, sorted by damage (or by `--view`'s own sort
-  key — see below).
-- `csv` — same per-player fields as the default `table` view, machine-readable.
-- `ei-json` — a subset of the real Elite Insights / dps.report JSON shape, for tools that already
-  consume EI's format. See **EI-JSON parity** below for exactly what is and isn't populated.
-- `html` — a single, self-contained interactive report (see **HTML report** below).
+`-o/--output FILE` writes to a file instead of stdout, for every format. `axilog parse --help` is
+the authoritative, measured reference for every flag — what it computes, which formats consume it,
+and its size/time cost. The tables below are the index.
 
-`-o/--output FILE` writes the rendered output to `FILE` instead of stdout — works with every
-`--format`, not just `html`.
+### Formats (`--format`, default `json`)
 
-`--replay` (M9) computes and embeds a native-only combat-replay block (per-squad-player and
-per-enemy-player-representative position tracks, downsampled to 300ms, plus down/dead intervals) —
-`--format json` embeds it as a top-level `replay` field, `--format html` feeds the animated Replay
-tab (see **HTML report** below). Off by default (adds meaningfully to output size — see **HTML
-report**'s size-budget notes).
+| Format | What it is |
+| --- | --- |
+| `json` | axilog's native schema (`axilog_schema::Report`) — the richest, most accurate output; every other format is a lossy view of it |
+| `table` | Human-readable per-player summary, one row per player (see `--view`) |
+| `csv` | The same fields as the default `table` view, machine-readable |
+| `ei-json` | A subset of the real Elite Insights / dps.report JSON shape, for tools that already consume it |
+| `html` | A single self-contained interactive report — inlined CSS/JS/data, zero network requests |
 
-The same flag (M15) turns on GW2EI's OWN replay shape for `--format ei-json`: per-actor
-`combatReplayData.{positions, orientations, dc, iconURL}` (map pixels on GW2EI's fixed 300ms
-polling grid) plus the top-level `combatReplayMetaData`. That is a second, independent engine
-(`axilog_core::analysis::ei_replay`) over the same events — not a reshaping of the native block —
-because the two shapes differ in grid bounds, units, interval semantics and rounding; see that
-module's doc comment. It roughly triples the ei-json payload, hence the same opt-in. `--format
-table`/`csv` ignore the flag.
-
-`--missiles` (M10) computes and embeds a native-only, opt-in missile (projectile) analytics
-block — per-squad-player `fired`/`hit`/`denied`/`reflected_at_self` counts plus a squad-wide
-`incoming_fired`/`incoming_denied` defensive rollup. `--format json` embeds it as a top-level
-`missiles` field; every other format ignores it (no comparable shape). Off by default. See
-`axilog_core::analysis::missiles`'s module doc for exactly what's attributable — the arcdps wire
-format has no blocked/reflected/destroyed reason code, so `denied` is deliberately undifferentiated
-and there is no per-player "who denied this" credit anywhere.
-
-`--skill-damage` (M12 Task 1) computes and embeds each squad player's per-skill damage
-distribution — outgoing (whole-fight and per-target) and incoming, grouped by skill id.
-`--format json` embeds it as each player's `skill_damage` field; `--format ei-json` (M12 Task 3)
-maps the same data into EI's own `totalDamageDist`/`targetDamageDist`/`totalDamageTaken` array
-shapes; every other format ignores it. Off by default — measured +249% JSON size on the committed
-fixture when always-on (see **EI-JSON parity** below and `axilog_schema::Report::players`'s
-`PlayerOut::skill_damage` doc comment).
-
-`--timeseries` (M12 Task 2) computes and embeds each squad player's per-second cumulative
-`damage`/`damage_taken`/per-target series, plus a per-enemy `dps_targets` whole-fight summary.
-`--format json` embeds them as each player's `per_second`/`dps_targets` fields; `--format ei-json`
-(M12 Task 3) maps the same data into EI's own `damage1S`/`targetDamage1S`/`damageTaken1S`/
-`dpsTargets` array shapes; every other format ignores it. Off by default — measured +147.7%/
-+36.4% JSON size respectively on the committed fixture when always-on (see **EI-JSON parity**
-below).
-
-`--rotation` (M14 Task 1) computes and embeds each squad player's per-skill cast list — a
-GW2EI-`AnimatedCastEvent`-pipeline reproduction, grouped by skill id, each cast carrying
-`cast_time_ms`/`duration_ms`/`time_gained_ms`/`quickness` (see `axilog_core::analysis::rotation`'s
-module doc for the full cast-boundary/quickness derivation this mirrors, and its documented
-`InstantCastEvent`-pipeline scope gap — weapon swaps/procs/instant-cast mechanics aren't decoded).
-`--format json` embeds it as each player's `rotation` field; `--format ei-json` maps the same data
-into EI's own flat `rotation[]` shape (`{id, skills:[{castTime,duration,timeGained,quickness}]}`,
-gated by the SAME presence, not a separate flag); every other format ignores it. Off by default —
-measured +66.9% JSON size on the committed fixture when always-on (see **EI-JSON parity** below).
-`--view rotation` (M14 Task 3) does NOT require this flag — it reads the underlying per-player cast
-data directly, always computed regardless of `--rotation` (that flag only gates the full per-cast
-JSON payload).
-
-`--modifiers` (M16) computes and embeds each squad player's damage-modifier attribution — for
-every trait/rune/relic/sigil/food modifier the player actually triggered, how many of the eligible
-hits it applied to and how much of the damage it accounts for. Backed by a 205-definition
-transcription of GW2EI's own descriptor tables (`axilog_core::analysis::damage_mods`), with the
-gain formula reproduced exactly: a modifier's share of an observed hit is `g/(100+g)`, not `g/100`,
-because the logged damage already contains the bonus. `--format json` embeds each player's
-`damage_mods` block plus the top-level `damage_mod_map`, and `--format html` carries the same
-native block (the report page embeds the serialized `Report` verbatim, so it grows 260,515 →
-347,412 bytes on the committed fixture — exactly as `--rotation`/`--skill-damage`/`--timeseries`
-already do; there is no modifier-specific HTML widget, and the flagless page, which is what both
-HTML size budgets measure, is unchanged). `--format ei-json` maps the same data into EI's
-`damageModifiers`/`incomingDamageModifiers`/`damageModifiersTarget`/
-`incomingDamageModifiersTarget` plus `damageModMap`, gated by this same flag and additionally the
-only format that asks the engine for the per-target split. `--format table`/`csv` ignore it
-entirely. Off by default, and unlike `--rotation`/`--skill-damage`/`--timeseries` this flag gates
-the COMPUTATION, not just the serialization — the engine is a separate pass over every damage event
-crossed with the whole catalogue, so nothing pays for it unless asked. Measured on the committed
-fixture: `--format json` +44.2%, `--format ei-json` +441.5% (the difference is EI's per-target
-arrays, which have no native counterpart), wall clock 0.074s → 0.155s. See **EI-JSON parity** below
-for the per-id coverage and accuracy numbers.
-
-`--view` (M3/M10) selects the `table` format's column layout — ignored for every other `--format`:
-
-- `default` (default) — damage/DPS/downs/kills/deaths, sorted by damage.
-- `support` — condi cleanses, boon strips, resurrects, stun breaks, sorted by cleanses.
-- `boons` — Might average stacks plus presence % for Quickness/Alacrity/Stability/Protection,
-  sorted by account.
-- `healing` (M10) — arcdps healing-extension totals: healing out (total), allies, barrier out,
-  downed-ally healing. Renders `-` per row (not misleading zeros) when the log carries no
-  healing-extension data at all.
-- `defense` (M13) — incoming defenses: blocks, evades, dodges, total damage taken, a strike/condi
-  split, downs taken, sorted by damage taken.
-- `rotation` (M14) — total animated-cast count plus APM (Actions Per Minute, `casts /
-  active_minutes`, using the same active-time base as `ei-json`'s `activeTimes`), sorted by cast
-  count. Unlike every other view, this one does NOT require `--rotation` to also be passed — it
-  reads the underlying per-player cast data directly (always computed by `analyze()`); `--rotation`
-  only gates whether the full per-cast JSON detail is also emitted.
-
-Example `table --view default` output (anonymized account names, from the committed golden fixture):
+### Table views (`--view`, `table` format only; `default` shown)
 
 ```
 account                  profession       damage      DPS  downs  kills  deaths
 :Anon104.4848            Engineer         205612     4172      1      0       0
-:Anon171.7327            Engineer         192437     3905      2      1       0
-:Anon110.5070            Necromancer      169689     3443      4      0       0
-:Anon116.5292            Necromancer      162652     3300      1      0       0
-:Anon107.4959            Mesmer           154899     3143      0      0       0
 ```
 
-Example `table --view support` output:
+| View | Columns |
+| --- | --- |
+| `default` | damage, DPS, downs, kills, deaths |
+| `support` | condi cleanses, boon strips, resurrects, stun breaks |
+| `boons` | Might average stacks, presence % for Quickness/Alacrity/Stability/Protection |
+| `healing` | arcdps healing-extension totals; renders `-`, not misleading zeros, when the log has no healing data |
+| `defense` | blocks, evades, dodges, damage taken with a strike/condi split, downs taken |
+| `rotation` | animated-cast count and APM (does **not** require `--rotation`) |
 
-```
-account                  profession    cleanses  strips resurrects stunbreaks
-:Anon133.5921            Elementalist        93       0          0          1
-:Anon118.5366            Mesmer              76       1          0          1
-:Anon125.5625            Ranger              66       0          0          0
-:Anon108.4996            Ranger              56       1          1          1
-:Anon109.5033            Elementalist        56       0          1          1
-```
+### Opt-in analysis flags
 
-Example `table --view boons` output:
+All off by default — each materially inflates the output. Percentages are measured on the fixture.
 
-```
-account                  profession   Might(avg)  Quick%   Alac%   Stab%   Prot%
-:Anon104.4848            Engineer          19.07    66.2     0.0    72.7    90.9
-:Anon105.4885            Ranger            10.15    31.3     0.0    79.5    67.6
-:Anon106.4922            Guardian          13.81    44.4     0.0    70.1    98.0
-:Anon107.4959            Mesmer             8.64    63.8     0.0    72.8    87.6
-:Anon163.7031            Mesmer             8.60    29.0    37.4    77.8    66.2
-```
-
-Example `table --view defense` output:
-
-```
-account                  profession    blocks  evades  dodges  dmg taken    strike     condi  downs
-:Anon119.5403            Guardian          24       2       4      81974     79652      1652      0
-:Anon123.5551            Mesmer            15       1       0      69439     67535      1160      0
-:Anon130.5810            Guardian          19       0       0      66177     64312       661      1
-:Anon105.4885            Ranger            16       0       1      63912     62634      1120      1
-:Anon133.5921            Elementalist       3       5       3      63506     62613       667      2
-```
-
-Example `table --view rotation` output:
-
-```
-account                  profession      casts      APM
-:Anon129.5773            Mesmer             55     67.0
-:Anon125.5625            Ranger             52     63.3
-:Anon118.5366            Mesmer             51     62.1
-:Anon140.6180            Mesmer             44     53.6
-:Anon119.5403            Guardian           43     52.4
-```
+| Flag | Adds | Cost |
+| --- | --- | --- |
+| `--replay` | Combat replay — native position tracks (`json`, and the HTML Replay tab), or GW2EI's own map-pixel `combatReplayData`/`combatReplayMetaData` (`ei-json`) | `ei-json` +142% compact |
+| `--missiles` | Projectile analytics: per-player fired/hit/denied, squad-wide incoming rollup (native only) | small |
+| `--skill-damage` | Per-skill damage distribution, outgoing and incoming → EI's `totalDamageDist`/`targetDamageDist`/`totalDamageTaken` | `json` +249% |
+| `--timeseries` | Per-second cumulative series and `dpsTargets` → EI's `damage1S`/`targetDamage1S`/`damageTaken1S`/`dpsTargets` | `json` +148% / +36% |
+| `--rotation` | Full per-cast list → EI's flat `rotation[]` | `json` +67% |
+| `--modifiers` | Damage-modifier attribution over a 205-definition GW2EI-derived catalog → EI's `damageModifiers*` and `damageModMap` | `json` +44%, `ei-json` +442%; the only flag that gates *computation*, 0.074 s → 0.155 s |
 
 ### HTML report
 
-```sh
-axilog parse <log.zevtc|log.evtc> --format html -o report.html
-```
+`axilog parse fight.zevtc --format html -o report.html` renders one self-contained dark-theme
+(light-mode toggle) document: CSS, JS and the report's own JSON are all inlined, so there are no
+external requests and nothing to ship alongside it. Sortable Damage/Support/Boons tables, a header
+with map/duration/commander/team chips, an inline SVG damage timeline with downs and CC overlaid,
+and — with `--replay` — an animated combat-replay tab. Every log-derived string reaches the DOM via
+`textContent` only; structure, determinism and size budgets are gated in CI.
 
-Renders a single, self-contained dark-theme (with a light-mode toggle) HTML document — open
-`report.html` directly in a browser, no server or network access needed. Built by the
-`axilog-html` crate (`axilog_html::render(&Report) -> String`): the CSS, JS, and the report's own
-JSON data are all inlined into one file (`<style>`/`<script>` blocks), so it's safe to email, drop
-in a chat, or archive next to the source log — there are no external requests (fonts, CDNs,
-analytics, or otherwise) and no other files to ship alongside it.
+### Anonymize before sharing
 
-The report contains:
+`axilog anonymize <in.zevtc> <out.zevtc>` rewrites every player agent's character/account name to a
+deterministic `Anon<N>` placeholder in place, preserving every other byte — the event stream, the
+skill table, NPC/gadget agents — so parsed metrics are identical before and after. Use it before
+filing a bug report, sharing a log, or committing a fixture.
 
-- **Header** — map name, fight duration, recorded-by account, commander (with commander-tag
-  variant when present), a warnings banner (only shown when `Report.warnings` is non-empty), and
-  one color-coded chip per team (`red`/`blue`/`green`) with a squad or enemy player count.
-- **Damage / Support / Boons tabs** — sortable tables (click a column header to sort, click again
-  to reverse) with a squad-totals footer row on the Damage tab:
-  - *Damage*: account, character, profession (elite-spec name when active), damage, DPS, downs,
-    kills, deaths, down contribution, damage taken.
-  - *Support*: cleanses (total/self), boon strips, resurrects, stun breaks, removed-stun seconds.
-  - *Boons*: Might average stacks, presence % for Quickness/Alacrity/Stability/Protection/Fury/
-    Resistance, and a self/group/squad toggle for Might/Quickness/Alacrity/Stability *generation*
-    attribution.
+## Performance
 
-  Non-squad players (subgroup 0) render visually muted in every table.
-- **Damage timeline** — an inline SVG chart built from `timeline.per_second`: squad damage as a
-  filled area + line (the primary series), downs plotted as circular markers directly on the
-  damage line at the second they occurred, and CC-applied plotted as a translucent bar overlay
-  normalized to its own scale (a different unit/magnitude than damage, so it intentionally doesn't
-  share the damage y-axis — see `buildTimelinePaths`'s doc comment in `report.js`). Time axis in
-  `mm:ss`, damage axis in `k`-format (e.g. `45k`). The chart uses an SVG `viewBox` with
-  `width: 100%`, so it scales with the browser window rather than being a fixed-size image.
-- **Replay tab** (M9, only shown when the report was generated with `--replay`) — an animated combat
-  replay: play/pause, a scrub slider, an `mm:ss`/`mm:ss` time readout, and a 1x/4x/8x speed toggle
-  (4x default) driving an inline SVG "stage" over `replay.tracks[]`. Squad players render as filled,
-  team-colored dots; enemies as hollow (team-colored stroke only, background fill); the commander
-  gets a gold ring; a track pulses with a red ring during its `down_intervals` and fades to 25%
-  opacity during its `dead_intervals`. There's no real map imagery (the zero-network invariant
-  holds) — just an abstract dark field with a subtle grid, sized from `replay.bounds` (padded 5%,
-  height capped so a tall/narrow map's real proportions don't stretch the page vertically — the
-  SVG's own `preserveAspectRatio` letterboxes the rest). Hovering a dot shows its name via a native
-  SVG `<title>` tooltip. All motion is driven by a pure `positionsAt(tracks, t)` function (linear
-  interpolation between a track's downsampled samples, holding-then-fading before its first/after
-  its last sample) called every animation frame — see `report.js`'s "replay (pure)" section and
-  `tests/js/pure_fn_tests.mjs` for the node-tested edge cases (exact-sample hit, between-samples,
-  before-first, after-last, empty track).
+End to end (decode → resolve → analyze → build the native report), release build, Ryzen 9 7900X3D:
 
-All number/date formatting and interactive behavior (sorting, the theme toggle, the boon
-generation-mode toggle, the timeline, the replay animation) runs client-side in `report.js` against
-the embedded JSON — Rust only builds the skeleton and inlines the data, so there's one source of
-truth for every value shown. See `crates/axilog-html/assets/report.js`'s header comment for the
-project's XSS contract (every log-derived string — player/account names, map name, warnings, ... —
-reaches the DOM via `textContent` only, never `innerHTML`), and `crates/axilog-html/tests/golden_html.rs`
-for the structural/size/determinism tests that gate this format in CI (replay-enabled reports stay
-under a 600KB budget; the combined raw `report.css`+`report.js` assets stay under 60KB).
+| Log | Events | Full parse | of which `analyze` |
+| --- | --- | --- | --- |
+| Committed fixture (`fixtures/wvw-small.anon.zevtc`) | 120,435 | **28.9 ms** | 18.9 ms |
+| Real WvW zerg log (48 players, 5:48 fight) | 583,194 | **174 ms** | 93.7 ms |
 
-### Anonymize a log for sharing
+That is a whole 583k-event log fully analyzed — damage, downs/CC, down contribution, boons and
+generation, support, healing, per-skill damage, per-second series, hit quality, defenses, rotation.
 
-```sh
-axilog anonymize <in.zevtc> <out.zevtc>
-```
+### vs Elite Insights — methodology
 
-Rewrites every player agent's character/account name to a deterministic `Anon<N>` /
-`:Anon<N>.<4 digits>` placeholder in place; every other byte (including every combat event, the
-skill table, and NPC/gadget agents) is preserved exactly, so parsed metrics are identical before
-and after. Use this to produce a PII-safe log before filing a bug report, sharing a log publicly,
-or committing it as a test fixture — never commit a raw `.zevtc`/`.evtc` (see Fixture policy).
+The table [above](#speed) was measured 2026-08-10 on axilog **v0.3.0**. It is the closest honest
+apples-to-apples available: EI additionally computes phases and its full skill-DB surface, while
+axilog emits its documented WvW parity surface.
+
+Memory used to be EI's one win — axilog
+peaked at 2.4 GiB building the whole `ei-json` document in RAM — until MSTREAM's streaming
+serializer removed it (−95% peak, byte-identical across 96 flag/output combinations). Since that
+run, MROSTER curated the `ei-json` enemy roster to GW2EI's own WvW rule, cutting the matched
+surface further on the real log to **1.70 s · 92 MiB** on the same harness. Full methodology, raw
+samples and every optimization that was *declined* are in
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
+## Accuracy
+
+The bar: **a calibrated number is exactly what Elite Insights prints for the same log, or a
+documented, ruled exception with a traced cause.** An exception is not a loosened tolerance — it is
+a written root-cause trace, a bound set at the *measured* residual plus a margin, and a named
+allowlist in the test file. Two references enforce it: a committed anonymized golden
+(`fixtures/wvw-small.anon.zevtc` plus `fixtures/wvw-small.ei.json`, a real dps.report export of the
+same log) asserted in CI on every run, and a larger post-rework capture living gitignored under
+`fixtures/local/`, so the post-`20260501` wire shape has real numbers and not only synthetic ones.
+Where the two disagree about method, the GW2EI source is the arbiter, read at a pinned commit and
+cited by file and line. What that produces, on the surfaces axilog covers:
+
+- **Exact vs EI** on fight duration, map, team ids, squad damage, CC applied and stun breaks, condi
+  cleanses / boon strips / resurrects (squad *and* per-player), boon presence and average stacks,
+  `activeTimes`, `statsAll` hit quality, `defenses` outcome counts, `healthPercents`, `instanceID`,
+  per-target offensive splits, the enemy-side `targets[]` mirrors, healing/barrier detail,
+  `guildID`, and the whole `--modifiers` `damageModMap`.
+- **Deliberately different**, documented as such: down contribution follows the arcdps developer's
+  health-anchored methodology rather than EI's window (EI has no equivalent for three of its four
+  stats); `lifeLeechDamageTakenCount` and `boonStripsTime` emit the true value instead of
+  reproducing verified GW2EI counting bugs.
+- **Honest gaps**, never faked with a plausible value: `wvWMapData` objective-capture timelines are
+  not decoded; the cast pipeline covers `AnimatedCastEvent` but not `InstantCastEvent` (~29% of a
+  real log's cast entries); `skillMap` names come from the log's own table, not EI's skill DB; 6 of
+  the reference export's 75 damage-modifier ids need engine features that do not exist yet. A field
+  axilog cannot compute is left out of `ei-json`, not guessed.
+
+Every row, its status, its measured residual and the test that pins it:
+[`docs/EI-PARITY.md`](docs/EI-PARITY.md), or the wiki's
+[accuracy page](https://arcdps.axi.link/axilog/accuracy/) for the reader-facing version.
 
 ## SDKs
 
-### Node
-
-`crates/axilog-node` (package `@axiapps/axilog`) is a native addon over the same Rust core the CLI
-uses — [napi-rs](https://napi.rs) bindings, not a subprocess wrapper, so there's no JSON-over-pipe
-overhead and no separate implementation to drift from the CLI's output (a dual-path parity test
-asserts the two stay identical). Not yet published to npm — see below.
-
-```sh
-cd crates/axilog-node
-npm install
-npm run build   # compiles the Rust crate to a platform .node addon
-```
+Both SDKs are native extension modules over the same Rust core the CLI drives — no reimplementation
+and no JSON-over-subprocess; parity tests assert they stay identical to the CLI's output.
 
 ```js
 const { parseFile, parseFileEi } = require('@axiapps/axilog')
-
-// Native schema (axilog_schema::Report) — the same JSON the CLI's
-// `--format json` prints, typed via index.d.ts/types.d.ts.
-const report = parseFile('./fight.zevtc')
-const squadDamage = report.players.reduce((sum, p) => sum + p.damage.total, 0)
-const quickness = report.players[0].boons.find((b) => b.name === 'Quickness')
-console.log(report.players.length, squadDamage, quickness?.presence_pct)
-
-// EI-compatibility JSON (axilog_ei::to_ei_json) — the shape axibridge-style
-// consumers already read (players[].account, dpsAll[0].damage, buffUptimes[], ...).
-const ei = parseFileEi('./fight.zevtc')
-```
-
-See [`crates/axilog-node/README.md`](crates/axilog-node/README.md) for the full API
-(`parseFile`/`parseBuffer`/`parseFileEi`/`anonymizeFile`), build/test instructions, and how the
-TypeScript types are generated/patched.
-
-**Not yet on the npm registry.** The package builds and tests cleanly (CI: linux build + `npm
-test`; the addon also builds on Windows/macOS every run), and every tagged release publishes
-installable tarballs to its GitHub Release (see **Install** above) — but `npm publish` to the
-registry itself is gated on the `NPM_TOKEN` repository secret, which isn't configured yet.
-
-### Python
-
-`crates/axilog-py` (package `axilog`) is a native extension module ([PyO3](https://pyo3.rs)
-bindings, `abi3-py39`) over the same Rust core the CLI and Node SDK use — again no subprocess
-wrapper, and a CLI-parity test keeps it from drifting from the CLI's own output. Not yet published
-to PyPI — see below.
-
-```sh
-cd crates/axilog-py
-python3 -m venv .venv
-.venv/bin/pip install maturin
-.venv/bin/maturin develop --release   # compiles the Rust crate into .venv as the `axilog` module
+const report = parseFile('./fight.zevtc')                 // native schema, typed via index.d.ts
+const ei = parseFileEi('./fight.zevtc')                   // Elite Insights JSON shape
+console.log(report.players.length, report.players[0].damage.total)
 ```
 
 ```python
 import axilog
-
-# Native schema (axilog_schema::Report) — the same JSON the CLI's
-# `--format json` prints, typed via axilog.pyi.
-report = axilog.parse_file("./fight.zevtc")
-squad_damage = sum(p["damage"]["total"] for p in report["players"])
-quickness = next(b for b in report["players"][0]["boons"] if b["name"] == "Quickness")
-print(len(report["players"]), squad_damage, quickness["presence_pct"])
-
-# EI-compatibility JSON (axilog_ei::to_ei_json) — the shape axibridge-style
-# consumers already read (players[].account, dpsAll[0].damage, buffUptimes[], ...).
-ei = axilog.parse_file_ei("./fight.zevtc")
+report = axilog.parse_file("./fight.zevtc")               # native schema, typed via axilog.pyi
+ei = axilog.parse_file_ei("./fight.zevtc")                # Elite Insights JSON shape
+print(len(report["players"]), report["players"][0]["damage"]["total"])
 ```
 
-See [`crates/axilog-py/README.md`](crates/axilog-py/README.md) for the full API
-(`parse_file`/`parse_bytes`/`parse_file_ei`/`anonymize_file`), build/test instructions, and the
-`axilog.pyi` typed-stub layout.
+Full API (`parseFile`/`parseBuffer`/`parseFileEi`/`anonymizeFile` and their Python equivalents), the
+opt-in analysis options and build-from-source instructions:
+[`crates/axilog-node/README.md`](crates/axilog-node/README.md) ·
+[`crates/axilog-py/README.md`](crates/axilog-py/README.md).
 
-**Not yet on the PyPI registry.** The extension builds and tests cleanly (CI: linux `maturin
-develop` + the stdlib `unittest` suite; the wheel also builds on Windows/macOS every run via
-`maturin build`), and every tagged release publishes installable wheels + an sdist to its GitHub
-Release (see **Install** above) — but `twine upload` to the registry itself is gated on the
-`PYPI_TOKEN` repository secret, which isn't configured yet.
+## Documentation
 
-## EI-JSON parity
-
-Calibrated against a real dps.report EI export for one WvW log (Green Alpine Borderlands,
-41 friendly players). "Golden" below means the committed anonymized fixture
-(`fixtures/wvw-small.anon.zevtc` + `fixtures/wvw-small.ei.json`), asserted exactly by
-`crates/axilog-core/tests/golden.rs` in CI on every run — not spot-checked once and left to drift.
-
-| Metric | Status | Detail |
-|---|---|---|
-| Fight duration | Exact | `durationMS` matches EI's `durationMS` |
-| Squad total damage | Exact | matches EI's `squadTotalDamage` |
-| CC applied (count / duration) | Exact | `34` events / `50460`ms, matches EI's `squadAppliedCrowdControl(Duration)` |
-| Stun breaks (count / duration) | Exact | `20` / `16907`ms, matches EI's `squadStunBreak`/`squadRemovedStunDuration` |
-| Professions (incl. elite specs) | Exact | EI-style naming (elite-spec name wins when active), joined by account across 37+ players. Post-SotO spec ids 73/75/80/81 (Troubadour/Amalgam/Evoker/Luminary) and 74 (Paragon) are named by elimination — not sourced from GW2's public API — by matching this project's unmapped elite-spec ids against EI's own exported `profession` string for the same account/profession on a calibration log; id 74 in particular was grounded against a forced 48-player bijection between this project's and EI's exports of the same post-rework capture (see `crates/axilog-core/src/model/mod.rs`). Because this mapping is applied unconditionally, it changes always-on output for any post-era log containing that spec, not just the calibration fixture |
-| Map name | Exact | resolved from the log's `MAP_ID` event |
-| Team colors / team IDs | Exact | prefers the log's own `CBTS_WVWTEAMS` event when present (recent arcdps builds); falls back to a static id→color table (sourced from axibridge, itself reconciled from two community EVTC tools) for older logs without it |
-| Friendly player count | Approximate | within ±2 of EI's count (one known relog straggler with a blank account, contributes 0 to every metric) |
-| Down contribution | Emitted (arcdps methodology) | the M11 contribution family (`downs_contribution`/`downed_by`): health-anchored window per the dev-relayed arcdps methodology — max(last-≥99%-health − 2000ms, log start, prev-down + 2100ms reset) — with four stats (damage/CC/strips/movement-impairing), both directions; replaces the retired M1-era 10s-window approximation (schema 0.1 → 0.2). EI has no equivalent surface — this follows arcdps itself, not EI |
-| CC detection (`is_cc` predicate) | Approximate, era-gated | exact vs. EI on a pre-`ResultEnumRework` arcdps build (< 20260501; `34`/`50460`ms, see the CC row above); post-era (≥ 20260501) now also accepts genuine `buff == 1` CC rows, era-gated off `RawHeader::is_post_buff_rework` (M4 Task 2, verified against GW2EI's post-`ResultEnumRework` source — no real post-rework capture to calibrate the post-era branch's numbers against yet), see "Supported log eras" below |
-| Per-second timeline (squad damage / CC applied / downs) | Native-only | EI's JSON doesn't expose a comparable per-second series; ours does (`timeline.per_second`) |
-| Down-contribution timeline (per-window breakdown) | Native-only, not yet exposed | the down-contribution algorithm already works in time windows internally; a windowed *timeline* (vs. today's single per-player total) is a planned native-only extension |
-| Squad markers (incl. commander-tag colour/variant), tick-rate telemetry | Native-only, implemented | `CBTS_MARKER`/`CBTS_TICK` decode: per-player/enemy `marker`, commander player `commander_tag { variant, guid }`, `encounter.markers[]` assignment timeline, `encounter.tick_rate { avg, min, per_second[] }`; EI's JSON can't express any of this, so the EI adapter is unaffected — see `docs/arcdps-dev-notes.md` |
-| Boon uptime — duration-type boons (Fury, Regeneration, Vigor, Swiftness, Protection, Aegis, Resolution, Quickness, Resistance, Alacrity) | Exact, era-gated | `presence_pct` (our field) == EI's `buffUptimes[].buffData[0].uptime`; 0/370 cells (10 boons × 37 joined players) over the 2pp tolerance — calibrated only against a pre-"BuffAppliesAndRemovesAsStateChanges" build (< 20260501); post-era (≥ 20260501) extraction is implemented and era-gated (M4 Tasks 1-2) and, as of MBUFFSIM, calibrated against a real post-rework capture — presence vs EI's own `buffUptimes` across 44 accounts is **mean 0.0002–0.0003pp** for nine of the ten, with per-account maxima below the 3-decimal print resolution of the harness (< 0.0005pp). **Regeneration is the exception and is NOT covered by that figure**: mean 0.0060pp, per-account max **0.037pp** — GW2EI types it `BuffStackType.Regeneration` → `HealingLogic`, which this project simulates as plain `Queue`; that is a deliberate, ledgered deferral (see `BuffStackType::Regeneration`'s doc comment and the MBUFFSIM report), still 54x inside the 2pp tolerance. Measured by `crates/axilog-core/tests/mbuffsim_diag.rs`, which needs the gitignored local capture and so is `#[ignore]` rather than always-on. See "Supported log eras" below |
-| Boon uptime — intensity-type boons (Might, Stability) presence % | Exact, era-gated | 0/74 cells over 2pp on the pre-rework fixture (< 20260501); worst cell 0.000496pp (Might), 0.000487pp (Stability). Post-era (≥ 20260501) extraction implemented, era-gated and now calibrated against a real post-rework capture (MBUFFSIM): per-account presence differences are below the harness's 3-decimal print resolution (< 0.0005pp) on both. See "Supported log eras" below |
-| Boon uptime — intensity-type boons (Might, Stability) average stacks | Exact, era-gated | 74/74 cells inside a **0.5% relative** tolerance on the pre-rework fixture — **no allowlist**. Worst cell **0.000558** (Might, `a133`); worst Stability cell **0.000476** (also `a133`) — i.e. a ~9x margin on the bound. The bound itself was tightened **10x** by MBUFFSIM (0.05 -> 0.005); the OLD 0.05 bound sat ~90x above the current worst cell, which is how the defect below survived two milestones. Until MBUFFSIM this row read *Approximate* with 7 allowlisted Stability cells (0.064–0.098 relative); the cause was not a simulator defect but two missing GW2EI event-pipeline rules — `BuffRemoveSingleEvent.OverstackOrNaturalEnd` (arcdps's natural-expiry/overstack reports were being replayed as real strips) and the `StackingConditionalLoss` `RemovedDuration` band aid (`BuffsContainer.cs:196-252`) — both now ported, see `analysis::buffs::events`. Also calibrated against a real POST-rework (≥ 20260501) capture for the first time: average stacks vs EI's own `buffUptimes` over 44 accounts are **mean** 0.0039 (Might) and < 0.0005 (Stability, below print resolution), with a per-account **max** of 0.051 on Might
-| Boon generation (self/group/squad attribution) — squad-average % for Might/Quickness/Alacrity/Stability | Exact, era-gated | 148 cells (4 boons × 37 players) checked on the pre-rework fixture, worst delta 0.097pp, 0 over the 2pp tolerance, no allowlist needed; post-era (≥ 20260501) extraction implemented and era-gated, calibration pending a real capture, see "Supported log eras" below |
-| Support: condi cleanses (squad total / self total) | Exact, era-gated | `801` / `97` on the pre-rework fixture, matches EI's `condiCleanse`/`condiCleanseSelf` sums, per-player exact (no allowlist); post-era (≥ 20260501) extraction implemented and era-gated (M4 Task 2's `apply_post_era`), calibration pending a real capture, see "Supported log eras" below |
-| Support: boon strips (squad total) | Exact, era-gated | `437` on the pre-rework fixture, matches EI's `boonStrips` sum, per-player exact; post-era (≥ 20260501) extraction implemented and era-gated, calibration pending a real capture, see "Supported log eras" below |
-| Support: resurrect casts (squad total) | Exact, era-gated | `6` on the pre-rework fixture, matches EI's `resurrects` sum, per-player exact; pre-era reads plain `is_activation` cast-start events, post-era (≥ 20260501) reads the dedicated `ANIMATION_START` statechange instead (a *different*, earlier threshold than the buff rework — GW2EI's `AnimationAsStateChanges = 20260430` — see "Supported log eras" below for the resulting narrow gap) |
-| `buffMap` / `buffUptimes[]` / `support[0]` condi-cleanse/boon-strip/resurrect fields (`ei-json`) | Implemented | subset covering only the 12 tracked boons and the fields we actually compute — see **EI-JSON parity** note below |
-| `targets[].isFake` (`ei-json`) | Exact | always `false` — every one of this project's `targets[]` rows is a real, individually tracked agent. GW2EI's one `isFake: true` row in a WvW log is its synthetic `Dummy PvP Agent` aggregate (`WvWLogic.cs:307`), the entire 57-vs-56 difference between its curated roster and this project's post-MROSTER one; it is deliberately not synthesized, since its numbers would be a re-derived sum of the real rows and every axibridge consumer discards it |
-| `players[].combatReplayData.{start,end,down,dead}` (`ei-json`) | Exact (down/dead), Approximate (start/end) | `down`/`dead` byte-exact vs. the golden (`crates/axilog-ei/tests/ei_golden.rs`); `start`/`end` (first/last event of any kind for that agent) match GW2EI's `FirstAware`/`LastAware` on every joined player in the golden fixture. Computed **unconditionally** (not gated on `--replay`) — cheap, unlike the position track. Enabling `--replay` is purely ADDITIVE to these four fields (byte-identical either way, asserted by `ei_json_replay_fields_do_not_disturb_the_always_on_surface`) |
-| `players[].combatReplayData.{positions,orientations,dc,iconURL}` + `targets[].combatReplayData` (`ei-json`) | Emitted, opt-in — **exact** | GW2EI's own fixed-rate replay shape (`axilog_core::analysis::ei_replay`, M15): map-PIXEL coordinates on GW2EI's 300ms polling grid, degrees for `orientations`, `long.MinValue`/`long.MaxValue`-bracketed `dc`, base-resolution profession `iconURL`. Present only when `--replay`/SDK `replay: true` was requested (measured +184% pretty-printed / +142% compact on the committed fixture). Calibrated **text-exact** (not just value-exact — EI serializes C# `float`s, so the emitted decimals must match too, see `axilog_ei`'s `ei_float`) against the golden fixture for all 37 joined accounts / 6,074 samples, and against the local post-rework GW2EI export for 44/44 players / 50,999 samples. One gap: an enemy-player target's `iconURL` is EI's own unknown-spec fallback, because this project resolves no profession for enemies (`model::Enemy` has no spec field) |
-| `combatReplayMetaData` (`ei-json`) | Emitted, opt-in — **exact** | top-level `{inchToPixel, pollingRate, sizes, maps:[{url, interval, position}]}` (M15 Task 2's `ei_replay::combat_replay_meta`, transcribed from `JsonCombatReplayMetaDataBuilder`); the arena image every `positions` pair is a pixel coordinate on. Present only with `--replay`/SDK `replay: true` **and** a map GW2EI ships an image for (the five WvW maps in `wvw::maps::WVW_MAPS`); omitted — while `combatReplayData` is still emitted, from the computed bounding box, exactly as GW2EI does — for Obsidian Sanctum/Armistice Bastion/any other id. Text-exact against both references, including `inchToPixel: 0.009` (see `axilog_ei`'s `ei_float` for why the decimal text, not just the value, is gated) |
-| `wvWMapData` (`ei-json`) | Emitted, partial — **documented gap** | only the three `{red,blue,green}TeamID` fields (from the log's own `CBTS_WVWTEAMS`/`TEAM_CHANGE` events). Real EI additionally carries `{red,blue,green}ShardID` and `objectiveData[]` (per-objective `{mapID, objectiveID, objectiveType, owners:[[teamID, ms], ...]}` capture-ownership timelines for every Camp/Tower/Keep on the map). Objective capture tracking is a whole separate event family this project does not decode yet — **parked**, not faked |
-| `players[].activeTimes` (`ei-json`) | Exact | `SingleActor.GetActiveDuration(log, 0, durationMS)` reproduced as `(last_aware − first_aware) − dead_ms` (down time is NOT subtracted, verified against GW2EI source); 0.0000% max error across all 37 joined players on the golden fixture (gate: ≤0.5%) |
-| `players[].totalDamageDist[][]` / `targetDamageDist[][][]` / `totalDamageTaken[][]` (`ei-json`) | Emitted, opt-in | `[phase][skillEntry]` / `[targetIndex][phase][skillEntry]` array shapes, verified against a real dps.report export; each entry carries only the fields this project computes (`id`, `totalDamage`, `min`, `max`, `hits`, `crit`, `flank` — real EI's `connectedHits`/`glance`/`missed`/`invulned`/`blocked`/`downContribution`/`indirectDamage`/etc. aren't tracked anywhere in this schema, omitted rather than faked). Present only when the `Report` was built with `--skill-damage`/SDK `skill_damage: true` (M12 Task 1's opt-in gate — measured +249% JSON size when always-on); omitted entirely (not emitted empty) otherwise. Every shared skill id matches the golden fixture's `skillDamage.outgoing` **exactly** (37/37 joined accounts, `crates/axilog-ei/tests/ei_golden.rs`) |
-| `players[].damage1S[][]` / `targetDamage1S[][][]` / `damageTaken1S[][]` (`ei-json`) | Emitted, opt-in | `[phase][second]` / `[targetIndex][phase][second]` cumulative running-total arrays (this project's own per-second series are already cumulative by construction, matching GW2EI's own `*1S` semantics — see `axilog_core::analysis::timeseries`'s module doc). Present only when the `Report` was built with `--timeseries`/SDK `timeseries: true` (M12 Task 2's opt-in gate — measured +147.7% JSON size when always-on); omitted entirely otherwise. `damage1S[0].last()` matches the golden fixture's whole-fight damage scalar **exactly** (37/37 joined accounts) |
-| `players[].dpsTargets[][]` (`ei-json`) | Emitted, opt-in | `[targetIndex][phase]{dps, damage}`, positionally keyed to `targets[]`; only the two fields this project computes (real EI's `condiDps`/`powerDps`/`breakbarDamage`/`actor*` duplicates aren't tracked, omitted). Gated by the SAME `--timeseries` flag as `damage1S` above (not a separate one — `axilog_schema::build_report` populates both off one bool); a real WvW log's large enemy roster makes `dpsTargets` alone exceed the size-discipline guideline (+36.4%), so it's opt-in too, not always-on as originally considered |
-| `players[].statsAll[0]` hit-quality fields (`criticalRate`/`criticalDmg`/`flankingRate`/`glanceRate`/`againstMovingRate`/`connectedDamageCount`/`connectedDmg`/`connectedDirectDamageCount`/`connectedDirectDmg`/`connectedConditionCount`/`connectedConditionDamage`/`critableDirectDamageCount`/`againstDownedCount`/`againstDownedDamage`/`connectedLifeLeechCount`/`connectedLifeLeechDamage`/`connectedPowerAbove90HPCount`/`connectedPowerAbove90HPDamage`/`connectedConditionAbove90HPCount`/`connectedConditionAbove90HPDamage`) (`ei-json`) | Emitted, always-on | mapped from the native `hit_stats` block (M13 Task 1); EI field names exact, actor-only scope (no pet-credit fold — matches real EI's own `statsAll[0]`). Pre-era (< 20260501): every field matches the golden fixture **exactly** (37/37 joined accounts, `crates/axilog-ei/tests/ei_golden.rs`); post-era (≥ 20260501): every field, including the condition/power/life-leech buff==1 split, is now **exact** too — MCONDCAT (`axilog_core::analysis::condition_catalog`) closed the previously-documented condition-skill-id catalog gap (44/44 joined accounts on a real post-era capture, `hit_stats_golden.rs`'s `CATALOG_EXACT_FIELDS`) |
-| `players[].defenses[0]` hit-outcome + damage-taken-breakdown fields (`blockedCount`/`evadedCount`/`dodgeCount`/`missedCount`/`interruptedCount`/`invulnedCount`/`strikeDamageTaken(Count)`/`powerDamageTaken(Count)`/`conditionDamageTaken(Count)`/`lifeLeechDamageTaken(Count)`/`damageBarrier(Count)`/`breakbarDamageTaken(Count)`) (`ei-json`) | Emitted, always-on | mapped from the native `defenses` block (M13 Task 2). Pre-era (< 20260501): every field matches the golden fixture **exactly** except `lifeLeechDamageTakenCount` (37/37 joined accounts, `crates/axilog-ei/tests/ei_golden.rs`) — this project deliberately emits the TRUE derived life-leech count rather than reproducing a real, verified GW2EI bug; post-era (≥ 20260501): the condition/power/life-leech damage-taken split is now **exact** too — MCONDCAT (`axilog_core::analysis::condition_catalog`) closed the previously-documented condition-skill-id catalog gap (44/44 joined accounts on a real post-era capture, up to 51.4% relative divergence on `powerDamageTakenCount` before the fix — see `defenses_golden.rs`'s `CATALOG_EXACT_FIELDS`); hit-outcome counts (blocked/evaded/dodge/miss/interrupt/invuln) remain exact both eras, as before. See `axilog_core::analysis::defenses`'s module doc for the full citation |
-| `players[].rotation[]` (`ei-json`) | Emitted, opt-in | flat array of `{id, skills:[{castTime,duration,timeGained,quickness}]}` — NOT phase-wrapped (unlike `statsAll`/`totalDamageDist`/etc above, real EI's own `rotation[]` has no phase dimension). Straight copy of the native `rotation` block (M14 Task 1's `AnimatedCastEvent`-pipeline reproduction — see `axilog_core::analysis::rotation`'s module doc for the documented `InstantCastEvent`-pipeline scope gap, ~29% of a real log's cast entries). Present only when the `Report` was built with `--rotation`/SDK `rotation: true` (keyed off that presence, not a separate flag — same convention `skill_damage`/`per_second` above establish); omitted entirely (not emitted empty) otherwise. Per-player total cast COUNT matches the golden fixture's own `rotation[]` **exactly** (37/37 joined accounts, `crates/axilog-ei/tests/ei_golden.rs`) |
-| `players[].damageModifiers[]` / `incomingDamageModifiers[]` (`ei-json`) | Emitted, opt-in, partial coverage | `[{id, damageModifiers:[{hitCount, totalHitCount, damageGain, totalDamage}]}]`, the inner array being EI's per-phase dimension (one element -- this project doesn't model phases). Present only when the `Report` was built with `--modifiers`/SDK `modifiers: true`; omitted entirely otherwise. Backed by a 205-definition transcription of GW2EI's own `DamageModifierDescriptor` tables (M16 -- `axilog_core::analysis::damage_mods`, every entry carrying the `file:line` it came from). **Coverage on the WvW reference capture: 69 of the export's 75 ids**; the 6 uncovered ones each need an engine feature this project doesn't have (absorbed-hit classification, a condition-buff-count graph, EI-synthetic weaver attunement ids, a source-HP probe, minion-species/illusion predicates) and are listed with reasons in that module's skipped table -- omitted, never approximated. **Accuracy:** **38** ids are exact on every field of every account and their emitted JSON is asserted TEXT-identical to the reference export (**356/356** whole-fight rows and 2,757/2,757 per-target rows, `crates/axilog-ei/tests/damage_mods_ei_golden.rs`); the remaining 31 carry a bounded residual that is **not** a damage-modifier defect but the accuracy of the underlying per-`(actor, buff)` stack timelines -- each id has its own measured per-field bound in `damage_mods_golden.rs`'s `ID_BOUNDS`, so the residual is visible and cannot grow silently. MBUFFSIM closed the two systematic buff-state gaps behind that class: **row-level exactness went 682/958 -> 779/958 (+97)**, `d422` "Might 25" 0/44 -> 36/44 accounts, `d-427` "Stability >= 5" 15/44 -> 38/44, `d-426` 25/44 -> 39/44, `d-428` 22/44 -> 34/44, and `d369` promoted to exact (on the one row the export carries for it). The id-level counter moves slowly by construction (an id only counts when all 44 accounts agree on all four fields), so the row counter is the one to read. MATTRIB then closed the second, independent residual cause — an incoming-denominator gap M16 had quarantined on one account (7 self-inflicted Bleeding ticks / 239 damage that GW2EI counts and this project's incoming branch refused, because their source was also a squad member; GW2EI's `GetDamageTakenEvents` has no source filter). **Row-level exactness 779/958 -> 792/958, ids exact 31 -> 38**, and **every** id's aggregate `totalHitCount`/`totalDamage` residual is now pinned at `0.0` — i.e. the denominator agrees with GW2EI on every id and every account, and the only residual left anywhere in the table is buff-state fidelity in `hitCount`/`damageGain`. `damageGain` is emitted as a `double` rounded to 3 decimals, matching GW2EI's `Math.Round(_, ParserHelper.DamageModGainDigit)` over a `double` -- deliberately NOT through this crate's `f32`-narrowing `ei_float` |
-| `players[].damageModifiersTarget[][]` / `incomingDamageModifiersTarget[][]` (`ei-json`) | Emitted, opt-in, index space differs | `[targetIndex][]` of the same entry shape, one slot per `targets[]` entry, `[]` where the player exchanged no qualifying hit with that target. Verified non-empty in WvW rather than assumed (the reference export's first player populates 22 of 57 outgoing and 14 of 57 incoming slots). Gated by the same `--modifiers` flag, and they dominate its cost: 854,077 of the 954,397 bytes it adds on the committed fixture. **Known divergence, narrowed by MROSTER then MINSTID:** the index space is this project's own `targets[]`. That used to be the full unfiltered 624-agent enemy roster against GW2EI's 57; MROSTER made it GW2EI's own WvW rule — enemy PLAYERS only (`WvWLogic.cs:325-375`, see `Report::ei_targets`) — and MINSTID added GW2EI's `InstID` regroup of enemy-player agents (`AgentManipulationHelper.cs:467-474`, see `axilog_core::wvw::dedupe_enemy_players`), so the roster is now 56 rows over GW2EI's exact 56 enemy-player instids. The remaining difference is GW2EI's 57th target, a synthetic aggregate row this project does not emit, so the arrays are still not blindly positionally interchangeable with a real EI export's — but they now list the same actors at the same granularity. Same scope note applies to `statsTargets`/`dpsTargets`/`targetDamage1S`. Calibrated by joining on arcdps agent identity instead: 3,963/3,963 per-target rows across all 56 joined enemy-player targets are TEXT-identical to the reference export (2,757/2,757 across 43 joinable targets before MINSTID) |
-| `damageModMap` (`ei-json`) | Emitted, opt-in | top-level, keyed `"d<signed id>"` per real EI's convention (negative = incoming), scoped to only the ids some player actually triggered -- GW2EI fills its own map the same lazy way. All eight of EI's `DamageModDesc` fields are emitted (`name`, `icon`, `description`, `nonMultiplier`, `isCounter`, `skillBased`, `approximate`, `incoming`), none faked: `description` is GW2EI's full composed tooltip, including the derived `<br>Applied on ...`/`<br>Compared against ...`/`<br>Counter`/`<br>Non multiplier`/`<br>Approximate` suffixes. **All 69 emitted entries are character-for-character identical to the reference export's**, every field (`crates/axilog-ei/tests/damage_mods_ei_golden.rs`). Omitted entirely (not emitted empty) without `--modifiers` -- an empty map would claim no player triggered anything, rather than that the engine never ran |
-| `personalDamageMods` (`ei-json`) | Not emitted | real EI's top-level `spec -> [modifier ids]` index (`JsonDamageModifierDataBuilder.cs:52-66`). It is a pure re-index of data `damageModMap` + the per-player arrays already carry, keyed by GW2EI's own `Spec` enum spelling, which this project does not reproduce -- omitted rather than faked with a near-miss spec name |
-| `skillMap` (`ei-json`) | Emitted, always-on, partial | top-level, keyed `"s<id>"` per real EI's convention, scoped to only the skill ids squad players' `skill_damage`/`rotation`/tracked-boons actually reference (M14 Task 2 — not a dump of the log's whole ~1,000-entry skill table). Only the fields this project computes are emitted: `name` (this log's own skill-table text, best-effort — falls back to `"Skill <id>"`; a genuinely different, narrower data source than EI's bundled/API-backed skill DB, so name strings are NOT calibrated against EI, only spot-checked, see `axilog_core::analysis::skill_map`'s module doc), `isSwap` (the `WeaponSwap` sentinel plus 3 curated non-sentinel categories — elementalist attunement swaps, revenant legend swaps, necromancer shroud transforms — still narrower than EI's own broader check, which also covers Weaver's separate combo-attunement table), `canCrit` (reused verbatim from M13's already-calibrated `NonCritableSkills` table, matches EI exactly on every overlapping id). Real EI's `icon` (a render.guildwars2.com URL) and `autoAttack` (needs the external, live GW2 API — this project's `auto_attack` is always omitted, not guessed) are NOT computed here, so they're omitted rather than faked, same for every proc/instant/accuracy classifier flag (`isInstantCast`/`isTraitProc`/etc) |
-| `players[].selfBuffs[]` / `groupBuffs[]` / `squadBuffs[]` `[].buffData[0].generation` (`ei-json`) | Emitted, always-on, 12-of-43 boon subset | MEIGAP Task 1a. Pure adapter mapping over M3's already-calibrated `GenerationStats`, through a 3-decimal .NET half-to-even rounder (`BuffStatistics.cs:116-121,135-141`, `BuffDigit = 3`). `selfBuffs` carries every id `buffUptimes` does (zeros included, verified character-for-character against the reference export); `groupBuffs`/`squadBuffs` apply EI's own `hasGeneration` filter (`BuffStatistics.cs:66,100`), which cut them 38.8%. Calibrated over the UNION of both sides' id sets: **1,036 of 1,064 cells inside M3's 2pp tolerance, worst non-allowlisted 0.862**; the 28 outliers are all Regeneration, whose dedicated `HealingLogic` this project does not model, pinned at a measured bound of 21.0 rather than skipped. The other six `buffData` fields (`wasted`, `overstack`, `generationPresence`, `unknownExtended`, `byExtension`, `extended`) are NOT computed and are omitted, not faked — see the audit-closure table for `wasted` |
-| `players[].buffUptimes[].states` / `.statesPerSource` (`ei-json`) | Emitted, opt-in — bounded | MEIGAP Task 1b. GW2EI's transition-point step function (`JsonBuffsUptimeBuilder.cs:55-76`), with all three of its behaviours reproduced: the mandatory leading `[0, 0]`, `StateGraph.FuseSegments`, and duration boons clamped to 0/1 (GW2EI reports the single ACTIVE stack, not queue depth). `statesPerSource` required real per-source stack ownership, so `buffs::generation`'s two simulators now emit `HeldSegment {source, start, end}` and the generated-ms map is literally a sum over them — a source's timeline and its `squadBuffs` number can never describe different simulations. Rides `--timeseries`, GW2EI's own `RawFormatTimelineArrays` gate. Calibrated by SAMPLING both step functions on a 1s grid (the two simulators fuse differently, so transition LISTS legitimately differ while the FUNCTION is what both sides mean): **169,614 instants over 486 timelines, 83 differ (0.05%), worst 13 stacks instantaneous / 0.052 time-averaged, 397 of 398 duration-boon timelines sample-for-sample EXACT** |
-| `players[].defenses[0].receivedCrowdControl(Duration)` / `.boonStrips` / `.boonStripsTime` (`ei-json`) | Emitted, always-on — **exact** | MEIGAP Task 1c. Incoming CC reproduces GW2EI's two asymmetries vs the outgoing direction verbatim (no source filter, no minion fold — `SingleActor.cs:935-943`); incoming strips apply `CreditedBy`'s master fold before both the unknown and self tests (`BuffEvent.cs:13`). All four **EXACT on 44/44 post-rework and 37/37 pre-rework accounts**. `boonStripsTime` is the one deliberate divergence: `DefensePerTargetStatistics.cs:63` reads `Math.Max(current + duration, LogDuration)` where `Min` was intended, so EI's exported number is essentially `distinct_boons_stripped x logDuration`; axilog emits the TRUE sum and the calibration joins the reference by reconstructing EI's formula from this project's per-boon detail |
-| `players[].statsTargets[i][0]` per-target offensive split (`killed`/`downed`/`connectedDamageCount`/`againstDownedCount`/`interrupts`/`downContribution`) (`ei-json`) | Emitted, opt-in — **exact** | MEIGAP Task 1d. The same `OffensiveStatistics` fields as `statsAll`, restricted to one enemy. **9,460 of 9,460 cells EXACT** (44 accounts x 43 instid-joined targets x 5 fields, 1,162 nonzero). Found and fixed a root cause on the way: GW2EI's `HasInterrupted`/`HasKilled`/`HasDowned` branches sit OUTSIDE the `From.Is(actor)` guard over a minion-inclusive event list, so a pet's finishing blow counts for its owner — the pre-existing always-on `statsAll[0].killed`/`downed` were actor-only and missed two cells. `connectedHits` is deliberately NOT emitted (real EI never writes that key); `downContribution` is this project's arcdps methodology, the same documented divergence `statsAll[0].downContribution` already carries. Rides `--skill-damage` (measured +56.5% rendered-HTML size when always-on) |
-| `players[].powerDamageTaken1S[][]` / `targetPowerDamage1S[][][]` (`ei-json`) | Emitted, opt-in — exact as a split | MEIGAP Task 2a. POWER is GW2EI's `dls.RemoveAll(x => x.ConditionDamageBased(log))` (`Actor.cs:449-451`) — every row whose skill id is NOT in the condition catalog, emphatically not `strike + life_leech`. **`targetPowerDamage1S`: 662,200 buckets EXACT.** `powerDamageTaken1S` is asserted as the per-bucket IDENTITY `ours.power[i] - ref.power[i] == ours.all[i] - ref.all[i]` rather than a flat tolerance (a tolerance would absorb a real classification error): **0 buckets where the split itself diverges**, the 2,442 that move carry the pre-existing skill-`23279` `damageTaken1S` residual, separately pinned |
-| `targets[].damage1S[][]` / `.powerDamage1S[][]` / `.totalDamageDist[][]` / `.buffs[]` (`ei-json`) | Emitted, opt-in — **exact** | MEIGAP Task 2b/2c/2d, the enemy-side mirrors. Series are the enemy's OUTGOING damage, minion-INCLUSIVE (`SingleActor.InitDamageEvents`): **30,100 buckets EXACT**. The dist is the same damage, actor-ONLY (`GetJustActorDamageEvents` filters the minion fold back out): **1,890 cells EXACT with row sets identical in both directions**, and **180 skill ids EXACT** against the committed golden's pre-era `Enemy Players` aggregate. Its `connectedHits` reproduces EI's `HasHit` from the result byte rather than this project's `dmg > 0` convention, because the consumer divides by it. `buffs[]` is scoped to the fourteen conditions and `statesPerSource` only (all axibridge reads): over **1,299 (enemy, condition, squad-source) keys the two implementations agree on 0 missing / 0 extra**, 0.09% of 453,351 sampled instants differ. Series and `buffs` ride `--timeseries`, the dist rides `--skill-damage` |
-| `players[].extHealingStats.outgoingHealingAllies[][]` / `.totalHealingDist[][]` / `.healing1S[][]`, `extBarrierStats.outgoingBarrierAllies[][]` / `.totalBarrierDist[][]` (`ei-json`) | Emitted, opt-in — **exact** | MEIGAP Task 3a. M10's `healing` module was refactored so its decode + instid resolution + `SanitizeForSrc` + minion owner fold + account fold live in ONE producer both the scalars and these three groupings reduce — so `outgoingHealing[0].healing`, the ally-matrix sum and `healing1S`'s last element cannot describe different event sets. Calibrated against the local export: **1,936 ally cells, 328 healing-dist rows / 1,732 cells, 23 barrier-dist rows and 15,400 `healing1S` buckets all EXACT, 0 missing / 0 extra rows.** The ally matrices carry `healing`/`downedHealing`/`barrier` only — EI's seventeen other per-ally fields split by a source ATTRIBUTE the extension's wire format does not carry. `healing1S` rides `--timeseries` (GW2EI's own gate); the ally matrices and both `*Dist` arrays ride `--skill-damage`, a payload gate (always-on the ally matrices alone are +36.0% flagless and grow QUADRATICALLY in squad size) with the same precedent `targets[].totalDamageDist` set |
-| `players[].minions[].totalDamageTakenDist[][]` (`ei-json`) | Emitted, opt-in — exact outside one englobed agent | MEIGAP Task 3b, scoped strictly to the two axibridge readers (per-minion damage taken; the mitigation minion rows' outcome columns). Reuses `defenses::classify` for the full outcome set and `skill_damage::creates_health_damage_event` for row existence; ownership is resolved as an AGENT-level fact, GW2EI's own "Linking minions to their masters" model, not per row. Grouped by minion NAME (what the consumer buckets on), species id emitted alongside. **544 of 554 (account, skill) rows EXACT on every column, 0 rows emitted that the reference does not have.** Two bounded label/roster residuals, both traced: arcdps names species 26153 `Clone` where EI's export reads `Rifle Clone`, and one player owns an englobed agent EI lists as its own `UNKNOWN` group (12 rows / 25,963 damage) that this project classifies as a player, not a minion. EI's twenty other minion arrays are read nowhere in axibridge and are not emitted |
-| `players[].guildID` (`ei-json`) | Emitted, always-on — **exact** | MEIGAP Task 3c. Decoded from the `CBTS_GUILD` statechange, whose `dst_agent`/`value`/`buff_dmg` carry the 16-byte guild GUID in arcdps's mixed-endian packing — GW2EI's `GuildEvent` ctor transcribed byte for byte, including `FirstOrDefault()` per agent. **No GW2-API lookup is involved**, which is what the cutover audit assumed; EXACT on 44/44 joined accounts against the reference export, all-zero GUIDs (unrepresented players) passed through verbatim as EI does. `evtc::anonymize` now zeroes those three payload fields, mirroring GW2EI's own `GuildEvent.Anonymize()`, so the committed fixture publishes only the all-zero GUID |
-| `players[].support[0].boonStripsTime` (`ei-json`) | Emitted, always-on — deliberate, calibrated divergence | MEIGAP Task 3e, the outgoing twin of `defenses[0].boonStripsTime` and the same GW2EI bug: `SupportPerAllyStatistics.cs` accumulates `Math.Max(foeTime + RemovedDuration, LogDuration)` per boon. axilog emits the true sum; the calibration reconstructs EI's formula from a new shared `support::outgoing_boon_strips` primitive that now also produces `strips` itself, so count and duration cannot drift. **Reconstruction EXACT on 44/44 accounts, `boonStrips` counts EXACT.** Note axibridge already clamps this field to 0 above 999,999 — a guard that fires on either side's number when a log carries a boon with a near-permanent remaining duration |
-
-| `players[].totalDamageDist[][]` / `totalDamageTaken[][]` outcome columns (`ei-json`) | Emitted, opt-in — **exact on the incoming side** | MEIGAP2 row 1, the damage-mitigation table's player half (the minion half landed in MEIGAP Task 3b). `connectedHits`/`glance`/`missed`/`evaded`/`blocked`/`invulned`/`interrupted`/`indirectDamage`, reproducing GW2EI's exact counting rules (`JsonDamageDistBuilder.cs:48-77`), including that the five direct-only counters sit inside `if (!IndirectDamage)` and that `hits` excludes the `Interrupt`/`KillingBlow`/`Downed` marker rows. Emitted as a UNION with the damage dist: a skill whose every attempt was blocked deals no damage and has no `skill_damage` row at all, yet is exactly what the mitigation table exists to read. **Incoming: 18,000 of 18,000 cells EXACT across 44 accounts, 0 reference rows missing** (the 23 rows emitted that the reference has not are all skill `23279`, the pre-existing incoming residual already pinned by three other tests). Outgoing inherits the documented M12 pet/minion fold (GW2EI's player dist is actor-only): the six non-count columns and `indirectDamage` are exact, `hits`/`connectedHits` differ on 8 of 5,340 joined cells (worst 17). Rides `--skill-damage`, the gate the distributions themselves already ride. On the committed pre-rework fixture: 511 of 511 reference rows exact on `connectedHits` + `indirectDamage` |
-| `players[].totalDamageDist[][].downContribution` (`ei-json`) | Emitted, opt-in — deliberate, documented divergence | MEIGAP2 row 1's other half. GW2EI's per-skill number is damage inside the victim's 90%-to-downstate window (`OffensiveStatistics.cs:81-108`); this is `axilog_core::analysis::contribution`'s arcdps methodology (over-99% anchor minus a 2s lead-in) sliced per skill — the same divergence `statsAll[0]`/`statsTargets[i][0].downContribution` already carry, and this project's founding differentiator. Accumulated at the one site that assigns the scalar, so the split **sums back to `statsAll[0].downContribution` exactly, per player** (asserted). Measured overlap against GW2EI's own algorithm, stated as a measurement and not a parity claim: 344 skills both credit (114 identically), 53 only here, 36 only there. Inherits `credit_window`'s documented breakbar carve-out, now per-skill visible |
-| `players[].healthPercents` (`ei-json`) | Emitted, opt-in — **byte-exact** | MEIGAP2 row 2. GW2EI's `[[time_ms, percent], ...]` step function, with `SingleActorGraphsHelper.ListFromStates` transcribed literally: the first value back-extended to log start, state `i`'s value taking effect at `t_i`, timestamps clamped into `[logStart, logEnd]`, empty segments removed and `FuseConsecutive` applied. Decoded through GW2EI's own rule (`Math.Round(DstAgent / 100.0, 2)` then clamp ABOVE at 100) rather than M11's defensive `HealthTracker` decode, which drops >200% rows as garbage — the two decodes stay separate so the calibrated `downs_contribution` family cannot move. **All 44 of 44 joined accounts identical, array for array.** Rides `--timeseries`, GW2EI's own `RawFormatTimelineArrays` gate |
-| `players[].instanceID` / `targets[].instanceID` (`ei-json`) | Emitted, always-on — **exact** | MEIGAP2 row 3. GW2EI's `jsonActor.InstanceID = actor.InstID` (`JsonActorBuilder.cs:31`). Read off the ONE `InstidRegistry` `analyze()` already builds, as a reverse index folded in after that scan rather than inside it (registrations are per ownership CHANGE, so the fold is linear in registrations, not in events — zero extra passes). The rule is "the first NON-ZERO instid this address was ever seen under", a reconstruction of GW2EI's agent-completion assignment rather than a transcription of it, so the agreement is measured, not proven: **44 of 44 players and 56 of 56 instid-joined targets EXACT** (43 of 43 before MINSTID collapsed the duplicated-instid enemy rows and made the other 13 joinable). An agent with no instid registration is ABSENT rather than reported as `0`, so "unknown" stays distinguishable from "really zero" |
-| `players[].boonsStates` (`ei-json`) | Emitted, opt-in — consumer scalar 43/44 exact | MEIGAP2 row 4. GW2EI's `[[time_ms, number of boons present], ...]`, a reduction of the very per-boon timelines `buffUptimes[].states` already publishes: each clamped to PRESENCE (`BuffGraph.MergePresenceInto`'s `seg.Value > 0 ? 1 : 0` — a 25-stack Might counts once) and summed. Calibrated on `boonsAppliedCount`, the only thing axibridge reads it for (`detailsProcessing.ts:128-142` sums the series' positive deltas): **43 of 44 accounts EXACT, worst 4 of 101 (4.0%)**. 28 of 44 arrays are pair-for-pair identical; the rest differ only by transitions landing tens of ms apart — the already-calibrated M3 simulation-timing residual, which does not move the count. Rides `--timeseries` |
-| `targets[].dpsAll[0]` (`ei-json`) | Emitted, always-on — **exact** | MEIGAP2 row 5. The enemy's OUTGOING damage total (`JsonActorBuilder.cs:46` over `GetDamageStats`), which needed both of GW2EI's scoping rules reproduced: the `!ToFriendly` `iff` filter, and the minion fold — an enemy ranger's pet damage counts for the ranger even though this project's own enemy roster lists that pet as an enemy of its own. Ownership is resolved as an AGENT-level fact (MEIGAP Task 3b's lesson: arcdps emits many minion rows with `src_master_instid == 0`), and folded into the always-on `combat_participant_enemies` scan rather than paid for as its own pass. **53 of 56 instid-joined targets EXACT** (49 nonzero). It was 43 of 43 until MINSTID made the 13 duplicated-instid targets joinable for the first time; 10 of those 13 are exact, and the 3 that are not are allowlisted and diagnosed in `meigap2_ei_golden` — a damage-CREDIT divergence that predates MINSTID (each merged total is the exact sum of the pre-merge parts) rather than anything the regroup introduced. `dps` uses the same whole-fight-seconds rounding the player side does; EI's `condiDps`/`powerDps`/`actor*` siblings are not computed per enemy and are omitted |
-| `players[].dpsAll[0].breakbarDamage` (`ei-json`) | Emitted, always-on — **exact** | MEIGAP2 row 6. Defiance-bar damage DEALT, minion-inclusive and `iff`-filtered (`DamageStatistics.cs:60`), folded into `defenses`' existing breakbar/CC scan rather than a new pass — the same fold that already put incoming CC there. Converted once at the adapter boundary by GW2EI's own decode (`BreakbarDamage = Math.Round(evtcItem.Value / 10.0, 1)`), which is why the core carries a raw integer sum. **44 of 44 accounts EXACT**, 27 of them nonzero and one where the minion fold is what makes the number right. GW2EI's `actorBreakbarDamage` (the same sum without the fold) is not computed and is omitted rather than faked with the folded value |
-
-The `ei-json` output only emits fields backed by a real computed metric. Where real EI has a field
-we don't compute (e.g. per-target down-contribution/CC splits, most of `statsAll`'s damage-modifier
-detail, skill icons/DB names), it's simply omitted — never faked — and the omission is documented
-inline in `crates/axilog-ei/src/lib.rs`.
-
-**Honest parity accounting (MEIGAP + MEIGAP2).** Against the axibridge cutover audit's own gap-row
-list, **19 of its 23 cited-scope rows are closed, 1 is half-closed** (`selfBuffs`/`groupBuffs`/
-`squadBuffs`: `generation` lands, `wasted` does not), **1 remains open** and 2 need no action —
-19 + 1 + 1 + 2 = 23. One of the 19 carries a methodology divergence on a single field
-(the `totalDamageDist` outcome-column row's `downContribution`, below); it is counted as closed
-because the field is emitted, internally exact and fully documented, not because it matches GW2EI.
-MEIGAP2 closed the six rows that were open-cheap: the player-side distribution outcome columns,
-`healthPercents`, `instanceID`, `boonsStates`/`boonsAppliedCount`, `targets[].dpsAll[0].damage` and
-`dpsAll[0].breakbarDamage` — each row's own table entry above states its calibration and its limits.
-The one still open is `statsAll[0].saved`, which waits on the animated-cast pipeline.
-That caveat on `targets[].totalDamageDist` — field-exact, but the damage-mitigation aggregate it
-exists for differing on the full enemy roster while exact under an `enemyPlayer`-restricted fold —
-is **closed by MROSTER**: `targets[]` is now curated to GW2EI's own WvW roster rule, so the two
-folds are the same fold and the mitigation multiplier `avg` is exact on all 206 shared skill ids
-with no restriction for the consumer to apply. A measured residual remains on the `min`
-mean-of-minima (16 of 206), attributed to the `InstID`-regroup gap above and reduced to 1 when
-same-instid rows are merged before folding. `targets[].profession` is
-unclosable because real EI does not emit it either. As of M14 (rotation/skillMap), the remaining
-axibridge-flagged Tier-1 analysis gaps are closed: the per-skill/per-second/dpsTargets family (M12),
-the hit-quality/defenses fine-grained outcome counts (M13), and rotation/skillMap (M14) that used to
-be entirely absent from `ei-json` are now all emitted — as are replay positions in EI's own
-coordinate grid (M15) and damage-modifier attribution (M16, opt-in `--modifiers`).
-
-### Orphaned-instid attribution repair
-
-arcdps sometimes emits combat rows whose `src_agent`/`dst_agent` is `0` while the matching
-instid field still names a live agent (observed on the reference capture: an enemy ranger pet's
-rows). Every addr-keyed pass in this project — damage, hit stats, defenses, skill damage,
-contribution — would silently drop those rows. GW2EI does not: it rewrites the address from the
-instid inside the parser, before analysis. **axilog performs the same repair, transcribed from
-`EvtcParser.CompleteAgents` and run as a `decode_raw` post-pass, so every consumer (metrics, the
-standalone replay/missile/health builders, the SDKs, the `ei-json` exporter) reads one repaired
-stream** — see `axilog_core::evtc::repair`, whose module doc carries the rule-by-rule citations.
-
-Two honesty notes:
-
-- **The ±300ms bound is two probe points, not a widened window.** GW2EI accepts a candidate agent
-  when `InAwareTimes(t - 300) || InAwareTimes(t + 300)`, so an agent whose entire aware window lies
-  strictly inside `(t-300, t+300)` — one alive for under 600ms around the orphaned row — fails
-  *both* probes and is rejected. This project reproduces that literally rather than "fixing" it,
-  and has a unit test that a widened-window implementation would fail.
-- **Roughly a third of orphans stay unrepaired**, and that is the correct outcome, not a shortfall:
-  on a real 583k-event capture 725 of 1,091 orphaned rows are repaired, and the bulk of the
-  remainder are `CBTS_DESPAWN` rows whose instid names no agent that was aware anywhere near them.
-  A row with no qualifying candidate keeps its zero address and is dropped downstream, exactly as
-  GW2EI leaves it.
-
-On the committed fixture the repair rewrites 43 rows (39 `EffectGroundCreate` src, 4
-`MissileLaunch` dst) and moves **no** output value; on the post-rework capture it moves one
-account's always-on damage/hit-stat scalars onto GW2EI's values exactly. Cost: one extra bounded
-scan in `decode_raw` (+9.4% on that stage, +4.2% end-to-end on the committed fixture — see
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
-
-### Supported log eras
-
-arcdps has two wire shapes for boon apply/remove/initial rows, split by GW2EI's
-`ArcDPSBuilds.BuffAppliesAndRemovesAsStateChanges`/`ResultEnumRework` threshold (build string
-`20260501`): **pre**-threshold builds report them as ordinary `is_statechange == 0` combat events;
-**post**-threshold builds report dedicated statechange event kinds instead (`BUFF_APPLY`/
-`BUFF_CHANGE`/`BUFF_REMOVE_SINGLE`/`BUFF_REMOVE_ALL`), and also move CC detection (`buff == 1` rows
-can carry real CC) and resurrect-cast detection (via the separate, one-day-earlier
-`AnimationAsStateChanges = 20260430` threshold, `ANIMATION_START`) onto their own dedicated
-statechanges.
-
-- **Pre-`20260501` (fully calibrated):** every metric in the parity table above is calibrated
-  exact-to-near-exact against a real dps.report EI export for a pre-rework WvW log — this is what
-  every "Exact"/"Approximate" status above without further qualification means.
-- **`≥ 20260501` (supported, calibration pending):** this project's buff/support/CC extraction is
-  **era-gated** (`RawHeader::is_post_buff_rework`) and decodes the post-rework wire shape too
-  (M4 Tasks 1-2) — boon uptimes, boon generation, condi cleanses, boon strips, resurrects, and CC
-  detection all work on a post-rework log, not just pre-rework ones. This was verified by
-  construction: every post-era code path was checked line-by-line against the current GW2EI
-  parser source (`GW2EIEvtcParser`, the arbiter for ambiguous field roles) and exercised by
-  synthetic **era-equivalence tests** (`analysis/buffs/events.rs`, `analysis/support.rs`,
-  `analysis/cc.rs` — each has a post-era twin of its pre-era test producing the identical output).
-  What's still missing is calibration against a *real* post-rework capture, since none existed at
-  implementation time — `crates/axilog-core/tests/postrework_golden.rs` is the hook that closes
-  this gap the moment one is available (see below).
-- **Known narrow gap, `[20260430, 20260501)`:** this project has only the single
-  `is_post_buff_rework` (`20260501`) header flag, not a separate `AnimationAsStateChanges`
-  (`20260430`) one. A log built in that one-day-to-one-month window (`AnimationAsStateChanges` has
-  landed but `BuffAppliesAndRemovesAsStateChanges`/`ResultEnumRework` hasn't yet) would be
-  classified pre-era and scanned with the pre-era shape throughout — including resurrect
-  detection, which is actually gated on the *earlier* threshold. Flagged honestly rather than
-  silently mishandled; considered out of scope to fix without adding a header field this project
-  otherwise has no use for (see `sc::ANIMATION_START`'s doc comment and the M4 Task 2 report for
-  the full analysis).
-
-To make the "genuinely zero buff data" case visible rather than silent, `analyze` detects it
-(post-rework build, per `RawHeader::is_post_buff_rework`, **and** zero buff events actually
-extracted — e.g. a truncated/filtered log) and records a warning in `Metrics::warnings`. This does
-**not** fire just because a log is post-era; it fires only when post-era extraction genuinely finds
-nothing to extract. The native JSON schema surfaces this as a top-level `warnings: [...]` array
-(omitted when empty); the CLI's `--format table` prints each warning to stderr; `ei-json` has no
-comparable field and doesn't carry it.
-
-#### How to provide a post-rework fixture
-
-The one thing this project can't do without a real log: **calibrate** the post-era code paths
-against real dps.report numbers, the same way the pre-era paths are calibrated in the parity table
-above. To help with that:
-
-1. Capture a WvW fight with a current (post-`20260501`) arcdps build.
-2. Drop the raw `.zevtc` at `fixtures/local/wvw-postrework.zevtc` (gitignored — see "Fixture
-   policy" below; never commit a raw log).
-3. Optionally, run it through dps.report's `getJson` endpoint and drop that JSON alongside at
-   `fixtures/local/wvw-postrework.ei.json` for full EI-parity assertions (duration/damage within
-   0.5%, support sums exact).
-4. Run `cargo test -p axilog-core --test postrework_golden` — no code changes needed. The tests
-   pick the fixture(s) up automatically, assert the post-era metrics are non-zero and warning-free
-   (and, if the EI JSON is present, that they match it), and print a compact summary table
-   (players, duration, squad damage, Might average stacks, Quickness %, cleanses, strips,
-   resurrects) so the first real capture's numbers are immediately visible.
-
-## Performance
-
-Measured end to end (decode → resolve → analyze → build the native report), release build, on an
-AMD Ryzen 9 7900X3D:
-
-| Log | Events | Full parse | of which `analyze` |
-|---|---|---|---|
-| Committed fixture (`fixtures/wvw-small.anon.zevtc`) | 120,435 | **28.9 ms** | 18.9 ms |
-| Real WvW zerg log (48 players, 5:48 fight) | 583,194 | **174 ms** | 93.7 ms |
-
-That is a whole real 583k-event WvW log parsed and fully analyzed — damage, downs/CC,
-arcdps-methodology down contribution, boons + generation, support, healing, per-skill damage,
-per-second series, hit quality, defenses, rotation — in under a fifth of a second, single-threaded,
-with no `unsafe`.
-
-### vs Elite Insights
-
-Head-to-head against the Elite Insights CLI v3.27 (+ its bundled .NET 8 runtime), measured
-2026-08-10 on axilog **v0.3.0**, same machine, medians of 3 runs after a warmup. "Matched" =
-axibridge's production EI configuration (detailed WvW, damage modifiers, combat replay, raw
-timeline arrays, phases) vs axilog's equivalent
-`--format ei-json --replay --skill-damage --timeseries --rotation --modifiers` — the closest
-honest apples-to-apples; EI additionally computes phases and its full skill-DB surface, while
-axilog emits its documented WvW parity surface (see the `targets[]` roster note above).
-
-| | Real 5:48 zerg fight (583k events, 48 players) | 49 s skirmish (120k events, 42 players) |
-|---|---|---|
-| Elite Insights CLI | 7.25 s · 857 MiB peak | 2.43 s · 373 MiB peak |
-| **axilog, matched surface** | **2.49 s (2.9×) · 117 MiB (7.3× less)** | **0.25 s (9.7×) · 24 MiB (15× less)** |
-| axilog, matched + gzip output | 2.86 s · 117 MiB | — |
-| **axilog, default native JSON** | **0.36 s (20×) · 86 MiB (10× less)** | **0.06 s (40×) · 20 MiB (18× less)** |
-
-Two structural notes behind the numbers. EI pays ~2 s of .NET startup + JIT **per spawned
-parse** (axibridge spawns per uploaded log), so the small-log column is the realistic
-per-upload ratio; axilog's fixed cost is effectively zero. And the memory column used to be
-EI's one win (axilog peaked at 2.4 GiB building the full ei-json document in RAM) — MSTREAM's
-streaming serializer removed that entirely (−95% peak, output verified byte-identical across
-96 flag/output combinations), so axilog now leads every cell. Full methodology, raw samples,
-and the per-milestone history are in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
-
-The MPERF milestone made `analysis::analyze` 2.1× faster on the fixture and 2.6× faster on the real
-log (1.75× / 1.87× end to end), with every step verified byte-identical against the previous
-output. The benchmark harness (`crates/axilog-cli/benches/pipeline.rs`, criterion), the full
-baseline → after-Task-2 → after-Task-3 tables, and every optimization that was *declined* along
-with why, are in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Reproduce the committed-fixture arm
-with:
-
-```bash
-cargo bench -p axilog-cli --bench pipeline
-```
-
-## Fixture policy
-
-- Committed fixtures (`fixtures/wvw-small.anon.zevtc`, `fixtures/wvw-small.ei.json`) are
-  anonymized/PII-safe — verified by both an automated PII scan (`anonymize_fixture.rs`) and a
-  manual independent scan before commit. CI runs the full golden-parity suite against them.
-- **Never commit a raw `.zevtc`/`.evtc`.** Real logs contain real GW2 account names.
-- `fixtures/local/` is gitignored and meant for real, non-anonymized logs used only for local
-  development/calibration (tests that need one skip gracefully — printing a `skip: ... absent`
-  message — when it's not present, e.g. in CI).
-
-## arcdps-dev guidance
-
-Implementation guidance relayed directly from the arcdps developer (event ids, payload layouts,
-upcoming features to build against) is tracked as a running log in
-[`docs/arcdps-dev-notes.md`](docs/arcdps-dev-notes.md), with a status per item and a pointer to the
-milestone task that implements it.
-
-## Milestones
-
-**M1 (done):** EVTC/zevtc decode, agent/skill resolution, WvW team/friend-foe resolution, damage +
-DPS, downs/kills/deaths/down-contribution, CC + per-second timeline, native JSON schema, CLI
-(`parse` with `json`/`table`/`csv`/`ei-json`), EI-compat adapter, golden parity test + CI.
-
-**M2 (done):** real elite-spec profession naming, real team IDs from the log itself (`CBTS_WVWTEAMS`)
-with a static fallback table, `CBTS_IDTOGUID` content-GUID decoding (teams now, skill/species
-retained for M3), CC/stun-break metrics from real `CROWD_CONTROL`/`CBTS_STUNBREAK` events, enemy
-relog dedupe, time-aware pet-damage/CC attribution across instid reuse, `axilog anonymize` +
-PII-safe committed golden fixture (CI now runs real parity checks, not skip-and-pass), EI adapter
-`statsAll` CC fields, squad markers (`CBTS_MARKER`) + commander-tag colour/variant + tick-rate
-telemetry (`CBTS_TICK`) — native-schema-only, this README.
-
-**M3 (done):** the 12 tracked boons' stack-count timelines, uptime/presence/average-stacks, and
-self/group/squad generation attribution (calibrated exact-to-near-exact vs. EI, see the parity
-table above); condi-cleanse/boon-strip/resurrect support stats (calibrated exact vs. EI, no
-allowlist); exposed in the native schema (`players[].boons[]`, `players[].support`), the EI adapter
-(`buffMap`, `buffUptimes[]`, extended `support[0]`), and two new CLI table views (`--view
-support`/`--view boons`).
-
-**M4 (done):** post-`20260501` (buff-statechange-rework) log support — era-gated boon/support/CC
-extraction (dedicated `BUFF_APPLY`/`BUFF_CHANGE`/`BUFF_REMOVE_SINGLE`/`BUFF_REMOVE_ALL`
-statechanges, `ANIMATION_START`-gated resurrect detection, `buff == 1` CC rows), verified by
-construction against GW2EI source + synthetic era-equivalence tests (no real post-rework capture
-existed yet); downgraded the M3-era unconditional post-rework warning to fire only on genuinely
-zero extracted buff events; added `tests/postrework_golden.rs`, a real-capture calibration hook
-that activates automatically the moment a `fixtures/local/wvw-postrework.zevtc` fixture exists —
-see "Supported log eras" above.
-
-**M5 (done):** Node SDK (`crates/axilog-node`, `@axiapps/axilog`) — napi-rs native addon exporting
-`parseFile`/`parseBuffer`/`parseFileEi`/`anonymizeFile` over the same decode → resolve → analyze →
-build_report pipeline the CLI drives (no reimplementation, no JSON-over-subprocess); hand-maintained
-TypeScript types (`types.d.ts`) for the native schema, patched into the generated `index.d.ts`; a
-`node --test` suite covering all four exports plus a dual-path parity test against the CLI's own
-`--format json` output; CI builds the addon on Linux/Windows/macOS and runs the node test suite on
-Linux (see `.github/workflows/ci.yml`). npm publishing deferred — see SDKs above.
-
-**M6 (done):** Python SDK (`crates/axilog-py`, package `axilog`) — PyO3 native extension module
-(`abi3-py39`) exporting `parse_file`/`parse_bytes`/`parse_file_ei`/`anonymize_file` over the same
-decode → resolve → analyze → build_report pipeline the CLI and Node SDK drive (no
-reimplementation); hand-maintained typed stubs (`axilog.pyi` + `py.typed`) for the native schema,
-auto-bundled into the wheel by maturin; a stdlib `unittest` suite covering all four exports plus a
-CLI-parity test against the CLI's own `--format json` output; CI builds the extension on
-Linux/Windows/macOS (`maturin build`) and runs `maturin develop` + the unittest suite on Linux (see
-`.github/workflows/ci.yml`). PyPI publishing deferred — see SDKs above.
-
-**M7 (done):** self-contained HTML report (`crates/axilog-html`, `axilog parse --format html`) —
-dark-theme (light-mode toggle) single-file document, zero external requests, built from
-`include_str!`-inlined `report.css`/`report.js` assets around the embedded `Report` JSON; header
-(map/duration/recorder/commander/warnings/team chips); sortable Damage/Support/Boons tabs (keyboard-
-accessible tab bar and column-sort buttons, `aria-sort` on the `<th>` per WAI-ARIA, squad-totals
-footer row, muted non-squad rows, boon generation-mode self/group/squad toggle); an inline responsive
-SVG damage timeline (squad-damage area/line, downs-on-the-line markers, normalized CC-applied bar
-overlay, mm:ss/k-format axes) built by pure, node-tested path-generation functions
-(`buildTimelinePaths`); an XSS contract (log-derived strings via `textContent` only, JSON escaped
-`<`-safe for inline `<script>` embedding) with regression tests for both halves; a golden structural
-test against the real committed fixture (calibrated squad-damage/support sums, all view/timeline
-containers, byte-for-byte determinism, size budgets: <250KB total report, <50KB combined raw CSS+JS).
-`-o/--output FILE` (any `--format`, not just html) added to the CLI alongside it. See **HTML
-report** above.
-
-**M8 (done):** tag-triggered release pipeline (`.github/workflows/release.yml`, `v*` tags) — CLI
-binaries for all 5 targets, `@axiapps/axilog` npm main + platform packages (all 5), and `axilog`
-Python wheels (abi3, 4 platforms) + sdist, all attached to one GitHub Release with a consolidated
-`SHA256SUMS`; a version single-source guard (`scripts/check-versions.sh`, wired into `ci.yml`)
-keeps `Cargo.toml`/`package.json`/npm platform packages/`pyproject.toml` from drifting apart, plus
-a tag==Cargo-version guard (`scripts/check-tag-version.sh`) before every release; `npm publish`/
-`twine upload` are wired in but gated on `NPM_TOKEN`/`PYPI_TOKEN` repository secrets being
-configured (log-skip otherwise — the Release itself, with every artifact attached, is created
-either way) and on the triggering event being a real tag push, never a `workflow_dispatch` dry
-run. See **Install** above and `RELEASING.md` for the full flow.
-
-**M9 (done):** animated combat replay — `axilog_core::analysis::replay::build_replay` decodes
-`CBTS_POSITION`/`CBTS_VELOCITY`/`CBTS_FACING` packed-float payloads (ordinals/layout verified
-against the arcdps README and GW2EI's `MovementEvent` source) into per-squad-player and
-per-enemy-player-representative position tracks, downsampled to a 300ms grid (matching GW2EI's own
-combat-replay polling) with linear interpolation between bracketing samples, plus down/dead
-intervals from existing event analysis — calibrated to ≥95% of samples within 1.0 map-pixel of
-GW2EI's exported `combatReplayData` on both golden fixtures (in practice 99.77–100%, see
-`crates/axilog-core/tests/replay_golden.rs`); an opt-in `replay: Option<ReplayOut>` schema block
-(`axilog-schema`) wired through `axilog parse --replay` (json/html) and both SDKs
-(`replay`/`replay=False` params, additive/back-compat); the HTML report's animated **Replay tab**
-(see **HTML report** above) — SVG stage, play/pause/scrub/speed controls, pure node-tested
-interpolation (`positionsAt`/`replayViewBox`/`isDownAt`/`isDeadAt`), rendered only when `--replay`
-data is present. Size gates: replay-enabled reports <600KB, combined raw CSS+JS <60KB (raised from
-M7's 50KB — controller-authorized, the animated stage/controls needed the extra headroom).
-
-**M10 (done):** arcdps healing-extension stats (`players[].healing`: `healing_out_total`/
-`healing_out_allies`/`healing_out_self`/`barrier_out`/`downed_healing_out`), calibrated exact
-(`healing_out_self`/`downed_healing_out`, 41/41 accounts) to near-exact (`healing_out_total`/
-`healing_out_allies` within 0.68%/0.71% squad-wide) against EI — except `barrier_out`, held to an
-explicitly authorized wider 8.0% squad-wide tolerance (a single repeating-skill peer-report
-cluster this project's byte-level replication of GW2EI's `SanitizeForSrc` rule can't perfectly
-reconstruct without also replicating GW2EI's internal per-agent-lifetime identity tracking — see
-`axilog_core::analysis::healing`'s module doc for the full trace); omitted entirely (not a
-`null`/all-zero block) when the log carries no healing-extension data, a real "no data" signal
-surfaced via a `Report.warnings` entry; new CLI `--view healing`. Opt-in missile (projectile)
-analytics (`--missiles`, native-only): per-squad-player `fired`/`hit`/`denied`/
-`reflected_at_self` plus a squad-wide `incoming_fired`/`incoming_denied` defensive rollup —
-deliberately honest about its scope: the arcdps wire format carries no blocked/reflected/
-destroyed reason code, so `denied` is one undifferentiated bucket, and there is no per-player
-"who denied this" credit anywhere (only the aggregate `squad.incoming_denied`); `missiles.
-players[]` entries carry `account` so they join back to `players[]` without needing `--replay`
-too. A combat-participant enemy filter (`Report.enemies`, and the HTML team chips that read it)
-now excludes NPC/gadget agents the squad never interacted with (no damage/CC either direction) —
-a real WvW log enumerates every nearby lootable/tactivator/chest as an "enemy", most of which are
-never actually part of the fight. (`ei-json`'s `targets[]`/`statsTargets[]` were left on the full
-unfiltered roster at the time; MROSTER later curated them to GW2EI's own WvW rule instead — the two
-surfaces are now independent filters over the same enemy list, see `Report::ei_targets`.) Team ids
-(`TeamOut.team_id` and the model/analysis layers feeding it) widened `u16` → `u32`, removing a
-truncating cast on dynamic `CBTS_WVWTEAMS` ids (future-proofing; no real fixture currently has an
-id large enough for the truncation to have mattered).
-
-**Later:** PvE encounter logic (boss health phases, mechanics), HTML report extras (tick-rate
-corner widget, mounts/glider/capping replay eye candy, a healing tab — see arcdps-dev-notes). Registry publishing is LIVE (npm `@axiapps/axilog`, PyPI
-`axilog` — automated on tag push via NPM_TOKEN + PyPI trusted publishing), and the post-rework
-era is fully real-capture calibrated.
+User-facing docs live on the arcdps wiki — [overview](https://arcdps.axi.link/axilog/),
+[quickstart](https://arcdps.axi.link/axilog/quickstart/),
+[methodology](https://arcdps.axi.link/axilog/methodology/),
+[schema](https://arcdps.axi.link/axilog/schema/), [accuracy](https://arcdps.axi.link/axilog/accuracy/).
+In this repo:
+[`docs/EI-PARITY.md`](docs/EI-PARITY.md) · [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) ·
+[`docs/CHANGELOG.md`](docs/CHANGELOG.md) · [`docs/ROADMAP.md`](docs/ROADMAP.md) ·
+[`CONTRIBUTING.md`](CONTRIBUTING.md) (build/test, fixture and PII policy, the accuracy bar, the
+milestone workflow) · [`RELEASING.md`](RELEASING.md).
 
 ## License
 
 MIT — see [LICENSE](LICENSE). Portions are derived from or verified against the MIT-licensed
-[GW2 Elite Insights Parser](https://github.com/baaron4/GW2-Elite-Insights-Parser) — the exact
-relationship (semantics arbiter vs derived data tables vs test-only reference port) and the
-required license text are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[GW2 Elite Insights Parser](https://github.com/baaron4/GW2-Elite-Insights-Parser); the exact
+relationship and the required license text are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
