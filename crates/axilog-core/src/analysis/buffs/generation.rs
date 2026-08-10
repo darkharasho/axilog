@@ -471,7 +471,13 @@ fn grouped_boon_events(
 /// [`simulate_boon_generation_ms_with_inputs`] and
 /// [`simulate_boon_held_segments_with_inputs`] so the two views can never
 /// diverge on it.
-fn run_segments(
+///
+/// Made `pub` by MEIGAP Task 2d so `analysis::target_conditions` can run the
+/// SAME two simulators over CONDITION events on ENEMY agents. That pass
+/// deliberately reuses this entry point rather than copying the dispatch:
+/// the intensity/duration choice, and both simulators behind it, then stay
+/// single-sourced across boons-on-players and conditions-on-enemies.
+pub fn run_segments(
     events: Vec<BuffEvent>,
     capacity: u32,
     is_intensity: bool,

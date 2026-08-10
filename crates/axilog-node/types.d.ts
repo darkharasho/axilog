@@ -134,19 +134,36 @@ export interface SkillDamageOut {
 export interface PlayerTargetSeriesOut {
   enemy_id: number
   damage: number[]
+  /**
+   * The non-condition half of `damage` (MEIGAP Task 2a), GW2EI's
+   * `targetPowerDamage1S` -- same buckets, same cumulative shape,
+   * element-wise `<= damage`. "Power" is GW2EI's `DamageType.Power`: every
+   * row whose skill id is NOT in its Condition buff catalog, i.e. strike
+   * damage AND life-leech AND the non-catalogued `buff == 1` bucket.
+   */
+  power_damage: number[]
 }
 
 /**
  * A player's per-second detail block (M12, Task 2), opt-in -- see
  * `PlayerOut.per_second`. `damage`/`damage_taken`/every `per_target[].damage`
  * are CUMULATIVE running totals, one entry per second, bucketed the same way
- * `Report.timeline` is (`resolution_ms = 1000`, from the log's first event)
- * -- mirrors GW2EI's `damage1S`/`damageTaken1S`/`targetDamage1S` cumulative
- * (not instant-delta) shape.
+ * GW2EI itself buckets them (`InterpolatedGraph`: `durationInS + 2` slots
+ * when the log is not a whole number of seconds, `+ 1` when it is; bucket
+ * index `ceil((t - logStart) / 1000)`) -- mirrors GW2EI's
+ * `damage1S`/`damageTaken1S`/`targetDamage1S` cumulative (not
+ * instant-delta) shape. NOTE: as of MEIGAP Task 2 this grid is no longer
+ * the same one `Report.timeline` uses; that one keeps its own
+ * floor-bucketed `duration/1000 + 1` scheme.
  */
 export interface PlayerPerSecondOut {
   damage: number[]
   damage_taken: number[]
+  /**
+   * The non-condition half of `damage_taken` (MEIGAP Task 2a), GW2EI's
+   * `powerDamageTaken1S` -- see `PlayerTargetSeriesOut.power_damage`.
+   */
+  power_damage_taken: number[]
   per_target: PlayerTargetSeriesOut[]
 }
 

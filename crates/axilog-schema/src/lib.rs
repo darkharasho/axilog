@@ -431,6 +431,14 @@ pub struct SkillRotationOut {
 pub struct PlayerTargetSeriesOut {
     pub enemy_id: u64,
     pub damage: Vec<u64>,
+    /// The non-condition half of `damage` (MEIGAP Task 2a), GW2EI's
+    /// `targetPowerDamage1S` -- same buckets, same cumulative shape,
+    /// element-wise `<= damage`. See
+    /// `axilog_core::analysis::timeseries`'s POWER-split section for the
+    /// `DamageType.Power` citation (`Actor.cs:449-451`: everything NOT
+    /// `ConditionDamageBased`, i.e. strike + life-leech + the
+    /// non-catalogued `buff == 1` bucket).
+    pub power_damage: Vec<u64>,
 }
 /// A player's per-second detail block (M12, Task 2), opt-in -- see
 /// `PlayerOut::per_second`'s doc comment for the measured size rationale.
@@ -444,6 +452,11 @@ pub struct PlayerTargetSeriesOut {
 pub struct PlayerPerSecondOut {
     pub damage: Vec<u64>,
     pub damage_taken: Vec<u64>,
+    /// The non-condition half of `damage_taken` (MEIGAP Task 2a), GW2EI's
+    /// `powerDamageTaken1S` -- see `PlayerTargetSeriesOut::power_damage`.
+    /// Its final element always equals this player's
+    /// `defenses.power_damage`.
+    pub power_damage_taken: Vec<u64>,
     pub per_target: Vec<PlayerTargetSeriesOut>,
 }
 /// One enemy's whole-fight dps/damage summary (M12, Task 2) -- mirrors
@@ -1088,11 +1101,16 @@ pub fn build_report(
                 Some(m.map(|m| PlayerPerSecondOut {
                     damage: m.timeseries.damage.clone(),
                     damage_taken: m.timeseries.damage_taken.clone(),
+                    power_damage_taken: m.timeseries.power_damage_taken.clone(),
                     per_target: m.timeseries.per_target.iter().map(|t| PlayerTargetSeriesOut {
                         enemy_id: t.enemy_id,
                         damage: t.damage.clone(),
+                        power_damage: t.power_damage.clone(),
                     }).collect(),
-                }).unwrap_or(PlayerPerSecondOut { damage: vec![], damage_taken: vec![], per_target: vec![] }))
+                }).unwrap_or(PlayerPerSecondOut {
+                    damage: vec![], damage_taken: vec![], power_damage_taken: vec![],
+                    per_target: vec![],
+                }))
             } else {
                 None
             },
@@ -1392,7 +1410,12 @@ mod tests {
                 timeseries: TimeseriesMetrics {
                     damage: vec![50, 80],
                     damage_taken: vec![10, 10],
-                    per_target: vec![TargetSeries { enemy_id: 9, damage: vec![50, 80] }],
+                    power_damage_taken: vec![7, 7],
+                    per_target: vec![TargetSeries {
+                        enemy_id: 9,
+                        damage: vec![50, 80],
+                        power_damage: vec![50, 60],
+                    }],
                     dps_targets: vec![DpsTargetEntry { enemy_id: 9, damage: 80, dps: 40.0 }],
                 },
                 ..Default::default()},
@@ -1414,6 +1437,11 @@ mod tests {
         assert_eq!(ps["damage_taken"], serde_json::json!([10, 10]));
         assert_eq!(ps["per_target"][0]["enemy_id"], 9);
         assert_eq!(ps["per_target"][0]["damage"], serde_json::json!([50, 80]));
+        // MEIGAP Task 2a: the POWER halves ride the same `include_timeseries`
+        // gate as their `All` counterparts, and are separate series (not
+        // copies) -- see `PlayerTargetSeriesOut::power_damage`.
+        assert_eq!(ps["power_damage_taken"], serde_json::json!([7, 7]));
+        assert_eq!(ps["per_target"][0]["power_damage"], serde_json::json!([50, 60]));
         assert_eq!(v["players"][0]["dps_targets"][0]["enemy_id"], 9);
         assert_eq!(v["players"][0]["dps_targets"][0]["damage"], 80);
         assert_eq!(v["players"][0]["dps_targets"][0]["dps"], 40.0);

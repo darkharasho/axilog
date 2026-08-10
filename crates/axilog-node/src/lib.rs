@@ -154,6 +154,9 @@ fn build_report_and_activity_from_bytes(
     Option<axilog_core::analysis::ei_replay::EiReplay>,
     Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
     Option<axilog_core::analysis::buffs::BoonStates>,
+    Option<std::collections::BTreeMap<u64, axilog_core::analysis::timeseries::EnemySeries>>,
+    Option<std::collections::BTreeMap<u64, Vec<axilog_core::analysis::skill_damage::SkillEntry>>>,
+    Option<axilog_core::analysis::target_conditions::TargetConditionStates>,
 )> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -193,7 +196,49 @@ fn build_report_and_activity_from_bytes(
     // `axilog_core::analysis::buffs::states`'s module doc.
     let boon_states = want_timeseries
         .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
-    Ok((report, activity, ei_replay, damage_mods, boon_states))
+    // MEIGAP Task 2b/2c/2d: the three `targets[]` mirrors. `enemy_series`
+    // and `target_conditions` ride the timeseries flag (GW2EI's own
+    // `RawFormatTimelineArrays` gate on `targets[].damage1S` at
+    // `JsonActorBuilder.cs:102` and on `statesPerSource` at
+    // `JsonBuffsUptimeBuilder.cs:52`); `enemy_dist` rides the skill-damage
+    // flag, the one that already gates every other per-skill block. All
+    // three are standalone passes -- `analyze()` above does not compute
+    // them, so an unflagged call pays nothing.
+    let enemy_sets = (want_timeseries || want_skill_damage).then(|| {
+        let enemies: std::collections::BTreeSet<u64> =
+            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+        let enemy_addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
+            .enemies
+            .iter()
+            .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+            .collect();
+        (enemies, enemy_addr_to_rep)
+    });
+    let enemy_series = enemy_sets.as_ref().filter(|_| want_timeseries).map(|(en, rep)| {
+        axilog_core::analysis::timeseries::build_enemy_series(
+            &enc,
+            &raw,
+            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+            en,
+            rep,
+        )
+    });
+    let enemy_dist = enemy_sets
+        .as_ref()
+        .filter(|_| want_skill_damage)
+        .map(|(en, rep)| axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep));
+    let target_conditions =
+        want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+    Ok((
+        report,
+        activity,
+        ei_replay,
+        damage_mods,
+        boon_states,
+        enemy_series,
+        enemy_dist,
+        target_conditions,
+    ))
 }
 
 fn report_to_value(report: &axilog_schema::Report) -> Result<Value> {
@@ -259,7 +304,7 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
     let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let (report, activity, ei_replay, damage_mods, boon_states) = build_report_and_activity_from_bytes(
+    let (report, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist, target_conditions) = build_report_and_activity_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
         want_modifiers,
     )?;
@@ -270,6 +315,9 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
             replay: ei_replay.as_ref(),
             modifiers: damage_mods.as_ref(),
             boon_states: boon_states.as_ref(),
+            enemy_series: enemy_series.as_ref(),
+            enemy_dist: enemy_dist.as_ref(),
+            target_conditions: target_conditions.as_ref(),
         },
     ))
 }

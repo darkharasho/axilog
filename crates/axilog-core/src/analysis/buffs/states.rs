@@ -116,7 +116,10 @@ pub struct BoonStates {
 /// A transition at or before `log_start` clamps to relative time 0, where
 /// it lands after the mandatory leading pair -- the same order GW2EI's own
 /// fused graph produces for a buff already up at log start.
-fn to_ei_states(steps: impl Iterator<Item = (u64, u32)>, log_start: u64) -> Vec<(u64, u32)> {
+pub(crate) fn to_ei_states(
+    steps: impl Iterator<Item = (u64, u32)>,
+    log_start: u64,
+) -> Vec<(u64, u32)> {
     let mut out: Vec<(u64, u32)> = vec![(0u64, 0u32)];
     for (t, v) in steps {
         let t = t.saturating_sub(log_start);
@@ -159,7 +162,7 @@ fn to_ei_states(steps: impl Iterator<Item = (u64, u32)>, log_start: u64) -> Vec<
 /// coincident segment boundaries, and consecutive equal counts are dropped
 /// for the same reason. Zero-length segments therefore vanish entirely,
 /// exactly as they do in GW2EI.
-fn overlap_steps(segments: &[HeldSegment]) -> Vec<(u64, u32)> {
+pub(crate) fn overlap_steps(segments: &[HeldSegment]) -> Vec<(u64, u32)> {
     let mut deltas: Vec<(u64, i32)> = Vec::with_capacity(segments.len() * 2);
     for s in segments {
         if s.end <= s.start {

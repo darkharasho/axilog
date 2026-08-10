@@ -47,6 +47,13 @@ pub mod skill_damage;
 /// `timeseries`'s module doc for the GW2EI cumulative-vs-instant citation
 /// and the `dps_targets`-vs-EI-`dpsTargets` scope note.
 pub mod timeseries;
+/// Incoming-condition attribution on ENEMY agents -- GW2EI's
+/// `targets[].buffs[].id`/`.statesPerSource` (MEIGAP Task 2d). A STANDALONE
+/// pass (not wired into [`analyze`], like `replay`/`missiles`/`damage_mods`/
+/// `buffs::states`), gated by the ei-json adapter on `--timeseries` -- see
+/// its module doc for the GW2EI direction citation and the reuse of the boon
+/// simulation machinery.
+pub mod target_conditions;
 /// Outgoing hit-quality stats (M13 Task 1) -- like `skill_damage`/
 /// `timeseries` above, wired into [`analyze`] below (`PlayerMetrics::
 /// hit_stats`), computed unconditionally (cheap: one extra scan reusing

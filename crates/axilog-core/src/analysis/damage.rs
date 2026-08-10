@@ -242,6 +242,28 @@ pub fn pet_credit_events_with_registry(
     friendly_team: Option<u32>,
     agent_team: &BTreeMap<u64, u32>,
 ) -> Vec<(u64, u64, u64, u64)> {
+    pet_credit_events_with_skill(raw, registry, squad, friendly_team, agent_team)
+        .into_iter()
+        .map(|(time, owner, dst, dmg, _)| (time, owner, dst, dmg))
+        .collect()
+}
+
+/// [`pet_credit_events_with_registry`] with the crediting row's `skillid`
+/// kept alongside: `(time, owner, dst, dmg, skill_id)` (MEIGAP Task 2a).
+///
+/// Same predicate, same owner resolution, same order -- the 4-tuple wrapper
+/// above is literally this function with the last element dropped, so the
+/// two can never disagree about WHICH events are credited. The skill id is
+/// what a caller needs to apply GW2EI's `DamageType.Power` filter
+/// (`condition_catalog::is_condition_damage_based`) to pet damage, which
+/// `timeseries`'s `targetPowerDamage1S` does.
+pub fn pet_credit_events_with_skill(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+    friendly_team: Option<u32>,
+    agent_team: &BTreeMap<u64, u32>,
+) -> Vec<(u64, u64, u64, u64, u32)> {
     let mut out = Vec::new();
     for e in &raw.events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }
@@ -255,7 +277,7 @@ pub fn pet_credit_events_with_registry(
         };
         let dmg = if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
         if dmg == 0 { continue; }
-        out.push((e.time, owner, e.dst_agent, dmg));
+        out.push((e.time, owner, e.dst_agent, dmg, e.skillid));
     }
     out
 }

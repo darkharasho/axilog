@@ -248,6 +248,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let boon_states = (timeseries && format == Format::EiJson).then(|| {
                 axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons)
             });
+            // MEIGAP Task 2b/2d: the two `--timeseries`-gated `targets[]`
+            // mirrors, on exactly the same gate and for the same reason
+            // (GW2EI puts `targets[].damage1S`/`.powerDamage1S` behind
+            // `RawFormatTimelineArrays` at `JsonActorBuilder.cs:102`, and
+            // `statesPerSource` behind it at `JsonBuffsUptimeBuilder.cs:52`).
+            // Both are standalone passes, not part of `analyze()`, so a
+            // flagless parse pays nothing for them.
+            // The enemy addr set + representative fold both enemy-side
+            // passes need -- built at most once, and only when one of them
+            // will actually run (a flagless parse pays nothing).
+            let enemy_sets = ((timeseries || skill_damage) && format == Format::EiJson).then(|| {
+                let enemies: std::collections::BTreeSet<u64> =
+                    enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+                let enemy_addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
+                    .enemies
+                    .iter()
+                    .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+                    .collect();
+                (enemies, enemy_addr_to_rep)
+            });
+            let enemy_series = enemy_sets.as_ref().filter(|_| timeseries).map(|(en, rep)| {
+                axilog_core::analysis::timeseries::build_enemy_series(
+                    &enc,
+                    &raw,
+                    &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+                    en,
+                    rep,
+                )
+            });
+            let target_conditions = (timeseries && format == Format::EiJson)
+                .then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+            // MEIGAP Task 2c: `targets[].totalDamageDist` rides
+            // `--skill-damage`, the flag that already gates every other
+            // per-skill block (GW2EI itself emits it unconditionally; this
+            // is a payload gate, and axibridge hardcodes the flag on).
+            let enemy_dist = enemy_sets.as_ref().filter(|_| skill_damage).map(|(en, rep)| {
+                axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep)
+            });
             // M16: the damage-modifier engine runs ONLY on `--modifiers`
             // (see the flag's doc comment -- it is a separate full event
             // pass, not a copy of something `analyze()` already computed).
@@ -298,6 +336,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 replay: ei_replay_data.as_ref(),
                                 modifiers: damage_mods.as_ref(),
                                 boon_states: boon_states.as_ref(),
+                                enemy_series: enemy_series.as_ref(),
+                                enemy_dist: enemy_dist.as_ref(),
+                                target_conditions: target_conditions.as_ref(),
                             },
                         ))?
                     )

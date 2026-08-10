@@ -170,6 +170,47 @@ pub const CONDITION_SKILL_IDS: [u32; 14] = [
     TAUNT,         // 27705
 ];
 
+/// The same fourteen conditions as [`CONDITION_SKILL_IDS`], carrying the
+/// two extra properties a BUFF SIMULATION needs that a damage-classification
+/// predicate does not: GW2EI's display `name` and its `BuffStackType`
+/// (MEIGAP Task 2d).
+///
+/// `(skill id, display name, is_intensity, capacity)`, transcribed
+/// field-for-field from the same fourteen `Buff` ctor calls the id table
+/// above cites (`GW2EIEvtcParser/EIData/Buffs/CommonBuffs.cs:36-49`). The
+/// shape deliberately mirrors [`super::buffs::BOON_IDS`]'s
+/// `(id, name, is_intensity)` triple, extended with the ctor's own capacity
+/// argument because -- unlike the boons -- these capacities are NOT in
+/// `simulator::capacity_for`'s table and several of them (1500) are far
+/// outside its 5-25 range.
+///
+/// `is_intensity` is `true` exactly for `BuffStackType.Stacking`
+/// (`CommonBuffs.cs:36-40` Bleeding/Burning/Confusion/Poison/Torment at
+/// capacity 1500, and `:49` Vulnerability at 25) and `false` for the eight
+/// `BuffStackType.Queue` entries (`:41-48`). No condition is
+/// `StackingConditionalLoss` or `Regeneration`, so the two stack-type
+/// special cases that complicate the boon table do not arise here.
+///
+/// Kept in the SAME ascending-id order as [`CONDITION_SKILL_IDS`] so the two
+/// tables are trivially diffable against each other (asserted in this
+/// module's tests).
+pub const CONDITION_BUFFS: [(u32, &str, bool, u32); 14] = [
+    (BLIND, "Blind", false, 9),
+    (CRIPPLED, "Crippled", false, 5),
+    (CHILLED, "Chilled", false, 5),
+    (POISON, "Poison", true, 1500),
+    (IMMOBILE, "Immobile", false, 3),
+    (BLEEDING, "Bleeding", true, 1500),
+    (BURNING, "Burning", true, 1500),
+    (VULNERABILITY, "Vulnerability", true, 25),
+    (WEAKNESS, "Weakness", false, 5),
+    (FEAR, "Fear", false, 5),
+    (CONFUSION, "Confusion", true, 1500),
+    (TORMENT, "Torment", true, 1500),
+    (SLOW, "Slow", false, 9),
+    (TAUNT, "Taunt", false, 5),
+];
+
 /// `SkillEvent.ConditionDamageBased(log)` (`SkillEvent.cs:43-50`) -- true
 /// iff `skill_id` is registered as a `BuffClassification.Condition` buff.
 ///
@@ -224,6 +265,24 @@ mod tests {
         assert!(!is_condition_damage_based(0), "id 0 is not a buff");
         assert!(!is_condition_damage_based(u32::MAX));
         assert!(!is_condition_damage_based(30770), "PulmonaryImpact is an ordinary strike skill");
+    }
+
+    /// [`CONDITION_BUFFS`] must describe exactly the same fourteen ids, in
+    /// the same order, as [`CONDITION_SKILL_IDS`] -- the two tables are two
+    /// views of one `CommonBuffs.Conditions` transcription, and a drift
+    /// between them would silently desync the damage-classification
+    /// predicate from the condition-uptime simulation.
+    #[test]
+    fn condition_buffs_table_agrees_with_the_id_table() {
+        let ids: Vec<u32> = CONDITION_BUFFS.iter().map(|&(id, _, _, _)| id).collect();
+        assert_eq!(ids.as_slice(), &CONDITION_SKILL_IDS[..]);
+        // Exactly six `BuffStackType.Stacking` entries (`CommonBuffs.cs:36-40`
+        // + `:49`); the other eight are `Queue`.
+        assert_eq!(CONDITION_BUFFS.iter().filter(|&&(_, _, i, _)| i).count(), 6);
+        for &(id, name, _, cap) in CONDITION_BUFFS.iter() {
+            assert!(!name.is_empty(), "{id} needs a display name");
+            assert!(cap > 0, "{id} needs a positive capacity");
+        }
     }
 
     /// The table must stay sorted + duplicate-free: `CommonBuffs.cs`'s own

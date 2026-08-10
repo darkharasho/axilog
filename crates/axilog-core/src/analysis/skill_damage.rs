@@ -369,6 +369,202 @@ pub fn build_with_registry(
     result
 }
 
+/// Per-ENEMY outgoing per-skill damage distribution -- GW2EI's
+/// `targets[].totalDamageDist[0]` (MEIGAP Task 2c).
+///
+/// ## Direction and scope (GW2EI citation)
+///
+/// `targets[]` entries are built by `JsonNPCBuilder.BuildJsonNPC`, whose
+/// first statement is `JsonActorBuilder.FillJsonActor(jsonNPC, npc, ...)`
+/// -- so an NPC's `totalDamageDist` is the SAME field a player's is, just
+/// over an NPC actor: `JsonActorBuilder.BuildDamageDistData`
+/// (`GW2EIBuilders/JsonModels/JsonActors/JsonActorBuilder.cs:130-137`)
+/// feeds it `actor.GetJustActorDamageEvents(null, log, ...)`. That is the
+/// enemy's **OUTGOING** damage, to anyone (`null` target), grouped by skill
+/// id. It is what axibridge's `precomputeGlobalEnemySkillStats`
+/// (`packages/bridge-metrics/src/computePlayerAggregation.ts:490-509`)
+/// folds into a global `skillId -> {totalDamage, connectedHits, min}` table
+/// and then divides into the per-avoided-hit averages behind the
+/// damage-mitigation columns (`recomputeMitigationTotals`, `:1517-1560`:
+/// `avoided = glanced * avg/2 + (blocked+evaded+missed+invulned+
+/// interrupted) * avg`, with `avg = totalDamage / connectedHits`).
+///
+/// **Actor-ONLY, no minion fold** -- and that is a real difference from
+/// this module's squad-side `outgoing`. `GetJustActorDamageEvents`
+/// (`EIData/Actors/SingleActor.cs:752-761`) is explicitly
+/// `GetDamageEvents(...).Where(x => x.From.Is(AgentItem))`, filtering back
+/// out the `mins.GetDamageEvents` fold `InitDamageEvents` applied
+/// (`:735-740`). An NPC's minions get their own `minions[]` dist, never the
+/// owner's. So this pass credits `src_agent` and nothing else -- which also
+/// makes it the mirror image of the documented squad-side divergence in
+/// this module's own doc comment (there, EI is actor-only and axilog folds
+/// pets; here BOTH are actor-only, so that gap does not arise).
+///
+/// ## `hits` vs `connectedHits` -- the M12 divergence, RESOLVED for this field
+///
+/// `JsonDamageDistBuilder.BuildJsonDamageDist`
+/// (`GW2EIBuilders/JsonModels/JsonActorUtilities/JsonDamageDistBuilder.cs:48-74`)
+/// writes several different counts off one event list:
+///
+/// - `hits` = `dmgEvt.IsNotADamageEvent ? 0 : 1` -- every ATTEMPT,
+///   including missed/blocked/evaded/invulned;
+/// - `connectedHits` = `dmgEvt.HasHit ? 1 : 0`;
+/// - `min`/`max`/`crit`/`flank` are guarded by `HasHit` too, and
+///   `crit`/`flank` additionally by `!IndirectDamage`.
+///
+/// This module's squad-side [`SkillStats`] counts CONTRIBUTING events
+/// (`dmg > 0`) -- the documented M12 divergence from EI's `hits`. **This
+/// pass does NOT inherit that divergence**, because the consumer's
+/// arithmetic depends on the difference: axibridge's mitigation math
+/// divides by `connectedHits` (`computePlayerAggregation.ts:277-286`,
+/// `avg = totalDamage / connectedHits`) and averages `min`
+/// (`minMitigation`). Measured against the reference export, `dmg > 0` and
+/// `HasHit` genuinely disagree: a connecting hit that dealt zero health
+/// damage is common enough that it moved `connectedHits` on many
+/// (target, skill) rows and collapsed `min` from a real value to `0` on
+/// most of them.
+///
+/// So this pass reproduces `HasHit` directly, from the result byte, with
+/// the same era dispatch `defenses::classify` and `hit_stats::classify`
+/// already use:
+///
+/// - `buff == 0`: `DirectNormal`/`DirectCrit`/`DirectGlance`
+///   (`DirectHealthDamageEvent.cs:18`). Every other direct result --
+///   block/evade/blind/absorb/invert, and the `KillingBlow`/`Downed`
+///   marker rows GW2EI routes to `NoDamageHealthDamageEvent` -- is not a
+///   hit.
+/// - `buff == 1`, post-rework era: `BuffCycle`/`BuffNotCycle`/
+///   `BuffNotCycle_DamageToSourceOnHit`, plus the two life-leech results
+///   (`NonDirectHealthDamageEvent.cs:32-33`: `HasHit = ... || IsLifeLeech`).
+/// - `buff == 1`, pre-rework era: `ConditionResult.ExpectedToHit`
+///   (`:17`), which decodes as result `0` on a `value == 0` row -- the
+///   same apply-vs-tick disambiguator `hit_stats`/`defenses` established.
+///
+/// `crit`/`flank` are additionally zeroed for any skill whose row list
+/// contains a `NonDirectHealthDamageEvent` -- GW2EI's per-skill
+/// `IndirectDamage` flag (`:17`), which gates the whole
+/// `flank`/`glance`/`crit`/`missed`/`evaded`/`blocked`/`interrupted` block
+/// (`:59-70`). A condition skill therefore reports `crit: 0, flank: 0` on
+/// both sides, rather than this project's raw byte counts.
+///
+/// EI's `hits` (the attempt count) is still NOT emitted: it needs the full
+/// missed/blocked/evaded/invulned outcome set, which the adapter has no
+/// key for on this shape. The count that IS emitted goes out under
+/// `connectedHits`, the key whose EI meaning it reproduces.
+///
+/// **Standalone, NOT wired into `analyze()`** -- opt-in like
+/// [`crate::analysis::timeseries::build_enemy_series`], gated by the
+/// adapter on `--skill-damage` (the flag that already gates every other
+/// per-skill block).
+pub fn build_enemy_dist(
+    raw: &RawLog,
+    enemies: &BTreeSet<u64>,
+    enemy_addr_to_rep: &BTreeMap<u64, u64>,
+) -> BTreeMap<u64, Vec<SkillEntry>> {
+    let post_era = raw.header.is_post_buff_rework();
+    let mut by_rep: BTreeMap<u64, BTreeMap<u32, EnemySkillStats>> = BTreeMap::new();
+    for e in &raw.events {
+        if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
+            continue;
+        }
+        if e.result == result::CROWD_CONTROL {
+            continue;
+        }
+        if !enemies.contains(&e.src_agent) {
+            continue;
+        }
+        let rep = enemy_addr_to_rep.get(&e.src_agent).copied().unwrap_or(e.src_agent);
+        let entry = by_rep.entry(rep).or_default().entry(e.skillid).or_default();
+        // GW2EI's per-skill `IndirectDamage` flag is `dmList.Exists(x => x is
+        // NonDirectHealthDamageEvent)` -- set from the WHOLE row list, hits
+        // and non-hits alike, so it is recorded before the `has_hit` gate.
+        if e.buff == 1 {
+            entry.indirect = true;
+        }
+        if !has_hit(e, post_era) {
+            continue;
+        }
+        let dmg = if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
+        entry.record(dmg, e.result == result::CRIT, e.is_flanking != 0);
+    }
+    by_rep
+        .into_iter()
+        .map(|(rep, by_skill)| {
+            (
+                rep,
+                by_skill
+                    .into_iter()
+                    .map(|(skill_id, s)| SkillEntry {
+                        skill_id,
+                        total: s.total,
+                        hits: s.hits,
+                        min: s.min,
+                        max: s.max,
+                        // `crit`/`flank` live inside GW2EI's
+                        // `if (!jsonDamageDist.IndirectDamage)` block.
+                        crit_hits: if s.indirect { 0 } else { s.crit_hits },
+                        flank_hits: if s.indirect { 0 } else { s.flank_hits },
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// `HealthDamageEvent.HasHit` (see [`build_enemy_dist`]'s doc comment for
+/// the three per-era ctor citations). Independent of the row's damage
+/// VALUE: a connecting hit that dealt zero health damage is still a hit.
+fn has_hit(e: &RawEvent, post_era: bool) -> bool {
+    if e.buff == 0 {
+        return matches!(e.result, result::NORMAL | result::CRIT | result::GLANCE);
+    }
+    if post_era {
+        return matches!(
+            e.result,
+            result::BUFF_CYCLE
+                | result::BUFF_NOT_CYCLE
+                | result::BUFF_NOT_CYCLE_DMG_TO_SOURCE_ON_HIT
+                | result::BUFF_NOT_CYCLE_DMG_TO_TARGET_ON_HIT
+                | result::BUFF_NOT_CYCLE_DMG_TO_TARGET_ON_STACK_REMOVE
+        );
+    }
+    // Pre-era `buff == 1`: `ConditionResult.ExpectedToHit` is result 0, on a
+    // damage TICK (`value == 0`) rather than an ordinary buff APPLY row --
+    // the same disambiguator `hit_stats`/`defenses` use.
+    e.value == 0 && e.result == 0
+}
+
+/// [`build_enemy_dist`]'s accumulator. Separate from [`SkillStats`] on
+/// purpose: this one counts `HasHit` rows (0-damage ones included) and
+/// carries GW2EI's per-skill `IndirectDamage` flag, where `SkillStats`
+/// counts CONTRIBUTING rows -- the two must not drift into each other, or
+/// the squad-side M12 calibration and this one would both move.
+#[derive(Debug, Clone, Default)]
+struct EnemySkillStats {
+    total: u64,
+    hits: u32,
+    min: u64,
+    max: u64,
+    crit_hits: u32,
+    flank_hits: u32,
+    indirect: bool,
+}
+
+impl EnemySkillStats {
+    fn record(&mut self, dmg: u64, is_crit: bool, is_flank: bool) {
+        self.total += dmg;
+        self.min = if self.hits == 0 { dmg } else { self.min.min(dmg) };
+        self.max = self.max.max(dmg);
+        self.hits += 1;
+        if is_crit {
+            self.crit_hits += 1;
+        }
+        if is_flank {
+            self.flank_hits += 1;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
