@@ -31,15 +31,37 @@ mod common;
 
 /// Duration-boon presence, and intensity-boon presence: percentage points.
 ///
-/// M3's brief set this at 2pp and it has never been approached. Measured
-/// worst cell after MBUFFSIM: **0.000500pp** (Quickness), i.e. 4000x inside
-/// the bound. Deliberately NOT tightened to match: unlike the average-stack
-/// integral, presence is a step-function boundary quantity, so a log with a
-/// different event cadence (a raid boss rather than this WvW capture, or the
-/// pre-rework era) can legitimately land further out without anything being
-/// wrong. The average-stack tolerance below is the one MBUFFSIM earned the
-/// right to tighten, because its residual has a named, now-eliminated cause.
-const PRESENCE_TOLERANCE_PP: f64 = 2.0;
+/// **MSMALL tightened this from `2.0` to `0.05`** (reviewer-recommended),
+/// on the following measurement rather than on the old prose argument.
+///
+/// M3 set 2pp and it was never approached; MBUFFSIM recorded a worst cell of
+/// 0.000500pp but declined to tighten, reasoning that presence is a
+/// step-function boundary quantity and so a log with a different event
+/// cadence could legitimately land further out. That reasoning was sound but
+/// it stopped one step short of the actual explanation. MSMALL re-measured
+/// all 444 presence cells (12 boons x 37 players) on this fixture:
+///
+/// | | mean | max |
+/// |---|---|---|
+/// | every boon | 0.000012 - 0.000295 | **0.000413 - 0.000500** |
+///
+/// The max is ~0.0005 for EVERY boon, and never exceeds it. That is not a
+/// simulator residual at all -- it is EI's own serialization rounding:
+/// `BuffStatistics` rounds every emitted number through `Math.Round(x,
+/// ParserHelper.BuffDigit)` with `BuffDigit = 3`
+/// (`GW2EIEvtcParser/ParserHelpers/ParserHelper.cs:24`), whose maximum
+/// representation error is exactly 0.0005. In other words all 444 cells
+/// already agree with EI to the full precision EI emits, and 0.0005pp is a
+/// HARD FLOOR that no amount of simulator work can go below while the golden
+/// is a 3-decimal JSON export.
+///
+/// `0.05` sits **100x** above that floor -- enough headroom for the
+/// cadence-sensitivity MBUFFSIM was rightly worried about (a boundary cell
+/// landing a whole tick out on a differently-paced log is ~0.001-0.01pp on a
+/// multi-minute window), while being **40x** tighter than the old bound.
+/// The old 2pp bound sat 4000x above the floor, which is wide enough to hide
+/// a real regression of the same magnitude as the one MBUFFSIM fixed.
+const PRESENCE_TOLERANCE_PP: f64 = 0.05;
 
 /// Intensity-boon average stacks: relative error.
 ///
