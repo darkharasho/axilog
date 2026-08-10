@@ -110,6 +110,21 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   adapter mapping over existing native data. When closed, axibridge flips its parser default
   from elite-insights to axilog (toggle already shipped).
 
+## Queued (autonomous — next session)
+- MINSTID Enemy-player instid regroup: `wvw::apply`'s `dedupe_enemy_players` keys on ACCOUNT,
+  which WvW anonymization leaves empty for enemies, so 13 instids carry 2 agent rows each on the
+  reference log (71 emitted enemy rows vs GW2EI's 56). GW2EI regroups by InstID first
+  (`AgentManipulationHelper.cs:467-474`). Fixing it: closes the last mitigation min-mean residual
+  (16/206 -> 1), takes the ei-json roster to EI's own count, and corrects the "enemies in the
+  fight" number eight axibridge sites display. NOTE: it changes agent identity in the core, so it
+  MOVES the native `enemies[]` surface (71 -> 56 on the real log) — needs the moved-output
+  discipline (cell-by-cell justification) and a re-run of every enemy-keyed calibration.
+- MOBJ wvWMapData objectives: the last whole EI feature surface axilog doesn't emit
+  (shard/team ids + GADGETCAPTURE-derived objective ownership timelines; reference shape verified
+  — 13 entries on the local export, `{mapID, objectiveID, objectiveType, owners:[[team,time]]}`).
+  Two attempts died to process exits before producing commits; no partial work exists. Lowest
+  value of the remaining items — nothing consumes it today.
+
 ## Parked (user-gated — do NOT do autonomously)
 - axibridge's actual cutover from EI CLI to the axilog SDK (both registries now live, so this is
   unblocked whenever the user wants it).
