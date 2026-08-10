@@ -30,7 +30,7 @@ use std::collections::HashMap;
 /// Duration-boon presence, and intensity-boon presence: percentage points.
 ///
 /// M3's brief set this at 2pp and it has never been approached. Measured
-/// worst cell after MBUFFSIM: **0.000455pp** (Quickness), i.e. 4400x inside
+/// worst cell after MBUFFSIM: **0.000500pp** (Quickness), i.e. 4000x inside
 /// the bound. Deliberately NOT tightened to match: unlike the average-stack
 /// integral, presence is a step-function boundary quantity, so a log with a
 /// different event cadence (a raid boss rather than this WvW capture, or the
