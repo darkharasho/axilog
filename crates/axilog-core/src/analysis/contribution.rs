@@ -477,31 +477,42 @@ fn credit_window<'a>(
         //
         // This predicate used to mirror `damage::accumulate` exactly. As of
         // MEIGAP Task 2's review round 1 it no longer does, and the
-        // difference is deliberate rather than an oversight: `accumulate`
-        // now also excludes `DamageResult.BreakbarDamage` (result 10),
-        // because GW2EI routes those rows to `brkBarDamage` and none of
-        // their magnitude is health damage
-        // (`CombatEventFactory.cs:799-809`; see
-        // `damage::is_health_damage_result`). **This pass still counts
-        // them.**
+        // difference WAS deliberate: `accumulate` excludes
+        // `DamageResult.BreakbarDamage` (result 10), because GW2EI routes
+        // those rows to `brkBarDamage` and none of their magnitude is
+        // health damage (`CombatEventFactory.cs:799-809`; see
+        // `damage::is_health_damage_result`), while this pass still counted
+        // them. MEIGAP Task 2 left it that way because this is the
+        // arcdps-methodology down-contribution family -- already a
+        // documented divergence from GW2EI's own 90%-to-downstate-window
+        // algorithm -- so "what GW2EI counts as health damage" was not
+        // automatically the right rule here, and that round could not
+        // re-run the calibration.
         //
-        // Why it was not swept with the rest: this is the arcdps-methodology
-        // down-contribution family (see this module's doc comment), already
-        // a documented, separately-calibrated divergence from GW2EI's own
-        // 90%-to-downstate-window algorithm -- so "what GW2EI counts as
-        // health damage" is not automatically the right rule here, and
-        // changing the weighting would move `downs_contribution`/`downed_by`
-        // without this round being able to re-run that calibration.
+        // **MSMALL item 5 CLOSED it: this pass now applies
+        // `is_health_damage_result` too.** The deciding argument is not
+        // GW2EI parity (there is no EI golden for this metric, by design)
+        // but causality: this family measures damage that LED TO a down,
+        // and defiance-bar damage does not reduce health, so it cannot
+        // contribute to one. Counting it was crediting a player for a down
+        // their damage could not physically have caused. That is a positive
+        // reason to sweep, which is what the old note asked for.
         //
-        // **Two definitions of countable damage now coexist in this crate
-        // and that must not be silent.** A follow-up should either sweep
-        // this site (and re-run the contribution calibration) or record a
-        // positive reason for defiance-bar damage to count toward a down.
-        // Measured exposure on the local post-rework capture: breakbar rows
-        // exist for 27 of 44 accounts, worst 2,000 raw units.
+        // Enumerated exposure of the sweep (full `parse` output diff):
+        //   * `fixtures/wvw-small.anon.zevtc`: ZERO changed values.
+        //   * local post-rework capture: exactly TWO cells, both
+        //     `downs_contribution.damage`: 146331 -> 144331 (-2000) and
+        //     3864 -> 2864 (-1000). Both move DOWN, i.e. non-health damage
+        //     is removed from a health-based causal metric -- the intended
+        //     direction. No other field in either output changed.
+        //
+        // `analysis::mod`'s `combat_participant_enemies` carve-out was
+        // examined in the same round and deliberately KEPT (zero measured
+        // exposure, and "did the squad interact at all" is genuinely not a
+        // health-damage question) -- see the long note at its site.
         if e.is_statechange == 0 && e.is_activation == 0 && e.is_buffremove == 0 && e.dst_agent == target {
             let cc_row = is_cc(e, post_era);
-            if cc_row || e.result != result::CROWD_CONTROL {
+            if cc_row || crate::analysis::damage::is_health_damage_result(e.result) {
                 if let Some(c) =
                     resolve_contributor(registry, e.src_agent, e.src_instid, e.src_master_instid, e.time)
                 {

@@ -444,6 +444,24 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // drop it. Recorded so the two definitions of "countable damage" in
     // this crate are not silent; see also `contribution::credit_window`,
     // the other carve-out.
+    //
+    // **MSMALL item 5 re-examined this and DELIBERATELY KEPT IT.** Measured
+    // by applying `is_health_damage_result` here and diffing the full
+    // `parse` output: ZERO changed bytes on `fixtures/wvw-small.anon.zevtc`
+    // AND zero on the local post-rework capture. So no fixture
+    // discriminates between the two readings, and there is no measurement
+    // pushing either way -- which leaves the semantic argument, and that
+    // argument favours keeping it: this set answers "did the squad interact
+    // with this agent", and a defiance-bar hit is interaction. Adding the
+    // filter would change behaviour only on some future log where an enemy
+    // is struck for breakbar damage and nothing else -- exactly the case
+    // the carve-out exists to get right -- in exchange for no present
+    // benefit. Unlike `contribution::credit_window` (which MSMALL DID
+    // sweep, because health damage is causally required for a down), the
+    // two definitions of countable damage differ here for a reason.
+    //
+    // The two carve-outs therefore resolved differently, and that is the
+    // point: "countable damage" is not one question.
     // MEIGAP2 row 5: enemy OUTGOING health damage, folded into this same
     // scan -- see `Metrics::enemy_damage_out`'s doc comment for the GW2EI
     // definition (minion-inclusive, `iff`-filtered).
