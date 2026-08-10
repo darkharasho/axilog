@@ -102,7 +102,7 @@ fn diag_buff_uptimes_vs_ei() {
         println!(
             "  b{id:<6} {name:<28} class {class}  BUFF_INFO={:?}  catalog=(intensity {:?}, cap {:?})  USED={}",
             caps.get(&id),
-            cat.map(|c| c.intensity),
+            cat.map(|c| c.stack_type),
             cat.map(|c| c.capacity),
             caps.get(&id)
                 .copied()
@@ -767,6 +767,7 @@ fn diag_stability_removed_duration_band_aid() {
                 buff_id: STABILITY,
                 owner: w.owner,
                 agent: 0,
+                buff_instance: w.inst,
                 kind,
             });
         }

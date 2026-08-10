@@ -240,9 +240,10 @@ fn run_duration(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) -> V
                 // BuffStack[0].Extend(extension, src); } else { Add(oldValue
                 // + extension, ..., addedActive: true, ...); }`. `oldValue`
                 // is GW2EI's post-`OffsetNewDuration`-corrected value; this
-                // project doesn't decode the `BuffInstance` field needed to
-                // replicate that correction (see `BuffEventKind::Extend`'s
-                // doc comment), so `old_value` here is the RAW
+                // project doesn't implement that correction (deferred by
+                // MBUFFSIM Task 2 as below the noise floor -- see
+                // `BuffEventKind::Extend`'s doc comment), so `old_value`
+                // here is the RAW
                 // `new_duration_ms - extended_ms` -- an approximation.
                 // `BuffStackItem.Extend` appends to a separate `Extensions`
                 // list rather than mutating `Duration` directly, but for a
@@ -433,6 +434,7 @@ mod tests {
             buff_id,
             owner,
             agent: owner,
+            buff_instance: 0,
             kind: BuffEventKind::Apply { duration_ms, is_shields },
         }
     }
@@ -442,11 +444,12 @@ mod tests {
             buff_id,
             owner,
             agent: owner,
+            buff_instance: 0,
             kind: BuffEventKind::RemoveSingle { removed_duration_ms },
         }
     }
     fn remove_all(time: u64, buff_id: u32, owner: u64) -> BuffEvent {
-        BuffEvent { time, buff_id, owner, agent: owner, kind: BuffEventKind::RemoveAll }
+        BuffEvent { time, buff_id, owner, agent: owner, buff_instance: 0, kind: BuffEventKind::RemoveAll }
     }
 
     fn run_duration_boon(events: Vec<BuffEvent>, buff_id: u32, log_end_ms: u64) -> Vec<(u64, u32)> {

@@ -17,6 +17,34 @@ impl RawHeader {
     pub fn is_post_buff_rework(&self) -> bool {
         is_post_buff_rework(&self.build)
     }
+
+    /// Strictly after GW2EI's `ArcDPSBuilds.ProperConfusionDamageSimulation`
+    /// (`20210529`, `GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:12`) --
+    /// the build gate on `CombatData.HasStackIDs`
+    /// (`ParsedData/CombatData.cs:610`), which in turn gates the
+    /// `StackingConditionalLoss` `RemovedDuration` band aid
+    /// (`EIData/Buffs/BuffsContainer.cs:197`). Note GW2EI's comparison is
+    /// STRICT `>`, not `>=`. Malformed builds are treated as "before"
+    /// (`false`), same conservative rule as
+    /// [`RawHeader::is_post_buff_rework`].
+    pub fn has_proper_confusion_damage_simulation(&self) -> bool {
+        let b = &self.build;
+        b.len() == 8 && b.bytes().all(|c| c.is_ascii_digit()) && b.as_str() > "20210529"
+    }
+
+    /// On/after GW2EI's `ArcDPSBuilds.BuffExtensionOverstackValueChanged`
+    /// (`20231107`, `ArcDPSEnums.cs:22`): from this build a `BUFF_INITIAL`
+    /// row's `buff_dmg` carries the stack's ORIGINAL as-cast duration while
+    /// `value` carries what is left of it, so GW2EI's
+    /// `BuffApplyEvent.OriginalAppliedDuration` reads `buff_dmg` rather than
+    /// `value` (`ParsedData/CombatEvents/BuffEvents/BuffApplies/
+    /// BuffApplyEvent.cs:21-28`). The difference is its `activeTime`, which
+    /// the `StackingConditionalLoss` band aid subtracts
+    /// (`BuffsContainer.cs:243`).
+    pub fn has_buff_extension_overstack_value_changed(&self) -> bool {
+        let b = &self.build;
+        b.len() == 8 && b.bytes().all(|c| c.is_ascii_digit()) && b.as_str() >= "20231107"
+    }
 }
 
 /// Free-function form of `RawHeader::is_post_buff_rework`, for callers that

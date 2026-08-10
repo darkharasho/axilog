@@ -288,6 +288,27 @@ pub mod sc {
     /// 5-9 `simulator::capacity_for` previously assumed -- see
     /// `analysis::buffs::events::extract_buff_capacities`.
     pub const BUFF_INFO: u8 = 30;
+    /// `CBTS_STACKACTIVE` -- "a buff stack became the active one".
+    /// Cross-checked against GW2EI's `ArcDPSEnums.StateChange.StackActive
+    /// = 27` (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:287`). GW2EI's
+    /// `BuffStackActiveEvent` reads its stack instance id from `DstAgent`
+    /// (NOT `pad`, unlike every other buff event -- `BuffStacks/
+    /// BuffStackActiveEvent.cs:10`).
+    ///
+    /// This project does not simulate activation (`BuffStackActiveEvent.
+    /// IsBuffSimulatorCompliant` is `false` in the NoID family for
+    /// everything except Regeneration, whose `HealingLogic` is a deferred
+    /// MBUFFSIM follow-up). It IS consumed for two things:
+    /// `CombatData.HasStackIDs` (`ParsedData/CombatData.cs:610`, the gate on
+    /// the `StackingConditionalLoss` band aid) and that band aid's own
+    /// `totalDuration` reconstruction (`EIData/Buffs/BuffsContainer.cs:230-234`).
+    pub const STACK_ACTIVE: u8 = 27;
+    /// `CBTS_STACKRESET`, GW2EI's `StackDeactive = 28`
+    /// (`ArcDPSEnums.cs:288`, "Formerly as StackReset"). Instance id in
+    /// `pad`, reset-to duration in `value`
+    /// (`BuffStacks/BuffStackDeactiveEvent.cs:8-12`). Consumed only by
+    /// `CombatData.HasStackIDs` here -- see [`STACK_ACTIVE`].
+    pub const STACK_DEACTIVE: u8 = 28;
     /// Cast-animation START statechange (M4 Task 2, `support::apply`'s
     /// resurrect-cast detection). Verified against the live arcdps EVTC
     /// reference (`curl https://www.deltaconnected.com/arcdps/evtc/README.txt`,

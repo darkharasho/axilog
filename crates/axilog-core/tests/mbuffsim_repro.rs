@@ -96,6 +96,17 @@ fn remove_single(
     }
 }
 
+/// `CBTS_STACKACTIVE`. Its only role in these tests is to satisfy GW2EI's
+/// `CombatData.HasStackIDs` precondition (`CombatData.cs:610`,
+/// `buffEvents.Any(x => x is BuffStackActiveEvent || x is
+/// BuffStackDeactiveEvent)`), which gates the whole
+/// `StackingConditionalLoss` band aid (`BuffsContainer.cs:197`). Placed on
+/// an unrelated buff id and a different owner so it contributes nothing to
+/// the `totalDuration` reconstruction under test.
+fn stack_active_marker(time: u64) -> RawEvent {
+    RawEvent { skillid: 9_999_999, src_agent: 77, dst_agent: 1, ..ev(time, sc::STACK_ACTIVE) }
+}
+
 fn raw(events: Vec<RawEvent>) -> RawLog {
     RawLog {
         header: RawHeader { build: "20260501".into(), revision: 1, boss_id: 1 },
@@ -253,14 +264,12 @@ fn a_real_strip_with_a_remover_agent_is_kept() {
 // ---------------------------------------------------------------------
 
 /// A conditional-loss strip that reports the ORIGINAL applied duration is
-/// currently passed through verbatim, so it matches nothing and the stack
-/// survives.
-///
-/// **MBUFFSIM Task 2 flips this**: the expected timeline becomes
-/// `[(0, 1), (2000, 0)]`.
+/// rewritten to the REMAINING duration, so it matches the held stack and
+/// removes it (MBUFFSIM Task 2, rule 2 — flipped).
 #[test]
-fn stability_strip_reporting_the_original_duration_currently_matches_nothing() {
+fn stability_strip_reporting_the_original_duration_is_rewritten() {
     let log = raw(vec![
+        stack_active_marker(0),
         apply(0, STABILITY, 1, 9, 6000, 7),
         // Real strip at t=2000 (remover present, so NOT OverstackOrNaturalEnd)
         // but `value` is the ORIGINAL 6000, not the remaining 4000.
@@ -268,16 +277,121 @@ fn stability_strip_reporting_the_original_duration_currently_matches_nothing() {
     ]);
     let evs = extract(&log, STABILITY);
     assert!(
-        matches!(evs[1].kind, BuffEventKind::RemoveSingle { removed_duration_ms: 6000 }),
-        "the extractor passes arcdps's raw `value` through today"
+        matches!(evs[1].kind, BuffEventKind::RemoveSingle { removed_duration_ms: 4000 }),
+        "6000 - activeTime(0) - elapsed(2000) = 4000 (BuffsContainer.cs:241-246): {:?}",
+        evs[1].kind
     );
     let states = simulator::run(evs, 25, true, 20_000);
-    assert_eq!(
-        states,
-        vec![(0, 1), (6000, 0)],
-        "MBUFFSIM Task 2 flips this -- expected [(0, 1), (2000, 0)]: GW2EI rewrites \
-         RemovedDuration to 6000 - 0 - 2000 = 4000 first (BuffsContainer.cs:240-246), \
-         which then matches the held stack's 4000ms remaining"
+    assert_eq!(states, vec![(0, 1), (2000, 0)]);
+}
+
+/// The band aid is gated on `CombatData.HasStackIDs`
+/// (`CombatData.cs:610` -> `BuffsContainer.cs:197`): a log carrying no
+/// `BuffStackActive`/`BuffStackDeactive` row at all must be left alone,
+/// even though the removal would otherwise qualify. Same fixture as above
+/// minus the marker row.
+#[test]
+fn band_aid_does_not_run_without_stack_ids() {
+    let log = raw(vec![
+        apply(0, STABILITY, 1, 9, 6000, 7),
+        remove_single(2000, STABILITY, 1, 42, 6000, IFF_FRIEND, 7),
+    ]);
+    let evs = extract(&log, STABILITY);
+    assert!(matches!(evs[1].kind, BuffEventKind::RemoveSingle { removed_duration_ms: 6000 }));
+    assert_eq!(simulator::run(evs, 25, true, 20_000), vec![(0, 1), (6000, 0)]);
+}
+
+/// `Stacking` (Might) is in the band aid's `stackTypeBuffs` filter but only
+/// qualifies for removals reporting `RemovedDuration == int.MaxValue`
+/// (`BuffsContainer.cs:202,210`). An ordinary finite Might strip must NOT
+/// be rewritten.
+#[test]
+fn band_aid_skips_plain_stacking_with_a_finite_removed_duration() {
+    let log = raw(vec![
+        stack_active_marker(0),
+        apply(0, MIGHT, 1, 9, 6000, 7),
+        remove_single(2000, MIGHT, 1, 42, 6000, IFF_FRIEND, 7),
+    ]);
+    let evs = extract(&log, MIGHT);
+    assert!(
+        matches!(evs[1].kind, BuffEventKind::RemoveSingle { removed_duration_ms: 6000 }),
+        "Might is BuffStackType.Stacking: only int.MaxValue removals qualify"
+    );
+}
+
+/// ...and the `int.MaxValue` sentinel DOES qualify a `Stacking` buff. The
+/// rewrite clamps at 0 (`BuffRemoveSingleEvent.cs:40-43`,
+/// `Math.Max(removedDuration, 0)`) — here `i32::MAX - 0 - 2000` stays
+/// positive, so this also pins the arithmetic.
+#[test]
+fn band_aid_applies_to_stacking_with_the_infinite_sentinel() {
+    let log = raw(vec![
+        stack_active_marker(0),
+        apply(0, MIGHT, 1, 9, i32::MAX, 7),
+        remove_single(2000, MIGHT, 1, 42, i32::MAX, IFF_FRIEND, 7),
+    ]);
+    let evs = extract(&log, MIGHT);
+    assert!(
+        matches!(
+            evs[1].kind,
+            BuffEventKind::RemoveSingle { removed_duration_ms } if removed_duration_ms == (i32::MAX - 2000) as u32
+        ),
+        "{:?}",
+        evs[1].kind
+    );
+}
+
+/// The `Math.Max(x, 0)` clamp: a strip long after the apply would otherwise
+/// produce a negative remaining duration.
+#[test]
+fn band_aid_clamps_a_negative_rewrite_to_zero() {
+    let log = raw(vec![
+        stack_active_marker(0),
+        apply(0, STABILITY, 1, 9, 6000, 7),
+        remove_single(20_000, STABILITY, 1, 42, 6000, IFF_FRIEND, 7),
+    ]);
+    let evs = extract(&log, STABILITY);
+    assert!(
+        matches!(evs[1].kind, BuffEventKind::RemoveSingle { removed_duration_ms: 0 }),
+        "6000 - 0 - 20000 clamps to 0, not a u32 wrap: {:?}",
+        evs[1].kind
+    );
+}
+
+/// The band aid pairs a removal with its apply by `BuffInstance`: a strip
+/// carrying a DIFFERENT instance id finds no apply and is left alone.
+#[test]
+fn band_aid_pairs_by_buff_instance() {
+    let log = raw(vec![
+        stack_active_marker(0),
+        apply(0, STABILITY, 1, 9, 6000, 7),
+        remove_single(2000, STABILITY, 1, 42, 6000, IFF_FRIEND, 8),
+    ]);
+    let evs = extract(&log, STABILITY);
+    assert!(matches!(evs[1].kind, BuffEventKind::RemoveSingle { removed_duration_ms: 6000 }));
+}
+
+/// An extension inside `[apply, remove]` raises the reconstructed
+/// `totalDuration`, so the gate now matches a LARGER reported value
+/// (`BuffsContainer.cs:227-230`).
+#[test]
+fn band_aid_totals_include_extensions() {
+    let mut extend = apply(1000, STABILITY, 1, 9, 2000, 7);
+    extend.is_statechange = sc::BUFF_CHANGE;
+    extend.overstack = 7000;
+    let log = raw(vec![
+        stack_active_marker(0),
+        apply(0, STABILITY, 1, 9, 6000, 7),
+        extend,
+        // totalDuration = 6000 + 2000 = 8000
+        remove_single(2000, STABILITY, 1, 42, 8000, IFF_FRIEND, 7),
+    ]);
+    let evs = extract(&log, STABILITY);
+    let rm = evs.iter().find(|e| matches!(e.kind, BuffEventKind::RemoveSingle { .. })).unwrap();
+    assert!(
+        matches!(rm.kind, BuffEventKind::RemoveSingle { removed_duration_ms: 6000 }),
+        "8000 - 0 - 2000 = 6000: {:?}",
+        rm.kind
     );
 }
 
@@ -296,20 +410,11 @@ fn stability_strip_reporting_the_remaining_duration_already_works() {
 }
 
 /// `BuffInstance` (`RawEvent::pad`) is what pairs a strip with its apply in
-/// the band aid. It is decoded on the wire but `BuffEvent` does not carry
-/// it, so Task 2 has to thread it through (or do the rewrite during
-/// extraction, where the raw row is still in hand).
-///
-/// **MBUFFSIM Task 2 flips this** only in the sense that the rewrite must
-/// become possible; the assertion below documents today's gap.
+/// the band aid (`BuffsContainer.cs:206-210`), and `BuffEvent` now carries
+/// it (MBUFFSIM Task 2 — flipped).
 #[test]
-fn buff_events_currently_carry_no_buff_instance_id() {
+fn buff_events_carry_the_buff_instance_id() {
     let log = raw(vec![apply(0, STABILITY, 1, 9, 6000, 7)]);
     let evs = extract(&log, STABILITY);
-    let fields = format!("{:?}", evs[0]);
-    assert!(
-        !fields.contains("instance"),
-        "MBUFFSIM Task 2 flips this -- BuffEvent has no BuffInstance field yet, but \
-         BuffsContainer.cs:206-210 groups by (To, BuffInstance): {fields}"
-    );
+    assert_eq!(evs[0].buff_instance, 7);
 }
