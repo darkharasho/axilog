@@ -508,3 +508,49 @@ difference. Per-row hashing on a 583k-row scan is not a micro-optimisation.
 
 `AXILOG_BENCH_LOG` is never set in CI, so the `real_log` arm always skips
 cleanly there.
+
+## axilog vs Elite Insights (v0.2.0 vs EI CLI v3.27, 2026-08-09)
+
+Same machine as above (Ryzen 9 7900X3D, 24 threads, Linux). EI = the exact CLI + .NET 8.0.25
+runtime axibridge ships (multithreaded, axibridge's production `settings.conf`: DetailledWvW,
+ComputeDamageModifiers, ParseCombatReplay, RawTimelineArrays, phases, JSON.gz out). axilog =
+release build, matched surface: `--format ei-json --replay --skill-damage --timeseries
+--rotation --modifiers`. 3 runs each after a warmup; median wall / peak RSS via
+`/usr/bin/time`.
+
+### Large log (7.6 MB zevtc, 583,194 events, 48 players, 5:48 fight)
+
+| pipeline | wall (median of 3) | peak RSS |
+|---|---|---|
+| Elite Insights CLI | 6.41 s | 857 MiB |
+| axilog, matched ei-json surface | **2.40 s** (2.7× faster) | 1,281 MiB |
+| axilog, matched + gzip output | 2.70 s (2.4× faster) | 1,282 MiB |
+| axilog, default native JSON | **0.32 s** (20× faster) | **82 MiB** (10× less) |
+
+### Small log (1.5 MB zevtc, 120,435 events, 42 players, 49 s fight)
+
+| pipeline | wall (median of 3) | peak RSS |
+|---|---|---|
+| Elite Insights CLI | 2.27 s | 373 MiB |
+| axilog, matched ei-json surface | **0.28 s** (8× faster) | 105 MiB |
+| axilog, default native JSON | **0.06 s** (38× faster) | **20 MiB** (18× less) |
+
+### Honest notes
+
+- **EI's fixed startup dominates small logs**: ~2 s of the EI number is dotnet start + JIT,
+  paid PER SPAWN — and axibridge spawns the CLI once per uploaded log, so every upload pays it.
+  axilog's fixed cost is ~0.
+- **axilog's matched-surface peak RSS is HIGHER than EI's on the large log** (1,281 vs
+  857 MiB): the ei-json path builds the entire 183 MB document as an in-memory
+  `serde_json::Value` tree before writing, while EI streams to `.json.gz`. The always-on
+  native path (82 MiB) doesn't have this problem. Future item: stream the ei-json
+  serialization. (The wall-clock lead survives regardless.)
+- **Output sizes diverge for content reasons**: EI's `.json.gz` is 3.77 MB (45.9 MB
+  decompressed); axilog's matched ei-json is 183 MB plain but **2.07 MB gzipped** — smaller
+  than EI's, because axilog's bulk is highly-repetitive per-target arrays over its full
+  624-entry target roster (EI exports a curated 57), while EI's payload includes things axilog
+  doesn't emit (full skill/buff DB metadata, phases, PvE machinery).
+- Not a feature-identical comparison: EI computes phases and its full DB-backed surface;
+  axilog computes its documented WvW parity surface (see README's EI-JSON parity table). The
+  matched-flag config is the closest apples-to-apples available and is exactly the
+  axibridge-production shape.
