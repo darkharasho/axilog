@@ -1,5 +1,6 @@
 use crate::evtc::{ContentType, RawEvent, RawLog, sc};
 use crate::model::{Encounter, Team, Player, Enemy};
+use crate::analysis::damage::InstidRegistry;
 use std::collections::BTreeMap;
 
 pub mod markers;
@@ -27,33 +28,107 @@ pub fn dedupe_players(players: &mut Vec<Player>) {
     *players = out;
 }
 
-/// Collapse relog/build-swap duplicates among enemy players, mirroring
-/// `dedupe_players` for the squad side -- with one deliberate difference.
+/// Collapse the multiple agent rows a single enemy PERSON can occupy into
+/// one entry, mirroring `dedupe_players` for the squad side -- but keyed
+/// primarily on INSTID, not account (MINSTID).
+///
+/// ## Why not account (the pre-MINSTID rule, and the bug)
 ///
 /// Squad players always reveal their own account, so `dedupe_players` can
-/// safely fall back to `character` as a key when `account` happens to be
-/// empty. Enemy players are different: arcdps only reveals an enemy's
-/// account name when it happens to be known/visible, and when it isn't,
-/// `character` is NOT a real display name -- arcdps substitutes the
-/// enemy's profession/elite-spec label instead (verified against the WvW
-/// golden fixture: every enemy player there has a blank account, and
-/// `character` is a shared spec label like "Druid" or "Harbinger" repeated
-/// across dozens of clearly-distinct agents). Falling back to `character`
-/// in that case would wrongly merge unrelated enemies who simply share a
-/// class. So: only dedupe enemy players with a known, non-empty account;
-/// everyone else is left as a distinct entry. NPCs/gadgets never go
-/// through this function at all -- distinct spawns are distinct.
-fn dedupe_enemy_players(players: &mut Vec<Player>) {
-    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+/// safely key on `account` (falling back to `character`). Enemy players are
+/// different: arcdps only reveals an enemy's account name when it happens
+/// to be known/visible, and in WvW it essentially never is -- every enemy
+/// player on this project's real captures has a BLANK account. `character`
+/// is no substitute either: for an anonymised enemy arcdps substitutes the
+/// profession/elite-spec label ("Druid", "Harbinger"), which is shared by
+/// dozens of clearly-distinct agents.
+///
+/// So an account-keyed dedupe degenerates to "no dedupe at all" for enemy
+/// players, and the multiple agent rows one person occupies (arcdps emits a
+/// fresh agent address per (re)spawn/instance for the same instid) each
+/// became their own `enemies[]` row: 71 rows over 56 real people on the
+/// reference capture, 13 instids carrying 2 rows each.
+///
+/// ## GW2EI's rule, reproduced
+///
+/// GW2EI regroups NON-SQUAD player agents purely by `InstID`, before any
+/// downstream roster building -- `AgentManipulationHelper.cs:467-474`:
+///
+/// ```text
+/// var nonSquadPlayersByInstids = nonSquadPlayerAgents.GroupBy(x => x.InstID)...
+/// foreach (...) if (agents.Count > 1) RegroupAgents(...);
+/// ```
+///
+/// `RegroupAgents` (same file, :283) keeps the FIRST agent of the group as
+/// the representative, widens its aware window to the min/max of the group,
+/// and redirects every src/dst combat row of the other members onto it --
+/// i.e. the merged actor is the UNION of its parts. This function's
+/// equivalent is: keep the first-seen `Player` as representative (so
+/// `agent_addr`, name, spec are the first agent's) and extend
+/// `agent_addrs` with the merged members', which is what every downstream
+/// consumer folds over.
+///
+/// **Ordering matters and is deliberate.** In GW2EI the account-keyed
+/// regroup on the next block (`:479-489`) applies to `AgentType.Player`
+/// only -- i.e. SQUAD players (`dedupe_players` here). Non-squad players
+/// are *never* account-grouped by EI. So account is not a competing key at
+/// the same level: it is only used here as a FALLBACK for an enemy agent
+/// whose instid could not be resolved at all (an addr that never appeared
+/// on a non-extension row carrying a nonzero instid). That keeps the old
+/// behaviour for such rows -- two rows that really are the same known
+/// account still collapse -- while making instid the rule wherever it is
+/// available, which on real logs is everywhere.
+///
+/// An enemy with no resolvable instid and a blank account stays a distinct
+/// entry, exactly as before: never merge on `character`.
+///
+/// ## Instid-reuse hazard
+///
+/// arcdps instids are recycled over a long log, and elsewhere this codebase
+/// resolves instid->addr *time-awarely* ([`InstidRegistry::resolve_at`]).
+/// GW2EI's non-squad regroup is deliberately NOT time-aware -- it is a flat
+/// `GroupBy(InstID)` with no aware-window or position check (contrast its
+/// NPC branch at `:338-366`, which does gate on positions). Two genuinely
+/// different enemy players who occupy the same instid at different times in
+/// a long log therefore merge into one actor in EI, and merge here too.
+/// That is a known fidelity limit of EI's rule, reproduced on purpose:
+/// parity is the goal, and diverging would put every enemy-keyed
+/// calibration off the reference. The key used here is
+/// [`InstidRegistry::instid_of`] (the FIRST instid an addr was registered
+/// under), which is this project's reconstruction of EI's
+/// `AgentItem.InstID` and the same value the ei-json adapter exports as
+/// `instanceID` -- so the merge granularity and the exported id agree by
+/// construction.
+///
+/// NPCs/gadgets never go through this function at all -- distinct spawns
+/// are distinct.
+fn dedupe_enemy_players(players: &mut Vec<Player>, registry: &InstidRegistry) {
+    /// Merge key: instid where resolvable (GW2EI's rule), else a known
+    /// account, else nothing (row stays distinct).
+    enum Key { Instid(u16), Account(String) }
+
+    let mut by_instid: BTreeMap<u16, usize> = BTreeMap::new();
+    let mut by_account: BTreeMap<String, usize> = BTreeMap::new();
     let mut out: Vec<Player> = Vec::new();
     for p in players.drain(..) {
-        if p.account.is_empty() {
-            out.push(p);
-            continue;
-        }
-        match seen.get(&p.account) {
-            Some(&i) => { out[i].agent_addrs.extend(p.agent_addrs); }
-            None => { seen.insert(p.account.clone(), out.len()); out.push(p); }
+        let key = match registry.instid_of(p.agent_addr) {
+            Some(instid) => Key::Instid(instid),
+            None if !p.account.is_empty() => Key::Account(p.account.clone()),
+            None => { out.push(p); continue; }
+        };
+        let slot = match &key {
+            Key::Instid(i) => by_instid.get(i).copied(),
+            Key::Account(a) => by_account.get(a).copied(),
+        };
+        match slot {
+            Some(i) => { out[i].agent_addrs.extend(p.agent_addrs); }
+            None => {
+                match key {
+                    Key::Instid(i) => { by_instid.insert(i, out.len()); }
+                    Key::Account(a) => { by_account.insert(a, out.len()); }
+                }
+                out.push(p);
+            }
         }
     }
     *players = out;
@@ -249,12 +324,13 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     }
     enc.players = friendly_players;
 
-    // Enemy relog dedupe (Task 4, M2): collapse enemy players relogging
-    // under the same known account into one Enemy, aggregating their raw
-    // addrs -- see `dedupe_enemy_players` docs for why this only keys on
-    // `account` (never falls back to `character` like the squad-side
-    // dedupe does).
-    dedupe_enemy_players(&mut enemy_players);
+    // Enemy agent-row dedupe (Task 4, M2; rekeyed on instid by MINSTID):
+    // collapse the several agent rows one enemy PERSON occupies into a
+    // single Enemy, aggregating their raw addrs -- GW2EI's non-squad
+    // `GroupBy(x => x.InstID)` regroup. See `dedupe_enemy_players` for the
+    // key order (instid, then a known account as fallback, never
+    // `character`) and the instid-reuse hazard EI's rule carries.
+    dedupe_enemy_players(&mut enemy_players, &InstidRegistry::build(raw));
     for p in enemy_players {
         let team = agent_team.get(&p.agent_addr).map(|&t| team_color_with(t, dynamic.as_ref())).unwrap_or_default();
         enc.enemies.push(Enemy {
@@ -368,6 +444,22 @@ mod tests {
             profession: "Thief".into(), elite_spec: "".into(), team: "".into(),
             subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![addr] }
+    }
+    /// A log with no events -- so `InstidRegistry::instid_of` resolves
+    /// nothing and `dedupe_enemy_players` exercises its account fallback.
+    fn empty_log() -> crate::evtc::RawLog {
+        crate::evtc::RawLog {
+            header: RawHeader { build: "20260101".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![], events: vec![], guid_map: vec![],
+        }
+    }
+    /// A plain (non-statechange) row registering `addr` under `instid`,
+    /// which is all `InstidRegistry::instid_of` needs.
+    fn damage_event(addr: u64, instid: u16) -> RawEvent {
+        RawEvent { time: 0, src_agent: addr, dst_agent: 0, value: 1, buff_dmg: 0,
+            overstack: 0, skillid: 1, src_instid: instid, dst_instid: 0,
+            src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
     fn agent(addr: u64, is_elite: u32, name: &[u8]) -> RawAgent {
         RawAgent { addr, prof: 5, is_elite,
@@ -631,7 +723,7 @@ mod tests {
     #[test]
     fn dedupe_enemy_players_collapses_same_account() {
         let mut enemies = vec![player(9, ":Foe.1"), player(10, ":Foe.1"), player(11, ":Bar.2")];
-        dedupe_enemy_players(&mut enemies);
+        dedupe_enemy_players(&mut enemies, &InstidRegistry::build(&empty_log()));
         assert_eq!(enemies.len(), 2);
         let foe = enemies.iter().find(|p| p.account == ":Foe.1").expect("foe present");
         assert_eq!(foe.agent_addr, 9, "representative is first-seen addr");
@@ -654,8 +746,40 @@ mod tests {
         let mut b = player(10, "");
         b.character = "Druid".into(); // same generic spec label, different agent
         let mut enemies = vec![a, b];
-        dedupe_enemy_players(&mut enemies);
+        dedupe_enemy_players(&mut enemies, &InstidRegistry::build(&empty_log()));
         assert_eq!(enemies.len(), 2, "blank-account enemies must stay distinct");
+    }
+
+    /// MINSTID: two anonymised enemy agent rows (blank account, generic
+    /// spec `character`) that share an INSTID are one person and collapse
+    /// into one entry -- GW2EI's non-squad `GroupBy(x => x.InstID)` regroup
+    /// (`AgentManipulationHelper.cs:467-474`). A third agent on a different
+    /// instid stays distinct. This is the case the old account-keyed rule
+    /// could not see at all, since WvW anonymisation blanks every enemy
+    /// account.
+    #[test]
+    fn dedupe_enemy_players_merges_shared_instid_when_accounts_are_blank() {
+        let mut a = player(9, "");
+        a.character = "Druid".into();
+        let mut b = player(10, "");
+        b.character = "Druid".into();
+        let mut c = player(11, "");
+        c.character = "Druid".into();
+        // addrs 9 and 10 both register under instid 7; addr 11 under 8.
+        let mut raw = empty_log();
+        raw.events = vec![
+            damage_event(9, 7),
+            damage_event(10, 7),
+            damage_event(11, 8),
+        ];
+        let mut enemies = vec![a, b, c];
+        dedupe_enemy_players(&mut enemies, &InstidRegistry::build(&raw));
+        assert_eq!(enemies.len(), 2, "same-instid enemy agent rows are one person");
+        assert_eq!(enemies[0].agent_addr, 9, "representative is the first agent row");
+        let mut addrs = enemies[0].agent_addrs.clone();
+        addrs.sort_unstable();
+        assert_eq!(addrs, vec![9, 10], "merged row is the union of its parts");
+        assert_eq!(enemies[1].agent_addrs, vec![11]);
     }
 
     /// Task 2b: a CBTS_IDTOGUID (content type TEAM) mapping attaches a

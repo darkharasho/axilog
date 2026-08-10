@@ -58,9 +58,12 @@ pub struct InstidRegistry {
     /// ever seen under", which is not the same algorithm and could in
     /// principle disagree for an address that several agents recycle, or
     /// for one whose earliest rows carry a stale instid. It agreed with the
-    /// reference export on 44 of 44 players and 43 of 43 instid-joined
-    /// targets, which is the evidence for it -- not a proof that the two
-    /// rules coincide in general.
+    /// reference export on 44 of 44 players and, since MINSTID collapsed the
+    /// enemy roster onto this same instid (so every one of GW2EI's 56
+    /// enemy-player instids joins to exactly one row), 56 of 56 instid-
+    /// joined targets -- 43 of 43 before that, when the 13 duplicated
+    /// instids were ambiguous and unjoinable. That is the evidence for it,
+    /// not a proof that the two rules coincide in general.
     ///
     /// Derived from [`Self::by_instid`] AFTER the scan rather than filled
     /// inside it: the scan runs twice per event on a ~600k-event log, and a

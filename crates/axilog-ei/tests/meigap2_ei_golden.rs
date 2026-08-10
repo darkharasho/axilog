@@ -25,16 +25,18 @@
 //!
 //! Same M16 pattern `meigap_ei_golden.rs`'s `statsTargets` test
 //! established. Post-MROSTER the two rosters agree in KIND (both are the
-//! enemy players; see `axilog_schema::Report::ei_targets`), but the join
-//! still cannot be positional: GW2EI regroups enemy-player agents sharing
-//! an `InstID` (`AgentManipulationHelper.cs:467-474`) and this project does
-//! not, so it emits 71 rows where GW2EI has 56, and the NAME spaces do not
-//! intersect either (GW2EI anonymises to `"<Spec> pl-<instid>"`, this
-//! project shows the WvW rank title). The join therefore goes through
-//! arcdps AGENT IDENTITY -- the instid GW2EI encodes into that placeholder
-//! name -> the addr that instid belonged to -> this project's `targets[]`
-//! index. Only the unambiguously joinable targets are calibratable; they
-//! are asserted, the rest are not compared.
+//! enemy players; see `axilog_schema::Report::ei_targets`) and post-MINSTID
+//! they agree in GRANULARITY too (both regroup enemy-player agents sharing
+//! an `InstID`, `AgentManipulationHelper.cs:467-474` /
+//! `axilog_core::wvw::dedupe_enemy_players`): 56 rows against 56, over the
+//! same 56 instids. The join still cannot be positional, because the NAME
+//! spaces do not intersect (GW2EI anonymises to `"<Spec> pl-<instid>"`,
+//! this project shows the WvW rank title) and neither side promises an
+//! order. It therefore goes through arcdps AGENT IDENTITY -- the instid
+//! GW2EI encodes into that placeholder name -> the addr that instid
+//! belonged to -> this project's `targets[]` index. Only unambiguously
+//! joinable targets are calibratable; MINSTID took that from 43 of 56 to
+//! all 56, since an instid no longer resolves to two of our rows.
 
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::decode_raw;
@@ -383,10 +385,46 @@ fn ei_json_target_power_damage_1s_matches_the_reference_export_when_available() 
 
 /// Per-enemy OUTGOING series, both the `All` and the `Power` variant, whole
 /// series, on every joined target.
+///
+/// ## MINSTID: the join grew from 43 targets to all 56, and what that
+/// uncovered
+///
+/// `render_and_reference`'s join only accepts an instid that resolves to
+/// exactly ONE of our `targets[]` rows. Before MINSTID this project emitted
+/// 71 rows over 56 instids, so the 13 instids carrying two agent rows each
+/// were AMBIGUOUS and silently skipped -- this test only ever compared the
+/// 43 single-row targets. MINSTID collapses those rows the way GW2EI does
+/// (`wvw::dedupe_enemy_players`), so all 56 targets now join and are
+/// compared here for the first time.
+///
+/// 10 of the 13 newly-joined targets are byte-exact against the reference
+/// on both series, which is the direct evidence that the merge reproduces
+/// EI's regroup: the merged row equals EI's merged person, not one of its
+/// halves.
+///
+/// [`RESIDUAL_INSTIDS`] are the other 3. Their divergence is NOT introduced
+/// by the merge -- each merged series was verified to be the exact sum of
+/// its pre-merge parts, and those parts are untouched by MINSTID; the merge
+/// only made an already-divergent value visible to this join for the first
+/// time. The diagnosed cause is damage CREDIT, not identity: on instid 3954
+/// (the worst, |delta| 364694) the reference's whole-log total, 37653, is
+/// exactly this project's two parts' DIRECT damage (2927 + 34726), i.e. the
+/// reference does not credit that person with the ~364k of non-direct
+/// (minion/credited) damage this project folds onto them, while this
+/// project's row is otherwise identical. That credit rule is a separate
+/// gap, out of MINSTID's scope, and is tracked by this allowlist: the test
+/// asserts the residual set is EXACTLY these three, so any regression that
+/// widens it -- or any fix that narrows it, which should shrink this list
+/// -- fails here.
 #[test]
 fn ei_json_target_series_match_the_reference_export_when_available() {
+    /// Joined targets whose series are knowingly not exact -- see this
+    /// test's doc comment. Keyed by `instanceID` (stable across roster
+    /// re-indexing) rather than by array position.
+    const RESIDUAL_INSTIDS: &[i64] = &[3483, 3954, 4952];
+
     let Some(c) = render_and_reference("ei-json targets[].damage1S") else { return };
-    assert!(c.joinable.len() >= 40, "expected >= 40 joinable targets, got {}", c.joinable.len());
+    assert!(c.joinable.len() >= 55, "expected >= 55 joinable targets, got {}", c.joinable.len());
     let (o_t, g_t) = (&c.ours["targets"], &c.golden["targets"]);
 
     let mut buckets = 0usize;
@@ -394,8 +432,11 @@ fn ei_json_target_series_match_the_reference_export_when_available() {
     let mut mismatched = 0usize;
     let mut worst_abs = 0i64;
     let mut failures: Vec<String> = Vec::new();
+    let mut residual_seen: BTreeSet<i64> = BTreeSet::new();
 
     for &(o_i, g_i) in &c.joinable {
+        let instid = o_t[o_i]["instanceID"].as_i64().expect("instanceID");
+        let residual = RESIDUAL_INSTIDS.contains(&instid);
         for field in ["damage1S", "powerDamage1S"] {
             let (ov, gv) = (phase0(&o_t[o_i][field]), phase0(&g_t[g_i][field]));
             if ov.len() != gv.len() {
@@ -416,11 +457,16 @@ fn ei_json_target_series_match_the_reference_export_when_available() {
                     nonzero += 1;
                 }
                 if a != b {
+                    if residual {
+                        residual_seen.insert(instid);
+                        continue;
+                    }
                     mismatched += 1;
                     worst_abs = worst_abs.max((a - b).abs());
                     if failures.len() < 25 {
                         failures.push(format!(
-                            "targets[our {o_i} / ref {g_i}].{field}[{i}]: ours={a} reference={b}"
+                            "targets[our {o_i} / ref {g_i}, instid {instid}].{field}[{i}]: \
+                             ours={a} reference={b}"
                         ));
                     }
                 }
@@ -434,10 +480,18 @@ fn ei_json_target_series_match_the_reference_export_when_available() {
         "{mismatched} targets[] series mismatch(es) (worst |delta| {worst_abs}):\n{}",
         failures.join("\n")
     );
+    // The allowlist is a measurement, not a licence: an entry that stops
+    // diverging must be removed from it, or it silently protects nothing.
+    let expected: BTreeSet<i64> = RESIDUAL_INSTIDS.iter().copied().collect();
+    assert_eq!(
+        residual_seen, expected,
+        "RESIDUAL_INSTIDS is stale: these instids no longer diverge and must be removed"
+    );
     println!(
         "ei_json_target_series: {buckets} buckets EXACT ({nonzero} nonzero) across {} joined \
-         targets x 2 fields",
-        c.joinable.len()
+         targets x 2 fields, minus {} allowlisted residual targets",
+        c.joinable.len(),
+        RESIDUAL_INSTIDS.len()
     );
 }
 
@@ -617,26 +671,29 @@ fn ei_json_target_damage_dist_matches_the_reference_export_when_available() {
 /// filter of its own and simply trusts the roster) gets the exact numbers
 /// without having to know to restrict.
 ///
-/// ## The one residual, and its diagnosis
+/// ## The one residual, and how MINSTID closed it
 ///
-/// The min-mean still differs on 16 of 206 ids. That is NOT roster kind --
-/// it is roster GRANULARITY, and the cause is pinned rather than guessed:
-/// GW2EI regroups non-squad player agents that share an `InstID` into ONE
-/// agent before building targets (`AgentManipulationHelper.cs:467-474`),
-/// so its 56 enemy-player targets are 56 *people*. This project does not
-/// (`wvw::apply`'s `dedupe_enemy_players` keys on ACCOUNT, which WvW
-/// anonymisation leaves empty for enemies), so it emits 71 rows over the
-/// same 56 instids -- 13 instids carry 2 agent rows each. `minCount` counts
-/// rows, so each split person contributes two minima where EI contributes
-/// one.
+/// Through MROSTER the min-mean still differed on 16 of 206 ids. That was
+/// NOT roster kind -- it was roster GRANULARITY, and the cause was pinned
+/// rather than guessed: GW2EI regroups non-squad player agents that share
+/// an `InstID` into ONE agent before building targets
+/// (`AgentManipulationHelper.cs:467-474`), so its 56 enemy-player targets
+/// are 56 *people*. This project did not (`wvw::apply`'s
+/// `dedupe_enemy_players` keyed on ACCOUNT, which WvW anonymisation leaves
+/// empty for enemies), so it emitted 71 rows over the same 56 instids -- 13
+/// instids carrying 2 agent rows each. `minCount` counts ROWS, so each
+/// split person contributed two minima where EI contributes one.
 ///
-/// Measured directly: folding this project's own emitted `targets[]` with
-/// the rows of same-`instanceID` targets merged first (`min` of the mins,
-/// sums of the sums) takes the min-mean divergence from **16 to 1**. So the
-/// `InstID` regroup accounts for 15 of the 16, and is the whole of the
-/// remaining follow-up. It is deliberately out of MROSTER's scope because
-/// it is an agent-IDENTITY change in the core, not a roster-CURATION change
-/// in the adapter: it would move the native `enemies[]` surface too.
+/// MINSTID rekeyed that dedupe on instid (GW2EI's rule verbatim, see
+/// `axilog_core::wvw::dedupe_enemy_players`). The roster is now 56 rows
+/// over EI's exact 56 instids, and the residual measured here went **16 ->
+/// 0**: every one of the 206 shared ids now agrees on the min-mean too, so
+/// the whole aggregate -- `totalDamage`, `connectedHits`, `avg` AND the
+/// min-mean -- is exact, on both folds. (The prediction from the merged-row
+/// simulation was 1; merging for real also fixed the last one, because the
+/// simulation could only merge the EXPORTED rows, not the underlying
+/// per-agent minima.) The bound below is kept as a ratchet rather than
+/// deleted.
 #[test]
 fn ei_json_enemy_skill_aggregate_residual_is_measured_and_bounded() {
     let Some(c) = render_and_reference("ei-json enemy-skill consumer aggregate") else { return };
@@ -779,12 +836,11 @@ fn ei_json_enemy_skill_aggregate_residual_is_measured_and_bounded() {
     );
     assert!(p_shared >= 150);
 
-    // --- The one measured residual: the `InstID`-regroup gap, pinned (with
-    // --- margin) so it cannot widen unnoticed while that follow-up is
-    // --- open. See this test's doc comment for the 16-to-1 measurement
-    // --- that attributes it.
-    assert!(
-        a_mm <= AGGREGATE_MIN_MEAN_DIFF_BOUND,
+    // --- Formerly the one measured residual (the `InstID`-regroup gap),
+    // --- driven to ZERO by MINSTID. Kept as a ratchet at the measured
+    // --- value so a regrouping regression cannot reintroduce it quietly.
+    assert_eq!(
+        a_mm, AGGREGATE_MIN_MEAN_DIFF_BOUND,
         "{a_mm} shared ids differ on the min-mean, past the pinned \
          {AGGREGATE_MIN_MEAN_DIFF_BOUND}"
     );
@@ -792,16 +848,15 @@ fn ei_json_enemy_skill_aggregate_residual_is_measured_and_bounded() {
 }
 
 /// Shared ids whose `min = minTotal / minCount` differs from the
-/// reference's. `minCount` counts ROWS, so this is the one part of the
-/// aggregate still sensitive to the `InstID`-regroup gap
-/// (`AgentManipulationHelper.cs:467-474`): 13 of our 71 enemy-player rows
-/// are second agents for an instid EI folds into one target, so 13 people
-/// contribute two minima each. Was 21 on the pre-MROSTER 624-agent roster;
-/// measured 16 now, and 1 if the same-`instanceID` rows are merged before
-/// folding. Pinned at 24 -- deliberately NOT tightened to 16, so that
-/// closing the regroup follow-up (which will drive it to ~1) does not have
-/// to touch this bound.
-const AGGREGATE_MIN_MEAN_DIFF_BOUND: usize = 24;
+/// reference's. `minCount` counts ROWS, so this was the one part of the
+/// aggregate sensitive to the `InstID`-regroup gap
+/// (`AgentManipulationHelper.cs:467-474`): 13 of the old 71 enemy-player
+/// rows were second agents for an instid EI folds into one target, so 13
+/// people contributed two minima each. 21 on the pre-MROSTER 624-agent
+/// roster, 16 after MROSTER, and **0 after MINSTID** rekeyed the enemy
+/// dedupe on instid. Pinned at 0: the gap is closed, so any reappearance is
+/// a regression, not a known residual.
+const AGGREGATE_MIN_MEAN_DIFF_BOUND: usize = 0;
 
 /// MEIGAP Task 2 review fix 3: `players[].damage1S` -- the family the grid
 /// fix swept through -- gets its own bounded whole-series calibration, so it

@@ -109,16 +109,16 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   targets[].totalDamageDist / targets[].damage1S mirrors, and powerDamageTaken1S. Mostly
   adapter mapping over existing native data. When closed, axibridge flips its parser default
   from elite-insights to axilog (toggle already shipped).
+- MINSTID Enemy-player instid regroup (DONE): `wvw::dedupe_enemy_players` now keys on INSTID,
+  GW2EI's own non-squad rule (`AgentManipulationHelper.cs:467-474`), instead of the ACCOUNT that
+  WvW anonymization leaves empty. Native `enemies[]` 140 -> 125 rows (71 -> 56 enemy players),
+  ei-json `targets[]` 71 -> 56 over EI's exact 56 instids, and the mitigation min-mean residual
+  went 16/206 -> 0/206. Every merged row was verified to be the sum/union of its parts; the
+  instid-joined calibrations widened from 43 targets to all 56, which exposed 3 pre-existing
+  damage-CREDIT divergences (allowlisted + diagnosed in `meigap2_ei_golden`) as the one
+  follow-up.
 
 ## Queued (autonomous — next session)
-- MINSTID Enemy-player instid regroup: `wvw::apply`'s `dedupe_enemy_players` keys on ACCOUNT,
-  which WvW anonymization leaves empty for enemies, so 13 instids carry 2 agent rows each on the
-  reference log (71 emitted enemy rows vs GW2EI's 56). GW2EI regroups by InstID first
-  (`AgentManipulationHelper.cs:467-474`). Fixing it: closes the last mitigation min-mean residual
-  (16/206 -> 1), takes the ei-json roster to EI's own count, and corrects the "enemies in the
-  fight" number eight axibridge sites display. NOTE: it changes agent identity in the core, so it
-  MOVES the native `enemies[]` surface (71 -> 56 on the real log) — needs the moved-output
-  discipline (cell-by-cell justification) and a re-run of every enemy-keyed calibration.
 - MOBJ wvWMapData objectives: the last whole EI feature surface axilog doesn't emit
   (shard/team ids + GADGETCAPTURE-derived objective ownership timelines; reference shape verified
   — 13 entries on the local export, `{mapID, objectiveID, objectiveType, owners:[[team,time]]}`).
