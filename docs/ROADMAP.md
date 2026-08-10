@@ -76,6 +76,14 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   all facts source-verified, zero dead links). axilog README de-staled (registries live,
   M11 down-contribution row, Later list).
 
+- MBUFFSIM COMPLETE (merged 2f25110, reviewed SHIP): isolate-first diagnosis OVERTURNED the
+  premise — simulator.rs was faithful; the real rules were event-pipeline (natural-expiry
+  removal drop + conditional-loss RemovedDuration rewrite, both ported clause-exact). Stability
+  allowlist 7→0 with teeth; avg-stack tolerance 0.05→0.005 (10x); modifier rows 682→779 exact;
+  0 previously-exact cells disturbed. Deferred (ledgered in-repo): Regeneration/HealingLogic
+  (4800x inside tolerance), PRESENCE_TOLERANCE_PP tighten (~0.05pp), boons_golden
+  LOCAL_FIXTURE_PATH env-var migration, OffsetBuffExtensionEvents, duration-graph-value latent.
+
 ## Queued (autonomous — build in order; reorder only for dependency)
 - M16 Damage modifiers COMPLETE (merged 1545930, reviewed SHIP): EiInputs refactor; GW2EI-cited
   engine (10 GainComputers, AlwaysMaster); 205-definition catalog regenerable from GW2EI source
@@ -85,12 +93,6 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   simulator-side -> MBUFFSIM); 69/69 damageModMap identical; 207/207 + 1,978/1,978 rows
   text-identical. NOTE for next MDOCS touch: /axilog/accuracy on the wiki needs a damage-modifier
   row (coverage + bounded-class statement).
-- MBUFFSIM Buff-simulator fidelity: GW2EI's NoID duration simulator has THREE stacking logics
-  (Queue / Healing-Regeneration / ForceOverride) + StackingConditionalLoss eviction; axilog has
-  two models (M3). First-measured on non-boon buffs by M16's calibration (worst residuals:
-  Might-25 saturation d422, Stability eviction ids, Force-override d312/d369 — mechanism not yet
-  isolated). Closing this flips M16's buff-gated rows toward EXACT and may shrink the M3
-  Stability allowlist.
 - MATTRIB Orphaned-instid attribution repair: rows with agent addr 0 but live instid are
   silently dropped by addr-keyed sets in damage/hit_stats/defenses/skill_damage (GW2EI repairs
   via orphaned-instid rewrite, EvtcParser.cs:1207-1243, ±300ms aware-window bound). Fixed
