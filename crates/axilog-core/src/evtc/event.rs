@@ -288,6 +288,27 @@ pub mod sc {
     /// 5-9 `simulator::capacity_for` previously assumed -- see
     /// `analysis::buffs::events::extract_buff_capacities`.
     pub const BUFF_INFO: u8 = 30;
+    /// `CBTS_STACKACTIVE` -- "a buff stack became the active one".
+    /// Cross-checked against GW2EI's `ArcDPSEnums.StateChange.StackActive
+    /// = 27` (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:287`). GW2EI's
+    /// `BuffStackActiveEvent` reads its stack instance id from `DstAgent`
+    /// (NOT `pad`, unlike every other buff event -- `BuffStacks/
+    /// BuffStackActiveEvent.cs:10`).
+    ///
+    /// This project does not simulate activation (`BuffStackActiveEvent.
+    /// IsBuffSimulatorCompliant` is `false` in the NoID family for
+    /// everything except Regeneration, whose `HealingLogic` is a deferred
+    /// MBUFFSIM follow-up). It IS consumed for two things:
+    /// `CombatData.HasStackIDs` (`ParsedData/CombatData.cs:610`, the gate on
+    /// the `StackingConditionalLoss` band aid) and that band aid's own
+    /// `totalDuration` reconstruction (`EIData/Buffs/BuffsContainer.cs:230-234`).
+    pub const STACK_ACTIVE: u8 = 27;
+    /// `CBTS_STACKRESET`, GW2EI's `StackDeactive = 28`
+    /// (`ArcDPSEnums.cs:288`, "Formerly as StackReset"). Instance id in
+    /// `pad`, reset-to duration in `value`
+    /// (`BuffStacks/BuffStackDeactiveEvent.cs:8-12`). Consumed only by
+    /// `CombatData.HasStackIDs` here -- see [`STACK_ACTIVE`].
+    pub const STACK_DEACTIVE: u8 = 28;
     /// Cast-animation START statechange (M4 Task 2, `support::apply`'s
     /// resurrect-cast detection). Verified against the live arcdps EVTC
     /// reference (`curl https://www.deltaconnected.com/arcdps/evtc/README.txt`,
@@ -646,6 +667,22 @@ pub mod buff_remove {
     /// BuffRemoves/BuffRemoveManualEvent.cs`); `analysis::buffs` mirrors
     /// this by not extracting Manual removals as simulator events at all.
     pub const MANUAL: u8 = 3;
+}
+
+/// `iff` enum values (arcdps `enum iff`). Verified against GW2EI's
+/// `ArcDPSEnums.IFF` (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:618-624`):
+/// `Friend = 0, Foe = 1, Unknown` (i.e. `2`; the enum's last member is
+/// implicitly `Foe + 1`), with `ArcDPSEnums.GetIFF` clamping anything else
+/// to `Unknown`.
+pub mod iff {
+    pub const FRIEND: u8 = 0;
+    pub const FOE: u8 = 1;
+    /// arcdps could not attribute the event to a friend or a foe. On a
+    /// `BuffRemove.Single` row this is half of GW2EI's
+    /// `BuffRemoveSingleEvent.OverstackOrNaturalEnd` test (the other half
+    /// being `dst_agent == 0`) -- see `analysis::buffs::events`'s
+    /// `is_overstack_or_natural_end`.
+    pub const UNKNOWN: u8 = 2;
 }
 pub mod result {
     // combat result values (`enum cbtresult`) -- verified by hand-counting

@@ -27,8 +27,44 @@ use axilog_core::evtc::{anon_account, decode_raw};
 use axilog_core::model::resolve;
 use std::collections::HashMap;
 
+/// Duration-boon presence, and intensity-boon presence: percentage points.
+///
+/// M3's brief set this at 2pp and it has never been approached. Measured
+/// worst cell after MBUFFSIM: **0.000500pp** (Quickness), i.e. 4000x inside
+/// the bound. Deliberately NOT tightened to match: unlike the average-stack
+/// integral, presence is a step-function boundary quantity, so a log with a
+/// different event cadence (a raid boss rather than this WvW capture, or the
+/// pre-rework era) can legitimately land further out without anything being
+/// wrong. The average-stack tolerance below is the one MBUFFSIM earned the
+/// right to tighten, because its residual has a named, now-eliminated cause.
 const PRESENCE_TOLERANCE_PP: f64 = 2.0;
-const INTENSITY_STACK_RELATIVE_TOLERANCE: f64 = 0.05; // 5%
+
+/// Intensity-boon average stacks: relative error.
+///
+/// **MBUFFSIM tightened this from `0.05` (5%) to `0.005` (0.5%).** M3 chose
+/// 5% because Stability could not do better -- seven cells sat at 0.064-0.098
+/// and had to be allowlisted (see [`INTENSITY_STACK_ALLOWLIST`]). Porting
+/// GW2EI's `BuffsContainer.cs:196-252` band aid removed that cause entirely.
+/// Measured on this fixture after MBUFFSIM:
+///
+/// Measured over ALL 37 cells per boon (not just the formerly-allowlisted
+/// ones -- an early draft of this note quoted 0.000075 for Stability, which
+/// was the max over those seven cells only and understated the real worst by
+/// 6x):
+///
+/// | | worst cell | mean |
+/// |---|---|---|
+/// | Might | 0.000558 (`a133`) | 0.000035 |
+/// | Stability | 0.000476 (`a133`) | 0.000066 |
+///
+/// `0.005` keeps a **~9x margin** over the worst cell in the fixture while
+/// being **10x** tighter than the old bound (0.05 -> 0.005). Separately: the
+/// OLD bound sat ~90x above that worst cell, which is exactly how the defect
+/// MBUFFSIM fixed (Stability at 0.06+, Might at 0.0073) passed silently for
+/// two milestones. It is set from the measurement WITH margin, not clamped to
+/// it: a bound equal to the worst observed value is a bound that fails on the
+/// next log.
+const INTENSITY_STACK_RELATIVE_TOLERANCE: f64 = 0.005;
 
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
@@ -38,56 +74,48 @@ const LOCAL_FIXTURE_PATH: &str = concat!(
 );
 const GOLDEN_JSON_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.ei.json");
 
-/// Cells that genuinely cannot meet the 5% relative intensity-avg-stacks
-/// tolerance after exhausting systematic causes (see the M3 Task 2 report
-/// for the full investigation). All 7 are Stability (`STABILITY == 1122`)
-/// specifically -- never Might, never any duration boon, never intensity
-/// PRESENCE (which matches within ~0.01pp on every single player for both
-/// Might and Stability). Root cause: GW2EI's `CommonBuffs.cs` types
-/// Stability as `BuffStackType.StackingConditionalLoss`, a stack type
-/// whose real in-game mechanic is "lose 1 stack of Stability instead of
-/// being crowd-controlled" -- but this project's simulator (Task 1,
-/// deliberately, and reconfirmed here) treats it identically to Might's
-/// plain `BuffStackType.Stacking` (same `OverrideLogic`/replace-lowest
-/// eviction, no CC-triggered loss). Directly verified this is the gap,
-/// not a bug in this task's own work: (1) exhaustively re-verified every
-/// other simulator rule (capacity, eviction, expiry, removal-matching,
-/// extension routing) against GW2EI source and found zero further
-/// deviations -- intensity PRESENCE (which does NOT depend on stack
-/// *count*, only "was anything held") matches EI to within ~0.01pp on
-/// every single one of these same players/boons, proving the underlying
-/// apply/remove event extraction and active/inactive windows are exactly
-/// right; only the concurrent-stack-count integral is inflated. (2)
-/// checked the worst offender (`Anon123.5551`) for `CBTS_CROWD_CONTROL`
-/// (`result::CROWD_CONTROL`) events during the fight and found ZERO --
-/// they were never crowd-controlled at all, so even a from-scratch
-/// implementation of "lose 1 stack per CC" would not explain this
-/// specific player's overcount, meaning the real mechanism is some
-/// further GW2EI-internal nuance of `StackingConditionalLoss` this
-/// project did not have enough signal to reverse-engineer with
-/// confidence. (3) grep'd the full GW2EI source tree for any
-/// `StackingConditionalLoss`-specific branch in the buff-stack simulator
-/// itself (`BuffSimulator`/`OverrideLogic`/`ForceOverrideLogic`/
-/// `AbstractBuffSimulator`) and found NONE -- the hardcoded simulator
-/// treats `StackingConditionalLoss` and `Stacking` identically, so the
-/// real GW2EI-vs-here divergence must come from arcdps-side data this
-/// project doesn't have visibility into (an undocumented CBTS_BUFFREMOVE
-/// or CBTS_BUFFDEACTIVE pattern specific to this stack type that the
-/// hand-traced event dumps for these 7 cells didn't reveal a matchable
-/// rule for). This is one more than the brief's suggested "≤5 cells"
-/// ceiling; documented transparently here rather than allowlisting fewer
-/// cells by cutting the investigation short or fabricating an unverified
-/// rule -- see the Task 2 report for the full per-cell trace.
-const INTENSITY_STACK_ALLOWLIST: &[(&str, u32)] = &[
-    ("Anon123.5551", axilog_core::analysis::buffs::STABILITY),
-    ("Anon119.5403", axilog_core::analysis::buffs::STABILITY),
-    ("Anon105.4885", axilog_core::analysis::buffs::STABILITY),
-    ("Anon150.6550", axilog_core::analysis::buffs::STABILITY),
-    ("Anon117.5329", axilog_core::analysis::buffs::STABILITY),
-    ("Anon171.7327", axilog_core::analysis::buffs::STABILITY),
-    ("Anon166.7142", axilog_core::analysis::buffs::STABILITY),
-];
-
+/// Cells that cannot meet the 5% relative intensity-avg-stacks tolerance.
+///
+/// **EMPTY as of MBUFFSIM Task 2.** M3 Task 2 shipped seven entries here,
+/// all Stability (`STABILITY == 1122`), all on the average-stack integral
+/// (never presence, never Might, never a duration boon). M3 correctly
+/// diagnosed the FAMILY -- GW2EI types Stability as
+/// `BuffStackType.StackingConditionalLoss` -- and correctly established
+/// that the divergence is NOT in the stack simulator (it grep'd
+/// `BuffSimulator`/`OverrideLogic`/`ForceOverrideLogic` for a
+/// conditional-loss branch and found none, which is right: GW2EI's
+/// `BuffSimulator.cs:35-39` maps `StackingConditionalLoss` and `Stacking`
+/// to the same `_overrideLogic`). What it could not find was the actual
+/// rule, and it guessed the cause was arcdps-side data this project cannot
+/// see. It was not: the rule is
+/// `GW2EIEvtcParser/EIData/Buffs/BuffsContainer.cs:196-252`, GW2EI's "band
+/// aid for the stack type situation with fake inactive/infinite durations",
+/// which rewrites a conditional-loss strip's `RemovedDuration` from the
+/// stack's ORIGINAL applied duration to its REMAINING duration before the
+/// simulator's 15ms match ever runs. Ported in
+/// `analysis::buffs::events::apply_conditional_loss_band_aid`.
+///
+/// Measured on this fixture, mean relative Stability average-stack error
+/// against the EI golden: **0.031969 -> 0.000066**, and each of the seven
+/// formerly-allowlisted cells individually:
+///
+/// | cell | before | after |
+/// |---|---|---|
+/// | a105 | 0.074670 | 0.000041 |
+/// | a117 | 0.067951 | 0.000074 |
+/// | a119 | 0.096168 | 0.000075 |
+/// | a123 | 0.098174 | 0.000034 |
+/// | a150 | 0.068835 | 0.000034 |
+/// | a166 | 0.064276 | 0.000020 |
+/// | a171 | 0.065096 | 0.000045 |
+///
+/// The worst average-stack cell in the whole fixture is now 0.000558
+/// (Might), ~9x inside the (since-tightened, 0.005) tolerance -- it was 90x
+/// inside the 0.05 bound this shipped with, which is why that bound was
+/// tightened too. Keep this list EMPTY:
+/// `allowlist_is_empty_and_unused` fails if an entry is added back without
+/// a cell that actually needs it.
+const INTENSITY_STACK_ALLOWLIST: &[(&str, u32)] = &[];
 fn read_local_fixture_or_skip(test_name: &str) -> Option<Vec<u8>> {
     match std::fs::read(LOCAL_FIXTURE_PATH) {
         Ok(b) => Some(b),
@@ -226,9 +254,46 @@ fn check_boon_uptimes_match_ei_golden(bytes: &[u8], golden: &serde_json::Value) 
         );
     }
 
+    // MBUFFSIM Task 2: the allowlist is empty, and this asserts it STAYS
+    // earned rather than merely declared -- an entry that no longer
+    // suppresses a real mismatch is dead weight that would silently absorb
+    // a future regression.
+    let used: Vec<&(&str, u32)> = INTENSITY_STACK_ALLOWLIST
+        .iter()
+        .filter(|(acct, boon)| {
+            // Match on the FULL allowlist key. `Mismatch` carries the boon's
+            // display name rather than its id, so map the id back through
+            // `BOON_IDS` -- comparing on the account alone (as this check
+            // first did) would let an entry for the wrong boon look "used".
+            let boon_name = BOON_IDS.iter().find(|(id, ..)| id == boon).map(|(_, n, _)| *n);
+            mismatches.iter().any(|m| {
+                m.allowlisted && m.account == *acct && Some(m.boon) == boon_name
+            })
+        })
+        .collect();
+    assert_eq!(
+        used.len(),
+        INTENSITY_STACK_ALLOWLIST.len(),
+        "INTENSITY_STACK_ALLOWLIST has {} entry(ies) that suppress nothing -- remove them",
+        INTENSITY_STACK_ALLOWLIST.len() - used.len()
+    );
+
     println!(
         "boon_uptimes_match_ei_golden: {checked} cells checked across {joined} joined players, \
          0 hard failures ({allowlisted_count} allowlisted per INTENSITY_STACK_ALLOWLIST)"
+    );
+}
+
+/// MBUFFSIM Task 2 pinned the `StackingConditionalLoss` allowlist shut. If
+/// a future change needs it re-opened, that is a deliberate act with a
+/// documented cause, not an accident.
+#[test]
+fn allowlist_is_empty_and_unused() {
+    assert!(
+        INTENSITY_STACK_ALLOWLIST.is_empty(),
+        "the Stability avg-stack allowlist was emptied by MBUFFSIM Task 2 (the \
+         `BuffsContainer.cs:196-252` band aid); re-adding an entry means a real \
+         regression -- document the cause before changing this test"
     );
 }
 

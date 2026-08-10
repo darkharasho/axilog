@@ -20,6 +20,112 @@ pub mod uptime;
 pub use generation::GenerationStats;
 pub use uptime::BoonUptime;
 
+/// GW2EI's `ArcDPSEnums.BuffStackType`
+/// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:384-393`) -- a property of
+/// the BUFF, and the key GW2EI's `BuffSimulator` ctor dispatches its
+/// stacking logic on (`EIData/Buffs/BuffSimulators/BuffSimulatorNoID/
+/// BuffSimulator.cs:24-43`).
+///
+/// MBUFFSIM Task 2 promoted this from the single `intensity: bool` the M16
+/// catalog carried, because rule 2 (the `RemovedDuration` band aid,
+/// `EIData/Buffs/BuffsContainer.cs:196-252`) gates on
+/// `StackingConditionalLoss` vs `Stacking` SPECIFICALLY -- a distinction a
+/// bool cannot express, even though the two share a simulator and a
+/// stacking logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuffStackType {
+    /// -> `QueueLogic` + `BuffSimulatorDuration`.
+    Queue,
+    /// -> `HealingLogic` + `BuffSimulatorDuration`. Only Regeneration.
+    /// **Not yet implemented** -- this project simulates it as [`Queue`];
+    /// see the MBUFFSIM Task 1 report's "secondary findings" for the
+    /// measured (sub-0.01pp) cost and the deferred follow-up.
+    ///
+    /// [`Queue`]: BuffStackType::Queue
+    Regeneration,
+    /// -> `ForceOverrideLogic` + `BuffSimulatorDuration`. Capacity is
+    /// effectively 1 regardless of the catalogued/reported value
+    /// (`ForceOverrideLogic.IsFull => stacks.Count == 1`).
+    Force,
+    /// -> `OverrideLogic` + `BuffSimulatorIntensity`.
+    Stacking,
+    /// -> `OverrideLogic` + `BuffSimulatorIntensity` (identical simulation
+    /// to [`Stacking`]; the distinction is upstream, in `BuffDictionary`/
+    /// `BuffsContainer` pre-processing).
+    ///
+    /// [`Stacking`]: BuffStackType::Stacking
+    StackingUniquePerSrc,
+    /// -> `OverrideLogic` + `BuffSimulatorIntensity`. "the same thing as
+    /// Stacking but individual stacks can be removed" (`ArcDPSEnums.cs:386`).
+    /// The only stack type the `RemovedDuration` band aid applies to
+    /// unconditionally.
+    StackingConditionalLoss,
+}
+
+impl BuffStackType {
+    /// `Buff.Type == BuffType.Intensity` (`EIData/Buffs/Buff.cs:45-56`):
+    /// which of the two `BuffSimulatorNoID` classes simulates it.
+    pub fn is_intensity(self) -> bool {
+        matches!(
+            self,
+            BuffStackType::Stacking
+                | BuffStackType::StackingUniquePerSrc
+                | BuffStackType::StackingConditionalLoss
+        )
+    }
+
+    /// Whether the `StackingConditionalLoss` `RemovedDuration` band aid
+    /// (`BuffsContainer.cs:198-199`) considers this stack type at all, and
+    /// if so whether it applies to EVERY real removal
+    /// (`StackingConditionalLoss`) or only to those reporting
+    /// `RemovedDuration == int.MaxValue` (`Stacking` /
+    /// `StackingUniquePerSrc`).
+    ///
+    /// Returns `None` for the duration stack types, which the band aid's
+    /// `stackTypeBuffs` filter excludes outright.
+    pub fn band_aid_scope(self) -> Option<BandAidScope> {
+        match self {
+            BuffStackType::StackingConditionalLoss => Some(BandAidScope::EveryRealRemoval),
+            BuffStackType::Stacking | BuffStackType::StackingUniquePerSrc => {
+                Some(BandAidScope::OnlyInfiniteRemovedDuration)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// See [`BuffStackType::band_aid_scope`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BandAidScope {
+    /// `x.StackType == BuffStackType.StackingConditionalLoss` satisfies
+    /// `BuffsContainer.cs`'s `(buff.StackType == ... || x.RemovedDuration ==
+    /// int.MaxValue)` disjunction on its own.
+    EveryRealRemoval,
+    /// Only removals whose `RemovedDuration` is the "infinite duration"
+    /// sentinel qualify.
+    OnlyInfiniteRemovedDuration,
+}
+
+/// GW2EI's `int.MaxValue` "infinite duration" sentinel, as it arrives in
+/// this project's `u32` `removed_duration_ms` (`RawEvent::value` is `i32`
+/// and is clamped with `.max(0)` on extraction, so the sentinel survives
+/// unchanged). See [`BandAidScope::OnlyInfiniteRemovedDuration`].
+pub const INFINITE_REMOVED_DURATION_MS: u32 = i32::MAX as u32;
+
+/// The [`BuffStackType`] of a buff id, from the transcribed GW2EI buff
+/// catalog.
+///
+/// **Layering note (MBUFFSIM Task 2, ledgered follow-up):** the table lives
+/// in `analysis::damage_mods::catalog::buff_stack` because M16 needed it
+/// first. It is really a property of the BUFF, shared by both consumers, so
+/// it wants hoisting to a crate-level buff catalog; that refactor is
+/// deliberately out of Task 2's scope (it would churn M16's calibrated
+/// surface for no measurable gain). This accessor keeps every buff-side
+/// caller pointed at one place in the meantime.
+pub fn stack_type_for(buff_id: u32) -> Option<BuffStackType> {
+    crate::analysis::damage_mods::catalog::buff_stack::stack_info(buff_id).map(|b| b.stack_type)
+}
+
 use crate::evtc::RawLog;
 use crate::model::Encounter;
 use std::collections::{BTreeMap, BTreeSet};

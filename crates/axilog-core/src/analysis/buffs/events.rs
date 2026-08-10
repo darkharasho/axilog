@@ -30,7 +30,7 @@
 //! uptimes, generation) works unchanged regardless of era.
 
 use crate::analysis::damage::InstidRegistry;
-use crate::evtc::{buff_remove, sc, RawLog};
+use crate::evtc::{buff_remove, iff, sc, RawLog};
 use std::collections::BTreeSet;
 
 /// One extracted apply/remove/initial event for a tracked boon.
@@ -58,6 +58,19 @@ pub struct BuffEvent {
     /// Task 1 brief's field-semantics verification scope, and to save a
     /// later "who generated this boon" task (M3) from re-deriving it.
     pub agent: u64,
+    /// GW2EI's `BuffInstance` -- arcdps's per-stack "trackable id"
+    /// (`RawEvent::pad`, the `pad61` field; `0` when the row carries none).
+    /// Added by MBUFFSIM Task 2: `BuffsContainer.cs:206-210` groups a
+    /// buff's events by `(To, BuffInstance)` to pair a removal with the
+    /// apply it removes, which is what the `StackingConditionalLoss`
+    /// `RemovedDuration` band aid needs (see
+    /// [`apply_conditional_loss_band_aid`]).
+    ///
+    /// NOT consumed by `simulator::run` -- this project still uses the NoID
+    /// simulator family exclusively, exactly as GW2EI does
+    /// (`CombatData.cs:611`, `UseBuffInstanceSimulator = false`). The
+    /// instance id is a PRE-PROCESSING input only.
+    pub buff_instance: u32,
     pub kind: BuffEventKind,
 }
 
@@ -113,13 +126,15 @@ pub enum BuffEventKind {
     /// BuffExtensionEvent.cs`. GW2EI additionally runs a per-`BuffInstance`
     /// wall-clock correction (`CombatData.OffsetBuffExtensionEvents` /
     /// `BuffExtensionEvent.OffsetNewDuration`) that adjusts these two
-    /// values before simulating; this project does not decode the
-    /// `BuffInstance` (`pad`) field needed to replicate that correction
-    /// (out of scope, same simplification Task 1 already documented for
-    /// the `pad61`/instance-id fields), so `simulator::run` consumes the
-    /// RAW `extended_ms`/`new_duration_ms` values directly -- see that
-    /// module's `Extend` doc comment for the resulting approximation and
-    /// its calibrated accuracy.
+    /// values before simulating; this project does not implement that
+    /// correction (MBUFFSIM Task 1 measured its cost as below the noise
+    /// floor -- 160 extension events over all 14 calibrated buffs in the
+    /// reference capture -- and Task 2 left it DEFERRED), so
+    /// `simulator::run` consumes the RAW `extended_ms`/`new_duration_ms`
+    /// values directly. The `BuffInstance` (`pad`) field the correction
+    /// keys on IS now decoded ([`BuffEvent::buff_instance`], MBUFFSIM Task
+    /// 2) -- implementing `OffsetNewDuration` is no longer blocked on the
+    /// wire, only unprioritised.
     Extend { extended_ms: u32, new_duration_ms: u32 },
 }
 
@@ -144,6 +159,70 @@ pub fn extract_buff_events(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEv
     extract_buff_events_with_registry(raw, &InstidRegistry::build(raw), boon_ids)
 }
 
+/// GW2EI's `BuffRemoveSingleEvent.OverstackOrNaturalEnd` (MBUFFSIM Task 2,
+/// rule 1) -- `GW2EIEvtcParser/ParsedData/CombatEvents/BuffEvents/
+/// BuffRemoves/BuffRemoveSingleEvent.cs`:
+///
+/// ```csharp
+/// :11   internal bool OverstackOrNaturalEnd =>
+///           (IFF == IFF.Unknown && CreditedBy.IsUnknown && !_byShouldntBeUnknown);
+/// :16   _byShouldntBeUnknown = evtcItem.DstAgent != 0;   // ctor
+/// :26-38 internal override bool IsBuffSimulatorCompliant(bool useBuffInstanceSimulator) {
+///           if (!base.IsBuffSimulatorCompliant(...)) return false;
+///           if (useBuffInstanceSimulator) return true;
+///           return !OverstackOrNaturalEnd;
+///        }
+/// ```
+///
+/// and `GW2EIEvtcParser/EIData/Buffs/BuffDictionary.cs:83-86` drops any
+/// non-compliant event before it ever reaches a simulator. The
+/// `useBuffInstanceSimulator` escape hatch is unreachable: GW2EI hard-codes
+/// `UseBuffInstanceSimulator = false` (`ParsedData/CombatData.cs:611`), so
+/// the NoID family -- and this predicate -- is always the arbiter.
+///
+/// **Three conjuncts reduce to two.** `CreditedBy` derives from `By =
+/// agentData.GetAgent(evtcItem.DstAgent, ...)`
+/// (`AbstractBuffRemoveEvent.cs:72`), and `GetAgent(0, _)` is exactly what
+/// yields the unknown agent -- so `CreditedBy.IsUnknown` is IMPLIED by
+/// `!_byShouldntBeUnknown` (`dst_agent == 0`), not merely correlated with
+/// it. (The converse doesn't hold -- a nonzero addr that isn't in the agent
+/// pool also resolves to unknown -- which is precisely why GW2EI carries
+/// `_byShouldntBeUnknown` separately, per its own ctor comment: "Sometimes
+/// there is a dstAgent value but the agent itself is not in the pool, such
+/// cases should not trigger _overstackOrNaturalEnd".) So the pair below is
+/// EQUIVALENT to the C#, not just sufficient.
+///
+/// Semantically: such a row is arcdps REPORTING that a stack ended on its
+/// own (natural expiry) or was overstacked by a re-application -- nothing
+/// stripped it. The simulator already models that expiry from the apply's
+/// own duration, so replaying the row would strip a stack twice. On the
+/// post-era WvW reference capture, 51863 of 52116 (99.5%) of SINGLE
+/// removals over the calibrated buffs are of this kind; feeding them to the
+/// simulator was the entire cause of MBUFFSIM's classes A, C and D (see
+/// `.superpowers/sdd/2026-08-09-mbuffsim/task-1-report.md`).
+fn is_overstack_or_natural_end(e: &crate::evtc::RawEvent) -> bool {
+    e.dst_agent == 0 && e.iff == iff::UNKNOWN
+}
+
+/// GW2EI's old-format `CombatItem.IsBuffApplyEvent` predicate: the shape a
+/// PRE-era (`is_statechange == 0`) apply-or-extension row has, before
+/// `is_offcycle` routes it to one or the other
+/// (`CombatEventFactory.AddBuffApplyEvent`'s pre-
+/// `BuffAppliesAndRemovesAsStateChanges` branch). Factored out in MBUFFSIM
+/// Task 3 because [`apply_conditional_loss_band_aid`] has to re-derive the
+/// same classification from raw rows, and two hand-copied six-clause
+/// predicates that must agree is a defect waiting to happen. Behaviourally
+/// inert: this is the extractor's own condition verbatim, and the era
+/// -equivalence tests below pin both callers.
+fn is_pre_era_apply_shaped(e: &crate::evtc::RawEvent) -> bool {
+    e.is_statechange == 0
+        && e.buff != 0
+        && e.buff_dmg == 0
+        && e.value > 0
+        && e.is_activation == 0
+        && e.is_buffremove == buff_remove::NONE
+}
+
 /// [`extract_buff_events`] against a caller-supplied, already-built
 /// [`InstidRegistry`] (MPERF Task 2) -- see
 /// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
@@ -152,14 +231,17 @@ pub fn extract_buff_events(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEv
 /// build` is era-agnostic (it scans `src_instid`/`dst_instid`/`*_agent` on
 /// every non-extension row regardless of `is_statechange`), so the pre- and
 /// post-era extractors were already building bit-identical maps. The
-/// `raw`-only wrapper above stays for standalone/test callers.
+/// `raw`-only wrapper ([`extract_buff_events`]) stays for standalone/test
+/// callers.
 pub fn extract_buff_events_with_registry(
     raw: &RawLog,
     registry: &InstidRegistry,
     boon_ids: &BTreeSet<u32>,
 ) -> Vec<BuffEvent> {
     if raw.header.is_post_buff_rework() {
-        return extract_buff_events_post_era(raw, registry, boon_ids);
+        let mut out = extract_buff_events_post_era(raw, registry, boon_ids);
+        apply_conditional_loss_band_aid(raw, boon_ids, &mut out);
+        return out;
     }
     // Master-resolve a (possibly-pet) source addr via its instid's master
     // instid, mirroring `damage::pet_credit_events`'s owner resolution
@@ -188,6 +270,7 @@ pub fn extract_buff_events_with_registry(
                 buff_id: e.skillid,
                 owner: e.dst_agent,
                 agent: resolve_agent(e.src_agent, e.src_master_instid, e.time),
+                buff_instance: e.pad,
                 kind: BuffEventKind::Apply {
                     duration_ms: e.value.max(0) as u32,
                     is_shields: e.is_shields != 0,
@@ -213,18 +296,14 @@ pub fn extract_buff_events_with_registry(
         // from `combatItem.IsBuffApplyEvent()`, gated on `IsStateChange ==
         // Combat` (i.e. `is_statechange == 0`), not from the separate
         // `BuffInitial` statechange dispatch.
-        if e.buff != 0
-            && e.buff_dmg == 0
-            && e.value > 0
-            && e.is_activation == 0
-            && e.is_buffremove == buff_remove::NONE
-        {
+        if is_pre_era_apply_shaped(e) {
             if e.is_offcycle != 0 {
                 out.push(BuffEvent {
                     time: e.time,
                     buff_id: e.skillid,
                     owner: e.dst_agent,
                     agent: resolve_agent(e.src_agent, e.src_master_instid, e.time),
+                    buff_instance: e.pad,
                     kind: BuffEventKind::Extend {
                         extended_ms: e.value.max(0) as u32,
                         new_duration_ms: e.overstack,
@@ -237,6 +316,7 @@ pub fn extract_buff_events_with_registry(
                 buff_id: e.skillid,
                 owner: e.dst_agent,
                 agent: resolve_agent(e.src_agent, e.src_master_instid, e.time),
+                buff_instance: e.pad,
                 kind: BuffEventKind::Apply {
                     duration_ms: e.value as u32,
                     is_shields: e.is_shields != 0,
@@ -257,20 +337,268 @@ pub fn extract_buff_events_with_registry(
                     buff_id: e.skillid,
                     owner: e.src_agent,
                     agent,
+                    buff_instance: e.pad,
                     kind: BuffEventKind::RemoveAll,
                 }),
-                buff_remove::SINGLE => out.push(BuffEvent {
+                // MBUFFSIM Task 2, rule 1: an OverstackOrNaturalEnd row is
+                // arcdps reporting an expiry the simulator already models,
+                // and GW2EI never feeds it to a simulator -- see
+                // `is_overstack_or_natural_end`.
+                buff_remove::SINGLE if !is_overstack_or_natural_end(e) => out.push(BuffEvent {
                     time: e.time,
                     buff_id: e.skillid,
                     owner: e.src_agent,
                     agent,
+                    buff_instance: e.pad,
                     kind: BuffEventKind::RemoveSingle { removed_duration_ms: e.value.max(0) as u32 },
                 }),
-                _ => {} // MANUAL or unknown: not simulator-compliant, skip (see buff_remove::MANUAL docs).
+                // MANUAL or unknown: not simulator-compliant, skip (see
+                // `buff_remove::MANUAL` docs). Same for the
+                // OverstackOrNaturalEnd SINGLE rows the arm above rejects.
+                _ => {}
             }
         }
     }
+    apply_conditional_loss_band_aid(raw, boon_ids, &mut out);
     out
+}
+
+/// GW2EI's "Band aid for the stack type situation with fake
+/// inactive/infinite durations" (MBUFFSIM Task 2, rule 2) --
+/// `GW2EIEvtcParser/EIData/Buffs/BuffsContainer.cs:196-252`, ported whole.
+///
+/// On a `StackingConditionalLoss` strip, arcdps sometimes reports the
+/// stack's ORIGINAL applied duration in `value` instead of its REMAINING
+/// duration. `simulator::find_single_removal_match` compares that value
+/// against each held stack's remaining duration within a strict 15ms
+/// tolerance, so the raw value matches nothing and the stack is never
+/// removed -- Stability then sits systematically HIGH. GW2EI detects the
+/// case (the reported value equals the stack's reconstructed total) and
+/// rewrites the value to the remaining duration BEFORE any simulator runs.
+///
+/// The C#, and every gate this transcribes:
+///
+/// ```csharp
+/// // :197  the HasStackIDs precondition (CombatData.cs:610):
+/// //         evtcVersion.Build > ArcDPSBuilds.ProperConfusionDamageSimulation
+/// //         && buffEvents.Any(x => x is BuffStackActiveEvent || x is BuffStackDeactiveEvent)
+/// if (combatData.HasStackIDs) {
+///   var stackTypeBuffs = currentBuffs.Where(x =>
+///       x.StackType == BuffStackType.StackingConditionalLoss ||
+///       x.StackType == BuffStackType.Stacking);                       // :199
+///   foreach (Buff buff in stackTypeBuffs) {
+///     // :202  the PER-BUFF precondition: at least one qualifying removal
+///     if (buffData.OfType<BuffRemoveSingleEvent>().Any(x => !x.OverstackOrNaturalEnd
+///           && (buff.StackType == BuffStackType.StackingConditionalLoss
+///               || x.RemovedDuration == int.MaxValue))) {
+///       foreach (var group in buffData.GroupBy(x => x.To)) {           // :204
+///         ... GroupBy(BuffInstance) ...                                // :206-210
+///         BuffApplyEvent? apply = applyList.LastOrDefault(x => x.Time <= remove.Time);
+///         var totalDuration = apply.OriginalAppliedDuration;           // :219
+///         var previousTime  = apply.Time;
+///         foreach (var other in others) {                              // :222-239
+///           if (other.Time >= apply.Time && other.Time <= remove.Time) {
+///             if (other is BuffExtensionEvent bee)   totalDuration += bee.ExtendedDuration;
+///             else if (other is BuffStackActiveEvent) totalDuration -= (other.Time - previousTime);
+///           }
+///           previousTime = other.Time;   // NOTE: updated for EVERY other,
+///         }                              // including ones outside the window
+///         if (totalDuration == remove.RemovedDuration) {               // :241
+///           int activeTime  = apply.OriginalAppliedDuration - apply.AppliedDuration;
+///           int elapsedTime = (int)(remove.Time - apply.Time);
+///           remove.OverrideRemovedDuration(remove.RemovedDuration - activeTime - elapsedTime);
+///         }                              // OverrideRemovedDuration clamps
+///       }                                // with Math.Max(x, 0)
+///     }                                  // (BuffRemoveSingleEvent.cs:40-43)
+///   }
+/// }
+/// ```
+///
+/// Every removal reaching here is already non-`OverstackOrNaturalEnd` --
+/// [`is_overstack_or_natural_end`] dropped the rest during extraction --
+/// so the `!x.OverstackOrNaturalEnd` conjunct is satisfied by construction
+/// and is not re-tested.
+///
+/// **One documented deviation from "ported whole".** GW2EI runs this over
+/// `BuffExtensionEvent`s whose `ExtendedDuration` has already been rewritten
+/// by `CombatData.OffsetBuffExtensionEvents`
+/// (`ParsedData/CombatData.cs:464-525`); this project consumes the RAW
+/// `value` because `OffsetNewDuration` is a deliberate, separately-ledgered
+/// deferral (see [`BuffEventKind::Extend`]). It can therefore only matter
+/// for a removal whose `totalDuration` reconstruction crosses an extension
+/// event, of which the reference capture has 5 for Stability across the
+/// whole log -- and the calibration below is measured WITH that deviation in
+/// place, so it is bounded, not merely argued. Every other clause of
+/// `BuffsContainer.cs:196-252` is transcribed exactly.
+///
+/// Measured on the post-era WvW reference capture: 181 of Stability's 253
+/// real SINGLE removals hit the rewrite; the mean per-account average-stack
+/// error against GW2EI drops from 0.04124 to 0.00027.
+fn apply_conditional_loss_band_aid(raw: &RawLog, boon_ids: &BTreeSet<u32>, out: &mut [BuffEvent]) {
+    // `CombatData.HasStackIDs` (`ParsedData/CombatData.cs:610`). GW2EI's
+    // `buffEvents` here is the WHOLE log's buff-event list, not a per-buff
+    // slice, so the scan is over every row rather than `boon_ids`.
+    if !raw.header.has_proper_confusion_damage_simulation() {
+        return;
+    }
+    let has_stack_ids = raw
+        .events
+        .iter()
+        .any(|e| e.is_statechange == sc::STACK_ACTIVE || e.is_statechange == sc::STACK_DEACTIVE);
+    if !has_stack_ids {
+        return;
+    }
+
+    // `BuffApplyEvent.OriginalAppliedDuration` (`BuffApplyEvent.cs:21-28`):
+    // `buff_dmg` on a BUFF_INITIAL row from this build onward, else `value`.
+    let initial_uses_buff_dmg = raw.header.has_buff_extension_overstack_value_changed();
+
+    // Per `(buff, owner, instance)`: the applies, and the "others"
+    // (extensions + stack-active/deactive) the `totalDuration`
+    // reconstruction walks. Built from RAW rows because two of the inputs --
+    // a BUFF_INITIAL row's `buff_dmg`, and the stack-active timestamps --
+    // are not carried on `BuffEvent`.
+    type Key = (u32, u64, u32);
+    #[derive(Clone, Copy)]
+    struct Apply {
+        time: u64,
+        /// `AppliedDuration` (`evtcItem.Value`).
+        applied: i64,
+        /// `OriginalAppliedDuration`.
+        original: i64,
+    }
+    /// `others`: `true` == `BuffExtensionEvent` (carrying
+    /// `ExtendedDuration`), `false` == `BuffStackActiveEvent`.
+    #[derive(Clone, Copy)]
+    struct Other {
+        time: u64,
+        extension_ms: Option<i64>,
+    }
+    let mut applies: std::collections::BTreeMap<Key, Vec<Apply>> = std::collections::BTreeMap::new();
+    let mut others: std::collections::BTreeMap<Key, Vec<Other>> = std::collections::BTreeMap::new();
+
+    let post = raw.header.is_post_buff_rework();
+    for e in &raw.events {
+        if !boon_ids.contains(&e.skillid) {
+            continue;
+        }
+        // Only the intensity stack types the band aid's `stackTypeBuffs`
+        // filter keeps (`BuffsContainer.cs:198-199`) are worth indexing.
+        let Some(st) = super::stack_type_for(e.skillid) else { continue };
+        if st.band_aid_scope().is_none() {
+            continue;
+        }
+        let initial = e.is_statechange == sc::BUFF_INITIAL;
+        let is_apply = initial
+            || if post { e.is_statechange == sc::BUFF_APPLY } else { is_pre_era_apply_shaped(e) && e.is_offcycle == 0 };
+        if is_apply {
+            let applied = i64::from(e.value);
+            let original =
+                if initial && initial_uses_buff_dmg { i64::from(e.buff_dmg) } else { applied };
+            applies
+                .entry((e.skillid, e.dst_agent, e.pad))
+                .or_default()
+                .push(Apply { time: e.time, applied, original });
+            continue;
+        }
+        let is_extension = if post {
+            e.is_statechange == sc::BUFF_CHANGE
+        } else {
+            is_pre_era_apply_shaped(e) && e.is_offcycle != 0
+        };
+        if is_extension {
+            others
+                .entry((e.skillid, e.dst_agent, e.pad))
+                .or_default()
+                .push(Other { time: e.time, extension_ms: Some(i64::from(e.value.max(0))) });
+        } else if e.is_statechange == sc::STACK_ACTIVE {
+            // `BuffStackActiveEvent.BuffInstance = (uint)evtcItem.DstAgent`
+            // (`BuffStackActiveEvent.cs:10`) -- NOT `pad`, unlike every
+            // other buff event. Its owner is `src_agent` (`BuffStackEvent`
+            // inherits `AbstractBuffEvent`'s `To = SrcAgent` for
+            // non-apply rows).
+            others
+                .entry((e.skillid, e.src_agent, e.dst_agent as u32))
+                .or_default()
+                .push(Other { time: e.time, extension_ms: None });
+        } else if e.is_statechange == sc::STACK_DEACTIVE {
+            // Indexed so it advances `previousTime` exactly as GW2EI's
+            // `others` list does, but contributes no `totalDuration` term
+            // (`BuffsContainer.cs:227-238` only branches on
+            // `BuffExtensionEvent` and `BuffStackActiveEvent`).
+            others
+                .entry((e.skillid, e.src_agent, e.pad))
+                .or_default()
+                .push(Other { time: e.time, extension_ms: None });
+        }
+    }
+    if applies.is_empty() {
+        return;
+    }
+    for v in applies.values_mut() {
+        v.sort_by_key(|a| a.time);
+    }
+    for v in others.values_mut() {
+        v.sort_by_key(|o| o.time);
+    }
+
+    // `BuffsContainer.cs:202` -- the per-buff precondition. A buff with no
+    // qualifying removal is skipped entirely, so a `Stacking` buff whose
+    // removals all report finite durations never enters the rewrite.
+    let mut qualifies: std::collections::BTreeMap<u32, bool> = std::collections::BTreeMap::new();
+    for ev in out.iter() {
+        let BuffEventKind::RemoveSingle { removed_duration_ms } = ev.kind else { continue };
+        let Some(scope) = super::stack_type_for(ev.buff_id).and_then(|st| st.band_aid_scope())
+        else {
+            continue;
+        };
+        let q = scope == super::BandAidScope::EveryRealRemoval
+            || removed_duration_ms == super::INFINITE_REMOVED_DURATION_MS;
+        *qualifies.entry(ev.buff_id).or_default() |= q;
+    }
+
+    for ev in out.iter_mut() {
+        let BuffEventKind::RemoveSingle { removed_duration_ms } = ev.kind else { continue };
+        let Some(scope) = super::stack_type_for(ev.buff_id).and_then(|st| st.band_aid_scope())
+        else {
+            continue;
+        };
+        if !qualifies.get(&ev.buff_id).copied().unwrap_or(false) {
+            continue;
+        }
+        // The same disjunct again, now per-removal
+        // (`BuffsContainer.cs:210`'s `removeSinglesPerInstanceID` filter).
+        if scope == super::BandAidScope::OnlyInfiniteRemovedDuration
+            && removed_duration_ms != super::INFINITE_REMOVED_DURATION_MS
+        {
+            continue;
+        }
+        let key = (ev.buff_id, ev.owner, ev.buff_instance);
+        let Some(list) = applies.get(&key) else { continue };
+        let Some(apply) = list.iter().rev().find(|a| a.time <= ev.time) else { continue };
+
+        let mut total_duration = apply.original;
+        let mut previous_time = apply.time;
+        for o in others.get(&key).map(|v| v.as_slice()).unwrap_or(&[]) {
+            if o.time >= apply.time && o.time <= ev.time {
+                match o.extension_ms {
+                    Some(ext) => total_duration += ext,
+                    None => total_duration -= o.time as i64 - previous_time as i64,
+                }
+            }
+            // Deliberately OUTSIDE the window check -- see the C# above.
+            previous_time = o.time;
+        }
+        if total_duration != i64::from(removed_duration_ms) {
+            continue;
+        }
+        let active_time = apply.original - apply.applied;
+        let elapsed = ev.time as i64 - apply.time as i64;
+        // `OverrideRemovedDuration`'s `Math.Max(removedDuration, 0)`
+        // (`BuffRemoveSingleEvent.cs:40-43`).
+        let rewritten = (i64::from(removed_duration_ms) - active_time - elapsed).max(0);
+        ev.kind = BuffEventKind::RemoveSingle { removed_duration_ms: rewritten as u32 };
+    }
 }
 
 /// Post-era (arcdps >= 20260501) twin of the pre-era loop above --
@@ -314,6 +642,7 @@ fn extract_buff_events_post_era(
                 buff_id: e.skillid,
                 owner: e.dst_agent,
                 agent: resolve_agent(e.src_agent, e.src_master_instid, e.time),
+                buff_instance: e.pad,
                 kind: BuffEventKind::Apply {
                     duration_ms: e.value.max(0) as u32,
                     is_shields: e.is_shields != 0,
@@ -329,6 +658,7 @@ fn extract_buff_events_post_era(
                 buff_id: e.skillid,
                 owner: e.dst_agent,
                 agent: resolve_agent(e.src_agent, e.src_master_instid, e.time),
+                buff_instance: e.pad,
                 kind: BuffEventKind::Apply {
                     duration_ms: e.value.max(0) as u32,
                     is_shields: e.is_shields != 0,
@@ -343,6 +673,7 @@ fn extract_buff_events_post_era(
                 buff_id: e.skillid,
                 owner: e.dst_agent,
                 agent: resolve_agent(e.src_agent, e.src_master_instid, e.time),
+                buff_instance: e.pad,
                 kind: BuffEventKind::Extend {
                     extended_ms: e.value.max(0) as u32,
                     new_duration_ms: e.overstack,
@@ -356,12 +687,20 @@ fn extract_buff_events_post_era(
             // same as pre-era, via the shared `AbstractBuffRemoveEvent`
             // ctor).
             sc::BUFF_REMOVE_SINGLE => {
-                if e.is_buffremove == buff_remove::SINGLE {
+                // MBUFFSIM Task 2, rule 1: same `OverstackOrNaturalEnd`
+                // drop as the pre-era branch -- GW2EI's
+                // `BuffRemoveSingleEvent` is era-agnostic (the era split in
+                // `CombatEventFactory.AddBuffRemoveEvent` only changes WHICH
+                // rows become one), so the filter belongs on both branches.
+                if e.is_buffremove == buff_remove::SINGLE
+                    && !is_overstack_or_natural_end(e)
+                {
                     out.push(BuffEvent {
                         time: e.time,
                         buff_id: e.skillid,
                         owner: e.src_agent,
                         agent: resolve_agent(e.dst_agent, e.dst_master_instid, e.time),
+                        buff_instance: e.pad,
                         kind: BuffEventKind::RemoveSingle { removed_duration_ms: e.value.max(0) as u32 },
                     });
                 }
@@ -376,6 +715,7 @@ fn extract_buff_events_post_era(
                 buff_id: e.skillid,
                 owner: e.src_agent,
                 agent: resolve_agent(e.dst_agent, e.dst_master_instid, e.time),
+                buff_instance: e.pad,
                 kind: BuffEventKind::RemoveAll,
             }),
             _ => {}
@@ -752,6 +1092,7 @@ mod era_equivalence {
                 buff_id: MIGHT,
                 owner: 0xB,
                 agent: 0xA,
+                buff_instance: 0,
                 kind: BuffEventKind::Apply { duration_ms: 5000, is_shields: false },
             }]
         );
@@ -788,6 +1129,7 @@ mod era_equivalence {
                 buff_id: MIGHT,
                 owner: 0xB,
                 agent: 0xA,
+                buff_instance: 0,
                 kind: BuffEventKind::Apply { duration_ms: 5000, is_shields: true },
             }]
         );
@@ -825,6 +1167,7 @@ mod era_equivalence {
                 buff_id: MIGHT,
                 owner: 0xB,
                 agent: 0xA,
+                buff_instance: 0,
                 kind: BuffEventKind::Extend { extended_ms: 1500, new_duration_ms: 4000 },
             }]
         );
@@ -862,6 +1205,7 @@ mod era_equivalence {
                 buff_id: MIGHT,
                 owner: 0xC,
                 agent: 0xD,
+                buff_instance: 0,
                 kind: BuffEventKind::RemoveSingle { removed_duration_ms: 1234 },
             }]
         );
@@ -890,7 +1234,7 @@ mod era_equivalence {
         assert_eq!(pre_events, post_events);
         assert_eq!(
             pre_events,
-            vec![BuffEvent { time: 300, buff_id: MIGHT, owner: 0xC, agent: 0xD, kind: BuffEventKind::RemoveAll }]
+            vec![BuffEvent { time: 300, buff_id: MIGHT, owner: 0xC, agent: 0xD, buff_instance: 0, kind: BuffEventKind::RemoveAll }]
         );
     }
 
@@ -943,6 +1287,7 @@ mod era_equivalence {
                 buff_id: MIGHT,
                 owner: 0xB,
                 agent: 0xA,
+                buff_instance: 0,
                 kind: BuffEventKind::Apply { duration_ms: 3000, is_shields: false },
             }]
         );
