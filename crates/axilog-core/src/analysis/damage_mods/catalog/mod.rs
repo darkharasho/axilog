@@ -1,13 +1,18 @@
 //! The damage-modifier DEFINITION table (M16, Task 2).
 //!
+//! **Generated** by `scripts/gen_damage_mod_catalog.py`; re-run it and
+//! `git diff` to re-verify against a GW2EI checkout. Hand edits are lost.
+//!
 //! # What is in here
 //!
-//! A transcription of GW2EI's definition set, grouped exactly as GW2EI
-//! groups it: the three shared tables
-//! (`CommonDamageModifiers/{Item,Gear,Shared}DamageModifiers.cs`) are
-//! transcribed COMPLETE -- every WvW-expressible member, observed in the
-//! reference capture or not -- and the per-profession files contribute the
-//! definitions whose ids appear in the reference capture's `damageModMap`.
+//! GW2EI's definition set, grouped exactly as GW2EI groups it: the three
+//! shared tables (`CommonDamageModifiers/{Item,Gear,Shared}DamageModifiers.cs`)
+//! are transcribed COMPLETE -- every WvW-expressible member, observed in
+//! the reference capture or not -- and the per-profession files contribute
+//! the definitions whose ids appear in that capture's `damageModMap`.
+//!
+//! **239 statements considered = 205 transcribed + 34 skipped.** Nothing is dropped silently; the skipped table
+//! below is exhaustive and each row carries every reason that applies.
 //!
 //! Every entry cites the `file:line` of the C# statement it came from, and
 //! carries GW2EI's own era windows verbatim: a reworked trait is several
@@ -44,7 +49,7 @@
 //!
 //! Each line is a GW2EI statement this project cannot evaluate faithfully.
 //! None is silently approximated -- the definition is simply absent, and
-//! the reason is recorded here:
+//! ALL of the reasons that apply to it are recorded here:
 //!
 //! | id | symbol | file:line | why |
 //! | --- | --- | --- | --- |
@@ -65,9 +70,9 @@
 //! | 221 | `Mod_IceRune` | `GearDamageModifiers.cs:35` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 222 | `Mod_RuneOfMesmer` | `GearDamageModifiers.cs:39` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 223 | `Mod_ImpactSigil` | `GearDamageModifiers.cs:42` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
-//! | 224 | `Mod_RelicOfTheDragonhunter` | `GearDamageModifiers.cs:44` | WithBuffOnFoeFromActor (per-applier stacks not modelled) |
-//! | 225 | `Mod_RelicOfIsgarren` | `GearDamageModifiers.cs:48` | WithBuffOnFoeFromActor (per-applier stacks not modelled) |
-//! | 226 | `Mod_RelicOfPeitha` | `GearDamageModifiers.cs:52` | WithBuffOnFoeFromActor (per-applier stacks not modelled) |
+//! | 224 | `Mod_RelicOfTheDragonhunter` | `GearDamageModifiers.cs:44` | WithBuffOnFoeFromActor (per-applier stacks not modelled); UsingEarlyExit (early-exit actor checker not modelled); BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 225 | `Mod_RelicOfIsgarren` | `GearDamageModifiers.cs:48` | WithBuffOnFoeFromActor (per-applier stacks not modelled); UsingEarlyExit (early-exit actor checker not modelled); BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 226 | `Mod_RelicOfPeitha` | `GearDamageModifiers.cs:52` | WithBuffOnFoeFromActor (per-applier stacks not modelled); UsingEarlyExit (early-exit actor checker not modelled); BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 227 | `Mod_RuneOfPerplexity` | `GearDamageModifiers.cs:100` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 229 | `Mod_FlowLikeWater10` | `ElementalistHelper.cs:166` | checker `FromHPChecker(50)` |
 //! | 252 | `Mod_ExposedStrike` | `SharedDamageModifiers.cs:45` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
@@ -77,10 +82,10 @@
 //! | 254 | `Mod_ExposedCondition` | `SharedDamageModifiers.cs:51` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 255 | `Mod_OldExposedCondition` | `SharedDamageModifiers.cs:55` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 256 | `Mod_Exposed` | `SharedDamageModifiers.cs:43` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
-//! | 327 | `Mod_BeastlyWarden_Pet` | `RangerHelper.cs:502` | checker `(x, log) => IsJuvenileUrsinePet(x.From) \|\| IsJuvenilePorcinePet(x.From)` |
-//! | 327 | `Mod_BeastlyWarden_Pet` | `RangerHelper.cs:507` | checker `(x, log) => IsJuvenileUrsinePet(x.From) \|\| IsJuvenilePorcinePet(x.From)` |
-//! | 327 | `Mod_BeastlyWarden_Pet` | `RangerHelper.cs:512` | checker `(x, log) => IsJuvenileUrsinePet(x.From) \|\| IsJuvenilePorcinePet(x.From)` |
-//! | 328 | `Mod_EmpoweredIllusions` | `MesmerHelper.cs:154` | checker `IllusionsChecker` |
+//! | 327 | `Mod_BeastlyWarden_Pet` | `RangerHelper.cs:502` | checker `(x, log) => IsJuvenileUrsinePet(x.From) \|\| IsJuvenilePorcinePet(x.From)`; UsingEarlyExit (early-exit actor checker not modelled) |
+//! | 327 | `Mod_BeastlyWarden_Pet` | `RangerHelper.cs:507` | checker `(x, log) => IsJuvenileUrsinePet(x.From) \|\| IsJuvenilePorcinePet(x.From)`; UsingEarlyExit (early-exit actor checker not modelled) |
+//! | 327 | `Mod_BeastlyWarden_Pet` | `RangerHelper.cs:512` | checker `(x, log) => IsJuvenileUrsinePet(x.From) \|\| IsJuvenilePorcinePet(x.From)`; UsingEarlyExit (early-exit actor checker not modelled) |
+//! | 328 | `Mod_EmpoweredIllusions` | `MesmerHelper.cs:154` | checker `IllusionsChecker`; UsingEarlyExit (early-exit actor checker not modelled) |
 //! | 374 | `Mod_RadiantArmamentsHammer` | `LuminaryHelper.cs:56` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //!
 //! The `BuffOnFoe` rows are not a gap in this port: GW2EI itself returns
@@ -331,7 +336,7 @@ pub static CATALOG: &[&DamageModifierDef] = &[
 
 /// Assert every catalog entry is a combination GW2EI itself could produce
 /// (`DamageModifierDef::validate`) -- the transcription guard for the
-/// hand-generated table.
+/// generated table.
 #[cfg(test)]
 #[test]
 fn catalog_definitions_are_valid() {
@@ -347,8 +352,9 @@ fn catalog_definitions_are_valid() {
 /// disjoint build windows and/or disjoint modes (GW2EI writes them that
 /// way, e.g. `Mod_BloodyRoar` has ten). What must NEVER happen is two of
 /// them being live at once: [`super::evaluate`] resolves a running key back
-/// to its definition by `json_id`, and EI's own JSON has one descriptor per
-/// id.
+/// to its definition by `json_id`, and GW2EI asserts the same uniqueness
+/// when it builds `OutgoingDamageModifiersByID`
+/// (`DamageModifiersContainer.cs:111-117`).
 ///
 /// So this sweeps every build boundary the catalog mentions (plus one below
 /// and one above each, to catch an off-by-one in a half-open window) across

@@ -382,6 +382,20 @@ pub enum ModSource {
     /// spec (`"Firebrand"`), or the core-only marker
     /// (`"BaseGuardianOnly"`), which are exactly the two entries
     /// `ParserHelper.SpecToSources` maps each `Spec` to (`:401-460`).
+    ///
+    /// **TODO (single- vs multi-source).** GW2EI's descriptor holds a
+    /// `HashSet<Source>`, not one source: `DamageModifierDescriptor` has a
+    /// `HashSet<Source> srcs` ctor overload
+    /// (`DamageModifierDescriptor.cs:51`) and
+    /// `DamageModifiersContainer` files such a modifier under EVERY source
+    /// in the set (`:97-104`). Three real call sites use it, all Revenant
+    /// (`RevenantHelper.cs:130,204,206`). None is in the WvW reference
+    /// capture's `damageModMap`, and the generator refuses to guess -- it
+    /// takes the FIRST element of the set and would need widening (to
+    /// `&'static [&'static str]`, with `applies_to` becoming an `any()`)
+    /// before any of those three can be transcribed correctly. Until then
+    /// a multi-source definition would be offered to too few specs, never
+    /// too many, so it can only under-report.
     Spec(&'static str),
 }
 
