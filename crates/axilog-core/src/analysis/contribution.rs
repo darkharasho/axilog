@@ -162,6 +162,13 @@ pub fn apply(
     enemies: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
 ) {
+    // Standalone/test callers get the enemy relog fold derived from `enc`
+    // itself -- `analyze` passes its own already-built map instead.
+    let enemy_addr_to_rep: BTreeMap<u64, u64> = enc
+        .enemies
+        .iter()
+        .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+        .collect();
     apply_with_registry(
         players,
         raw,
@@ -170,6 +177,7 @@ pub fn apply(
         squad,
         enemies,
         addr_to_rep,
+        &enemy_addr_to_rep,
     );
 }
 
@@ -182,6 +190,7 @@ pub fn apply(
 /// Note the sibling `HealthTracker::build(raw)` below is deliberately NOT
 /// hoisted here: it is this module's only consumer, so it is already built
 /// exactly once per parse.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_with_registry(
     players: &mut [PlayerMetrics],
     raw: &RawLog,
@@ -190,6 +199,7 @@ pub fn apply_with_registry(
     squad: &BTreeSet<u64>,
     enemies: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
+    enemy_addr_to_rep: &BTreeMap<u64, u64>,
 ) {
     let idx: BTreeMap<u64, usize> =
         players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
@@ -317,9 +327,22 @@ pub fn apply_with_registry(
 
         match down.dir {
             Direction::Outgoing => {
+                // MEIGAP Task 1d: the same credits, additionally split by
+                // the DOWNED TARGET, for `statsTargets[i][0].
+                // downContribution`. Keyed by the target's enemy
+                // representative id (relog fold), so it lines up with
+                // `Report::all_enemies`/`PlayerOut::damage.per_enemy`; a
+                // target whose addr never resolves keeps its raw addr, the
+                // same convention every other per-enemy map here uses.
+                let target_rep =
+                    enemy_addr_to_rep.get(&target).copied().unwrap_or(target);
                 for (contributor, c) in credits {
                     if let Some(&i) = idx.get(&rep(contributor)) {
                         players[i].downs_contribution.merge(c);
+                        *players[i]
+                            .downs_contribution_per_target
+                            .entry(target_rep)
+                            .or_default() += c.damage;
                     }
                 }
             }
@@ -431,10 +454,35 @@ fn credit_window<'a>(
         }
 
         // damage + cc: an ordinary (non-statechange, non-activation,
-        // non-buffremove) combat event aimed at the target. Damage predicate
-        // mirrors `damage::accumulate` exactly (CC-excluded, buff_dmg vs
-        // value selection); `cc` reuses `cc::is_cc`'s own era-gated
-        // predicate rather than re-deriving it.
+        // non-buffremove) combat event aimed at the target. `cc` reuses
+        // `cc::is_cc`'s own era-gated predicate rather than re-deriving it.
+        //
+        // ## DELIBERATE CARVE-OUT from `damage::is_health_damage_result`
+        //
+        // This predicate used to mirror `damage::accumulate` exactly. As of
+        // MEIGAP Task 2's review round 1 it no longer does, and the
+        // difference is deliberate rather than an oversight: `accumulate`
+        // now also excludes `DamageResult.BreakbarDamage` (result 10),
+        // because GW2EI routes those rows to `brkBarDamage` and none of
+        // their magnitude is health damage
+        // (`CombatEventFactory.cs:799-809`; see
+        // `damage::is_health_damage_result`). **This pass still counts
+        // them.**
+        //
+        // Why it was not swept with the rest: this is the arcdps-methodology
+        // down-contribution family (see this module's doc comment), already
+        // a documented, separately-calibrated divergence from GW2EI's own
+        // 90%-to-downstate-window algorithm -- so "what GW2EI counts as
+        // health damage" is not automatically the right rule here, and
+        // changing the weighting would move `downs_contribution`/`downed_by`
+        // without this round being able to re-run that calibration.
+        //
+        // **Two definitions of countable damage now coexist in this crate
+        // and that must not be silent.** A follow-up should either sweep
+        // this site (and re-run the contribution calibration) or record a
+        // positive reason for defiance-bar damage to count toward a down.
+        // Measured exposure on the local post-rework capture: breakbar rows
+        // exist for 27 of 44 accounts, worst 2,000 raw units.
         if e.is_statechange == 0 && e.is_activation == 0 && e.is_buffremove == 0 && e.dst_agent == target {
             let cc_row = is_cc(e, post_era);
             if cc_row || e.result != result::CROWD_CONTROL {
@@ -624,7 +672,7 @@ mod tests {
             players: squad_addrs.iter().map(|&a| Player {
                 agent_addr: a, account: format!(":P{a}.1"), character: format!("P{a}"),
                 profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-                subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+                subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
                 agent_addrs: vec![a],
             }).collect(),
             enemies: enemy_player_addrs.iter().map(|&a| Enemy {

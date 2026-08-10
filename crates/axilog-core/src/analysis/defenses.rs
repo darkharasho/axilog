@@ -312,6 +312,95 @@ pub struct DefenseStats {
     pub barrier_damage: u64,
     pub breakbar_count: u32,
     pub breakbar_damage: u64,
+    /// EI's `defenses[].receivedCrowdControl` -- the number of crowd-
+    /// control applications this player RECEIVED (MEIGAP Task 1c).
+    ///
+    /// The exact mirror of `PlayerMetrics::cc_applied`'s outgoing count,
+    /// off the same already-verified `cc::is_cc` predicate: GW2EI's
+    /// `DefensePerTargetStatistics.cs:136-141` counts one per
+    /// `CrowdControlEvent` in `GetIncomingCrowdControlEvents`, and a
+    /// `CrowdControlEvent` is precisely a damage-shaped row whose `Result`
+    /// is `DamageResult.CrowdControl` (`CombatEventFactory.cs:811-813`,
+    /// reachable from both the direct and buff damage paths) -- which is
+    /// what `cc::is_cc` already decides, era-gated.
+    ///
+    /// **Two deliberate asymmetries vs the outgoing count**, both read
+    /// straight off GW2EI's own source and both reproduced here:
+    ///
+    /// - **No source filter at all.** `SingleActor.cs:935-943` builds the
+    ///   incoming list from `CombatData.GetIncomingCrowdControlData(
+    ///   AgentItem)` with no `ToFriendly`/`ToFoe` predicate, unlike the
+    ///   OUTGOING init at `:918` which does `.Where(x => !x.ToFriendly)`.
+    ///   So friendly-sourced and unknown-sourced CC on a squad player
+    ///   counts here, where `cc::apply_cc`'s outgoing pass restricts to
+    ///   `enemies` recipients.
+    /// - **No pet/minion fold.** The outgoing side additionally merges the
+    ///   actor's minions' CC (`SingleActor.cs:919-923`, reproduced by
+    ///   `cc::pet_credit_cc_events`); the incoming side does not, so this
+    ///   is keyed purely on the event's own destination.
+    pub received_cc_count: u32,
+    /// EI's `defenses[].receivedCrowdControlDuration`, in MILLISECONDS --
+    /// the sum of `CrowdControlEvent.Duration`, itself the raw
+    /// `evtcItem.Value` (`CrowdControlEvent.cs:12`), with no `/1000` and no
+    /// rounding anywhere on the incoming path
+    /// (`DefensePerTargetStatistics.cs:139`). Same ms convention as
+    /// `PlayerMetrics::cc_duration_ms` on the outgoing side.
+    pub received_cc_duration_ms: u64,
+    /// EI's `defenses[].boonStrips` -- the number of BOONS stripped OFF
+    /// this player (MEIGAP Task 1c). The incoming counterpart of
+    /// `support::SupportMetrics::strips`, sharing that module's
+    /// already-calibrated `BuffRemoveAllEvent` machinery and its inverted
+    /// role convention (`owner = src_agent`, `remover = dst_agent`, both
+    /// read RAW -- see `support`'s module doc for the full citation).
+    ///
+    /// GW2EI: `DefensePerTargetStatistics.cs:149` ->
+    /// `GetStripData(BuffsByClassification[Boon], ..., excludeSelf: true)`
+    /// at `:48-70`, which walks `GetBuffRemoveAllEventsFromByID` (i.e.
+    /// `CombatData.GetBuffRemoveAllDataByDst(AgentItem)` -- removals whose
+    /// VICTIM is this actor) and skips a removal when
+    /// `brae.CreditedBy.IsUnknown` or `brae.CreditedBy.Is(actor.AgentItem)`.
+    ///
+    /// **Both skips test `CreditedBy`, not the raw remover.** `CreditedBy`
+    /// is `By.GetFinalMaster()` (`BuffEvent.cs:13`), so the MINION fold
+    /// happens first and both tests then apply to the resolved owner: a
+    /// player's own minion's strip on himself is a self-removal, and a
+    /// removal is "unknown" only when the OWNER cannot be resolved. Both
+    /// are reproduced in [`incoming_boon_strips`], through the same
+    /// single-hop `InstidRegistry` master fold every other pet-crediting
+    /// pass in this crate uses.
+    pub boon_strips_taken: u32,
+    /// The sum of `BuffRemoveAllEvent.RemovedDuration` (raw
+    /// `evtcItem.Value`, ms) over exactly the removals
+    /// [`boon_strips_taken`] counts -- i.e. how much boon duration was
+    /// destroyed on this player.
+    ///
+    /// **This is deliberately NOT a reproduction of EI's own
+    /// `boonStripsTime`**, which is affected by a real, verified GW2EI
+    /// arithmetic bug: `DefensePerTargetStatistics.cs:63` reads
+    /// `currentBoonStripTime = Math.Max(currentBoonStripTime +
+    /// brae.RemovedDuration, log.LogData.LogDuration)` -- a `Max` where a
+    /// `Min` (clamping one removal's remaining duration to the log length)
+    /// was plainly intended. As written, the FIRST qualifying strip of any
+    /// boon pins that boon's accumulator to at least the whole log
+    /// duration, so the exported number is essentially
+    /// `distinct_boons_stripped * logDuration`, not a duration sum at all.
+    /// Verified on this project's reference export: a player with
+    /// `boonStrips: 4` across 4 distinct boons reports `boonStripsTime:
+    /// 1393.448` on a 348,362 ms log -- exactly `4 * 348.362`.
+    ///
+    /// This field therefore carries the TRUE sum, the same "axilog is more
+    /// correct here, not less" convention `life_leech_count` above already
+    /// establishes for GW2EI's other verified counting bug in this same
+    /// class. The adapter documents the divergence, and
+    /// `crates/axilog-ei/tests/meigap_ei_golden.rs` calibrates against the
+    /// export by reconstructing EI's buggy formula from this project's own
+    /// per-boon strip data -- which pins the removal SET exactly without
+    /// enshrining the bug in the output.
+    ///
+    /// Milliseconds (EI reports its own value in seconds; the conversion
+    /// lives in the adapter, matching how `removed_stun_duration_ms` is
+    /// already handled).
+    pub boon_strips_taken_duration_ms: u64,
 }
 
 impl DefenseStats {
@@ -334,6 +423,10 @@ impl DefenseStats {
         self.barrier_damage += o.barrier_damage;
         self.breakbar_count += o.breakbar_count;
         self.breakbar_damage += o.breakbar_damage;
+        self.received_cc_count += o.received_cc_count;
+        self.received_cc_duration_ms += o.received_cc_duration_ms;
+        self.boon_strips_taken += o.boon_strips_taken;
+        self.boon_strips_taken_duration_ms += o.boon_strips_taken_duration_ms;
     }
 }
 
@@ -341,7 +434,7 @@ impl DefenseStats {
 /// taken breakdown" section). One variant per branch of
 /// `DefensePerTargetStatistics`'s ctor -- including `PowerOnly`, the FOURTH
 /// BUCKET that MCONDCAT Task 1 made representable.
-enum HitKind {
+pub(crate) enum HitKind {
     /// `buff == 0`, not catalogued: `strike_*` AND `power_*`.
     Strike,
     /// Skill id ∈ `condition_catalog`: `condition_*` ONLY (never power).
@@ -362,7 +455,7 @@ enum HitKind {
 /// One incoming damage-shaped row's classification -- unlike `hit_stats::
 /// Classified` (which only exists for HITS), this covers every outcome
 /// `DefensePerTargetStatistics` tracks, hit or not.
-enum Outcome {
+pub(crate) enum Outcome {
     Hit { dmg: u64, kind: HitKind, shield_dmg: u64 },
     Blocked,
     Evaded,
@@ -378,6 +471,10 @@ enum Outcome {
 /// any buff==1 row whose `result` GW2EI silently drops with no event at
 /// all). Reuses `hit_stats::classify`'s exact era/result-byte semantics,
 /// just widened to also surface the non-hit outcomes.
+pub(crate) fn classify_outcome(e: &RawEvent, post_era: bool) -> Option<Outcome> {
+    classify(e, post_era)
+}
+
 fn classify(e: &RawEvent, post_era: bool) -> Option<Outcome> {
     let dmg = if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
 
@@ -545,21 +642,47 @@ fn accumulate(events: &[RawEvent], squad: &BTreeSet<u64>, post_era: bool) -> BTr
 
 /// Defiance-bar damage taken -- a wholly separate scan from `accumulate`
 /// above (see module doc's `breakbar_count`/`breakbar_damage` section).
-fn accumulate_breakbar(events: &[RawEvent], squad: &BTreeSet<u64>, out: &mut BTreeMap<u64, DefenseStats>) {
+/// Breakbar damage taken, and (MEIGAP Task 1c) incoming crowd control --
+/// two result-byte classifications over the same `dst in squad` event
+/// family, so they share one scan rather than paying for two full passes
+/// over a 583k-event log (see `docs/BENCHMARKS.md`'s MEIGAP entry).
+fn accumulate_breakbar_and_received_cc(
+    events: &[RawEvent],
+    squad: &BTreeSet<u64>,
+    post_era: bool,
+    out: &mut BTreeMap<u64, DefenseStats>,
+) {
     for e in events {
-        if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
-            continue;
-        }
-        if e.result != result::BREAKBAR_DAMAGE {
+        // Byte-level classification BEFORE the `squad` set lookup: the
+        // membership test is a `BTreeSet<u64>` probe and by far the most
+        // expensive thing in this loop, while both classifications are a
+        // handful of byte compares that reject the overwhelming majority
+        // of rows. (Measured: hoisting the `squad` check to the top of the
+        // loop instead cost +4% on `analysis::analyze` over the real log.)
+        //
+        // `cc::is_cc` carries its own era-gated statechange/buff handling
+        // (see [`DefenseStats::received_cc_count`]); a CC row is never a
+        // breakbar row.
+        let is_cc = crate::analysis::cc::is_cc(e, post_era);
+        let is_breakbar = !is_cc
+            && e.is_statechange == 0
+            && e.is_activation == 0
+            && e.is_buffremove == 0
+            && e.result == result::BREAKBAR_DAMAGE;
+        if !is_cc && !is_breakbar {
             continue;
         }
         if !squad.contains(&e.dst_agent) {
             continue;
         }
-        let dmg = e.value.max(0) as u64;
         let stats = out.entry(e.dst_agent).or_default();
-        stats.breakbar_count += 1;
-        stats.breakbar_damage += dmg;
+        if is_cc {
+            stats.received_cc_count += 1;
+            stats.received_cc_duration_ms += e.value.max(0) as u64;
+        } else {
+            stats.breakbar_count += 1;
+            stats.breakbar_damage += e.value.max(0) as u64;
+        }
     }
 }
 
@@ -585,16 +708,132 @@ fn accumulate_dodges(raw: &RawLog, squad: &BTreeSet<u64>, post_era: bool, out: &
 /// Compute per-squad-player incoming-defense stats (M13 Task 2),
 /// account-folded via `addr_to_rep` (relog fold, same convention every
 /// other pass in this codebase uses).
+/// Every boon-strip this squad player SUFFERED, as `(boon id, removed
+/// duration ms)` in log order, keyed by the player's account-representative
+/// addr (MEIGAP Task 1c).
+///
+/// The shared primitive behind [`DefenseStats::boon_strips_taken`] and
+/// [`DefenseStats::boon_strips_taken_duration_ms`] -- see those fields for
+/// the GW2EI citation trail (`DefensePerTargetStatistics.cs:48-70,149`),
+/// and `support`'s module doc for the `BuffRemoveAllEvent` role inversion
+/// and era dispatch this mirrors on the incoming side.
+///
+/// Public because the strip DETAIL (not just its two rollups) is what the
+/// ei-json calibration needs: GW2EI's own exported `boonStripsTime` is
+/// computed by a buggy per-boon accumulator (see
+/// [`DefenseStats::boon_strips_taken_duration_ms`]), and reconstructing
+/// that formula from this list is how the reference export is joined
+/// without reproducing the bug in axilog's own output.
+pub fn incoming_boon_strips(
+    raw: &RawLog,
+    squad: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) -> BTreeMap<u64, Vec<(u32, u64)>> {
+    incoming_boon_strips_with_registry(
+        raw,
+        &crate::analysis::damage::InstidRegistry::build(raw),
+        squad,
+        addr_to_rep,
+    )
+}
+
+/// [`incoming_boon_strips`] against a caller-supplied, already-built
+/// [`InstidRegistry`] (MPERF Task 2 convention) -- the registry is what
+/// resolves `CreditedBy`'s minion fold. The `raw`-only wrapper above stays
+/// for standalone/test callers.
+pub fn incoming_boon_strips_with_registry(
+    raw: &RawLog,
+    registry: &crate::analysis::damage::InstidRegistry,
+    squad: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) -> BTreeMap<u64, Vec<(u32, u64)>> {
+    let post_era = raw.header.is_post_buff_rework();
+    let boon_ids: BTreeSet<u32> =
+        crate::analysis::buffs::BOON_IDS.iter().map(|&(id, _, _)| id).collect();
+    // `CreditedBy.IsUnknown` (`DefensePerTargetStatistics.cs:60`): GW2EI's
+    // `AgentItem.Unknown` is the placeholder it hands out for an addr that
+    // never appeared in the log's agent table, so membership in that table
+    // is exactly the test -- applied to the MASTER-FOLDED remover, since
+    // `CreditedBy` is `By.GetFinalMaster()`.
+    let known_agents: BTreeSet<u64> = raw.agents.iter().map(|a| a.addr).collect();
+    let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
+
+    let mut out: BTreeMap<u64, Vec<(u32, u64)>> = BTreeMap::new();
+    for e in &raw.events {
+        // Era-dispatched removal predicate, identical to `support::apply`/
+        // `support::apply_post_era`'s own (see that module's doc comment):
+        // pre-era an ordinary combat row with `is_buffremove == ALL`,
+        // post-era the dedicated `sc::BUFF_REMOVE_ALL` statechange.
+        let is_remove_all = if post_era {
+            e.is_statechange == crate::evtc::sc::BUFF_REMOVE_ALL
+        } else {
+            e.is_statechange == 0
+                && e.is_activation == 0
+                && e.is_buffremove == crate::evtc::buff_remove::ALL
+        };
+        if !is_remove_all || !boon_ids.contains(&e.skillid) {
+            continue;
+        }
+        // Role inversion (see `support`'s module doc): the removal's VICTIM
+        // is `src_agent`, the REMOVER is `dst_agent`.
+        let victim = e.src_agent;
+        let remover = e.dst_agent;
+        if !squad.contains(&victim) {
+            continue;
+        }
+        // `CreditedBy = By.GetFinalMaster()` (`BuffEvent.cs:13`): fold the
+        // remover onto its owner BEFORE either skip test, through the same
+        // single-hop `*_master_instid` -> registry resolution
+        // `damage::pet_credit_events`/`cc::pet_credit_cc_events`/
+        // `downs::credited_squad_source` all use. Roles are inverted on a
+        // removal row, so it is the `dst_*` triple that describes the
+        // remover -- the same read `contribution::credit_window`'s strips
+        // branch already makes. A removal with no master link resolves to
+        // the remover itself, which is what `GetFinalMaster` returns for a
+        // masterless agent.
+        let credited = registry.resolve_at(e.dst_master_instid, e.time).unwrap_or(remover);
+        if !known_agents.contains(&credited) {
+            continue; // `CreditedBy.IsUnknown`
+        }
+        if rep(credited) == rep(victim) {
+            continue; // `excludeSelf` (`CreditedBy.Is(actor.AgentItem)`)
+        }
+        out.entry(rep(victim)).or_default().push((e.skillid, e.value.max(0) as u64));
+    }
+    out
+}
+
 pub fn build(raw: &RawLog, squad: &BTreeSet<u64>, addr_to_rep: &BTreeMap<u64, u64>) -> BTreeMap<u64, DefenseStats> {
+    build_with_registry(raw, &crate::analysis::damage::InstidRegistry::build(raw), squad, addr_to_rep)
+}
+
+/// [`build`] against a caller-supplied, already-built [`InstidRegistry`]
+/// (MPERF Task 2 convention) -- needed since MEIGAP Task 1c, whose incoming
+/// boon strips resolve `CreditedBy`'s minion fold through it. The
+/// `raw`-only wrapper above stays for standalone/test callers.
+pub fn build_with_registry(
+    raw: &RawLog,
+    registry: &crate::analysis::damage::InstidRegistry,
+    squad: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) -> BTreeMap<u64, DefenseStats> {
     let post_era = raw.header.is_post_buff_rework();
     let mut by_addr = accumulate(&raw.events, squad, post_era);
-    accumulate_breakbar(&raw.events, squad, &mut by_addr);
+    accumulate_breakbar_and_received_cc(&raw.events, squad, post_era, &mut by_addr);
     accumulate_dodges(raw, squad, post_era, &mut by_addr);
 
     let mut by_rep: BTreeMap<u64, DefenseStats> = BTreeMap::new();
     for (addr, stats) in by_addr {
         let rep = addr_to_rep.get(&addr).copied().unwrap_or(addr);
         by_rep.entry(rep).or_default().merge(&stats);
+    }
+    // Incoming boon strips fold themselves (their shared primitive is
+    // already keyed by representative addr, since the self-exclusion needs
+    // the relog fold to decide "self" correctly in the first place).
+    for (rep, strips) in incoming_boon_strips_with_registry(raw, registry, squad, addr_to_rep) {
+        let stats = by_rep.entry(rep).or_default();
+        stats.boon_strips_taken += strips.len() as u32;
+        stats.boon_strips_taken_duration_ms += strips.iter().map(|&(_, ms)| ms).sum::<u64>();
     }
     by_rep
 }
@@ -686,6 +925,15 @@ mod tests {
         BTreeMap::new()
     }
 
+    /// A minimal agent-table row, so `incoming_boon_strips`'
+    /// `CreditedBy.IsUnknown` check has something to resolve against.
+    fn agent(addr: u64) -> crate::evtc::RawAgent {
+        crate::evtc::RawAgent {
+            addr, prof: 1, is_elite: 0, toughness: 0, concentration: 0, healing: 0,
+            hitbox_width: 0, condition: 0, hitbox_height: 0, name_raw: vec![],
+        }
+    }
+
     fn get(raw: &RawLog) -> DefenseStats {
         build(raw, &squad1(), &no_rep()).get(&1).copied().unwrap_or_default()
     }
@@ -773,12 +1021,150 @@ mod tests {
     }
 
     #[test]
-    fn crowd_control_result_is_excluded_entirely() {
+    /// A CC row is excluded from every DAMAGE/outcome counter -- and, since
+    /// MEIGAP Task 1c, is the sole input to the two `received_cc_*` fields
+    /// (see [`DefenseStats::received_cc_count`]). `value` carries the CC
+    /// duration in ms, never damage.
+    fn crowd_control_result_only_feeds_the_received_cc_fields() {
         let mut e = direct(9, 1, result::CROWD_CONTROL, 0);
         e.value = 1500; // CC duration ms, not damage
         let raw = raw_from(vec![e]);
         let d = get(&raw);
-        assert_eq!(d, DefenseStats::default());
+        assert_eq!(
+            d,
+            DefenseStats {
+                received_cc_count: 1,
+                received_cc_duration_ms: 1500,
+                ..DefenseStats::default()
+            }
+        );
+    }
+
+    /// The incoming CC count is deliberately NOT source-filtered (GW2EI's
+    /// `SingleActor.cs:935-943` has no `ToFriendly` predicate on the
+    /// incoming list, unlike the outgoing one at `:918`) -- a friendly-
+    /// sourced CC on a squad player still counts.
+    #[test]
+    fn received_cc_counts_friendly_sourced_crowd_control() {
+        let mut e = direct(1, 2, result::CROWD_CONTROL, 0);
+        e.value = 700;
+        e.iff = 0; // FRIEND
+        let raw = raw_from(vec![e]);
+        let squad: BTreeSet<u64> = [1u64, 2].into_iter().collect();
+        let by_rep = build(&raw, &squad, &BTreeMap::new());
+        assert_eq!(by_rep[&2].received_cc_count, 1);
+        assert_eq!(by_rep[&2].received_cc_duration_ms, 700);
+        assert!(!by_rep.contains_key(&1), "CC is credited to the victim, never the source");
+    }
+
+    /// Incoming boon strips: a hostile `BUFFREMOVE_ALL` of a boon off a
+    /// squad player counts, with the removal's remaining duration; a
+    /// SELF-removal of the same shape does not (`excludeSelf`,
+    /// `DefensePerTargetStatistics.cs:60`).
+    #[test]
+    fn incoming_boon_strips_count_hostile_removals_and_skip_self() {
+        let mut hostile = base(1, 9); // victim = src_agent, remover = dst_agent
+        hostile.skillid = crate::analysis::buffs::MIGHT;
+        hostile.is_buffremove = crate::evtc::buff_remove::ALL;
+        hostile.value = 2400;
+        let mut own = base(1, 1);
+        own.skillid = crate::analysis::buffs::MIGHT;
+        own.is_buffremove = crate::evtc::buff_remove::ALL;
+        own.value = 9000;
+        let mut raw = raw_from(vec![hostile, own]);
+        // `CreditedBy.IsUnknown` is decided by agent-table membership, so
+        // both removers must be real agents for this test to exercise the
+        // self-exclusion rather than the unknown-exclusion.
+        raw.agents = vec![agent(1), agent(9)];
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let by_rep = build(&raw, &squad, &BTreeMap::new());
+        assert_eq!(by_rep[&1].boon_strips_taken, 1);
+        assert_eq!(by_rep[&1].boon_strips_taken_duration_ms, 2400);
+    }
+
+    /// `CreditedBy = By.GetFinalMaster()`: a squad player's own MINION
+    /// stripping a boon off him is a SELF-removal and must not count, even
+    /// though the raw remover addr differs from the victim's
+    /// (`DefensePerTargetStatistics.cs:61`'s `excludeSelf` test is on
+    /// `CreditedBy`, not on `By`).
+    #[test]
+    fn incoming_boon_strips_exclude_a_players_own_minion_via_the_master_fold() {
+        // The minion (addr 50, instid 5) is registered as owned by player 1
+        // (instid 1) through an ordinary earlier event.
+        let mut intro = base(50, 9);
+        intro.src_instid = 5;
+        intro.src_master_instid = 1;
+        let mut owner_intro = base(1, 9);
+        owner_intro.src_instid = 1;
+
+        let mut minion_strip = base(1, 50); // victim = 1, remover = the minion
+        minion_strip.skillid = crate::analysis::buffs::MIGHT;
+        minion_strip.is_buffremove = crate::evtc::buff_remove::ALL;
+        minion_strip.value = 3000;
+        minion_strip.dst_instid = 5;
+        minion_strip.dst_master_instid = 1; // -> resolves to player 1 == the victim
+
+        let mut raw = raw_from(vec![owner_intro, intro, minion_strip]);
+        raw.agents = vec![agent(1), agent(50), agent(9)];
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let by_rep = build(&raw, &squad, &BTreeMap::new());
+        assert_eq!(
+            by_rep.get(&1).map(|d| d.boon_strips_taken).unwrap_or(0),
+            0,
+            "a player's own minion's strip is a self-removal under CreditedBy"
+        );
+    }
+
+    /// The mirror: an ENEMY's minion still counts, and is credited by the
+    /// victim (the strip is an incoming stat, so the owner's identity only
+    /// matters for the two skip tests).
+    #[test]
+    fn incoming_boon_strips_count_an_enemy_minion_after_the_master_fold() {
+        let mut owner_intro = base(9, 1);
+        owner_intro.src_instid = 9;
+        let mut strip = base(1, 50);
+        strip.skillid = crate::analysis::buffs::MIGHT;
+        strip.is_buffremove = crate::evtc::buff_remove::ALL;
+        strip.value = 3000;
+        strip.dst_instid = 5;
+        strip.dst_master_instid = 9; // -> enemy 9, not the victim
+        let mut raw = raw_from(vec![owner_intro, strip]);
+        raw.agents = vec![agent(1), agent(9), agent(50)];
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let by_rep = build(&raw, &squad, &BTreeMap::new());
+        assert_eq!(by_rep[&1].boon_strips_taken, 1);
+        assert_eq!(by_rep[&1].boon_strips_taken_duration_ms, 3000);
+    }
+
+    /// A removal credited to an agent the log never enumerated is dropped
+    /// (`brae.CreditedBy.IsUnknown`, `DefensePerTargetStatistics.cs:60`).
+    #[test]
+    fn incoming_boon_strips_skip_unknown_removers() {
+        let mut e = base(1, 12345);
+        e.skillid = crate::analysis::buffs::MIGHT;
+        e.is_buffremove = crate::evtc::buff_remove::ALL;
+        e.value = 2400;
+        let mut raw = raw_from(vec![e]);
+        raw.agents = vec![agent(1)]; // 12345 is not in the agent table
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let by_rep = build(&raw, &squad, &BTreeMap::new());
+        assert_eq!(by_rep.get(&1).map(|d| d.boon_strips_taken).unwrap_or(0), 0);
+    }
+
+    /// Only BOONS -- a condition's `BUFFREMOVE_ALL` is a cleanse, not a
+    /// strip (`BuffsByClassification[Boon]`,
+    /// `DefensePerTargetStatistics.cs:149`).
+    #[test]
+    fn incoming_boon_strips_ignore_condition_removals() {
+        let mut e = base(1, 9);
+        e.skillid = crate::analysis::condition_catalog::BLEEDING;
+        e.is_buffremove = crate::evtc::buff_remove::ALL;
+        e.value = 2400;
+        let mut raw = raw_from(vec![e]);
+        raw.agents = vec![agent(1), agent(9)];
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let by_rep = build(&raw, &squad, &BTreeMap::new());
+        assert_eq!(by_rep.get(&1).map(|d| d.boon_strips_taken).unwrap_or(0), 0);
     }
 
     // ---- barrier (is_shields / overstack) ----

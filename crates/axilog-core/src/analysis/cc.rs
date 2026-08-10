@@ -81,7 +81,7 @@ pub fn timeline_with_registry(
             // unconditional exclusion was already correct pre-era too, just
             // for a different underlying reason). So this predicate needs
             // NO era dispatch, unlike `is_cc`/`pet_credit_cc_events` below.
-            && e.result != crate::evtc::result::CROWD_CONTROL
+            && crate::analysis::damage::is_health_damage_result(e.result)
             && squad.contains(&e.src_agent)
             && enemies.contains(&e.dst_agent)
         {

@@ -321,6 +321,45 @@ pub struct TeamOut {
 pub struct DamageOut { pub total: u64, pub dps: f64, pub per_enemy: Vec<PerEnemyOut> }
 #[derive(Serialize)]
 pub struct PerEnemyOut { pub enemy_id: u64, pub total: u64 }
+/// One `(player, enemy)` pair's offensive split (MEIGAP Task 1d) -- mirrors
+/// `axilog_core::analysis::per_target::PerTargetOffense` field-for-field,
+/// plus the arcdps-methodology per-target down-contribution damage from
+/// `PlayerMetrics::downs_contribution_per_target` (see that field's doc
+/// comment for why it is NOT GW2EI's own per-target `downContribution`).
+///
+/// SPARSE: one entry per enemy this player actually interacted with, not
+/// one per enumerated target -- a real WvW log enumerates hundreds of
+/// targets almost none of which a given player touched.
+///
+/// **Opt-in, gated by `include_skill_damage`** (`--skill-damage` / SDK
+/// `skill_damage: true`), the same flag that already gates the other
+/// per-target damage family, `SkillDamageOut::per_target`. Measured, and
+/// the reason: on the committed WvW fixture (41 players) the always-on
+/// variant grew the rendered HTML report from 260,520 to 407,826 bytes
+/// (**+56.5%**), far past the ~30% guideline every other block in this
+/// schema was measured against before being gated (see
+/// `crates/axilog-html/tests/golden_html.rs`'s budget comment for that
+/// guideline's own provenance). Sparse though it is, ~50 enemies x 8
+/// fields per player is simply 5x the shape of `DamageOut::per_enemy`.
+///
+/// The underlying pass itself is NOT gated -- `analyze()` computes
+/// `PlayerMetrics::per_target` unconditionally (one shared scan; see
+/// `per_target`'s module doc), so this is a serialization gate only, and
+/// the ei-json adapter's `statsTargets` split keys off this field's
+/// PRESENCE the same way `totalDamageDist` keys off `skill_damage`'s.
+#[derive(Serialize)]
+pub struct PerTargetStatsOut {
+    pub enemy_id: u64,
+    pub connected_hits: u32,
+    pub connected_damage: u64,
+    pub against_downed_count: u32,
+    pub downed: u32,
+    pub killed: u32,
+    pub interrupts: u32,
+    /// arcdps-methodology down-contribution DAMAGE credited to this player
+    /// for downs of this specific enemy.
+    pub downs_contribution_damage: u64,
+}
 /// One skill id's aggregated hit stats within some grouping (M12, Task 1) --
 /// mirrors `axilog_core::analysis::skill_damage::SkillEntry` field-for-field.
 /// `hits`/`min`/`max` count only CONTRIBUTING (`dmg > 0`) events, matching
@@ -392,6 +431,14 @@ pub struct SkillRotationOut {
 pub struct PlayerTargetSeriesOut {
     pub enemy_id: u64,
     pub damage: Vec<u64>,
+    /// The non-condition half of `damage` (MEIGAP Task 2a), GW2EI's
+    /// `targetPowerDamage1S` -- same buckets, same cumulative shape,
+    /// element-wise `<= damage`. See
+    /// `axilog_core::analysis::timeseries`'s POWER-split section for the
+    /// `DamageType.Power` citation (`Actor.cs:449-451`: everything NOT
+    /// `ConditionDamageBased`, i.e. strike + life-leech + the
+    /// non-catalogued `buff == 1` bucket).
+    pub power_damage: Vec<u64>,
 }
 /// A player's per-second detail block (M12, Task 2), opt-in -- see
 /// `PlayerOut::per_second`'s doc comment for the measured size rationale.
@@ -405,6 +452,11 @@ pub struct PlayerTargetSeriesOut {
 pub struct PlayerPerSecondOut {
     pub damage: Vec<u64>,
     pub damage_taken: Vec<u64>,
+    /// The non-condition half of `damage_taken` (MEIGAP Task 2a), GW2EI's
+    /// `powerDamageTaken1S` -- see `PlayerTargetSeriesOut::power_damage`.
+    /// Its final element always equals this player's
+    /// `defenses.power_damage`.
+    pub power_damage_taken: Vec<u64>,
     pub per_target: Vec<PlayerTargetSeriesOut>,
 }
 /// One enemy's whole-fight dps/damage summary (M12, Task 2) -- mirrors
@@ -456,7 +508,14 @@ pub struct BoonOut {
 /// counts stay on `CcOut` (already there since M1) rather than duplicated
 /// here -- see the Task 5 brief.
 #[derive(Serialize)]
-pub struct SupportOut { pub cleanses: u32, pub cleanses_self: u32, pub strips: u32, pub resurrects: u32 }
+pub struct SupportOut { pub cleanses: u32, pub cleanses_self: u32, pub strips: u32,
+    /// True total remaining duration (ms) of every boon counted by
+    /// `strips` (MEIGAP Task 3e) -- see
+    /// `axilog_core::analysis::support::SupportMetrics::strips_duration_ms`
+    /// for why GW2EI's own exported `boonStripsTime` is a different (buggy)
+    /// number.
+    pub strips_duration_ms: u64,
+    pub resurrects: u32 }
 /// The arcdps-methodology contribution family's four stats (M11, Task 2) --
 /// mirrors `axilog_core::analysis::contribution::ContributionMetrics`
 /// field-for-field. Used for BOTH `PlayerOut::downs_contribution`
@@ -552,6 +611,23 @@ pub struct DefensesOut {
     pub barrier_damage: u64,
     pub breakbar_count: u32,
     pub breakbar_damage: u64,
+    /// Incoming crowd control (MEIGAP Task 1c) -- see
+    /// `axilog_core::analysis::defenses::DefenseStats::received_cc_count`
+    /// for the GW2EI citation trail and the two documented asymmetries vs
+    /// the outgoing `cc` block above.
+    pub received_cc_count: u32,
+    /// Milliseconds, same convention as `CcOut::applied_duration_ms` -- see
+    /// `DefenseStats::received_cc_duration_ms`.
+    pub received_cc_duration_ms: u64,
+    /// Boons stripped OFF this player (MEIGAP Task 1c) -- the incoming
+    /// counterpart of `SupportOut::strips`. See
+    /// `DefenseStats::boon_strips_taken`.
+    pub boon_strips_taken: u32,
+    /// The TRUE sum of removed boon duration, in milliseconds -- see
+    /// `DefenseStats::boon_strips_taken_duration_ms` for why this
+    /// deliberately does NOT reproduce EI's own (verified buggy)
+    /// `boonStripsTime`.
+    pub boon_strips_taken_duration_ms: u64,
 }
 #[derive(Serialize)]
 pub struct PlayerOut { pub account: String, pub character: String, pub profession: String,
@@ -567,6 +643,12 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// tag.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commander_tag: Option<CommanderTagOut>,
+    /// Guild GUID from `CBTS_GUILD` (MEIGAP Task 3c) -- GW2EI's
+    /// `players[].guildID`, uppercase dash-separated. Omitted when the log
+    /// carries no guild row for this account. See
+    /// `axilog_core::wvw::guilds`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild_id: Option<String>,
     pub damage: DamageOut, pub downs_dealt: u32, pub kills_dealt: u32,
     pub downs_taken: u32, pub deaths: u32, pub damage_taken: u64,
     pub cc: CcOut,
@@ -580,6 +662,13 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// Per-tracked-boon uptime/generation summary (M3, Tasks 1-4), one
     /// entry per `buffs::BOON_IDS` id, in that table's order.
     pub boons: Vec<BoonOut>,
+    /// Per-enemy offensive split (MEIGAP Task 1d) -- see
+    /// [`PerTargetStatsOut`], including the measured size numbers behind
+    /// the gate. Sorted by `enemy_id`, sparse; `None` (omitted from the
+    /// JSON entirely, not `null`) unless `--skill-damage`/SDK
+    /// `skill_damage: true` was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_target: Option<Vec<PerTargetStatsOut>>,
     /// Support-stat counts (M3, Task 3).
     pub support: SupportOut,
     /// arcdps healing-extension totals (M10, Task 1). `None` (omitted from
@@ -926,6 +1015,7 @@ pub fn build_report(
             commander: p.commander,
             marker: p.marker.clone(),
             commander_tag: p.commander_tag.as_ref().map(|t| CommanderTagOut { variant: t.variant.clone(), guid: t.guid.clone() }),
+            guild_id: p.guild_id.clone(),
             damage: DamageOut {
                 total: m.map(|m| m.damage_total).unwrap_or(0),
                 dps: m.map(|m| m.dps).unwrap_or(0.0),
@@ -960,10 +1050,44 @@ pub fn build_report(
                     generation: GenerationOut { self_pct: g.self_pct, group_pct: g.group_pct, squad_pct: g.squad_pct },
                 }
             }).collect(),
+            per_target: if !include_skill_damage {
+                None
+            } else {
+                m.map(|m| {
+                    // Union of the two sparse per-enemy maps: an enemy can
+                    // appear in the down-contribution map (a credit inside
+                    // its down window) without having taken a HIT from this
+                    // player in the whole fight, and vice versa.
+                    let mut ids: std::collections::BTreeSet<u64> =
+                        m.per_target.keys().copied().collect();
+                    ids.extend(m.downs_contribution_per_target.keys().copied());
+                    ids.into_iter()
+                        .map(|enemy_id| {
+                            let o = m.per_target.get(&enemy_id).copied().unwrap_or_default();
+                            PerTargetStatsOut {
+                                enemy_id,
+                                connected_hits: o.connected_hits,
+                                connected_damage: o.connected_damage,
+                                against_downed_count: o.against_downed_count,
+                                downed: o.downed,
+                                killed: o.killed,
+                                interrupts: o.interrupts,
+                                downs_contribution_damage: m
+                                    .downs_contribution_per_target
+                                    .get(&enemy_id)
+                                    .copied()
+                                    .unwrap_or(0),
+                            }
+                        })
+                        .collect()
+                })
+                .or(Some(Vec::new()))
+            },
             support: m.map(|m| SupportOut {
                 cleanses: m.support.cleanses, cleanses_self: m.support.cleanses_self,
-                strips: m.support.strips, resurrects: m.support.resurrects,
-            }).unwrap_or(SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 }),
+                strips: m.support.strips, strips_duration_ms: m.support.strips_duration_ms,
+                resurrects: m.support.resurrects,
+            }).unwrap_or(SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 }),
             healing: if metrics.has_healing_extension {
                 Some(m.map(|m| HealingOut {
                     healing_out_total: m.healing.healing_out_total,
@@ -992,11 +1116,16 @@ pub fn build_report(
                 Some(m.map(|m| PlayerPerSecondOut {
                     damage: m.timeseries.damage.clone(),
                     damage_taken: m.timeseries.damage_taken.clone(),
+                    power_damage_taken: m.timeseries.power_damage_taken.clone(),
                     per_target: m.timeseries.per_target.iter().map(|t| PlayerTargetSeriesOut {
                         enemy_id: t.enemy_id,
                         damage: t.damage.clone(),
+                        power_damage: t.power_damage.clone(),
                     }).collect(),
-                }).unwrap_or(PlayerPerSecondOut { damage: vec![], damage_taken: vec![], per_target: vec![] }))
+                }).unwrap_or(PlayerPerSecondOut {
+                    damage: vec![], damage_taken: vec![], power_damage_taken: vec![],
+                    per_target: vec![],
+                }))
             } else {
                 None
             },
@@ -1029,6 +1158,10 @@ pub fn build_report(
                 life_leech_count: d.life_leech_count, life_leech_damage: d.life_leech_damage,
                 barrier_count: d.barrier_count, barrier_damage: d.barrier_damage,
                 breakbar_count: d.breakbar_count, breakbar_damage: d.breakbar_damage,
+                received_cc_count: d.received_cc_count,
+                received_cc_duration_ms: d.received_cc_duration_ms,
+                boon_strips_taken: d.boon_strips_taken,
+                boon_strips_taken_duration_ms: d.boon_strips_taken_duration_ms,
             }}).unwrap_or_default(),
             rotation: if include_rotation {
                 Some(m.map(|m| m.rotation.iter().map(|s| SkillRotationOut {
@@ -1155,7 +1288,7 @@ mod tests {
             duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"".into(),
-            team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]}],
+            team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]}],
             enemies:vec![], markers:vec![], tick_rate:None };
         let m = Metrics { players: vec![PlayerMetrics{agent_addr:1,damage_total:500,
             dps:500.0,..Default::default()}],
@@ -1191,10 +1324,10 @@ mod tests {
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
-                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
                 Player{agent_addr:2,account:":B.1".into(),character:"B".into(),
                     profession:"Guardian".into(),elite_spec:"".into(),team:"red".into(),
-                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![2]},
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![2]},
             ],
             enemies:vec![], markers:vec![], tick_rate:None };
         let m = Metrics { players: vec![
@@ -1235,7 +1368,7 @@ mod tests {
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
-                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
             enemies:vec![], markers:vec![], tick_rate:None };
         let entry = SkillEntry { skill_id: 100, total: 50, hits: 1, min: 50, max: 50, crit_hits: 0, flank_hits: 0 };
@@ -1284,7 +1417,7 @@ mod tests {
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
-                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
             enemies:vec![], markers:vec![], tick_rate:None };
         let m = Metrics { players: vec![
@@ -1292,7 +1425,12 @@ mod tests {
                 timeseries: TimeseriesMetrics {
                     damage: vec![50, 80],
                     damage_taken: vec![10, 10],
-                    per_target: vec![TargetSeries { enemy_id: 9, damage: vec![50, 80] }],
+                    power_damage_taken: vec![7, 7],
+                    per_target: vec![TargetSeries {
+                        enemy_id: 9,
+                        damage: vec![50, 80],
+                        power_damage: vec![50, 60],
+                    }],
                     dps_targets: vec![DpsTargetEntry { enemy_id: 9, damage: 80, dps: 40.0 }],
                 },
                 ..Default::default()},
@@ -1314,6 +1452,11 @@ mod tests {
         assert_eq!(ps["damage_taken"], serde_json::json!([10, 10]));
         assert_eq!(ps["per_target"][0]["enemy_id"], 9);
         assert_eq!(ps["per_target"][0]["damage"], serde_json::json!([50, 80]));
+        // MEIGAP Task 2a: the POWER halves ride the same `include_timeseries`
+        // gate as their `All` counterparts, and are separate series (not
+        // copies) -- see `PlayerTargetSeriesOut::power_damage`.
+        assert_eq!(ps["power_damage_taken"], serde_json::json!([7, 7]));
+        assert_eq!(ps["per_target"][0]["power_damage"], serde_json::json!([50, 60]));
         assert_eq!(v["players"][0]["dps_targets"][0]["enemy_id"], 9);
         assert_eq!(v["players"][0]["dps_targets"][0]["damage"], 80);
         assert_eq!(v["players"][0]["dps_targets"][0]["dps"], 40.0);
@@ -1334,7 +1477,7 @@ mod tests {
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
-                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
             enemies:vec![], markers:vec![], tick_rate:None };
         let m = Metrics { players: vec![
@@ -1413,7 +1556,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "Alice".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: true, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: true, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1],
         };
         let enc = Encounter {
@@ -1462,7 +1605,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "Alice".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1],
         };
         let enc = Encounter {

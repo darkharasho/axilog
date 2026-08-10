@@ -438,7 +438,28 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
         "damageBarrierCount",
         "breakbarDamageTaken",
         "breakbarDamageTakenCount",
+        // MEIGAP Task 1c -- incoming CC + incoming strip COUNTS are exact.
+        // `boonStripsTime` is NOT in this list: EI's own exported value is
+        // produced by a verified arithmetic bug (see the reconstruction
+        // check below and `axilog_core::analysis::defenses::DefenseStats::
+        // boon_strips_taken_duration_ms`).
+        "receivedCrowdControl",
+        "receivedCrowdControlDuration",
+        "boonStrips",
     ];
+
+    // MEIGAP Task 1c: the per-boon incoming-strip detail behind the
+    // `boonStripsTime` reconstruction below (see that block's comment).
+    let squad: std::collections::BTreeSet<u64> =
+        enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
+    let addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
+        .players
+        .iter()
+        .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
+        .collect();
+    let strip_detail =
+        axilog_core::analysis::defenses::incoming_boon_strips(&raw, &squad, &addr_to_rep);
+    let log_duration_ms = golden["durationMS"].as_f64().expect("golden durationMS");
 
     let mut joined_hit_stats = 0usize;
     let mut joined_defenses = 0usize;
@@ -489,6 +510,70 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
                 if our_val != golden_val {
                     mismatches.push(format!(
                         "{key} defenses[0].{field}: ours={our_val} golden[defenses.{field}]={golden_val}"
+                    ));
+                }
+            }
+
+            // `boonStripsTime`: the SECOND intentional divergence on this
+            // block (after life-leech below). GW2EI's exported value comes
+            // out of `DefensePerTargetStatistics.cs:63`'s
+            // `Math.Max(currentBoonStripTime + brae.RemovedDuration,
+            // log.LogData.LogDuration)` -- a `Max` where `Min` was plainly
+            // intended -- so it is roughly
+            // `distinct_boons_stripped * logDuration`, not a duration sum.
+            // axilog emits the TRUE sum instead, so the golden's raw value
+            // is joined by RECONSTRUCTING EI's formula from this project's
+            // own per-boon strip detail. Note what that does and does not
+            // pin: `max(current + r, L)` from `current = 0` swallows the
+            // FIRST removal's duration per boon whenever it is below the
+            // log length, so the join pins the distinct-boon SET, the
+            // per-boon removal COUNT (via `boonStrips`, asserted exactly
+            // above) and every removal AFTER the first -- not the first
+            // one's duration. Still materially stronger than comparing two
+            // sums, and it does not enshrine the bug in axilog's output.
+            {
+                let mut per_boon: std::collections::BTreeMap<u32, Vec<u64>> =
+                    std::collections::BTreeMap::new();
+                for &(boon, ms) in
+                    strip_detail.get(&enc.players[player_idx].agent_addr).into_iter().flatten()
+                {
+                    per_boon.entry(boon).or_default().push(ms);
+                }
+                let recon_ms: f64 = per_boon
+                    .values()
+                    .map(|removals| {
+                        let mut current = 0.0f64;
+                        for &ms in removals {
+                            current = (current + ms as f64).max(log_duration_ms);
+                        }
+                        current
+                    })
+                    .sum();
+                let recon = round3_ties_even(recon_ms / 1000.0);
+                let golden_time = de["boonStripsTime"].as_f64().unwrap_or(0.0);
+                if (recon - golden_time).abs() > 0.0005 {
+                    mismatches.push(format!(
+                        "{key} defenses[0].boonStripsTime [EI-bug reconstruction]: ours={recon:.3} \
+                         golden={golden_time:.3}"
+                    ));
+                }
+                // And axilog's own emitted value is the true sum: strictly
+                // below EI's inflated one whenever anything was stripped.
+                let ours_time = our_defenses["boonStripsTime"].as_f64().unwrap_or(-1.0);
+                // `<=`, not `<`: EI's per-boon accumulator only inflates
+                // when the FIRST removal of that boon reported less
+                // remaining duration than the whole log
+                // (`max(r1, L) + r2 + ...`), so on a short fight where every
+                // stripped boon's first removal already exceeded the log
+                // length the buggy total collapses onto the true sum. Two
+                // of this fixture's 37 accounts are exactly that case --
+                // which is a stronger agreement, not a weaker one.
+                if de["boonStrips"].as_i64().unwrap_or(0) > 0
+                    && !(ours_time > 0.0 && ours_time <= golden_time)
+                {
+                    mismatches.push(format!(
+                        "{key} defenses[0].boonStripsTime [emitted]: expected 0 < {ours_time} <= \
+                         {golden_time}"
                     ));
                 }
             }
@@ -655,7 +740,7 @@ fn ei_json_combat_replay_matches_the_golden() {
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None });
+    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
 
     // -- combatReplayMetaData: EXACT, field by field, as text --
     let meta = &ei["combatReplayMetaData"];
@@ -769,7 +854,7 @@ fn ei_json_replay_fields_do_not_disturb_the_always_on_surface() {
 
     let without = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, ..Default::default() });
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let mut with = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None });
+    let mut with = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
 
     // Sanity: the replay-on document really does carry the new surface
     // (otherwise this test would pass vacuously).
@@ -837,7 +922,7 @@ fn ei_json_combat_replay_matches_the_local_postrework_export() {
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None });
+    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
 
     // metaData: text-exact against the export's own object.
     let want_meta = &golden["combatReplayMetaData"];
@@ -913,3 +998,727 @@ fn ei_json_combat_replay_matches_the_local_postrework_export() {
         "orientations text-exact for only {ang_text_exact}/{joined} players"
     );
 }
+
+/// `Math.Round(x, 3)`, .NET's half-to-even default -- see
+/// `axilog_ei`'s own `round3_ties_even` (private; duplicated here because
+/// an integration test cannot reach into the crate's private items, and
+/// pulling it into the public API purely for a test would be worse).
+/// Hand-rolled rather than `f64::round_ties_even` for the workspace's
+/// 1.74 MSRV.
+fn round3_ties_even(x: f64) -> f64 {
+    let scaled = x * 1000.0;
+    let floor = scaled.floor();
+    let frac = scaled - floor;
+    let rounded = if frac == 0.5 {
+        // The tie: land on the even scaled integer.
+        if (floor as i64) % 2 == 0 { floor } else { floor + 1.0 }
+    } else if frac > 0.5 {
+        floor + 1.0
+    } else {
+        floor
+    };
+    rounded / 1000.0
+}
+
+/// MEIGAP Task 1d: the `statsTargets[i][0]` split is gated on the SAME
+/// `--skill-damage` presence signal as `totalDamageDist`, and when present
+/// its columns sum back to their `statsAll[0]` counterparts.
+///
+/// The sum invariant is the structural half of the per-target calibration
+/// (the exact-vs-EI half lives in `meigap_ei_golden.rs`, which needs the
+/// gitignored local export): each column is the SAME already-calibrated
+/// whole-fight predicate restricted to one enemy, so the two must agree
+/// modulo events landing on an agent outside the `enemies` set -- which
+/// `statsAll` counts and the split cannot. Hence `<=`, with at least one
+/// player asserted to hit exact equality so the check cannot go vacuous.
+#[test]
+fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+
+    // -- gated off: today's `totalDmg`-only row, split keys ABSENT (not 0) --
+    let plain =
+        axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
+    let plain_ei = axilog_ei::to_ei_json(&plain, &EiInputs::default());
+    for p in plain_ei["players"].as_array().expect("players") {
+        for t in p["statsTargets"].as_array().expect("statsTargets") {
+            let row = t[0].as_object().expect("statsTargets row");
+            assert_eq!(
+                row.keys().collect::<Vec<_>>(),
+                vec!["totalDmg"],
+                "without --skill-damage the split keys must be OMITTED, not emitted as zeros \
+                 (axibridge's own `sawTargetSplit` guard keys off exactly that)"
+            );
+        }
+    }
+
+    // -- gated on: the full split, summing back to statsAll[0] --
+    let full =
+        axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, false, false, None);
+    let ei = axilog_ei::to_ei_json(&full, &EiInputs::default());
+    let mut exact_players = 0usize;
+    let mut checked = 0usize;
+    for p in ei["players"].as_array().expect("players") {
+        let targets = p["statsTargets"].as_array().expect("statsTargets");
+        let mut all_equal = true;
+        for (split_field, all_field) in [
+            ("killed", "killed"),
+            ("downed", "downed"),
+            ("connectedDamageCount", "connectedDamageCount"),
+            ("againstDownedCount", "againstDownedCount"),
+        ] {
+            let sum: i64 =
+                targets.iter().map(|t| t[0][split_field].as_i64().expect("integer")).sum();
+            let whole = p["statsAll"][0][all_field].as_i64().expect("integer");
+            checked += 1;
+            assert!(
+                sum <= whole,
+                "{}: statsTargets sum of {split_field} ({sum}) exceeds statsAll[0].{all_field} \
+                 ({whole}) -- the split can only ever be a subset",
+                p["account"]
+            );
+            if sum != whole {
+                all_equal = false;
+            }
+        }
+        if all_equal {
+            exact_players += 1;
+        }
+    }
+    assert!(checked >= 100, "expected a non-degenerate comparison, checked {checked}");
+    assert!(
+        exact_players > 0,
+        "expected at least one player whose per-target split sums EXACTLY to statsAll -- all \
+         {exact_players} short means the split is systematically dropping events"
+    );
+    println!(
+        "ei_json_stats_targets_split_is_gated_and_sums_to_stats_all: {checked} column sums \
+         checked, {exact_players} players exact"
+    );
+}
+
+/// MEIGAP Task 2, committed-fixture structural gate: the three `targets[]`
+/// mirrors and the two POWER series are ABSENT without their flags and
+/// present, correctly shaped and internally consistent with them.
+///
+/// This is the half of Task 2's calibration CI can actually run: the
+/// exact-vs-EI half (`meigap2_ei_golden.rs`) needs the gitignored local
+/// export. What is pinned here is everything that is a CONTRACT rather
+/// than a simulation -- the gates, the array lengths against GW2EI's own
+/// `InterpolatedGraph` allocation, `power <= all` on every series, and the
+/// `buffMap` rows without which axibridge drops `targets[].buffs` entirely.
+#[test]
+fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let activity = build_activity_intervals(&raw, &enc);
+
+    // -- gated off --
+    let plain = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
+    );
+    let off = axilog_ei::to_ei_json(&plain, &EiInputs { activity: &activity, ..Default::default() });
+    for p in off["players"].as_array().expect("players") {
+        assert!(p.get("powerDamageTaken1S").is_none(), "powerDamageTaken1S must ride --timeseries");
+        assert!(p.get("targetPowerDamage1S").is_none(), "targetPowerDamage1S must ride --timeseries");
+    }
+    for t in off["targets"].as_array().expect("targets") {
+        for k in ["damage1S", "powerDamage1S", "totalDamageDist", "buffs"] {
+            assert!(t.get(k).is_none(), "targets[].{k} must be gated, not emitted empty");
+        }
+    }
+    // The condition rows must NOT join `buffMap` on a flagless render --
+    // that is what keeps the always-on payload byte-identical.
+    for &(id, _, _, _) in axilog_core::analysis::condition_catalog::CONDITION_BUFFS.iter() {
+        assert!(
+            off["buffMap"].get(format!("b{id}")).is_none(),
+            "buffMap must not carry condition b{id} without targets[].buffs"
+        );
+    }
+
+    // -- gated on --
+    let enemies: std::collections::BTreeSet<u64> =
+        enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+    let enemy_addr_to_rep: std::collections::BTreeMap<u64, u64> =
+        enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id))).collect();
+    let registry = axilog_core::analysis::damage::InstidRegistry::build(&raw);
+    let series = axilog_core::analysis::timeseries::build_enemy_series(
+        &enc, &raw, &registry, &enemies, &enemy_addr_to_rep,
+    );
+    let dist =
+        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &enemy_addr_to_rep);
+    let conditions =
+        axilog_core::analysis::target_conditions::build_with_registry(&raw, &registry, &enc);
+    let full = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
+    );
+    let on = axilog_ei::to_ei_json(
+        &full,
+        &EiInputs {
+            activity: &activity,
+            enemy_series: Some(&series),
+            enemy_dist: Some(&dist),
+            target_conditions: Some(&conditions),
+            ..Default::default()
+        },
+    );
+
+    // GW2EI's `InterpolatedGraph` allocation (`InterpolatedGraph.cs:18-20`).
+    let secs = enc.duration_ms / 1000;
+    let want_len =
+        if secs * 1000 == enc.duration_ms { (secs + 1) as usize } else { (secs + 2) as usize };
+    let phase0 = |v: &serde_json::Value| -> Vec<i64> {
+        v[0].as_array().map(|a| a.iter().map(|x| x.as_i64().unwrap_or(-1)).collect()).unwrap_or_default()
+    };
+
+    let target_count = on["targets"].as_array().expect("targets").len();
+    let mut nonzero_target_series = 0usize;
+    let mut dist_grand_total = 0i64;
+    let mut series_grand_total = 0i64;
+    for p in on["players"].as_array().expect("players") {
+        let all = phase0(&p["damageTaken1S"]);
+        let pow = phase0(&p["powerDamageTaken1S"]);
+        assert_eq!(all.len(), want_len, "damageTaken1S must use GW2EI's grid length");
+        assert_eq!(pow.len(), want_len, "powerDamageTaken1S must use GW2EI's grid length");
+        assert!(pow.windows(2).all(|w| w[1] >= w[0]), "powerDamageTaken1S must be cumulative");
+        assert!(
+            pow.iter().zip(all.iter()).all(|(x, y)| x <= y),
+            "powerDamageTaken1S must be element-wise <= damageTaken1S"
+        );
+        let tp = p["targetPowerDamage1S"].as_array().expect("targetPowerDamage1S");
+        let ta = p["targetDamage1S"].as_array().expect("targetDamage1S");
+        assert_eq!(tp.len(), target_count, "targetPowerDamage1S is indexed by targets[]");
+        for (a, b) in ta.iter().zip(tp.iter()) {
+            let (a, b) = (phase0(a), phase0(b));
+            assert_eq!(b.len(), want_len);
+            assert!(a.iter().zip(b.iter()).all(|(x, y)| y <= x), "target power <= target all");
+        }
+    }
+    for t in on["targets"].as_array().expect("targets") {
+        let (all, pow) = (phase0(&t["damage1S"]), phase0(&t["powerDamage1S"]));
+        assert_eq!(all.len(), want_len, "targets[].damage1S must use GW2EI's grid length");
+        assert_eq!(pow.len(), want_len);
+        assert!(all.windows(2).all(|w| w[1] >= w[0]), "targets[].damage1S must be cumulative");
+        assert!(pow.iter().zip(all.iter()).all(|(x, y)| x <= y));
+        if all.last().copied().unwrap_or(0) > 0 {
+            nonzero_target_series += 1;
+        }
+        // `totalDamageDist` is ACTOR-only where `damage1S` is
+        // minion-INCLUSIVE (`GetJustActorDamageEvents` vs
+        // `GetDamageEvents`, `SingleActor.cs:752-761`/`:735-740`), so the
+        // two are compared in AGGREGATE rather than per row. Per-row `<=`
+        // would be wrong in one direction on this project's shape: an
+        // enemy's minion is itself a row in the full unfiltered `targets[]`
+        // roster, and its own outgoing damage is credited to its MASTER's
+        // series -- so a minion row legitimately reports a nonzero
+        // `totalDamageDist` beside a zero `damage1S`. (GW2EI's curated
+        // `targets[]` never lists the minion, so the case cannot arise
+        // there.) Summed over the whole roster the fold cancels out.
+        dist_grand_total += t["totalDamageDist"][0]
+            .as_array()
+            .expect("totalDamageDist[0]")
+            .iter()
+            .map(|e| e["totalDamage"].as_i64().expect("integer"))
+            .sum::<i64>();
+        series_grand_total += all.last().copied().unwrap_or(0);
+        for b in t["buffs"].as_array().expect("buffs") {
+            let id = b["id"].as_u64().expect("buff id") as u32;
+            assert!(
+                axilog_core::analysis::condition_catalog::is_condition_damage_based(id),
+                "targets[].buffs is scoped to the condition catalog; saw b{id}"
+            );
+            assert!(
+                on["buffMap"].get(format!("b{id}")).is_some(),
+                "every emitted target buff id needs a buffMap row, or axibridge drops the entry"
+            );
+            for (_, states) in b["statesPerSource"].as_object().expect("statesPerSource") {
+                let s = states.as_array().expect("state list");
+                assert_eq!(
+                    (s[0][0].as_i64(), s[0][1].as_i64()),
+                    (Some(0), Some(0)),
+                    "every statesPerSource timeline starts with GW2EI's mandatory [0, 0]"
+                );
+                assert!(
+                    s.windows(2).all(|w| w[0][0].as_i64() <= w[1][0].as_i64()),
+                    "statesPerSource times must be non-decreasing"
+                );
+            }
+        }
+    }
+    assert!(
+        dist_grand_total <= series_grand_total,
+        "actor-only totalDamageDist across the roster ({dist_grand_total}) cannot exceed the \
+         minion-inclusive damage1S total ({series_grand_total})"
+    );
+    assert!(dist_grand_total > 0, "degenerate: no enemy skill damage at all");
+    assert!(
+        nonzero_target_series >= 5,
+        "expected a non-degenerate fixture: only {nonzero_target_series} targets dealt damage"
+    );
+    let with_buffs =
+        on["targets"].as_array().expect("targets").iter().filter(|t| !t["buffs"].as_array().expect("buffs").is_empty()).count();
+    assert!(with_buffs >= 5, "expected several targets to carry conditions, got {with_buffs}");
+    println!(
+        "ei_json_meigap2_target_mirrors: gated off cleanly; on, {target_count} targets \
+         ({nonzero_target_series} damaging, {with_buffs} carrying conditions), all series \
+         {want_len} long, power <= all everywhere"
+    );
+}
+
+/// MEIGAP Task 2c, review round 1: the committed-fixture (PRE-rework era)
+/// calibration for `targets[].totalDamageDist`, against real Elite Insights
+/// output -- and the CI gate for the phantom-row class.
+///
+/// The source export for this fixture is non-`detailedWvW`, so its single
+/// `targets[0]` is GW2EI's synthetic `Enemy Players` row: the AGGREGATE of
+/// every enemy player's outgoing per-skill damage. That is exactly the shape
+/// axibridge's own `precomputeGlobalEnemySkillStats`
+/// (`packages/bridge-metrics/src/computePlayerAggregation.ts:490-509`)
+/// reduces a detailed payload to, so folding axilog's `enemyPlayer` targets
+/// the same way makes the two directly comparable.
+///
+/// This is the assertion that would have caught review finding 1 in CI:
+/// before the fix, `build_enemy_dist` created a row for any non-statechange
+/// combat item, including pre-rework buff APPLICATION rows, and 143 of the
+/// 488 rows this very fixture emitted were phantoms GW2EI never emits --
+/// 19 skill ids' worth once folded (199 ids vs the reference's 180).
+/// Comparing the folded ID SET is what makes that visible; comparing only
+/// values would let a phantom pass as `0 == 0`. The post-rework local
+/// capture had none, so this pre-era fixture is the only place the class is
+/// observable at all.
+///
+/// `min` is deliberately not compared: EI's aggregate row carries one `min`
+/// over all enemy players combined, while the consumer's `minTotal/minCount`
+/// averages per-target mins -- not the same statistic on this export shape.
+/// The per-target and detailed-aggregate calibrations live in
+/// `meigap2_ei_golden.rs` (local export, skipped in CI).
+#[test]
+fn ei_json_enemy_player_skill_dist_matches_the_golden_aggregate() {
+    let golden: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/wvw-small.ei.json"
+        ))
+        .expect("read committed golden"),
+    )
+    .expect("parse committed golden");
+    let want: std::collections::BTreeMap<i64, (i64, i64)> = golden["enemyPlayerSkillDist"]
+        .as_object()
+        .expect("enemyPlayerSkillDist")
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.parse::<i64>().expect("skill id key"),
+                (
+                    v["totalDamage"].as_i64().expect("totalDamage"),
+                    v["connectedHits"].as_i64().expect("connectedHits"),
+                ),
+            )
+        })
+        .collect();
+    assert!(want.len() >= 150, "degenerate golden aggregate: {} ids", want.len());
+
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let activity = build_activity_intervals(&raw, &enc);
+    let enemies: std::collections::BTreeSet<u64> =
+        enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+    let enemy_addr_to_rep: std::collections::BTreeMap<u64, u64> =
+        enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id))).collect();
+    let dist =
+        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &enemy_addr_to_rep);
+    let report = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, true, false, false, None,
+    );
+    let ei = axilog_ei::to_ei_json(
+        &report,
+        &EiInputs { activity: &activity, enemy_dist: Some(&dist), ..Default::default() },
+    );
+
+    let mut ours: std::collections::BTreeMap<i64, (i64, i64)> = std::collections::BTreeMap::new();
+    for t in ei["targets"].as_array().expect("targets") {
+        if !t["enemyPlayer"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        for e in t["totalDamageDist"][0].as_array().into_iter().flatten() {
+            let Some(id) = e["id"].as_i64() else { continue };
+            if id == 0 {
+                continue;
+            }
+            let slot = ours.entry(id).or_insert((0, 0));
+            slot.0 += e["totalDamage"].as_i64().unwrap_or(0);
+            slot.1 += e["connectedHits"].as_i64().unwrap_or(0);
+        }
+    }
+
+    let phantom: Vec<i64> = ours.keys().filter(|k| !want.contains_key(k)).copied().collect();
+    let missing: Vec<i64> = want.keys().filter(|k| !ours.contains_key(k)).copied().collect();
+    assert!(
+        phantom.is_empty(),
+        "{} PHANTOM skill id(s) in our enemy-player aggregate that real EI never emits: {:?}",
+        phantom.len(),
+        &phantom[..phantom.len().min(20)]
+    );
+    assert!(
+        missing.is_empty(),
+        "{} skill id(s) real EI emits that our enemy-player aggregate lacks: {:?}",
+        missing.len(),
+        &missing[..missing.len().min(20)]
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for (id, (wd, wh)) in &want {
+        let (od, oh) = ours[id];
+        if od != *wd {
+            failures.push(format!("skill {id}.totalDamage: ours={od} reference={wd}"));
+        }
+        if oh != *wh {
+            failures.push(format!("skill {id}.connectedHits: ours={oh} reference={wh}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} enemy-player aggregate mismatch(es) over {} skill ids:\n{}",
+        failures.len(),
+        want.len(),
+        failures.iter().take(25).cloned().collect::<Vec<_>>().join("\n")
+    );
+    println!(
+        "ei_json_enemy_player_skill_dist_matches_the_golden_aggregate: {} skill ids, \
+         totalDamage + connectedHits EXACT on all of them, 0 phantom / 0 missing rows",
+        want.len()
+    );
+}
+
+/// MEIGAP Task 3, committed-fixture gate: the healing/barrier detail
+/// families, `minions[]` and `guildID` are ABSENT without their flags,
+/// present and internally consistent with them, and the two figures the
+/// committed golden already carries from REAL EI output are matched
+/// exactly.
+///
+/// This is the half of Task 3's calibration CI can run without the
+/// gitignored local export (`meigap3_ei_golden.rs` holds the exact-vs-EI
+/// half). Two of the assertions below are genuine EI-reference joins, not
+/// self-consistency: `squadHealingSelf` and `squadDownedHealing` in
+/// `fixtures/wvw-small.ei.json` were extracted from the same real export
+/// this fixture came from, and they pin the SELF diagonal of
+/// `outgoingHealingAllies` and the `totalDownedHealing` column of
+/// `totalHealingDist` respectively.
+#[test]
+fn ei_json_meigap3_healing_detail_minions_and_guild_are_gated_and_consistent() {
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let golden = read_json(GOLDEN_JSON_PATH);
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let activity = build_activity_intervals(&raw, &enc);
+
+    // -- gated off --
+    let plain = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
+    );
+    let off = axilog_ei::to_ei_json(&plain, &EiInputs { activity: &activity, ..Default::default() });
+    for p in off["players"].as_array().expect("players") {
+        assert!(p.get("minions").is_none(), "minions[] must ride --skill-damage");
+        let h = &p["extHealingStats"];
+        for k in ["outgoingHealingAllies", "totalHealingDist", "healing1S"] {
+            assert!(h.get(k).is_none(), "extHealingStats.{k} must be gated, not emitted empty");
+        }
+        for k in ["outgoingBarrierAllies", "totalBarrierDist"] {
+            assert!(
+                p["extBarrierStats"].get(k).is_none(),
+                "extBarrierStats.{k} must be gated, not emitted empty"
+            );
+        }
+        // ...while the M10 scalars stay always-on, as they always were.
+        assert!(h["outgoingHealing"][0]["healing"].is_number());
+    }
+
+    // -- gated on --
+    let registry = axilog_core::analysis::damage::InstidRegistry::build(&raw);
+    let detail = axilog_core::analysis::healing_detail::build_with_registry(&raw, &registry, &enc)
+        .expect("the committed fixture carries the healing extension");
+    let minions = axilog_core::analysis::minions::build_with_registry(&raw, &registry, &enc);
+    let full = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
+    );
+    let on = axilog_ei::to_ei_json(
+        &full,
+        &EiInputs {
+            activity: &activity,
+            healing_detail: Some(&detail),
+            healing_series: true,
+            healing_dist: true,
+            minions: Some(&minions),
+            ..Default::default()
+        },
+    );
+    let players = on["players"].as_array().expect("players");
+    let buckets = golden["series1SBuckets"].as_u64().expect("series1SBuckets") as usize;
+
+    let mut self_healing_sum = 0i64;
+    let mut downed_dist_sum = 0i64;
+    let mut minion_groups = 0usize;
+    let mut minion_rows = 0usize;
+    for (i, p) in players.iter().enumerate() {
+        let h = &p["extHealingStats"];
+        let b = &p["extBarrierStats"];
+        let scalar = h["outgoingHealing"][0]["healing"].as_i64().expect("scalar healing");
+
+        // Ally matrices: one row per players[] entry, on both families.
+        let allies = h["outgoingHealingAllies"].as_array().expect("outgoingHealingAllies");
+        let b_allies = b["outgoingBarrierAllies"].as_array().expect("outgoingBarrierAllies");
+        assert_eq!(allies.len(), players.len(), "the ally axis must be one row per player");
+        assert_eq!(b_allies.len(), players.len(), "the barrier ally axis must match too");
+        self_healing_sum += allies[i][0]["healing"].as_i64().unwrap_or(0);
+        let ally_total: i64 = allies.iter().map(|c| c[0]["healing"].as_i64().unwrap_or(0)).sum();
+        assert!(
+            ally_total <= scalar,
+            "the ally matrix can only ever be a SUBSET of the scalar total (heals landing on \
+             non-enumerated friendlies are in the scalar and in no ally row)"
+        );
+
+        // `totalHealingDist` sums to the scalar EXACTLY -- the shared-producer
+        // invariant `healing_detail`'s module doc claims.
+        let dist = h["totalHealingDist"][0].as_array().expect("totalHealingDist");
+        let dist_total: i64 = dist.iter().map(|r| r["totalHealing"].as_i64().unwrap_or(0)).sum();
+        assert_eq!(dist_total, scalar, "totalHealingDist must sum to outgoingHealing[0].healing");
+        downed_dist_sum +=
+            dist.iter().map(|r| r["totalDownedHealing"].as_i64().unwrap_or(0)).sum::<i64>();
+        let ids: Vec<i64> = dist.iter().map(|r| r["id"].as_i64().unwrap_or(-1)).collect();
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "totalHealingDist must be sorted by skill id");
+        for r in dist {
+            assert!(r["hits"].as_i64().unwrap_or(0) > 0, "a dist row exists only for real events");
+            assert!(r["min"].as_i64().unwrap_or(0) <= r["max"].as_i64().unwrap_or(0));
+            assert!(r["indirectHealing"].is_boolean());
+        }
+        let b_dist = b["totalBarrierDist"][0].as_array().expect("totalBarrierDist");
+        let b_total: i64 = b_dist.iter().map(|r| r["totalBarrier"].as_i64().unwrap_or(0)).sum();
+        assert_eq!(
+            b_total,
+            b["outgoingBarrier"][0]["barrier"].as_i64().expect("scalar barrier"),
+            "totalBarrierDist must sum to outgoingBarrier[0].barrier"
+        );
+        let b_ally_total: i64 = b_allies.iter().map(|c| c[0]["barrier"].as_i64().unwrap_or(0)).sum();
+        assert!(b_ally_total <= b_total, "the barrier ally matrix is a subset of the total");
+
+        // `healing1S`: GW2EI's grid length, cumulative, ending at the scalar.
+        let s: Vec<i64> =
+            h["healing1S"][0].as_array().expect("healing1S").iter().map(|v| v.as_i64().unwrap_or(0)).collect();
+        assert_eq!(s.len(), buckets, "healing1S must use GW2EI's InterpolatedGraph length");
+        assert!(s.windows(2).all(|w| w[0] <= w[1]), "healing1S must be cumulative");
+        assert_eq!(*s.last().expect("non-empty grid"), scalar, "healing1S must end at the total");
+
+        // `minions[]`: present only for players who have them, well-formed.
+        if let Some(ms) = p.get("minions") {
+            let ms = ms.as_array().expect("minions array");
+            assert!(!ms.is_empty(), "an empty minions[] must be omitted, not emitted");
+            minion_groups += ms.len();
+            for m in ms {
+                assert!(m["name"].is_string());
+                let rows = m["totalDamageTakenDist"][0].as_array().expect("totalDamageTakenDist");
+                minion_rows += rows.len();
+                let ids: Vec<i64> = rows.iter().map(|r| r["id"].as_i64().unwrap_or(-1)).collect();
+                assert!(ids.windows(2).all(|w| w[0] < w[1]), "minion dist must be sorted by skill id");
+                for r in rows {
+                    let (hits, conn) = (r["hits"].as_i64().unwrap_or(0), r["connectedHits"].as_i64().unwrap_or(0));
+                    assert!(conn <= hits, "connectedHits ({conn}) can never exceed hits ({hits})");
+                    if r["indirectDamage"].as_bool().unwrap_or(false) {
+                        for k in ["blocked", "evaded", "glance", "missed", "interrupted"] {
+                            assert_eq!(r[k], 0, "GW2EI zeroes {k} on an indirect skill");
+                        }
+                    }
+                }
+            }
+        }
+
+        // `guildID`: the committed fixture is anonymized, so every guild
+        // row's payload is zeroed (`evtc::anonymize`'s guild pass) and the
+        // only value that may appear is GW2EI's own all-zero GUID.
+        if let Some(g) = p.get("guildID") {
+            assert_eq!(
+                g.as_str(), Some("00000000-0000-0000-0000-000000000000"),
+                "the committed fixture must never carry a real guild GUID"
+            );
+        }
+    }
+
+    // -- the two real-EI joins --
+    assert_eq!(
+        self_healing_sum,
+        golden["squadHealingSelf"].as_i64().expect("squadHealingSelf"),
+        "the SELF diagonal of outgoingHealingAllies must equal real EI's squad self-healing"
+    );
+    assert_eq!(
+        downed_dist_sum,
+        golden["squadDownedHealing"].as_i64().expect("squadDownedHealing"),
+        "totalHealingDist's downed column must equal real EI's squad downed healing"
+    );
+
+    assert!(minion_groups >= 10, "expected a non-degenerate minion set, got {minion_groups}");
+    assert!(minion_rows >= 50, "expected a non-degenerate minion dist, got {minion_rows}");
+
+    // -- the real-EI minion join --
+    //
+    // `fixtures/wvw-small.ei.json`'s `minionDamageTaken` block was extracted
+    // verbatim from the same source export the file's `_source` names,
+    // bucketed by axibridge's own `normalizeMinionName`. This is REAL EI
+    // output for the pre-rework era, i.e. exactly the coverage the local
+    // post-rework calibration (`meigap3_ei_golden.rs`) cannot give CI.
+    let mut ours_by_name: HashMap<String, (i64, i64)> = HashMap::new(); // rows, damage
+    for p in players {
+        for m in p.get("minions").and_then(|v| v.as_array()).into_iter().flatten() {
+            let raw = m["name"].as_str().unwrap_or("Unknown");
+            let stripped = raw.strip_prefix("Juvenile ").unwrap_or(raw);
+            let name = if stripped.to_uppercase().contains("UNKNOWN") {
+                "Unknown".to_string()
+            } else {
+                stripped.to_string()
+            };
+            let rows = m["totalDamageTakenDist"][0].as_array().expect("dist");
+            let e = ours_by_name.entry(name).or_insert((0, 0));
+            e.0 += rows.len() as i64;
+            e.1 += rows.iter().map(|r| r["totalDamage"].as_i64().unwrap_or(0)).sum::<i64>();
+        }
+    }
+    let reference = &golden["minionDamageTaken"];
+    let ref_by_name = reference["byName"].as_object().expect("byName");
+
+    // **Every EI minion name that took damage must match EXACTLY**, on both
+    // the row count and the damage total. This is the assertion that would
+    // catch a real regression in the classifier, the ownership fold or the
+    // event-creation gate.
+    let mut nonzero_names = 0usize;
+    for (name, r) in ref_by_name {
+        let ref_damage = r["totalDamage"].as_i64().unwrap_or(0);
+        if ref_damage == 0 {
+            continue;
+        }
+        // The ONE documented exclusion (MEIGAP Task 3b): GW2EI's own
+        // `UNKNOWN <id>` placeholder group is an englobed agent, which
+        // `model::agent_kind` classifies as a PLAYER (`is_elite !=
+        // 0xffffffff`) and which is therefore never anyone's minion here.
+        // It is not skipped silently -- its damage appears explicitly in
+        // the squad-wide identity asserted just below, so removing it from
+        // the reference would break that instead.
+        if name == "Unknown" {
+            continue;
+        }
+        nonzero_names += 1;
+        let (rows, damage) = ours_by_name.get(name).copied().unwrap_or_else(|| {
+            panic!("minion group {name} took {ref_damage} damage in real EI output and is absent here")
+        });
+        assert_eq!(
+            damage, ref_damage,
+            "minion {name}: damage-taken total must match real EI exactly"
+        );
+        assert_eq!(
+            rows, r["rows"].as_i64().unwrap_or(0),
+            "minion {name}: damage-taken dist row count must match real EI exactly"
+        );
+    }
+    assert!(nonzero_names >= 8, "expected a non-degenerate join, got {nonzero_names} names");
+
+    // Row COUNT over the whole squad is exact; the damage TOTAL is not, and
+    // the entire difference is the two carve-outs MEIGAP Task 3b documents,
+    // reproduced here as an exact identity rather than a tolerance:
+    //
+    //   ours = EI - (EI's "Unknown" englobed-agent group)
+    //             + (groups EI does not treat as minions at all)
+    //
+    // `Unknown` is the englobed agent `model::agent_kind` classifies as a
+    // PLAYER; `Continuum Rift` and the unnamed `ch<species>-<id>` agents are
+    // masters-resolved agents GW2EI's own NPC classification excludes.
+    let ours_rows: i64 = ours_by_name.values().map(|v| v.0).sum();
+    let ours_damage: i64 = ours_by_name.values().map(|v| v.1).sum();
+    assert_eq!(
+        ours_rows, reference["rows"].as_i64().expect("rows"),
+        "squad-wide minion dist row count must match real EI exactly"
+    );
+    let ei_only_unknown = ref_by_name
+        .get("Unknown")
+        .and_then(|v| v["totalDamage"].as_i64())
+        .expect("the reference carries an englobed-agent Unknown group");
+    let ours_only: i64 = ours_by_name
+        .iter()
+        .filter(|(n, _)| !ref_by_name.contains_key(*n))
+        .map(|(_, v)| v.1)
+        .sum();
+    assert_eq!(
+        ours_damage,
+        reference["totalDamage"].as_i64().expect("totalDamage") - ei_only_unknown + ours_only,
+        "the squad-wide minion damage delta must be EXACTLY the two documented carve-outs"
+    );
+
+    // -- the real-EI healing-dist joins --
+    //
+    // BOUNDED, deliberately: M10's `healing_golden.rs` records a
+    // root-caused peer-sanitization residual on this project's healing
+    // TOTALS for the PRE-rework era (the post-rework calibration in
+    // `meigap3_ei_golden.rs` is exact). The row COUNT and the ally-matrix
+    // sum are exact even here, so those two are asserted exactly and only
+    // the total is bounded.
+    let ref_rows = golden["squadHealingDistRows"].as_i64().expect("squadHealingDistRows");
+    let ref_allies = golden["squadOutgoingHealingAlliesTotal"].as_i64().expect("squadOutgoingHealingAlliesTotal");
+    let ref_total = golden["squadHealingTotal"].as_i64().expect("squadHealingTotal");
+    let mut our_rows = 0i64;
+    let mut our_total = 0i64;
+    let mut our_allies = 0i64;
+    for p in players {
+        let h = &p["extHealingStats"];
+        let d = h["totalHealingDist"][0].as_array().expect("totalHealingDist");
+        our_rows += d.len() as i64;
+        our_total += d.iter().map(|r| r["totalHealing"].as_i64().unwrap_or(0)).sum::<i64>();
+        for a in h["outgoingHealingAllies"].as_array().expect("allies") {
+            our_allies += a[0]["healing"].as_i64().unwrap_or(0);
+        }
+    }
+    assert_eq!(
+        our_allies, ref_allies,
+        "the whole outgoingHealingAllies matrix must sum to real EI's exactly"
+    );
+    assert!(
+        (our_rows - ref_rows).abs() <= HEALING_DIST_ROW_BOUND,
+        "totalHealingDist row count {our_rows} vs real EI's {ref_rows} exceeds the pinned bound"
+    );
+    let rel = (our_total - ref_total) as f64 / ref_total as f64;
+    assert!(
+        rel.abs() <= HEALING_DIST_TOTAL_TOLERANCE,
+        "totalHealingDist squad total {our_total} vs real EI's {ref_total} is {:.4} relative, past the M10 residual bound",
+        rel
+    );
+    println!(
+        "ei_json_meigap3 real-EI join: {nonzero_names} damaged minion names exact, {ours_rows} dist rows exact, \
+         healing allies {our_allies} exact, healing dist rows {our_rows} vs {ref_rows}, total rel {rel:+.5}"
+    );
+    println!(
+        "ei_json_meigap3: {} players, self-healing {self_healing_sum}, downed {downed_dist_sum}, \
+         {minion_groups} minion groups / {minion_rows} rows",
+        players.len()
+    );
+}
+
+/// `totalHealingDist` squad row count vs real EI's, on the PRE-rework
+/// committed fixture. Measured 212 vs 211 -- one extra skill id, from the
+/// same M10 peer-sanitization residual as the total below (a skill whose
+/// only surviving events differ between the two `SanitizeForSrc` runs).
+const HEALING_DIST_ROW_BOUND: i64 = 2;
+
+/// Relative bound on the squad-wide `totalHealingDist` total vs real EI's,
+/// on the PRE-rework committed fixture. Measured +0.68% (1,015,275 vs
+/// 1,008,414) -- this is M10's documented, root-caused repeating-skill
+/// peer-report residual (`analysis::healing`'s module doc), inherited whole
+/// and not made worse here. The post-rework calibration
+/// (`meigap3_ei_golden.rs`) is EXACT, which is why this is the only place a
+/// tolerance appears on the healing detail at all.
+const HEALING_DIST_TOTAL_TOLERANCE: f64 = 0.01;

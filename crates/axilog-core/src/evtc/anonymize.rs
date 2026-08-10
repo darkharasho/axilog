@@ -48,6 +48,19 @@ pub fn anon_account(n: usize) -> String {
 /// all bytes outside the 64-byte name buffers of PLAYER agents are left
 /// byte-identical. Returns the number of PLAYER agents rewritten.
 pub fn anonymize_raw_evtc(data: &mut [u8]) -> Result<usize, EvtcError> {
+    // Revision guard (MEIGAP Task 3 review). Every offset below --
+    // `AGENT_SIZE`, `NAME_BUF_OFFSET`, and in particular
+    // `anonymize_guild_events`' `EVENT_SIZE_REV1` stride -- is a
+    // revision-1 layout constant. On a revision-0 file the agent walk would
+    // rewrite the wrong bytes and, worse for privacy, the guild pass would
+    // step at the wrong stride and silently scrub nothing. `decode_raw`
+    // already refuses anything but revision 1
+    // (`evtc::container::decode_raw`), so this is the same contract, stated
+    // where the writer can honour it: REJECT rather than half-process.
+    let header = crate::evtc::decode_header(data)?;
+    if header.revision != 1 {
+        return Err(EvtcError::UnsupportedRevision(header.revision));
+    }
     let read_u32 = |d: &[u8], off: usize| -> Result<u32, EvtcError> {
         d.get(off..off + 4)
             .map(|s| u32::from_le_bytes(s.try_into().unwrap()))
@@ -109,7 +122,52 @@ pub fn anonymize_raw_evtc(data: &mut [u8]) -> Result<usize, EvtcError> {
         data[name_off..name_off + NAME_BUF_LEN].copy_from_slice(&new_buf);
         anonymized += 1;
     }
+    anonymize_guild_events(data, agent_count)?;
     Ok(anonymized)
+}
+
+/// Zero the GUID payload of every `CBTS_GUILD` (statechange 29) row
+/// (MEIGAP Task 3c).
+///
+/// Until axilog decoded them, guild rows were inert bytes in a committed
+/// fixture. They are not any more: `wvw::guilds` now turns them into
+/// `players[].guildID`, so an anonymized capture would publish the real
+/// guild GUID of every repped squad member alongside their `Anon<N>`
+/// placeholder names -- enough to name the guild the squad belongs to.
+/// GW2EI draws the same line: `GuildEvent.Anonymize()`
+/// (`ParsedData/CombatEvents/MetaDataEvents/GuildEvent.cs`) makes
+/// `APIString` return `""` under its own anonymous mode.
+///
+/// Only the three payload fields the GUID is assembled from -- `dst_agent`
+/// (bytes 16..24), `value` (24..28) and `buff_dmg` (28..32) -- are zeroed.
+/// The row itself, its `src_agent` and its timestamp survive, so the event
+/// count, every offset and every other decode stay byte-compatible. A
+/// zeroed row decodes to the all-zero GUID
+/// `00000000-0000-0000-0000-000000000000`, which is exactly what an
+/// unrepresented player reports on a real capture -- so the anonymized
+/// fixture stays a VALID log rather than a malformed one.
+///
+/// No metric-bearing field is touched (a guild row carries none), so
+/// `tests/anonymize.rs`'s "identical analysis output" invariant is
+/// unaffected.
+fn anonymize_guild_events(data: &mut [u8], agent_count: usize) -> Result<(), EvtcError> {
+    const GUILD_STATECHANGE: u8 = crate::wvw::guilds::GUILD_STATECHANGE;
+    let agents_start = HEADER_SIZE + 4;
+    let skill_count_off = agents_start + agent_count * AGENT_SIZE;
+    let skill_count = data
+        .get(skill_count_off..skill_count_off + 4)
+        .map(|s| u32::from_le_bytes(s.try_into().unwrap()) as usize)
+        .ok_or(EvtcError::Truncated { need: skill_count_off + 4, at: skill_count_off, have: data.len() })?;
+    let events_start = skill_count_off + 4 + skill_count * crate::evtc::SKILL_SIZE;
+    let size = crate::evtc::EVENT_SIZE_REV1;
+    let mut off = events_start;
+    while off + size <= data.len() {
+        if data[off + 56] == GUILD_STATECHANGE {
+            data[off + 16..off + 32].fill(0);
+        }
+        off += size;
+    }
+    Ok(())
 }
 
 /// Writes `data` as the single "stored" (uncompressed, method 0) entry

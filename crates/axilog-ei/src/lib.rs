@@ -1,9 +1,14 @@
 use std::collections::BTreeMap;
 use serde_json::{json, Value};
-use axilog_core::analysis::buffs::BOON_IDS;
+use axilog_core::analysis::buffs::{BoonStates, BOON_IDS};
 use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
 use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::analysis::replay::{ActivityIntervals, Interval};
+use axilog_core::analysis::healing_detail::{HealDistEntry, HealingDetail};
+use axilog_core::analysis::minions::MinionRollups;
+use axilog_core::analysis::skill_damage::SkillEntry;
+use axilog_core::analysis::target_conditions::TargetConditionStates;
+use axilog_core::analysis::timeseries::EnemySeries;
 use axilog_core::icons::prof_icon_url;
 use axilog_schema::Report;
 
@@ -164,6 +169,70 @@ fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
     })
 }
 
+/// [`skill_entry_ei_json`]'s enemy-side twin: one
+/// `targets[].totalDamageDist[0][]` entry (MEIGAP Task 2c).
+///
+/// Same fields, ONE addition: `connectedHits`. On the player side that key
+/// is deliberately omitted (see [`skill_entry_ei_json`]'s doc comment --
+/// this project tracks no missed/blocked/evaded outcomes, so it cannot
+/// distinguish EI's `hits` from its `connectedHits`). On the ENEMY side the
+/// distinction is forced, because axibridge's damage-mitigation math
+/// divides by `connectedHits` specifically
+/// (`computePlayerAggregation.ts:277-286`, `avg = totalDamage /
+/// connectedHits`) and would otherwise get a `0` denominator and drop the
+/// skill entirely (`if (!enemy.hasSkill || enemy.hits <= 0) return;`).
+///
+/// So the CONTRIBUTING-hit count this project tracks is emitted under the
+/// key whose EI meaning it actually reproduces -- `connectedHits` is
+/// `dmgEvt.HasHit ? 1 : 0` (`JsonDamageDistBuilder.cs:72`), and a
+/// blocked/evaded/missed/invulned row (the `HasHit == false` cases) carries
+/// `dmg == 0` and is skipped by this project's damage predicate. `hits`
+/// (EI's attempt count) stays absent rather than being filled with a number
+/// that means something else; the exact residual is stated in
+/// `skill_damage::build_enemy_dist`'s doc comment.
+/// `extHealingStats.totalHealingDist[0]` / `extBarrierStats
+/// .totalBarrierDist[0]` (MEIGAP Task 3a) -- GW2EI's `EXTJsonHealingDist`
+/// / `EXTJsonBarrierDist` shape, field-for-field.
+///
+/// `total_key` is `"totalHealing"` or `"totalBarrier"`; `indirect_key`
+/// follows it (`"indirectHealing"` / `"indirectBarrier"`).
+/// `with_downed` adds `totalDownedHealing`, which exists only on the
+/// healing side (`EXTJsonBarrierDist` has no downed field at all).
+fn heal_dist_json(rows: &[HealDistEntry], total_key: &str, with_downed: bool) -> Value {
+    Value::Array(
+        rows.iter()
+            .map(|r| {
+                let mut o = serde_json::Map::new();
+                o.insert("id".into(), Value::from(r.skill_id));
+                o.insert(total_key.into(), Value::from(r.total));
+                if with_downed {
+                    o.insert("totalDownedHealing".into(), Value::from(r.total_downed));
+                }
+                o.insert("hits".into(), Value::from(r.hits));
+                o.insert("min".into(), Value::from(r.min));
+                o.insert("max".into(), Value::from(r.max));
+                o.insert(
+                    if with_downed { "indirectHealing".into() } else { "indirectBarrier".to_string() },
+                    Value::from(r.indirect),
+                );
+                Value::Object(o)
+            })
+            .collect(),
+    )
+}
+
+fn enemy_skill_entry_ei_json(e: &SkillEntry) -> Value {
+    json!({
+        "id": e.skill_id,
+        "totalDamage": e.total,
+        "min": e.min,
+        "max": e.max,
+        "connectedHits": e.hits,
+        "crit": e.crit_hits,
+        "flank": e.flank_hits,
+    })
+}
+
 /// `damageModifiers[].damageModifiers[].damageGain` (M16, Task 3).
 ///
 /// **Deliberately NOT [`ei_float`].** That helper narrows through `f32`
@@ -192,6 +261,118 @@ fn ei_damage_gain(v: f64) -> Value {
         return Value::from(v as i64);
     }
     Value::from(v)
+}
+
+/// `Math.Round(x, 3)` with .NET's default `MidpointRounding.ToEven`.
+///
+/// Hand-rolled rather than `f64::round_ties_even`, which is only stable
+/// since Rust 1.77 and this workspace's MSRV is 1.74 (`Cargo.toml`'s
+/// `rust-version`). Ties land on the EVEN scaled integer, exactly as .NET
+/// does; every other value rounds normally. `floor` is toward negative
+/// infinity, so the parity test is correct for negative inputs too (none
+/// of this crate's callers produce them, but the helper is general).
+fn round3_ties_even(x: f64) -> f64 {
+    let scaled = x * 1000.0;
+    let floor = scaled.floor();
+    let frac = scaled - floor;
+    let rounded = if frac == 0.5 {
+        // The tie: land on the even scaled integer.
+        if (floor as i64) % 2 == 0 { floor } else { floor + 1.0 }
+    } else if frac > 0.5 {
+        floor + 1.0
+    } else {
+        floor
+    };
+    rounded / 1000.0
+}
+
+/// One GW2EI buff-percentage number, `Math.Round(x, ParserHelper.BuffDigit)`
+/// with `BuffDigit = 3` (MEIGAP Task 1a).
+///
+/// Every value GW2EI writes into `selfBuffs`/`groupBuffs`/`squadBuffs`'
+/// `buffData[]` goes through that rounding before serialization
+/// (`GW2EIEvtcParser/EIData/Statistics/BuffStatistics.cs:116-121` for the
+/// duration branch, `:135-141` for the intensity branch, `:190-195`/
+/// `:211-216` for the `GetBuffsForSelf` twin; `ParserHelper.BuffDigit = 3`
+/// at `GW2EIEvtcParser/ParserHelpers/ParserHelper.cs:24`), so the reference
+/// export never carries more than three decimals on any of them -- verified
+/// over all 6,371 `generation` values in `fixtures/local/
+/// wvw-postrework.ei.json`.
+///
+/// .NET's `Math.Round(double, int)` is half-to-EVEN (`MidpointRounding.
+/// ToEven` is the documented default), which is what [`round3_ties_even`]
+/// below reproduces. Whole values are emitted as JSON
+/// integers, matching .NET's own serializer (`"generation": 0`, never
+/// `0.0`) -- the same adjustment [`ei_damage_gain`] already makes for
+/// `damageGain`, and for the same reason (`serde_json` would otherwise
+/// write `0.0`).
+///
+/// **Deliberately NOT [`ei_float`]**: these are C# `double`s
+/// (`JsonBuffsGenerationData.Generation`, `GW2EIJSON/JsonActorUtilities/
+/// JsonPlayerUtilities/JsonPlayerBuffsGeneration.cs:16-45`), not the
+/// `float`s M15's replay surface narrows through.
+fn ei_buff_pct(v: f64) -> Value {
+    if !v.is_finite() {
+        return Value::Null;
+    }
+    let r = round3_ties_even(v);
+    if r.fract() == 0.0 && r.abs() < 9.0e15 {
+        return Value::from(r as i64);
+    }
+    Value::from(r)
+}
+
+/// One GW2EI duration-in-seconds number: `Math.Round(ms / 1000.0,
+/// ParserHelper.TimeDigit)` with `TimeDigit = 3` (MEIGAP Task 1c).
+///
+/// The convention every `*Time` field on `JsonStatistics` uses -- e.g.
+/// `GW2EIEvtcParser/EIData/Statistics/DefensePerTargetStatistics.cs:69`
+/// (`boonStripsTime`/`conditionCleansesTime`) and
+/// `SupportStatistics.cs:78` (the outgoing twin). Half-to-even and
+/// whole-value-as-integer for the same reasons [`ei_buff_pct`] documents.
+fn ei_time_secs(ms: u64) -> Value {
+    let r = round3_ties_even(ms as f64 / 1000.0);
+    if r.fract() == 0.0 {
+        return Value::from(r as i64);
+    }
+    Value::from(r)
+}
+
+/// `buffUptimes[].states`/`.statesPerSource`: `[[time, stacks], ...]`
+/// (MEIGAP Task 1b). A `buffUptimes` entry for a boon this player never
+/// held gets `[]`, matching GW2EI's own empty-graph case
+/// (`JsonBuffsUptimeBuilder.cs:68-76` returns an empty list there).
+fn ei_states_json(states: &[(u64, u32)]) -> Value {
+    Value::Array(states.iter().map(|&(t, v)| json!([t, v])).collect())
+}
+
+/// One of the three boon-generation attribution arrays
+/// (`selfBuffs`/`groupBuffs`/`squadBuffs`), `pick` selecting which scope of
+/// [`axilog_schema::GenerationOut`] to read -- see the call sites' doc
+/// comment for the GW2EI citation trail.
+///
+/// `keep_zero` is EI's own id-set rule, which differs between the arrays --
+/// see the call site for the citation: `selfBuffs` keeps every id
+/// `buffUptimes` carries (zeros included), `groupBuffs`/`squadBuffs` are
+/// filtered to buffs this player is a recorded source for
+/// (`BuffStatistics.cs:66,100`'s `hasGeneration`).
+fn buff_generation_json(
+    boons: &[axilog_schema::BoonOut],
+    pick: fn(&axilog_schema::GenerationOut) -> f64,
+    keep_zero: bool,
+) -> Value {
+    Value::Array(
+        boons
+            .iter()
+            .filter(|b| keep_zero || pick(&b.generation) > 0.0)
+            .map(|b| {
+                json!({
+                    "id": b.id,
+                    "buffData": [ { "generation": ei_buff_pct(pick(&b.generation)) } ],
+                })
+            })
+            .collect(),
+    )
 }
 
 /// One `{ hitCount, totalHitCount, damageGain, totalDamage }` item, wrapped
@@ -317,6 +498,131 @@ pub struct EiInputs<'a> {
     /// `damageModifiersTarget` 497,702, `incomingDamageModifiersTarget`
     /// 356,375, `damageModMap` 19,325.
     pub modifiers: Option<&'a DamageModifierResults>,
+    /// `boon_states` (MEIGAP Task 1b): the GW2EI-shape boon stack timelines
+    /// from `axilog_core::analysis::buffs::states::build`, or `None`. This
+    /// is the OPT-IN gate for `buffUptimes[].states` and
+    /// `buffUptimes[].statesPerSource`.
+    ///
+    /// GW2EI puts those same two arrays behind its own
+    /// `RawFormatTimelineArrays` setting
+    /// (`GW2EIBuilders/JsonModels/JsonActorUtilities/JsonBuffsUptimeBuilder.cs:52`)
+    /// -- the setting axibridge already maps onto axilog's `--timeseries`
+    /// -- so every caller computes this exactly when `--timeseries`/SDK
+    /// `timeseries: true` was requested, i.e. the same request that
+    /// populates `axilog_schema::PlayerOut::per_second`. Reproducing EI's
+    /// own gate rather than inventing one is what keeps the two payloads
+    /// shaped alike under the same settings.
+    ///
+    /// It arrives as a side-channel input rather than a `Report` field for
+    /// the same reason `activity`/`replay` do: it is EI-SHAPE data
+    /// (LOG-RELATIVE ms with GW2EI's mandatory leading `[0, 0]` pair,
+    /// keyed by source CHARACTER NAME), which the native schema
+    /// deliberately does not carry -- `Metrics::boons` is this project's
+    /// own absolute-time, addr-keyed shape.
+    ///
+    /// Joined to `report.players` by `PlayerOut::agent_addr` -- a real key,
+    /// not a position, so a mismatch yields an absent entry rather than a
+    /// mis-attributed timeline.
+    ///
+    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, pretty-printed,
+    /// 41 players x 12 boons over a 49s fight):** `--format ei-json
+    /// --timeseries` grows 3,878,210 -> 4,855,657 bytes (**+25.2%**). The
+    /// flagless payload is byte-identical to before (763,450 both sides).
+    /// It scales with transitions, i.e. roughly `players x boons x
+    /// applications`, which is why it stays behind the flag GW2EI itself
+    /// puts it behind.
+    pub boon_states: Option<&'a BoonStates>,
+    /// `enemy_series` (MEIGAP Task 2b): per-enemy cumulative outgoing-damage
+    /// series from `axilog_core::analysis::timeseries::build_enemy_series`,
+    /// or `None`. The OPT-IN gate for `targets[].damage1S` and
+    /// `targets[].powerDamage1S`.
+    ///
+    /// GW2EI gates the same two arrays on `RawFormatTimelineArrays`
+    /// (`GW2EIBuilders/JsonModels/JsonActors/JsonActorBuilder.cs:63-80`,
+    /// the shared actor builder `JsonNPCBuilder` runs first), so every
+    /// caller computes this exactly when `--timeseries`/SDK
+    /// `timeseries: true` was requested -- the same request that populates
+    /// `PlayerOut::per_second`.
+    ///
+    /// Side-channel rather than a `Report` field because it is keyed by
+    /// enemy, and the native schema carries no per-enemy block at all
+    /// (`Report::all_enemies` is identity-only, and is itself
+    /// `#[serde(skip)]`).
+    ///
+    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, pretty-printed):**
+    /// see this crate's `targets[]` block comment.
+    pub enemy_series: Option<&'a BTreeMap<u64, EnemySeries>>,
+    /// `enemy_dist` (MEIGAP Task 2c): per-enemy outgoing per-skill damage
+    /// distribution from `axilog_core::analysis::skill_damage::
+    /// build_enemy_dist`, or `None`. The OPT-IN gate for
+    /// `targets[].totalDamageDist`.
+    ///
+    /// Unlike its two siblings here, GW2EI emits this UNCONDITIONALLY
+    /// (`JsonActorBuilder.cs:87` sits outside every
+    /// `RawFormatTimelineArrays` block). It rides `--skill-damage` here for
+    /// the same reason the player-side `totalDamageDist` already does --
+    /// payload -- and axibridge hardcodes that flag to `true`, so the read
+    /// surface is unchanged (see the cutover report's flag table).
+    pub enemy_dist: Option<&'a BTreeMap<u64, Vec<SkillEntry>>>,
+    /// `target_conditions` (MEIGAP Task 2d): per-(enemy, condition)
+    /// source-split stack timelines from
+    /// `axilog_core::analysis::target_conditions::build`, or `None`. The
+    /// OPT-IN gate for `targets[].buffs[].id`/`.statesPerSource` -- and for
+    /// the fourteen CONDITION entries this adapter then adds to `buffMap`,
+    /// without which axibridge's `resolveBuffMetaById` returns nothing and
+    /// the whole array is skipped (`conditionsMetrics.ts:311-314`).
+    ///
+    /// Gated on `--timeseries`: `statesPerSource` sits inside GW2EI's own
+    /// `RawFormatTimelineArrays` block
+    /// (`JsonBuffsUptimeBuilder.cs:52`), the same gate the player-side
+    /// [`Self::boon_states`] rides.
+    pub target_conditions: Option<&'a TargetConditionStates>,
+    /// `healing_detail` (MEIGAP Task 3a): per-ally / per-skill / per-second
+    /// healing and barrier from
+    /// `axilog_core::analysis::healing_detail::build`, or `None` (which is
+    /// also what that function returns on a log with no healing
+    /// extension). Positionally joined to `report.players`, in both the
+    /// outer index and the inner ally index.
+    ///
+    /// The OPT-IN gate for `extHealingStats.outgoingHealingAllies` /
+    /// `.totalHealingDist` / `.healing1S` and
+    /// `extBarrierStats.outgoingBarrierAllies` / `.totalBarrierDist`. The
+    /// three families are gated SEPARATELY once this input is present --
+    /// see [`Self::healing_series`] and [`Self::healing_dist`], which are
+    /// the two flag bits the caller sets alongside it.
+    ///
+    /// Side-channel rather than a `Report` field for the same reason
+    /// [`Self::enemy_dist`] is: it is a per-(player, ally) matrix and a
+    /// per-skill map that the native schema deliberately reduces to the
+    /// five `HealingOut` scalars.
+    pub healing_detail: Option<&'a HealingDetail>,
+    /// Emit `extHealingStats.healing1S` -- set by the caller exactly when
+    /// `--timeseries`/SDK `timeseries: true` was requested, GW2EI's own
+    /// gate on that field
+    /// (`EXTJsonPlayerHealingStatsBuilder.cs:30`, inside
+    /// `if (settings.RawFormatTimelineArrays)`). Ignored when
+    /// [`Self::healing_detail`] is `None`.
+    pub healing_series: bool,
+    /// Emit `extHealingStats.outgoingHealingAllies` / `.totalHealingDist`
+    /// and `extBarrierStats.outgoingBarrierAllies` / `.totalBarrierDist` --
+    /// set by the caller exactly when `--skill-damage`/SDK
+    /// `skill_damage: true` was requested. GW2EI emits all four
+    /// unconditionally; they ride the per-skill flag here for PAYLOAD (the
+    /// ally matrices alone are +36.0% on the flagless committed fixture and
+    /// grow quadratically in squad size), the same treatment
+    /// `totalDamageDist` already gets, and axibridge hardcodes that flag to
+    /// `true`. Ignored when [`Self::healing_detail`] is `None`.
+    pub healing_dist: bool,
+    /// `minions` (MEIGAP Task 3b): per-player minion damage-taken rollups
+    /// from `axilog_core::analysis::minions::build`, or `None`. The OPT-IN
+    /// gate for `players[].minions[]`, positionally joined to
+    /// `report.players`.
+    ///
+    /// Gated by the caller on `--skill-damage` -- it is a per-skill
+    /// distribution like every other `*Dist` block. See
+    /// `axilog_core::analysis::minions`' module doc for the (very small)
+    /// read surface this reproduces.
+    pub minions: Option<&'a MinionRollups>,
 }
 
 /// Render a [`Report`] plus its EI-only side inputs as Elite-Insights-
@@ -325,7 +631,25 @@ pub struct EiInputs<'a> {
 /// See [`EiInputs`] for what each input gates; `EiInputs::default()` renders
 /// everything that is derivable from the `Report` alone.
 pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
-    let EiInputs { activity, replay, modifiers } = *inputs;
+    let EiInputs {
+        activity,
+        replay,
+        modifiers,
+        boon_states,
+        enemy_series,
+        enemy_dist,
+        target_conditions,
+        healing_detail,
+        healing_series,
+        healing_dist,
+        minions,
+    } = *inputs;
+    // Positional-join guards, same convention `replay` uses just below: a
+    // hand-built `Report` (every unit test) can violate them, and dropping
+    // the whole surface beats mis-attributing one player's healing to
+    // another.
+    let healing_detail = healing_detail.filter(|d| d.len() == report.players.len());
+    let minions = minions.filter(|m| m.len() == report.players.len());
     // Positional join guard: the tracks must be `report.players` followed by
     // the enemy-PLAYER subset of `report.all_enemies`, in those orders. A
     // caller that hand-builds a `Report` (every unit test below) can violate
@@ -432,10 +756,71 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
         // interaction, and `statsTargets[][]` is positionally keyed to
         // `targets[]` below, so both must stay in lockstep off the same
         // unfiltered list to preserve that faithfulness.
+        //
+        // MEIGAP Task 1d: the per-target OFFENSIVE SPLIT joins `totalDmg`
+        // here, exactly when this player's native `per_target` block is
+        // present (`--skill-damage`/SDK `skill_damage: true` -- the same
+        // flag that gates `targetDamageDist` below, and the same
+        // "presence, not a flag" convention every other opt-in block in
+        // this function uses). Without it the row keeps today's
+        // `totalDmg`-only shape: the split keys are OMITTED, never emitted
+        // as zeros, so a consumer can still tell "not computed" from
+        // "genuinely none" -- which is exactly what axibridge's own
+        // `!sawTargetSplit` guard (`src/main/detailsProcessing.ts`) keys
+        // off. The fields are -- `killed`, `downed`, `connectedDamageCount`,
+        // `connectedDmg`, `againstDownedCount`, `interrupts` and
+        // `downContribution`, from `p.per_target`
+        // (`axilog_core::analysis::per_target`, whose module doc carries
+        // the per-field `OffensiveStatistics` citation trail). Real EI
+        // computes all of them from the SAME statistics class as
+        // `statsAll[0]`, only with a non-null `target`
+        // (`JsonPlayerBuilder.cs:122` -> `SingleActor.cs:680-691`), and
+        // this reproduces that relationship exactly: each field is the
+        // already-calibrated whole-fight pass' own predicate, restricted to
+        // one enemy, so the per-target column sums back to its `statsAll`
+        // counterpart by construction.
+        //
+        // `connectedHits` is NOT an EI field name -- axibridge reads it
+        // through a `connectedHits ?? connectedDamageCount ?? hits` chain
+        // (`computeFightDiffMode.ts:78-90`) and real EI only ever emits
+        // `connectedDamageCount` (verified across the whole reference
+        // export). So `connectedDamageCount` is what's emitted; inventing
+        // an EI-shaped key EI itself never writes would be the wrong kind
+        // of compatibility.
+        //
+        // `downContribution` is this project's arcdps-methodology number
+        // (`p.per_target[].downs_contribution_damage`), NOT EI's own
+        // 90%-to-downstate-window algorithm -- the identical deliberate
+        // divergence, with the identical honesty caveat, that
+        // `statsAll[0].downContribution` above already carries. It is the
+        // one field in this block that is a "closest real EI field for
+        // this concept" placement rather than a parity claim.
+        //
+        // Everything else real EI carries on `statsTargets[i][0]` (the
+        // full connected*/critable*/flanking/glance/moving family, the
+        // miss/evade/block/invuln outcomes, the per-target
+        // appliedCrowdControl* split, `againstDownedDamage`) is still not
+        // computed per-target here, and stays omitted rather than faked.
         let stats_targets: Vec<Value> = report.all_enemies.iter().map(|e| {
             let dmg = p.damage.per_enemy.iter().find(|pe| pe.enemy_id == e.id)
                 .map(|pe| pe.total).unwrap_or(0);
-            json!([ { "totalDmg": dmg } ])
+            let mut row = json!({ "totalDmg": dmg });
+            if let Some(split) = &p.per_target {
+                let t = split.iter().find(|t| t.enemy_id == e.id);
+                let obj = row.as_object_mut().expect("statsTargets row is an object");
+                for (k, v) in [
+                    ("killed", t.map(|t| t.killed).unwrap_or(0) as u64),
+                    ("downed", t.map(|t| t.downed).unwrap_or(0) as u64),
+                    ("connectedDamageCount", t.map(|t| t.connected_hits).unwrap_or(0) as u64),
+                    ("connectedDmg", t.map(|t| t.connected_damage).unwrap_or(0)),
+                    ("againstDownedCount", t.map(|t| t.against_downed_count).unwrap_or(0) as u64),
+                    ("interrupts", t.map(|t| t.interrupts).unwrap_or(0) as u64),
+                    ("downContribution", t.map(|t| t.downs_contribution_damage).unwrap_or(0)),
+                ] {
+                    obj.insert(k.to_string(), json!(v));
+                }
+            }
+            json!([row])
         }).collect();
         let mut v = json!({
             "account": p.account,
@@ -503,7 +888,46 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 "damageBarrier": p.defenses.barrier_damage,
                 "damageBarrierCount": p.defenses.barrier_count,
                 "breakbarDamageTaken": p.defenses.breakbar_damage,
-                "breakbarDamageTakenCount": p.defenses.breakbar_count
+                "breakbarDamageTakenCount": p.defenses.breakbar_count,
+                // MEIGAP Task 1c: incoming CC + incoming boon strips, the
+                // last four always-on `defenses[0]` fields axibridge reads.
+                // Mapped from `p.defenses` like every field above -- see
+                // `axilog_core::analysis::defenses::DefenseStats`'s
+                // `received_cc_count`/`boon_strips_taken` doc comments for
+                // the full GW2EI derivation (`JsonStatistics.cs:130-137,
+                // 150-154`, `DefensePerTargetStatistics.cs:48-70,136-141,
+                // 149`).
+                //
+                // `receivedCrowdControlDuration` stays in MILLISECONDS,
+                // EI's own convention on this field (`CrowdControlEvent.
+                // Duration = evtcItem.Value`, summed with no `/1000` at
+                // `DefensePerTargetStatistics.cs:139`) -- the same ms
+                // convention `appliedCrowdControlDuration` above already
+                // uses, and unlike `support[0].removedStunDuration` below,
+                // which EI really does report in seconds.
+                //
+                // `boonStripsTime` IS in seconds (`GetStripData`'s closing
+                // `Math.Round(stripTime / 1000.0, ParserHelper.TimeDigit)`,
+                // `:69`) -- BUT this emits the TRUE duration sum, not a
+                // reproduction of GW2EI's own verified arithmetic bug on
+                // that line's accumulator (`Math.Max(current + removed,
+                // LogDuration)` where `Min` was intended, `:63`), which
+                // inflates the exported number to roughly
+                // `distinct_boons_stripped * logDuration`. Same
+                // "axilog is correct here, not less" convention as
+                // `lifeLeechDamageTakenCount` above; see
+                // `DefenseStats::boon_strips_taken_duration_ms`'s doc
+                // comment for the measured proof on the reference export,
+                // and `crates/axilog-ei/tests/meigap_ei_golden.rs` for the
+                // calibration, which reconstructs EI's formula from our own
+                // per-boon strip detail (pinning the distinct-boon set, the
+                // per-boon removal count and every removal after the first;
+                // EI's `Max` swallows the first one's duration).
+                // `TimeDigit` is 3, matching the export's own precision.
+                "receivedCrowdControl": p.defenses.received_cc_count,
+                "receivedCrowdControlDuration": p.defenses.received_cc_duration_ms,
+                "boonStrips": p.defenses.boon_strips_taken,
+                "boonStripsTime": ei_time_secs(p.defenses.boon_strips_taken_duration_ms)
             } ],
             // EI places stun-break stats under `support`, not `defenses` — verified
             // against GW2EI's `SupportAllStatistics` (StunBreakCount /
@@ -524,6 +948,17 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 "condiCleanse": p.support.cleanses,
                 "condiCleanseSelf": p.support.cleanses_self,
                 "boonStrips": p.support.strips,
+                // MEIGAP Task 3e: the outgoing twin of
+                // `defenses[0].boonStripsTime`, and the same deliberate,
+                // calibrated divergence -- axilog emits the TRUE sum in
+                // seconds, GW2EI's own export carries the value its buggy
+                // `Math.Max(foeTime + RemovedDuration, LogDuration)`
+                // accumulator produces
+                // (`SupportPerAllyStatistics.cs`). See
+                // `axilog_core::analysis::support::SupportMetrics::
+                // strips_duration_ms` for the full transcription and what
+                // the calibration's reconstruction pins.
+                "boonStripsTime": ei_time_secs(p.support.strips_duration_ms),
                 "resurrects": p.support.resurrects
             } ],
             // `buffUptimes[]` (M3 Task 5): one entry per tracked boon (the 12 in
@@ -540,20 +975,118 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             // entry we can honestly attribute to a specific character name is the
             // player's own self-generation — emitted as `{ <own character>:
             // self_pct }` rather than fabricating group/squad members' names.
+            //
+            // MEIGAP Task 1b: `states` and `statesPerSource` join each
+            // entry exactly when `EiInputs::boon_states` was supplied (see
+            // that field's doc comment for GW2EI's own
+            // `RawFormatTimelineArrays` gate, which it mirrors). Both are
+            // `[[time_ms_from_log_start, stackCount], ...]`;
+            // `statesPerSource` keys by source CHARACTER name, with
+            // GW2EI's own `"UNKNOWN"` placeholder for an unresolved source
+            // -- see `axilog_core::analysis::buffs::states`'s module doc
+            // for the full shape/citation trail, including why a leading
+            // `[0, 0]` pair is always present.
             "buffUptimes": p.boons.iter().map(|b| {
                 let (uptime, presence) = match b.avg_stacks {
                     Some(avg) => (avg, b.presence_pct), // intensity boon
                     None => (b.presence_pct, 0.0),      // duration boon
                 };
-                json!({
+                let mut entry = json!({
                     "id": b.id,
                     "buffData": [ {
                         "uptime": uptime,
                         "presence": presence,
                         "generated": { &p.character: b.generation.self_pct }
                     } ]
-                })
-            }).collect::<Vec<_>>()
+                });
+                if let Some(bs) = boon_states {
+                    let obj = entry.as_object_mut().expect("buffUptimes entry is an object");
+                    let key = (p.agent_addr, b.id);
+                    obj.insert(
+                        "states".to_string(),
+                        ei_states_json(bs.total.get(&key).map(|v| v.as_slice()).unwrap_or(&[])),
+                    );
+                    let per_source: BTreeMap<&str, Value> = bs
+                        .per_source
+                        .get(&key)
+                        .into_iter()
+                        .flatten()
+                        .map(|(name, states)| (name.as_str(), ei_states_json(states)))
+                        .collect();
+                    obj.insert("statesPerSource".to_string(), json!(per_source));
+                }
+                entry
+            }).collect::<Vec<_>>(),
+            // `selfBuffs`/`groupBuffs`/`squadBuffs` (MEIGAP Task 1a): the
+            // boon-generation ATTRIBUTION arrays, i.e. "how much boon-time
+            // did THIS player generate, for himself / for his subgroup /
+            // for the squad".
+            //
+            // Shape (`GW2EIJSON/JsonActors/JsonPlayer.cs:233,239,251` ->
+            // `GW2EIJSON/JsonActorUtilities/JsonPlayerUtilities/
+            // JsonPlayerBuffsGeneration.cs:53,60`): `[{ id, buffData: [
+            // {...} ] }]`, the inner array being per-phase (one element
+            // here -- this project's one-phase convention, same as
+            // `statsAll`/`totalDamageDist`).
+            //
+            // Scope, verified against `GW2EIEvtcParser/EIData/Actors/
+            // Player.cs:58-69`: `Self` -> `BuffStatistics.GetBuffsForSelf`
+            // (this player as both source and target), `Group` -> every
+            // OTHER player with the same subgroup, `Squad` -> every OTHER
+            // player in `log.PlayerList`. That is exactly the tripartite
+            // split `axilog_core::analysis::buffs::generation`'s
+            // `GenerationStats` already computes and M3 Task 4 calibrated
+            // (see that module's doc comment for the per-scope citation
+            // trail and the ms->percent/avg-stacks scaling, which matches
+            // `BuffStatistics.cs:116-121`/`:135-141` term for term:
+            // duration boons `*100`, intensity boons raw average stacks).
+            //
+            // Emitted fields: `generation` ONLY. Real EI's sibling fields
+            // on the same object -- `generationPresence`, `overstack`
+            // (which is really overstack+generation, `BuffStatistics.cs:117`),
+            // `wasted`, `unknownExtended`, `byExtension`, `extended` --
+            // come from the simulator's WASTE/OVERSTACK/EXTENSION channels
+            // (`GW2EIEvtcParser/EIData/Buffs/BuffSimulators/SimulationItem.cs:81-115`,
+            // `BuffSimulatorNoID/BuffSimulator.cs:67,99,104,117,122`), which
+            // this project's own generation simulator does not model: it
+            // accumulates only the HELD (generation) ms per source. They're
+            // omitted rather than faked, the same "don't fake absent data"
+            // convention `statsTargets`/`support`/`extHealingStats` above
+            // already follow. (`wasted` is the one axibridge also reads;
+            // absent, its reader's `wasted ?? 0` yields a zero wasted-time
+            // column while the generation column -- the metric that matters
+            // -- is fully populated.)
+            //
+            // Id sets, following EI's own two DIFFERENT rules:
+            //
+            // - `selfBuffs` carries every id `buffUptimes` carries, zeros
+            //   included. Verified on the reference export: its `selfBuffs`
+            //   id list is character-for-character its `buffUptimes` id
+            //   list, 43 of 43 on every player, and its first entry there
+            //   really does read `"generation": 0`. This emits all 12
+            //   tracked boons for the same reason -- `buffUptimes` above
+            //   emits all 12. (EI's 43 ids against this project's 12 is the
+            //   tracked-boon SCOPE difference the README already records --
+            //   these arrays are a 12-of-43 SUBSET, not a parity claim --
+            //   not a difference in this rule.)
+            // - `groupBuffs`/`squadBuffs` are filtered to buffs this player
+            //   is a recorded SOURCE for: `BuffStatistics.cs:66,100`'s
+            //   `hasGeneration`, i.e. `buffDistribution.HasSrc(boon.ID,
+            //   srcAgentItem)` on at least one target in scope. A source
+            //   with nonzero generated-ms on some target is exactly such a
+            //   source, so `> 0` reproduces that filter. It is marginally
+            //   NARROWER than `HasSrc`, which is also true for a source
+            //   that contributed only overstack/waste/extension and no held
+            //   time -- an all-zero row on the one field this adapter
+            //   emits, so dropping it loses nothing.
+            //
+            // Emitting all 12 in all THREE arrays was measured first and
+            // rejected: the zero rows carry no information and cost 39.4%
+            // of these arrays' bytes (see the MEIGAP Task 1 report's
+            // always-on size decision).
+            "selfBuffs": buff_generation_json(&p.boons, |g| g.self_pct, true),
+            "groupBuffs": buff_generation_json(&p.boons, |g| g.group_pct, false),
+            "squadBuffs": buff_generation_json(&p.boons, |g| g.squad_pct, false)
         });
         // `activeTimes`/`combatReplayData` (M11 Task 3): unlike every other
         // block on this player, these are ALWAYS present -- not gated on
@@ -702,6 +1235,19 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert("damage1S".to_string(), json!([ps.damage]));
             obj.insert("damageTaken1S".to_string(), json!([ps.damage_taken]));
+            // MEIGAP Task 2a: the POWER half of the same two families.
+            // GW2EI emits `powerDamageTaken1S` beside `damageTaken1S` from
+            // the identical `GetDamageTakenGraph` call with
+            // `DamageType.Power` instead of `.All`
+            // (`JsonPlayerBuilder.cs:76-77`), and `targetPowerDamage1S`
+            // beside `targetDamage1S` likewise (`:99-100`). POWER is "not
+            // `ConditionDamageBased`" (`Actor.cs:449-451`) -- strike AND
+            // life-leech AND the non-catalogued `buff == 1` bucket, NOT
+            // `strike + life_leech`; see `axilog_core::analysis::
+            // timeseries`'s POWER-split section. `conditionDamageTaken1S`/
+            // `targetConditionDamage1S` (the complements EI also emits) are
+            // deliberately omitted: no axibridge reader touches them.
+            obj.insert("powerDamageTaken1S".to_string(), json!([ps.power_damage_taken]));
             let buckets = ps.damage.len();
             let target_damage_1s: Vec<Value> = report
                 .all_enemies
@@ -717,6 +1263,20 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 })
                 .collect();
             obj.insert("targetDamage1S".to_string(), json!(target_damage_1s));
+            let target_power_damage_1s: Vec<Value> = report
+                .all_enemies
+                .iter()
+                .map(|e| {
+                    let series = ps
+                        .per_target
+                        .iter()
+                        .find(|t| t.enemy_id == e.id)
+                        .map(|t| t.power_damage.clone())
+                        .unwrap_or_else(|| vec![0u64; buckets]);
+                    json!([series])
+                })
+                .collect();
+            obj.insert("targetPowerDamage1S".to_string(), json!(target_power_damage_1s));
 
             let dps_targets: Vec<Value> = report
                 .all_enemies
@@ -727,6 +1287,17 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 })
                 .collect();
             obj.insert("dpsTargets".to_string(), json!(dps_targets));
+        }
+        // `guildID` (MEIGAP Task 3c): GW2EI's own field, decoded from the
+        // `CBTS_GUILD` statechange -- see `axilog_core::wvw::guilds` for
+        // the byte permutation and for why this needs no GW2-API lookup.
+        // Inserted conditionally rather than as a `json!` key so a log
+        // without guild rows carries no `"guildID": null` noise; axibridge
+        // guards with `typeof player?.guildID === 'string'`
+        // (`src/shared/squadGuilds.ts:18`) either way.
+        if let Some(g) = &p.guild_id {
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
+            obj.insert("guildID".to_string(), Value::from(g.clone()));
         }
         // `extHealingStats`/`extBarrierStats` (M10 Task 1): only when this
         // log carries the healing extension at all (`p.healing` is `None`
@@ -750,27 +1321,147 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
         // which has no direct EI-field-name equivalent to reuse here) --
         // omitted rather than faked, same convention as `statsTargets`/
         // `support` above.
+        //
+        // MEIGAP Task 3a fills in three of those gaps --
+        // `outgoingHealingAllies`, `totalHealingDist`, `healing1S` (and
+        // the two barrier twins) -- from `EiInputs::healing_detail`. The
+        // rest of the sentence above still stands: the skill-type
+        // breakdown, `incomingHealing` and every `allied*`/`*Received1S`
+        // array remain uncomputed and unemitted.
         if let Some(h) = &p.healing {
+            let detail = healing_detail.and_then(|d| d.get(player_idx));
+            let mut healing = json!({
+                "outgoingHealing": [ {
+                    "healing": h.healing_out_total,
+                    "hps": (h.healing_out_total as f64 / duration_secs).round() as i64,
+                    "downedHealing": h.downed_healing_out,
+                    "downedHps": (h.downed_healing_out as f64 / duration_secs).round() as i64,
+                } ]
+            });
+            let mut barrier = json!({
+                "outgoingBarrier": [ {
+                    "barrier": h.barrier_out,
+                    "bps": (h.barrier_out as f64 / duration_secs).round() as i64,
+                } ]
+            });
+            if let Some(d) = detail {
+                let ho = healing.as_object_mut().expect("object literal");
+                let bo = barrier.as_object_mut().expect("object literal");
+                // `outgoingHealingAllies[allyIndex][phase]` /
+                // `outgoingBarrierAllies[allyIndex][phase]`: one row per
+                // `players[]` entry, in that order, single-phase like every
+                // other array in this document.
+                //
+                // GW2EI emits both unconditionally
+                // (`EXTJsonPlayerHealingStatsBuilder.cs:73` sits outside
+                // every `RawFormatTimelineArrays` block). They ride
+                // `--skill-damage` here purely for PAYLOAD -- measured
+                // always-on on `fixtures/wvw-small.anon.zevtc` they grow
+                // the flagless compact ei-json 262,226 -> 356,662 bytes
+                // (+36.0%), past the ~30% band every always-on block in
+                // this schema has been held to, and they grow
+                // QUADRATICALLY in squad size (41x41 cells here, 48x48 on
+                // the real capture). Same treatment, same flag, and the
+                // same Task-2c precedent as `targets[].totalDamageDist`,
+                // which GW2EI also emits unconditionally; axibridge
+                // hardcodes the flag to `true`, so the read surface is
+                // unchanged.
+                if healing_dist {
+                    ho.insert(
+                        "outgoingHealingAllies".to_string(),
+                        Value::Array(
+                            d.ally_healing
+                                .iter()
+                                .map(|c| {
+                                    json!([ { "healing": c.healing, "downedHealing": c.downed_healing } ])
+                                })
+                                .collect(),
+                        ),
+                    );
+                    bo.insert(
+                        "outgoingBarrierAllies".to_string(),
+                        Value::Array(
+                            d.ally_barrier.iter().map(|&b| json!([ { "barrier": b } ])).collect(),
+                        ),
+                    );
+                    // Two shape divergences from GW2EI, both deliberate and
+                    // both invisible to an id-keyed consumer:
+                    //
+                    // 1. **Row ORDER.** GW2EI emits dist rows in
+                    //    `GroupBy(x => x.SkillID)` order, i.e. first-event
+                    //    order; these are sorted by skill id ascending (the
+                    //    `BTreeMap` the pass accumulates into). Every reader
+                    //    of this array in axibridge keys by `entry.id`
+                    //    (`computePlayerAggregation.ts:1075-1097`), and so
+                    //    does the calibration, so nothing observes the
+                    //    difference -- but a byte-diff against a real export
+                    //    would.
+                    // 2. **Indirect ids are not added to `buffMap`.**
+                    //    `BuildHealingDist` routes an `IndirectHealing` row's
+                    //    id into `buffMap` rather than `skillMap`, so EI's
+                    //    consumers can name it. This adapter's `buffMap` is
+                    //    the 12 tracked boons (plus Task 2d's conditions),
+                    //    and a healing-over-time id is neither -- so an
+                    //    indirect row here carries a correct
+                    //    `indirectHealing: true` and an id that resolves in
+                    //    neither map. axibridge's `resolveSkillMeta` falls
+                    //    back to `"Skill <id>"`, which is the same fallback
+                    //    the always-on `skillMap` already documents for ids
+                    //    whose name this project cannot resolve.
+                    ho.insert(
+                        "totalHealingDist".to_string(),
+                        json!([ heal_dist_json(&d.healing_dist, "totalHealing", true) ]),
+                    );
+                    bo.insert(
+                        "totalBarrierDist".to_string(),
+                        json!([ heal_dist_json(&d.barrier_dist, "totalBarrier", false) ]),
+                    );
+                }
+                if healing_series {
+                    ho.insert("healing1S".to_string(), json!([ d.healing_1s ]));
+                }
+            }
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
+            obj.insert("extHealingStats".to_string(), healing);
+            obj.insert("extBarrierStats".to_string(), barrier);
+        }
+        // `minions[]` (MEIGAP Task 3b): emitted only under
+        // `--skill-damage` (the caller supplies `EiInputs::minions` exactly
+        // then), and only for a player that actually has minions -- GW2EI
+        // omits the key entirely for a player with none, and axibridge's
+        // readers both start with an `Array.isArray(...) ? ... : []` guard,
+        // so an empty array and an absent key are equivalent to it. Absent
+        // is the smaller and the more faithful of the two.
+        if let Some(groups) = minions.and_then(|m| m.get(player_idx)).filter(|g| !g.is_empty()) {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert(
-                "extHealingStats".to_string(),
-                json!({
-                    "outgoingHealing": [ {
-                        "healing": h.healing_out_total,
-                        "hps": (h.healing_out_total as f64 / duration_secs).round() as i64,
-                        "downedHealing": h.downed_healing_out,
-                        "downedHps": (h.downed_healing_out as f64 / duration_secs).round() as i64,
-                    } ]
-                }),
-            );
-            obj.insert(
-                "extBarrierStats".to_string(),
-                json!({
-                    "outgoingBarrier": [ {
-                        "barrier": h.barrier_out,
-                        "bps": (h.barrier_out as f64 / duration_secs).round() as i64,
-                    } ]
-                }),
+                "minions".to_string(),
+                Value::Array(
+                    groups
+                        .iter()
+                        .map(|g| {
+                            json!({
+                                "id": g.species_id,
+                                "name": g.name,
+                                "totalDamageTakenDist": [ g.taken.iter().map(|r| json!({
+                                    "id": r.skill_id,
+                                    "totalDamage": r.total,
+                                    "hits": r.hits,
+                                    "connectedHits": r.connected_hits,
+                                    "min": r.min,
+                                    "max": r.max,
+                                    "blocked": r.blocked,
+                                    "evaded": r.evaded,
+                                    "glance": r.glance,
+                                    "missed": r.missed,
+                                    "invulned": r.invulned,
+                                    "interrupted": r.interrupted,
+                                    "indirectDamage": r.indirect,
+                                })).collect::<Vec<_>>() ]
+                            })
+                        })
+                        .collect(),
+                ),
             );
         }
         // `rotation[]` (M14, Task 3): only present when this player's
@@ -910,6 +1601,16 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
     // the README rather than faked. (EI's exported `targets[]` has no
     // `profession` field either, so the reference cannot be joined on spec
     // the way `players[]` can.)
+    // Bucket count for an enemy that never dealt damage (MEIGAP Task 2b):
+    // read off any enemy that did, since every series in the map is built
+    // to the one length `axilog_core::analysis::timeseries::ei_grid`
+    // computes (GW2EI's own `InterpolatedGraph` allocation). Falling back to
+    // a player's own `per_second.damage` length keeps the arrays aligned
+    // even on the degenerate log where no enemy dealt any damage at all.
+    let enemy_buckets = enemy_series
+        .and_then(|m| m.values().next().map(|s| s.damage.len()))
+        .or_else(|| report.players.iter().find_map(|p| p.per_second.as_ref()).map(|ps| ps.damage.len()))
+        .unwrap_or(0);
     let mut enemy_track = replay.map(|r| r.tracks[report.players.len()..].iter());
     let targets: Vec<Value> = report.all_enemies.iter().map(|e| {
         let mut t = json!({
@@ -920,7 +1621,7 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             if let Some(track) = enemy_track.as_mut().and_then(|it| it.next()) {
                 // Correction to the earlier audit fix: `combatReplayData` is
                 // NOT gated on the actor having any polled positions.
-                // GW2EI's `JsonActorBuilder.cs:104-105` builds it
+                // GW2EI's `JsonActorBuilder.cs:103-104` builds it
                 // UNCONDITIONALLY (`if (log.CanCombatReplay) jsonActor.
                 // CombatReplayData = Build(...)`, keyed only on whether
                 // replay was requested at all), and
@@ -958,6 +1659,57 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 );
             }
         }
+        // MEIGAP Task 2b/2c/2d: the three `targets[]` mirrors. Each keys off
+        // its own input's PRESENCE (the "presence, not a flag" convention
+        // `skill_damage`/`per_second` already use on the player side), so a
+        // flagless render emits none of them and stays byte-identical.
+        let obj = t.as_object_mut().expect("target is a JSON object");
+        if let Some(series) = enemy_series {
+            // `targets[].damage1S`/`.powerDamage1S` are this enemy's OUTGOING
+            // damage, `[phase][second]`-shaped exactly like the player-side
+            // `damage1S` -- built by the SHARED `JsonActorBuilder.
+            // FillJsonActor` (`JsonActorBuilder.cs:72-73`) over an NPC actor
+            // (`JsonNPCBuilder.cs:20` calls it first). An enemy that never
+            // dealt damage gets a full-length zero series, not an absent
+            // key, matching EI's always-present arrays.
+            let (damage, power) = match series.get(&e.id) {
+                Some(s) => (s.damage.clone(), s.power_damage.clone()),
+                None => (vec![0u64; enemy_buckets], vec![0u64; enemy_buckets]),
+            };
+            obj.insert("damage1S".to_string(), json!([damage]));
+            obj.insert("powerDamage1S".to_string(), json!([power]));
+        }
+        if let Some(dist) = enemy_dist {
+            // `targets[].totalDamageDist[0]`: this enemy's OUTGOING damage
+            // by skill, ACTOR-ONLY (`GetJustActorDamageEvents`) -- see
+            // `skill_damage::build_enemy_dist`'s doc comment, including why
+            // the contributing-hit count is emitted as `connectedHits`
+            // (the key axibridge's mitigation math divides by) rather than
+            // as EI's attempt-count `hits`.
+            let skills: Vec<Value> = dist
+                .get(&e.id)
+                .map(|v| v.iter().map(enemy_skill_entry_ei_json).collect())
+                .unwrap_or_default();
+            obj.insert("totalDamageDist".to_string(), json!([skills]));
+        }
+        if let Some(tc) = target_conditions {
+            // `targets[].buffs[]`: `{id, statesPerSource}` per condition
+            // this enemy carried, source-split by squad-player character
+            // name -- see `axilog_core::analysis::target_conditions`'s
+            // module doc for the direction citation and the deliberate
+            // conditions-only / `statesPerSource`-only narrowing.
+            let buffs: Vec<Value> = tc
+                .range((e.id, 0u32)..=(e.id, u32::MAX))
+                .map(|(&(_, buff_id), per_source)| {
+                    let states: BTreeMap<&str, Value> = per_source
+                        .iter()
+                        .map(|(name, tl)| (name.as_str(), ei_states_json(tl)))
+                        .collect();
+                    json!({ "id": buff_id, "statesPerSource": states })
+                })
+                .collect();
+            obj.insert("buffs".to_string(), json!(buffs));
+        }
         t
     }).collect();
     // `buffMap` (M3 Task 5): a subset covering only the 12 tracked boons,
@@ -971,9 +1723,24 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
     // (`classification`, `icon`, `conversionBasedHealing`, `hybridHealing`,
     // `descriptions`) aren't computed here, so they're omitted rather than
     // faked.
-    let buff_map: BTreeMap<String, Value> = BOON_IDS.iter().map(|&(id, name, is_intensity)| {
+    //
+    // MEIGAP Task 2d: when `targets[].buffs` is emitted, the fourteen
+    // CONDITION ids join the map on the same terms. This is not decoration:
+    // axibridge resolves every target-buff id through `resolveBuffMetaById`
+    // and drops the entry outright when the lookup misses
+    // (`conditionsMetrics.ts:311-314`), so without these rows the whole
+    // `targets[].buffs` array would be dead payload. Gated on the same
+    // input so the flagless `buffMap` stays byte-identical.
+    let mut buff_map: BTreeMap<String, Value> = BOON_IDS.iter().map(|&(id, name, is_intensity)| {
         (format!("b{id}"), json!({ "name": name, "stacking": is_intensity }))
     }).collect();
+    if target_conditions.is_some() {
+        for (id, name, is_intensity) in
+            axilog_core::analysis::target_conditions::condition_buff_map()
+        {
+            buff_map.insert(format!("b{id}"), json!({ "name": name, "stacking": is_intensity }));
+        }
+    }
     // `skillMap` (M14, Task 3): keyed `"s<id>"` per real EI's convention
     // (verified against axibridge's `test-fixtures/boon/
     // 20260117-181030.json`, `skillMap.s45534` etc -- same `"s"`-prefix
@@ -1101,10 +1868,10 @@ mod tests {
             duration_ms:1000,build:"".into(),revision:1,recorded_by:Some(":A.1".into()),
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"Daredevil".into(),
-            team:"red".into(),subgroup:2,in_squad:true,commander:true,marker:None,commander_tag:None,agent_addrs:vec![1]},
+            team:"red".into(),subgroup:2,in_squad:true,commander:true,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             Player{agent_addr:2,account:":B.2".into(),
             character:"B".into(),profession:"Guardian".into(),elite_spec:"".into(),
-            team:"red".into(),subgroup:2,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![2]}],
+            team:"red".into(),subgroup:2,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![2]}],
             enemies:vec![Enemy{id:9,instid:9,name:"Foe".into(),team:"blue".into(),
             is_player:true,marker:None,agent_addrs:vec![9]},
             Enemy{id:10,instid:10,name:"Gadget".into(),team:"blue".into(),
@@ -1195,7 +1962,7 @@ mod tests {
             duration_ms:1000,build:"".into(),revision:1,recorded_by:None,
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"Nim Iss".into(),profession:"Thief".into(),elite_spec:"".into(),
-            team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]}],
+            team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]}],
             enemies:vec![],markers:vec![],tick_rate:None};
         let mut boon_uptime = std::collections::BTreeMap::new();
         // Might (intensity): avg_stacks=3.5, presence_pct=100.0.
@@ -1206,7 +1973,7 @@ mod tests {
         boon_generation.insert((1u64, buffs::MIGHT), GenerationStats { self_pct: 1.5, group_pct: 2.0, squad_pct: 3.0 });
         let m = Metrics{
             players: vec![PlayerMetrics{agent_addr:1,
-                support: SupportMetrics { cleanses: 5, cleanses_self: 2, strips: 7, resurrects: 1 },
+                support: SupportMetrics { cleanses: 5, cleanses_self: 2, strips: 7, strips_duration_ms: 12345, resurrects: 1 },
                 ..Default::default()}],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime, boon_generation,
@@ -1278,15 +2045,16 @@ mod tests {
             PlayerOut {
                 account: account.to_string(), character: account.to_string(),
                 profession: "Guardian".into(), elite_spec: "".into(), team: "red".into(),
-                subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+                subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
                 damage: DamageOut { total: 0, dps: 0.0, per_enemy: vec![] },
                 downs_dealt: 0, kills_dealt: 0, downs_taken: 0, deaths: 0,
                 damage_taken: 0,
                 cc: CcOut { applied_total: 0, applied_duration_ms: 0, stun_breaks: 0, removed_stun_duration_ms: 0 },
                 downs_contribution: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
+                per_target: None,
                 downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
                 boons: vec![],
-                support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
+                support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 },
                 healing,
                 skill_damage: None,
                 per_second: None,
@@ -1411,14 +2179,15 @@ mod tests {
         PlayerOut {
             account: ":A.1".into(), character: "A".into(), profession: "Guardian".into(),
             elite_spec: "".into(), team: "red".into(), subgroup: 1, in_squad: true,
-            commander: false, marker: None, commander_tag: None,
+            commander: false, marker: None, commander_tag: None, guild_id: None,
             damage: DamageOut { total: 0, dps: 0.0, per_enemy: vec![] },
             downs_dealt: 0, kills_dealt: 0, downs_taken: 0, deaths: 0, damage_taken: 0,
             cc: CcOut { applied_total: 0, applied_duration_ms: 0, stun_breaks: 0, removed_stun_duration_ms: 0 },
             downs_contribution: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
+            per_target: None,
             downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
             boons: vec![],
-            support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
+            support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 },
             healing: None,
             skill_damage, per_second, dps_targets,
             hit_stats: HitStatsOut::default(),
@@ -1529,7 +2298,12 @@ mod tests {
         let ps = PlayerPerSecondOut {
             damage: vec![50, 80, 80],
             damage_taken: vec![10, 10, 10],
-            per_target: vec![PlayerTargetSeriesOut { enemy_id: 9, damage: vec![50, 80, 80] }],
+            power_damage_taken: vec![6, 6, 6],
+            per_target: vec![PlayerTargetSeriesOut {
+                enemy_id: 9,
+                damage: vec![50, 80, 80],
+                power_damage: vec![50, 70, 70],
+            }],
         };
         let dps_targets = vec![DpsTargetOut { enemy_id: 9, damage: 80, dps: 40.0 }];
         let enemies = vec![
@@ -1547,6 +2321,9 @@ mod tests {
         assert_eq!(p["damage1S"], json!([[50, 80, 80]]));
         assert_eq!(p["damage1S"][0].as_array().unwrap().last().unwrap(), &json!(80));
         assert_eq!(p["damageTaken1S"], json!([[10, 10, 10]]));
+        // MEIGAP Task 2a: the POWER halves ride the same `per_second`
+        // presence gate, and are their own series.
+        assert_eq!(p["powerDamageTaken1S"], json!([[6, 6, 6]]));
 
         // targetDamage1S: [targetIndex][phase][second] -- enemy 9 gets the
         // real series, enemy 10 (untouched) gets an all-zero series of the
@@ -1554,6 +2331,9 @@ mod tests {
         assert_eq!(p["targetDamage1S"].as_array().unwrap().len(), 2);
         assert_eq!(p["targetDamage1S"][0], json!([[50, 80, 80]]));
         assert_eq!(p["targetDamage1S"][1], json!([[0, 0, 0]]), "untouched target gets an all-zero series, not absent");
+        assert_eq!(p["targetPowerDamage1S"].as_array().unwrap().len(), 2);
+        assert_eq!(p["targetPowerDamage1S"][0], json!([[50, 70, 70]]));
+        assert_eq!(p["targetPowerDamage1S"][1], json!([[0, 0, 0]]));
 
         // dpsTargets: [targetIndex][phase]{dps, damage} -- enemy 9 carries
         // the real dps/damage, enemy 10 defaults to zero.
@@ -1794,7 +2574,7 @@ mod tests {
     /// list (the `NonSquadPlayer`/no-`forcePolling` case -- see
     /// `axilog_core::analysis::ei_replay::build_world_track`'s doc comment)
     /// still gets a `combatReplayData` object -- GW2EI's own
-    /// `JsonActorBuilder.cs:104-105` builds it unconditionally whenever
+    /// `JsonActorBuilder.cs:103-104` builds it unconditionally whenever
     /// replay was requested at all (`SingleActorCombatReplayDescription`'s
     /// ctor assigns `Positions`/`Rotations` straight from whatever the
     /// actor polled, empty or not); it does NOT gate on

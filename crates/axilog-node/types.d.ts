@@ -65,6 +65,26 @@ export interface PerEnemyOut {
   total: number
 }
 
+/**
+ * One `(player, enemy)` pair's offensive split -- mirrors
+ * `axilog_schema::PerTargetStatsOut` / EI's `statsTargets[i][0]`.
+ * `connected_hits`/`against_downed_count` are the actor-only hit-quality
+ * counts restricted to that enemy; `downed`/`killed` are minion-inclusive
+ * last-hit attributions, matching GW2EI. `downs_contribution_damage` is the
+ * arcdps-methodology per-target down-contribution, NOT EI's own
+ * 90%-to-downstate-window algorithm.
+ */
+export interface PerTargetStatsOut {
+  enemy_id: number
+  connected_hits: number
+  connected_damage: number
+  against_downed_count: number
+  downed: number
+  killed: number
+  interrupts: number
+  downs_contribution_damage: number
+}
+
 export interface DamageOut {
   total: number
   dps: number
@@ -114,19 +134,36 @@ export interface SkillDamageOut {
 export interface PlayerTargetSeriesOut {
   enemy_id: number
   damage: number[]
+  /**
+   * The non-condition half of `damage` (MEIGAP Task 2a), GW2EI's
+   * `targetPowerDamage1S` -- same buckets, same cumulative shape,
+   * element-wise `<= damage`. "Power" is GW2EI's `DamageType.Power`: every
+   * row whose skill id is NOT in its Condition buff catalog, i.e. strike
+   * damage AND life-leech AND the non-catalogued `buff == 1` bucket.
+   */
+  power_damage: number[]
 }
 
 /**
  * A player's per-second detail block (M12, Task 2), opt-in -- see
  * `PlayerOut.per_second`. `damage`/`damage_taken`/every `per_target[].damage`
  * are CUMULATIVE running totals, one entry per second, bucketed the same way
- * `Report.timeline` is (`resolution_ms = 1000`, from the log's first event)
- * -- mirrors GW2EI's `damage1S`/`damageTaken1S`/`targetDamage1S` cumulative
- * (not instant-delta) shape.
+ * GW2EI itself buckets them (`InterpolatedGraph`: `durationInS + 2` slots
+ * when the log is not a whole number of seconds, `+ 1` when it is; bucket
+ * index `ceil((t - logStart) / 1000)`) -- mirrors GW2EI's
+ * `damage1S`/`damageTaken1S`/`targetDamage1S` cumulative (not
+ * instant-delta) shape. NOTE: as of MEIGAP Task 2 this grid is no longer
+ * the same one `Report.timeline` uses; that one keeps its own
+ * floor-bucketed `duration/1000 + 1` scheme.
  */
 export interface PlayerPerSecondOut {
   damage: number[]
   damage_taken: number[]
+  /**
+   * The non-condition half of `damage_taken` (MEIGAP Task 2a), GW2EI's
+   * `powerDamageTaken1S` -- see `PlayerTargetSeriesOut.power_damage`.
+   */
+  power_damage_taken: number[]
   per_target: PlayerTargetSeriesOut[]
 }
 
@@ -171,6 +208,13 @@ export interface SupportOut {
   cleanses: number
   cleanses_self: number
   strips: number
+  /**
+   * True total remaining duration (ms) of every boon counted by `strips`
+   * (MEIGAP Task 3e). NOT the same number as EI's own
+   * `support[0].boonStripsTime`, whose accumulator is buggy -- see the
+   * Rust doc on `SupportMetrics::strips_duration_ms`.
+   */
+  strips_duration_ms: number
   resurrects: number
 }
 
@@ -244,6 +288,13 @@ export interface HitStatsOut {
  * counting bug in its own `lifeLeechDamageTakenCount` is deliberately not
  * reproduced). Purely additive alongside `downs_taken`/`deaths`/
  * `damage_taken`/`cc`. Always present (not gated), like `hit_stats`.
+ *
+ * `received_cc_count`/`received_cc_duration_ms` (ms) are the INCOMING
+ * mirror of the outgoing `cc` block, and count CC from every source
+ * (friendly included) with no pet/minion fold -- GW2EI's own two
+ * asymmetries. `boon_strips_taken`/`boon_strips_taken_duration_ms` (ms) are
+ * boons stripped OFF this player; the duration is the TRUE sum, not a
+ * reproduction of GW2EI's own (verified buggy) `boonStripsTime`.
  */
 export interface DefensesOut {
   blocked_count: number
@@ -264,6 +315,10 @@ export interface DefensesOut {
   barrier_damage: number
   breakbar_count: number
   breakbar_damage: number
+  received_cc_count: number
+  received_cc_duration_ms: number
+  boon_strips_taken: number
+  boon_strips_taken_duration_ms: number
 }
 
 export interface PlayerOut {
@@ -279,6 +334,12 @@ export interface PlayerOut {
   marker?: string
   /** Present when `commander` is true. */
   commander_tag?: CommanderTagOut
+  /**
+   * Guild GUID from `CBTS_GUILD` (MEIGAP Task 3c), uppercase
+   * dash-separated. Omitted when the log carries no guild row for this
+   * account.
+   */
+  guild_id?: string
   damage: DamageOut
   downs_dealt: number
   kills_dealt: number
@@ -299,6 +360,14 @@ export interface PlayerOut {
   downed_by: ContributionOut
   /** One entry per tracked boon id, in `axilog_core::analysis::buffs::BOON_IDS` order. */
   boons: BoonOut[]
+  /**
+   * Per-enemy offensive split (MEIGAP, Task 1d), sorted by `enemy_id` and
+   * SPARSE (only enemies this player interacted with). Rides the same
+   * `skillDamage: true` flag as `skill_damage` itself -- omitted entirely
+   * unless requested; measured +56.5% rendered-HTML size when always-on.
+   * The underlying pass always runs; only this serialized key is gated.
+   */
+  per_target?: PerTargetStatsOut[]
   support: SupportOut
   /**
    * arcdps healing-extension totals (M10, Task 1). Omitted entirely (not

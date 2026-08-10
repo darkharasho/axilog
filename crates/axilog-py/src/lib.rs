@@ -86,13 +86,20 @@ fn build_report_from_bytes(
 }
 
 /// `build_report_and_activity_from_bytes`'s return tuple. Named because it
-/// grew a fourth member in M16 and `clippy::type_complexity` is right that
+/// grew a fourth member in M16 (and a fifth in MEIGAP) and
+/// `clippy::type_complexity` is right that
 /// the inline form had stopped being readable.
 type EiPipelineOutputs = (
     axilog_schema::Report,
     Vec<axilog_core::analysis::replay::ActivityIntervals>,
     Option<axilog_core::analysis::ei_replay::EiReplay>,
     Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
+    Option<axilog_core::analysis::buffs::BoonStates>,
+    Option<std::collections::BTreeMap<u64, axilog_core::analysis::timeseries::EnemySeries>>,
+    Option<std::collections::BTreeMap<u64, Vec<axilog_core::analysis::skill_damage::SkillEntry>>>,
+    Option<axilog_core::analysis::target_conditions::TargetConditionStates>,
+    Option<axilog_core::analysis::healing_detail::HealingDetail>,
+    Option<axilog_core::analysis::minions::MinionRollups>,
 );
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
@@ -150,7 +157,68 @@ fn build_report_and_activity_from_bytes(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
     );
-    Ok((report, activity, ei_replay, damage_mods))
+    // MEIGAP Task 1b: GW2EI-shape boon stack timelines
+    // (`buffUptimes[].states`/`.statesPerSource`), gated on the timeseries
+    // flag -- the same setting GW2EI itself gates those two arrays behind
+    // (`RawFormatTimelineArrays`). See
+    // `axilog_core::analysis::buffs::states`'s module doc.
+    let boon_states = want_timeseries
+        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
+    // MEIGAP Task 2b/2c/2d: the three `targets[]` mirrors. `enemy_series`
+    // and `target_conditions` ride the timeseries flag (GW2EI's own
+    // `RawFormatTimelineArrays` gate on `targets[].damage1S` at
+    // `JsonActorBuilder.cs:63` and on `statesPerSource` at
+    // `JsonBuffsUptimeBuilder.cs:52`); `enemy_dist` rides the skill-damage
+    // flag, the one that already gates every other per-skill block. All
+    // three are standalone passes -- `analyze()` above does not compute
+    // them, so an unflagged call pays nothing.
+    let enemy_sets = (want_timeseries || want_skill_damage).then(|| {
+        let enemies: std::collections::BTreeSet<u64> =
+            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+        let enemy_addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
+            .enemies
+            .iter()
+            .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+            .collect();
+        (enemies, enemy_addr_to_rep)
+    });
+    let enemy_series = enemy_sets.as_ref().filter(|_| want_timeseries).map(|(en, rep)| {
+        axilog_core::analysis::timeseries::build_enemy_series(
+            &enc,
+            &raw,
+            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+            en,
+            rep,
+        )
+    });
+    let enemy_dist = enemy_sets
+        .as_ref()
+        .filter(|_| want_skill_damage)
+        .map(|(en, rep)| axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep));
+    let target_conditions =
+        want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+    // MEIGAP Task 3a/3b. Every healing-detail family is flag-gated in the
+    // adapter (`healing1S` on timeseries; the ally matrices and the two
+    // `*Dist` arrays on skill-damage -- see `EiInputs::healing_dist`), so
+    // the pass only runs when at least one of them will be serialized. It
+    // self-gates to `None` on a log with no healing extension.
+    let healing_detail = (want_skill_damage || want_timeseries)
+        .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
+        .flatten();
+    let minion_rollups =
+        want_skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
+    Ok((
+        report,
+        activity,
+        ei_replay,
+        damage_mods,
+        boon_states,
+        enemy_series,
+        enemy_dist,
+        target_conditions,
+        healing_detail,
+        minion_rollups,
+    ))
 }
 
 fn report_to_value(report: &axilog_schema::Report) -> PyResult<Value> {
@@ -240,7 +308,8 @@ fn parse_file_ei(
     modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let (report, activity, ei_replay, damage_mods) =
+    let (report, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist,
+         target_conditions, healing_detail, minion_rollups) =
         build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     let ei = axilog_ei::to_ei_json(
         &report,
@@ -248,6 +317,14 @@ fn parse_file_ei(
             activity: &activity,
             replay: ei_replay.as_ref(),
             modifiers: damage_mods.as_ref(),
+            boon_states: boon_states.as_ref(),
+            enemy_series: enemy_series.as_ref(),
+            enemy_dist: enemy_dist.as_ref(),
+            target_conditions: target_conditions.as_ref(),
+            healing_detail: healing_detail.as_ref(),
+            healing_series: timeseries,
+            healing_dist: skill_damage,
+            minions: minion_rollups.as_ref(),
         },
     );
     value_to_py(py, &ei)

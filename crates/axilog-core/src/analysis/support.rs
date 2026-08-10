@@ -86,6 +86,38 @@ pub struct SupportMetrics {
     /// `Unknown`-bucket recipients (if any exist in this fixture) are
     /// already-known `enemies` members here, not a separate case to model.
     pub strips: u32,
+    /// Total remaining duration, in ms, of every boon counted by
+    /// [`SupportMetrics::strips`] -- the TRUE sum (MEIGAP Task 3e).
+    ///
+    /// This is the outgoing twin of
+    /// [`crate::analysis::defenses::DefenseStats::boon_strips_taken_duration_ms`],
+    /// and it carries the identical caveat: **GW2EI's own exported
+    /// `support[0].boonStripsTime` is not this number, because GW2EI's
+    /// accumulator is buggy.**
+    /// `SupportPerAllyStatistics`'s ctor
+    /// (`GW2EIEvtcParser/EIData/Statistics/SupportPerAllyStatistics.cs`)
+    /// reads, per boon id:
+    ///
+    /// ```csharp
+    /// foeTime = Math.Max(foeTime + brae.RemovedDuration, log.LogData.LogDuration);
+    /// ```
+    ///
+    /// a `Max` where a `Min` (clamping one removal to the log length) was
+    /// plainly intended -- the same typo, in the same shape, that
+    /// `DefensePerTargetStatistics.cs:63` has on the incoming side.
+    /// `SupportStatistics` then sums those per-boon accumulators over
+    /// every boon with `foeCount > 0` (plus `UnknownRemovals` the same
+    /// way) and divides by 1000. So EI's exported number is essentially
+    /// `distinct_boons_stripped x logDurationSeconds`.
+    ///
+    /// axilog emits the true sum, exactly as it does for the incoming
+    /// twin. The calibration joins the two by RECONSTRUCTING EI's formula
+    /// from this project's per-boon detail
+    /// ([`outgoing_boon_strips`]) -- which pins the set of distinct boons
+    /// stripped, the per-boon removal counts, and every removal's duration
+    /// after the first for each boon, but not the first one's when it
+    /// falls below the log length (EI's `Max` swallows it).
+    pub strips_duration_ms: u64,
     /// Resurrect-skill (id 1066) cast attempts. Verified against
     /// `SupportAllStatistics.GetReses`: counts every `CastEvent` whose
     /// `SkillID == SkillIDs.Resurrect`, with NO filter on cast completion
@@ -308,14 +340,13 @@ pub fn apply(
                 }
                 players[i].support.cleanses += 1;
             }
-        } else {
-            // Strip: recipient (owner) must be an enemy.
-            if !enemies.contains(&owner) {
-                continue;
-            }
-            players[i].support.strips += 1;
         }
+        // Boon strips are deliberately NOT counted in this loop: both
+        // `strips` and `strips_duration_ms` are folded from the shared
+        // [`outgoing_boon_strips`] primitive after it, so the count and the
+        // duration can never describe different row sets (MEIGAP Task 3e).
     }
+    fold_outgoing_boon_strips(players, raw, enemies, addr_to_rep, &idx);
 
     // Resurrects: start-cast events (`is_activation` == Normal(1) or
     // Quickness(2)) of the Resurrect skill, by a squad player. See
@@ -423,13 +454,11 @@ fn apply_post_era(
                 }
                 players[i].support.cleanses += 1;
             }
-        } else {
-            if !enemies.contains(&owner) {
-                continue;
-            }
-            players[i].support.strips += 1;
         }
+        // See the pre-era loop: strips are folded from the shared
+        // primitive below, not counted here.
     }
+    fold_outgoing_boon_strips(players, raw, enemies, addr_to_rep, &idx);
 
     // Resurrects (post-era): `sc::ANIMATION_START` cast-start rows for the
     // Resurrect skill, credited by raw `src_agent` (see this fn's doc
@@ -440,6 +469,82 @@ fn apply_post_era(
                 players[i].support.resurrects += 1;
             }
         }
+    }
+}
+
+/// Every boon this squad player STRIPPED off an enemy, as `(boon id,
+/// removed duration ms)` in log order, keyed by the remover's
+/// account-representative addr (MEIGAP Task 3e).
+///
+/// The shared primitive behind both [`SupportMetrics::strips`] and
+/// [`SupportMetrics::strips_duration_ms`] -- the outgoing mirror of
+/// [`crate::analysis::defenses::incoming_boon_strips`], and public for the
+/// same reason: the ei-json calibration needs the per-boon DETAIL to
+/// reconstruct GW2EI's own buggy `Math.Max` accumulator (see
+/// [`SupportMetrics::strips_duration_ms`]) without reproducing the bug in
+/// axilog's output.
+///
+/// **Attribution deliberately differs from the incoming twin, matching
+/// GW2EI.** `DefensePerTargetStatistics` reads `brae.CreditedBy`
+/// (`By.GetFinalMaster()`, a minion fold) and skips unknown/self;
+/// `SupportPerAllyStatistics` iterates `actor.GetBuffRemoveAllEventsByByID`
+/// -- the actor's OWN removals, with no `CreditedBy` fold, no unknown test
+/// and no self test, only the `ToFoe`/`ToUnknown` recipient split. So this
+/// function credits the RAW remover (account-folded), which is exactly
+/// what M3's already-calibrated `strips` count has always done; this
+/// function is a refactoring of that counting, not a change to it.
+///
+/// "Foe" is decided by `enemies` membership rather than the row's own
+/// `iff` byte -- the pre-existing, calibrated-exact choice documented on
+/// [`SupportMetrics::strips`], which also folds GW2EI's separate
+/// `UnknownRemovals` bucket in (those recipients are already `enemies`
+/// members on the calibrated captures).
+pub fn outgoing_boon_strips(
+    raw: &RawLog,
+    enemies: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) -> BTreeMap<u64, Vec<(u32, u64)>> {
+    let post_era = raw.header.is_post_buff_rework();
+    let boon_id_set: BTreeSet<u32> = BOON_IDS.iter().map(|&(id, _, _)| id).collect();
+    let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
+
+    let mut out: BTreeMap<u64, Vec<(u32, u64)>> = BTreeMap::new();
+    for e in &raw.events {
+        // Era-dispatched removal predicate, transcribed from `apply` /
+        // `apply_post_era`'s own loop heads above.
+        let is_remove_all = if post_era {
+            e.is_statechange == crate::evtc::sc::BUFF_REMOVE_ALL
+        } else {
+            e.is_statechange == 0
+                && e.is_activation == 0
+                && e.is_buffremove == crate::evtc::buff_remove::ALL
+        };
+        if !is_remove_all || !boon_id_set.contains(&e.skillid) {
+            continue;
+        }
+        // Role inversion (module doc): owner = src_agent (the victim),
+        // remover = dst_agent.
+        if !enemies.contains(&e.src_agent) {
+            continue;
+        }
+        out.entry(rep(e.dst_agent)).or_default().push((e.skillid, e.value.max(0) as u64));
+    }
+    out
+}
+
+/// Fold [`outgoing_boon_strips`] into `players`' `strips` /
+/// `strips_duration_ms`. Called from both era paths of [`apply`].
+fn fold_outgoing_boon_strips(
+    players: &mut [PlayerMetrics],
+    raw: &RawLog,
+    enemies: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+    idx: &BTreeMap<u64, usize>,
+) {
+    for (rep_addr, strips) in outgoing_boon_strips(raw, enemies, addr_to_rep) {
+        let Some(&i) = idx.get(&rep_addr) else { continue };
+        players[i].support.strips += strips.len() as u32;
+        players[i].support.strips_duration_ms += strips.iter().map(|&(_, ms)| ms).sum::<u64>();
     }
 }
 
@@ -475,7 +580,7 @@ mod tests {
         Player {
             agent_addr: addr, account: format!(":P{addr}.0001"), character: format!("P{addr}"),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(), subgroup: 1,
-            in_squad: true, commander: false, marker: None, commander_tag: None,
+            in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![addr],
         }
     }
@@ -490,7 +595,7 @@ mod tests {
         Player {
             agent_addr: addr, account: "".into(), character: "Evoker".into(),
             profession: "Elementalist".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 0, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 0, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![addr],
         }
     }
@@ -857,7 +962,7 @@ mod era_equivalence {
         Player {
             agent_addr: addr, account: format!(":P{addr}.0001"), character: format!("P{addr}"),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(), subgroup: 1,
-            in_squad: true, commander: false, marker: None, commander_tag: None,
+            in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![addr],
         }
     }

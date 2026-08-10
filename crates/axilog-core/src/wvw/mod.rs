@@ -7,6 +7,7 @@ pub mod markers;
 /// URLs and combat-replay geometry, all transcribed from GW2EI. axilog's
 /// single source of truth for all three; see [`maps`]' module doc.
 pub mod maps;
+pub mod guilds;
 
 /// Collapse relog/build-swap duplicates: one Player per account (fallback character).
 pub fn dedupe_players(players: &mut Vec<Player>) {
@@ -334,8 +335,17 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     // dedupe, so `agent_addrs` on each final Player/Enemy already covers
     // every raw addr an account owns (relog/build-swap) -- `final_marker`/
     // `final_commander_tag` pick the freshest state across all of them.
-    let marker_res = markers::resolve_markers(raw);
+    // CBTS_GUILD (sc=29): MEIGAP Task 3c. Also after dedupe, for the same
+    // reason -- a relogged account's guild row may sit on any of its addrs,
+    // so the lookup walks `agent_addrs` and takes the first hit in ADDR
+    // order (deterministic; `guilds::collect_guild_event`, called from the
+    // marker scan below, already applied GW2EI's per-agent
+    // `FirstOrDefault` in event order).
+    let mut guild_by_addr: BTreeMap<u64, String> = BTreeMap::new();
+    let marker_res = markers::resolve_markers_and_guilds(raw, &mut guild_by_addr);
     for p in &mut enc.players {
+        p.guild_id =
+            p.agent_addrs.iter().find_map(|addr| guild_by_addr.get(addr)).cloned();
         p.marker = markers::final_marker(&marker_res.open, &p.agent_addrs);
         p.commander_tag =
             markers::final_commander_tag(&marker_res.open, &marker_res.ever_commander, &p.agent_addrs);
@@ -356,7 +366,7 @@ mod tests {
     fn player(addr: u64, acc: &str) -> Player {
         Player { agent_addr: addr, account: acc.into(), character: "C".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![addr] }
     }
     fn agent(addr: u64, is_elite: u32, name: &[u8]) -> RawAgent {

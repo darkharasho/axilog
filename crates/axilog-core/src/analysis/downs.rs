@@ -1,3 +1,4 @@
+use crate::analysis::damage::InstidRegistry;
 use crate::analysis::PlayerMetrics;
 use crate::evtc::{result, sc, RawLog};
 use crate::model::Encounter;
@@ -5,8 +6,66 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub fn apply(
     players: &mut [PlayerMetrics],
+    enc: &Encounter,
+    raw: &RawLog,
+    squad: &BTreeSet<u64>,
+    enemies: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) {
+    apply_with_registry(
+        players,
+        enc,
+        raw,
+        &InstidRegistry::build(raw),
+        squad,
+        enemies,
+        addr_to_rep,
+    );
+}
+
+/// The squad player a downing/killing blow is credited to, or `None`.
+///
+/// GW2EI's `OffensiveStatistics.cs:190-197` increments `DownedCount`/
+/// `KilledCount` OUTSIDE the `dl.From.Is(actor.AgentItem)` guard that
+/// wraps almost every other field in that loop, over an event list
+/// (`SingleActor.cs:734-739`) that already folds in the actor's MINIONS.
+/// So a pet's or minion's downing/killing blow counts for its owner --
+/// verified against this project's reference export, where exactly this
+/// case accounts for the only two `statsAll[0].killed`/`downed` cells that
+/// an actor-only predicate misses (one kill, one down, on two different
+/// accounts).
+///
+/// Resolution is the single-hop `*_master_instid` -> [`InstidRegistry`]
+/// fold every other pet-crediting pass in this crate already uses
+/// (`damage::pet_credit_events`, `cc::pet_credit_cc_events`,
+/// `buffs::events::resolve_agent`): a direct squad source credits itself,
+/// otherwise the source's master at that event's time must itself be a
+/// squad addr.
+pub(crate) fn credited_squad_source(
+    e: &crate::evtc::RawEvent,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+) -> Option<u64> {
+    if squad.contains(&e.src_agent) {
+        return Some(e.src_agent);
+    }
+    match registry.resolve_at(e.src_master_instid, e.time) {
+        Some(addr) if squad.contains(&addr) => Some(addr),
+        _ => None,
+    }
+}
+
+/// [`apply`] against a caller-supplied, already-built [`InstidRegistry`]
+/// (MPERF Task 2 convention) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. The `raw`-only wrapper above stays for standalone/test
+/// callers.
+pub fn apply_with_registry(
+    players: &mut [PlayerMetrics],
     _enc: &Encounter,
     raw: &RawLog,
+    registry: &InstidRegistry,
     squad: &BTreeSet<u64>,
     enemies: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
@@ -20,13 +79,14 @@ pub fn apply(
 
     for e in &raw.events {
         if e.is_statechange != 0 { continue; }
-        let src_is_squad = squad.contains(&e.src_agent);
-        let dst_is_enemy = enemies.contains(&e.dst_agent);
-        if src_is_squad && dst_is_enemy && e.result == result::DOWNED {
-            if let Some(&i) = idx.get(&rep(e.src_agent)) { players[i].downs_dealt += 1; }
-        }
-        if src_is_squad && dst_is_enemy && e.result == result::KILLING_BLOW {
-            if let Some(&i) = idx.get(&rep(e.src_agent)) { players[i].kills_dealt += 1; }
+        if !enemies.contains(&e.dst_agent) { continue; }
+        if e.result != result::DOWNED && e.result != result::KILLING_BLOW { continue; }
+        let Some(src) = credited_squad_source(e, registry, squad) else { continue };
+        let Some(&i) = idx.get(&rep(src)) else { continue };
+        if e.result == result::DOWNED {
+            players[i].downs_dealt += 1;
+        } else {
+            players[i].kills_dealt += 1;
         }
     }
     // downs taken / deaths (squad members as destination / statechange)

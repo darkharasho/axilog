@@ -1,8 +1,191 @@
 {
   "_source": "axibridge test-fixtures/boon/20260117-181030.json (dps.report EI JSON, accounts anonymized)",
-  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index — the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task). Task 1 (M9): each matched player's `combatReplay` object holds EI's raw `combatReplayData` `{start, count, first, last}` (start = EI's own log-relative start ms; count/first/last = positions.length / positions[0] / positions[-1], EI's map-pixel space) for parity spot-checks, plus a full verbatim `positions` array (EI map-pixel `[x,y]` pairs, one per 300ms poll) for the 3 longest tracks (Anon104.4848/Anon108.4996/Anon122.5514, 165 samples each) for full-track calibration. Source: this log's mapID=95 (Green Alpine Borderlands) `combatReplayMetaData` {inchToPixel:0.009, pollingRate:300, sizes:[523,750]}. Same real-account join method as Tasks 2-4 (M3) (obfuscate(real account) -> raw agent-table index -> `Anon<N>`); 37 of 41 players matched (4 `Non Squad Player N` rows have no real account to join from, same as `generation`). See `crates/axilog-core/tests/replay_golden.rs` for how this is consumed (raw world positions decoded from `wvw-small.anon.zevtc`'s `CBTS_POSITION` events, downsampled via `analysis::replay::build_replay`, then transformed into this same map-pixel space via the Green/Blue Alpine Borderland affine transform derived from GW2EI's `WvWLogic.GetCombatMapInternal`/`CombatReplayMap.GetMapCoordRounded` -- the test file cites the exact formula). Task 1 (M10): each player's `healing` object holds the arcdps healing-extension totals for the full fight (single phase, matching this fixture's `phases` length of 1): `healing`/`downedHealing` mirror EI's raw `extHealingStats.outgoingHealing[0]` `{healing, downedHealing}` fields verbatim (target=null, i.e. every friendly-directed heal this player cast, self included); `barrier` mirrors `extBarrierStats.outgoingBarrier[0].barrier` verbatim. `healingSelf` is EI's own `outgoingHealingAllies[selfIndex][0].healing` (selfIndex = this player's own position in EI's `Friendlies`/`players[]` ordering, verified to line up 1:1 with axibridge's `players[]` array index for all 41 rows here -- self healing at that index never exceeds the player's own `healing` total, the sanity check used to confirm the assumption). `healingAllies` is DERIVED (`healing - healingSelf`), NOT a sum of EI's own per-friendly `outgoingHealingAllies[*][0].healing` array -- that array's sum under-counts real ally healing (e.g. Anon-index 21's ally-array sums to 165971 vs its true `healing` total of 205820) because EI's per-friendly breakdown only enumerates real `Friendlies` (players), never non-enumerated friendly targets like pets/minions that legitimately receive `ToFriendly` heals and count toward the scalar total. Same real-account join method as prior tasks (profession + `dpsAll[0].damage` + `statsAll[0].appliedCrowdControl` triple -> unique row, verified unique across all 41 rows with zero collisions), since the healing extension has no separate obfuscated-account reference to join through. `squadHealingTotal`/`squadHealingSelf`/`squadHealingAllies`/`squadDownedHealing`/`squadBarrierTotal` are sums of the same fields over all 41 players (1008414/36563/971851/55681/279498) -- the calibration targets `healing_golden.rs` checks against. Task 3 (M11): each player's `activeTimes` (single-element array, matching this fixture's one-phase convention) and `combatReplayData` `{start, end, down, dead}` are EI's raw fields verbatim (real `combatReplayData.positions`/`orientations`/`iconURL`/`dc` are NOT copied here -- not needed by this task's calibration, `positions` in particular stays a deliberately heavier, still-`--replay`-gated concept per M9). Same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, both already cross-checked profession+damage+CC with zero mismatches across all 41 rows). `start`/`end` are GW2EI's own `AgentItem.FirstAware`/`LastAware` (verified: `players[35]`/`Anon130.5810` has `start=1 end=49266` -- exactly `combatReplay.start=1` from the M9 Task 1 addition above, an independent field on the same row, confirming the join). `activeTimes[0]` is GW2EI's `SingleActor.GetActiveDuration(log, 0, durationMS)` (`GW2EIEvtcParser/EIData/Actors/ActorsHelper/SingleActorStatusHelper.cs`): `(end - start) - sum(dead ∩ [start,end]) - sum(dc ∩ [start,end])` -- verified NOT to subtract down time (that same row, `players[35]`, has a real 2870ms down interval `combatReplayData.down=[[12642,15512]]` yet `activeTimes[0]=49265` equals `end-start` exactly); every one of this log's 41 players has `dead=[]` (no deaths, only downs), so this fixture alone can't distinguish \"dead subtracted\" from \"dead not subtracted\" -- confirmed from the GW2EI source formula directly, not just this fixture's numbers. Two players (`players[35]`/`Anon130.5810` and `players[40]`/`Non Squad Player 10`) have non-empty `down` arrays -- the only two in the whole log; `crates/axilog-ei/tests/ei_golden.rs` asserts byte-exact `down`/`dead` interval reproduction for the one of the two reachable through its real-account join (`players[35]`/`Anon130.5810` -- `Non Squad Player 10` has no real account to join through at all, same limitation the M9/M3 golden tests already document for that row type). Task 2 (M12): each player's `timeSeries` object holds four scalars extracted from the source EI JSON's per-second series/target fields, for the per-player per-second calibration `crates/axilog-core/tests/timeseries_golden.rs` checks -- NOT full arrays (kept the fixture growth small; only final/summed values are needed to calibrate this project's own cumulative buckets, which are recomputed from raw events every test run, not replayed from a stored series). `damage1SFinal`/`damageTaken1SFinal` are the LAST element of the source's `damage1S[0]`/`damageTaken1S[0]` arrays (phase 0, i.e. the whole-fight cumulative total at the final second) -- verified these equal `dpsAll[0].damage`/`defenses[0].damageTaken` exactly on every one of this fixture's 41 rows, confirming GW2EI's `damage1S`/`damageTaken1S` are CUMULATIVE per-second running totals, not per-second deltas (`GW2EIEvtcParser/EIData/Actors/ActorHelpers/ActorDamageHelper.cs`'s `Get1SDamageList` builds these via `Statistics.GetCastLogsByFilter`-style running sums over `DamageLogs`, matching the same monotonic-non-decreasing shape this project's own `timeseries::build` buckets produce). `targetDamage1SFinal` sums the LAST element of every target's `targetDamage1S[target][0]` array (only one target exists on this non-`detailedWvW` fixture, the synthetic `Enemy Players` aggregate); `dpsTargetsTotalDamage` sums `dpsTargets[0][*].damage` the same way -- the two match each other exactly on every row (as expected, since `dpsTargets[*].damage` IS `targetDamage1S[*][0][-1]` under a different key) but are BOTH systematically smaller than `damage1SFinal` (e.g. player 0: `targetDamage1SFinal=71362` vs `damage1SFinal=96084`, a 24722 gap) -- GW2EI's non-`detailedWvW` `targets[]`/`dpsTargets` only enumerate the one synthetic enemy-PLAYER aggregate, silently excluding damage dealt to non-player-enemy NPCs (siege equipment, dolyaks, guards) that this fixture's WvW log still contains combat events against -- that damage is still counted in the whole-player `damage1SFinal`/`dpsAll[0].damage` scalar, just not attributable to any one `targets[]` entry in this fixture's non-detailed export. This is DIFFERENT from (and larger than) Task 1's separately-documented pet/minion `skillDamage` gap -- see `timeseries_golden.rs`'s module doc for the full writeup, including why this project's own `dps_targets` (built from the `per_enemy` map, which DOES enumerate every NPC enemy the log tracks) can only be checked for INTERNAL consistency (`sum(dps_targets) == damage_total`) against this fixture, not for an exact per-target match against GW2EI's own narrower `dpsTargets`. Joined by a (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) triple key against this fixture's existing `players[]` rows (verified unique across all 41 rows on both sides, zero collisions) rather than the `anon_account` join every prior task used -- this lets all 41 rows join (including the 4 `Non Squad Player N` placeholder rows Tasks 2-4/M3's account-based join couldn't reach), since none of these four scalars are account-identifying on their own. Task 1 (M13): each squad-member player's `hitStats` object holds a subset of EI's real `statsAll[0]` fields verbatim, extracted the same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, already cross-checked profession+damage+CC with zero mismatches for all 41 rows) -- `criticalRate`/`criticalDmg`/`flankingRate`/`glanceRate`/`againstMovingRate`/`connectedDamageCount`/`connectedDmg`/`connectedDirectDamageCount`/`connectedDirectDmg`/`connectedConditionCount`/`connectedConditionDamage`/`critableDirectDamageCount`/`againstDownedCount`/`againstDownedDamage`/`connectedLifeLeechCount`/`connectedLifeLeechDamage`/`connectedPowerAbove90HPCount`/`connectedPowerAbove90HPDamage`/`connectedConditionAbove90HPCount`/`connectedConditionAbove90HPDamage`. Unlike `skillDamage`'s `damage` scalar (which mirrors `dpsAll[0].damage`, pet-inclusive), `statsAll[0]` -- and therefore every `hitStats` field -- is ACTOR-ONLY (verified: `statsAll[0].connectedDmg` equals `sum(totalDamageDist)` exactly for all 41 players, including the 4 pet/minion-affected accounts `skillDamage`'s own note documents, where it is strictly LESS than `dpsAll[0].damage`/this fixture's own `damage` field) -- see `axilog_core::analysis::hit_stats`'s module doc for the full citation trail. `crates/axilog-core/tests/hit_stats_golden.rs` calibrates `axilog_core::analysis::hit_stats::HitStats` against these fields: all 12 count fields EXACT and all 8 damage-sum fields EXACT (0 measured residual against a 0.5% plan tolerance) across all 37 joined accounts. Task 2 (M13): each squad-member player's `defenses` object holds a subset of EI's real `defenses[0]` fields verbatim, extracted the same index-order join as every prior task (source players[i] -> this fixture's players[i], already cross-checked profession+damage+CC with zero mismatches for all 41 rows) -- blockedCount/evadedCount/missedCount/dodgeCount/invulnedCount/interruptedCount/strikeDamageTaken(Count)/powerDamageTaken(Count)/conditionDamageTaken(Count)/lifeLeechDamageTaken(Count)/damageBarrier(Count)/breakbarDamageTaken(Count). IMPORTANT: GW2EI's own `lifeLeechDamageTakenCount` is 0 for all 41 players here despite nonzero `lifeLeechDamageTaken` sums -- a real, reproducible GW2EI source bug (`DefensePerTargetStatistics.cs`'s life-leech branch increments `LifeLeechDamageTaken++` a second time instead of `LifeLeechDamageTakenCount++`, so the sum field is also inflated by exactly the true count). `crates/axilog-core/tests/defenses_golden.rs` derives the TRUE life-leech count/sum as `powerDamageTaken(Count) - strikeDamageTaken(Count)` instead of trusting the buggy fields directly (verified algebraically exact against `axilog_core::analysis::defenses`'s own module doc, which documents the bug in full). All other fields here are trusted verbatim. `breakbarDamageTaken(Count)` is 0 for every player in this fixture (a real WvW zerg log records no defiance-bar damage against squad players) -- covered by unit tests + a real-log sanity check instead of golden-value calibration. `dodgeCount` (56 total across 41 players) does NOT track `evadedCount` (122 total) at all -- see `analysis::defenses`'s module doc for why (dodge is a self-cast-skill count, evade is an incoming-hit result-byte outcome, genuinely independent concepts). Task 1 (M14): each player's `rotation` array holds EI's raw `rotation[]` entries (`{id, skills:[{castTime,duration,timeGained,quickness}]}`), FILTERED to the `AnimatedCastEvent`-pipeline subset `axilog_core::analysis::rotation` actually computes -- per-CAST (not per-skill-id): `id >= 0 && duration > 1`. Verified against `CombatEventFactory.CreateCastEvents`'s own `RemoveAll(x => x.Caster.IsPlayer && x.ActualDuration <= 1)` filter plus `InstantCastEvent`'s ctor (which ALWAYS hardcodes `ActualDuration = 0`): any surviving `JsonRotation` entry with `duration > 1` MUST be a real surviving `AnimatedCastEvent` (an `InstantCastEvent` can never reach that value); any entry with `duration <= 1` MUST be an `InstantCastEvent`/`WeaponSwapEvent` (a real `AnimatedCastEvent` that short never survives export). This is a PER-CAST signal, not per-skill-id -- a single skill (e.g. a signet: a real activation cast alongside a separate instant passive-proc trigger under the SAME skill id) can legitimately have BOTH shapes, confirmed empirically on a real post-rework capture (`fixtures/local/wvw-postrework.{zevtc,ei.json}`, gitignored, not this committed fixture): `Signet of Fury` (id 14410) has two real ~500ms-duration animated casts AND two duration-0 instant-proc entries on the SAME player, while the source EI JSON's own `skillMap[\"s14410\"].isInstantCast` is `true` -- a coarser per-skill flag that would have wrongly excluded the two genuinely-animated entries too (an earlier version of this extraction used that flag directly; empirically identical result on THIS particular fixture -- 0 disagreements across all 1,732 raw entries -- but the per-cast `duration > 1` signal is the one actually grounded in GW2EI's real filter behavior, not a coincidence of this one fixture's content, so it's what's used here). Same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, re-verified zero mismatches on profession + `dpsAll[0].damage` for this task). Of 1,732 total rotation-group cast entries across all 41 players in the source, 1,222 (~71%) pass this animated-only filter and are extracted here -- the remaining ~29% (weapon swaps, procs, extension-sourced instants, etc, GW2EI's separate `InstantCastFinder` family) are a documented, out-of-scope gap, see `analysis::rotation`'s module doc. 37 of 41 players have at least one animated cast (4 have none, all `Non Squad Player N` placeholder rows). `crates/axilog-core/tests/rotation_golden.rs` calibrates against this block: per-player animated cast COUNT and every extracted `{castTime,duration,timeGained,quickness}` field. Task 3 (M15): each player's `combatReplayData` gains the source export's own `iconURL`/`positions`/`orientations`/`dc` (verbatim, same index-order join as every prior task -- re-verified here against the already-present `start`/`end`, which match for all 41 players), and the top-level `combatReplayMetaData` is the source's verbatim. `positions` are GW2EI map-PIXEL coordinates on the 523x750 Green Alpine Borderlands arena image (`combatReplayMetaData.maps[0].url`), sampled on GW2EI's fixed 300ms polling grid; `orientations` are degrees. Neither is PII (no account/character strings ride along -- only the already-anonymized `account` key each row is joined by). ONE normalization: the source's `dc` sentinels read -9223372036854776000/9223372036854776000 because that file was round-tripped through JavaScript, whose Number cannot represent C# `long.MinValue`/`long.MaxValue`; they are restored here to the exact -9223372036854775808/9223372036854775807 GW2EI's own writer emits (and that `axilog_core::analysis::ei_replay` produces). Every other value is byte-verbatim. The four numeric arrays are written on single lines (rather than one element per line) purely to keep this fixture readable and small; `crates/axilog-ei/tests/ei_golden.rs`'s `ei_json_combat_replay_matches_the_golden` compares them as text, not as parsed f64s, because EI serializes C# `float`s and a widened f64 would print e.g. 246.6719970703125 where EI prints 246.672.",
+  "_note": "Golden aggregates for axilog WvW parity. Task 3 (M2): squadAppliedCrowdControl(Duration)/squadStunBreak/squadRemovedStunDuration are sums of statsAll[0].appliedCrowdControl(Duration) / support[0].stunBreak(removedStunDuration) over all 41 players; per-player appliedCrowdControl/appliedCrowdControlDuration/stunBreak/removedStunDuration below are the same source fields joined by account. Task 5 (M2): player[].account values were regenerated to `Anon<N>.<4 digits>` (N = raw agent-table index, same deterministic formula as `axilog_core::evtc::anon_account`) so they equal what `fixtures/wvw-small.anon.zevtc` (committed, PII-safe) decodes to at that same index \u2014 the real .zevtc stays local-only, gitignored, PII, never committed. The old->new mapping for this one-time regeneration was derived by joining each real account's sha256-based EI-obfuscated form (still present as `ei_account_obfuscation` in `crates/axilog-cli/tests/cli.rs`, kept as a historical/standalone-tested reference) to its raw agent-table index. The `professions_match_ei_golden` test itself now joins purely by raw agent-table index (via `anon_account(i)`), which works identically against the committed anon fixture or the real local one. 4 rows keep their original `Non Squad Player N` placeholder account (EI's own label for non-squad players present in the encounter but outside the recorded squad) since they never had a real account to map from. Task 2 (M3): each player's `boons` object holds the 12 tracked-boon skill ids (see `axilog_core::analysis::buffs::BOON_IDS`) -> EI's raw `buffUptimes[].buffData[0]` `{uptime, presence}` pair, verbatim (0/0 when the id is absent from the source `buffUptimes` array, i.e. the player never held that buff at all). EI's own field meaning differs by boon stack type (verified directly from these numbers, e.g. player Anon132.5884's Might=740 uptime=7.808/presence=88.962 vs Fury=725 uptime=68.459/presence=0): for DURATION-type boons (everything except Might=740/Stability=1122) `uptime` IS the presence percentage (0-100) and `presence` is always 0/unused; for INTENSITY-type boons (Might, Stability) `uptime` is the time-weighted average stack count and `presence` is the presence percentage (0-100). This asymmetry is exactly what the M3 Task 2 brief flagged and what `boons_golden.rs` decodes per-boon via `BOON_IDS`'s `is_intensity` flag. Same real-account join method as Task 5's account regeneration (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked against 3 independent fields (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) for all 41 players with zero mismatches before trusting the join for `boons`. Task 3 (M3): each player's `support` object holds EI's raw `support[0]` `{condiCleanse, condiCleanseSelf, boonStrips, resurrects}` fields (durations/downContribution fields omitted, not needed by this task), extracted the same way as `boons` (same index-order join, cross-checked). `squadCondiCleanse`/`squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects` are sums of the same fields over all 41 players (801/97/437/6) -- the calibration targets `support_golden.rs` checks against. Task 4 (M3): each squad-member player's `generation` object holds the 12 tracked-boon skill ids -> `{self, group, squad}`, EI's own precomputed per-source generation rollups verbatim (`selfBuffs`/`groupBuffs`/`squadBuffs`[boon].buffData[0].generation from the source EI JSON -- see `GW2EIEvtcParser/EIData/Actors/Player.cs`'s `ComputeBuffs`: `self` = `GetBuffsForSelf` (how much of THIS player's own boon-time they generated for themselves), `group` = `GetBuffsForPlayers(PlayerList.Where(p.Group==Group && p!=this))` (averaged, over this player's own subgroup excluding self, of how much boon-time this player generated for each teammate), `squad` = `GetBuffsForPlayers(PlayerList.Where(p!=this))` (same average but over the whole squad excluding self) -- all on the SAME 0-100 (duration boons) / raw-average-stack-count (Might, Stability -- no *100) scale as `boons.uptime` above, verified against `BuffStatistics.cs`. Same real-account join method as Tasks 2/3 M3 (obfuscate(real account) -> raw agent-table index -> `Anon<N>`), cross-checked the same 3 fields with zero mismatches. 37 of 41 players have a `generation` object: the 4 `Non Squad Player N` rows are excluded (out of scope -- self/group/squad rollups only apply to real recorded squad members, i.e. `Player.subgroup != 0`, per the Task 3 finding these 4 rows are excluded from EI's own `log.PlayerList` too). A 42nd real squad member the decoded local fixture reports (would be `Anon142.6254`) has never been one of this fixture's 41 `players` rows at all, in ANY field, since Task 2 (M3) first generated it -- the source axibridge JSON export for this log has no matching player entry for them (not a gap introduced by this task). Task 1 (M9): each matched player's `combatReplay` object holds EI's raw `combatReplayData` `{start, count, first, last}` (start = EI's own log-relative start ms; count/first/last = positions.length / positions[0] / positions[-1], EI's map-pixel space) for parity spot-checks, plus a full verbatim `positions` array (EI map-pixel `[x,y]` pairs, one per 300ms poll) for the 3 longest tracks (Anon104.4848/Anon108.4996/Anon122.5514, 165 samples each) for full-track calibration. Source: this log's mapID=95 (Green Alpine Borderlands) `combatReplayMetaData` {inchToPixel:0.009, pollingRate:300, sizes:[523,750]}. Same real-account join method as Tasks 2-4 (M3) (obfuscate(real account) -> raw agent-table index -> `Anon<N>`); 37 of 41 players matched (4 `Non Squad Player N` rows have no real account to join from, same as `generation`). See `crates/axilog-core/tests/replay_golden.rs` for how this is consumed (raw world positions decoded from `wvw-small.anon.zevtc`'s `CBTS_POSITION` events, downsampled via `analysis::replay::build_replay`, then transformed into this same map-pixel space via the Green/Blue Alpine Borderland affine transform derived from GW2EI's `WvWLogic.GetCombatMapInternal`/`CombatReplayMap.GetMapCoordRounded` -- the test file cites the exact formula). Task 1 (M10): each player's `healing` object holds the arcdps healing-extension totals for the full fight (single phase, matching this fixture's `phases` length of 1): `healing`/`downedHealing` mirror EI's raw `extHealingStats.outgoingHealing[0]` `{healing, downedHealing}` fields verbatim (target=null, i.e. every friendly-directed heal this player cast, self included); `barrier` mirrors `extBarrierStats.outgoingBarrier[0].barrier` verbatim. `healingSelf` is EI's own `outgoingHealingAllies[selfIndex][0].healing` (selfIndex = this player's own position in EI's `Friendlies`/`players[]` ordering, verified to line up 1:1 with axibridge's `players[]` array index for all 41 rows here -- self healing at that index never exceeds the player's own `healing` total, the sanity check used to confirm the assumption). `healingAllies` is DERIVED (`healing - healingSelf`), NOT a sum of EI's own per-friendly `outgoingHealingAllies[*][0].healing` array -- that array's sum under-counts real ally healing (e.g. Anon-index 21's ally-array sums to 165971 vs its true `healing` total of 205820) because EI's per-friendly breakdown only enumerates real `Friendlies` (players), never non-enumerated friendly targets like pets/minions that legitimately receive `ToFriendly` heals and count toward the scalar total. Same real-account join method as prior tasks (profession + `dpsAll[0].damage` + `statsAll[0].appliedCrowdControl` triple -> unique row, verified unique across all 41 rows with zero collisions), since the healing extension has no separate obfuscated-account reference to join through. `squadHealingTotal`/`squadHealingSelf`/`squadHealingAllies`/`squadDownedHealing`/`squadBarrierTotal` are sums of the same fields over all 41 players (1008414/36563/971851/55681/279498) -- the calibration targets `healing_golden.rs` checks against. Task 3 (M11): each player's `activeTimes` (single-element array, matching this fixture's one-phase convention) and `combatReplayData` `{start, end, down, dead}` are EI's raw fields verbatim (real `combatReplayData.positions`/`orientations`/`iconURL`/`dc` are NOT copied here -- not needed by this task's calibration, `positions` in particular stays a deliberately heavier, still-`--replay`-gated concept per M9). Same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, both already cross-checked profession+damage+CC with zero mismatches across all 41 rows). `start`/`end` are GW2EI's own `AgentItem.FirstAware`/`LastAware` (verified: `players[35]`/`Anon130.5810` has `start=1 end=49266` -- exactly `combatReplay.start=1` from the M9 Task 1 addition above, an independent field on the same row, confirming the join). `activeTimes[0]` is GW2EI's `SingleActor.GetActiveDuration(log, 0, durationMS)` (`GW2EIEvtcParser/EIData/Actors/ActorsHelper/SingleActorStatusHelper.cs`): `(end - start) - sum(dead \u2229 [start,end]) - sum(dc \u2229 [start,end])` -- verified NOT to subtract down time (that same row, `players[35]`, has a real 2870ms down interval `combatReplayData.down=[[12642,15512]]` yet `activeTimes[0]=49265` equals `end-start` exactly); every one of this log's 41 players has `dead=[]` (no deaths, only downs), so this fixture alone can't distinguish \"dead subtracted\" from \"dead not subtracted\" -- confirmed from the GW2EI source formula directly, not just this fixture's numbers. Two players (`players[35]`/`Anon130.5810` and `players[40]`/`Non Squad Player 10`) have non-empty `down` arrays -- the only two in the whole log; `crates/axilog-ei/tests/ei_golden.rs` asserts byte-exact `down`/`dead` interval reproduction for the one of the two reachable through its real-account join (`players[35]`/`Anon130.5810` -- `Non Squad Player 10` has no real account to join through at all, same limitation the M9/M3 golden tests already document for that row type). Task 2 (M12): each player's `timeSeries` object holds four scalars extracted from the source EI JSON's per-second series/target fields, for the per-player per-second calibration `crates/axilog-core/tests/timeseries_golden.rs` checks -- NOT full arrays (kept the fixture growth small; only final/summed values are needed to calibrate this project's own cumulative buckets, which are recomputed from raw events every test run, not replayed from a stored series). `damage1SFinal`/`damageTaken1SFinal` are the LAST element of the source's `damage1S[0]`/`damageTaken1S[0]` arrays (phase 0, i.e. the whole-fight cumulative total at the final second) -- verified these equal `dpsAll[0].damage`/`defenses[0].damageTaken` exactly on every one of this fixture's 41 rows, confirming GW2EI's `damage1S`/`damageTaken1S` are CUMULATIVE per-second running totals, not per-second deltas (`GW2EIEvtcParser/EIData/Actors/ActorHelpers/ActorDamageHelper.cs`'s `Get1SDamageList` builds these via `Statistics.GetCastLogsByFilter`-style running sums over `DamageLogs`, matching the same monotonic-non-decreasing shape this project's own `timeseries::build` buckets produce). `targetDamage1SFinal` sums the LAST element of every target's `targetDamage1S[target][0]` array (only one target exists on this non-`detailedWvW` fixture, the synthetic `Enemy Players` aggregate); `dpsTargetsTotalDamage` sums `dpsTargets[0][*].damage` the same way -- the two match each other exactly on every row (as expected, since `dpsTargets[*].damage` IS `targetDamage1S[*][0][-1]` under a different key) but are BOTH systematically smaller than `damage1SFinal` (e.g. player 0: `targetDamage1SFinal=71362` vs `damage1SFinal=96084`, a 24722 gap) -- GW2EI's non-`detailedWvW` `targets[]`/`dpsTargets` only enumerate the one synthetic enemy-PLAYER aggregate, silently excluding damage dealt to non-player-enemy NPCs (siege equipment, dolyaks, guards) that this fixture's WvW log still contains combat events against -- that damage is still counted in the whole-player `damage1SFinal`/`dpsAll[0].damage` scalar, just not attributable to any one `targets[]` entry in this fixture's non-detailed export. This is DIFFERENT from (and larger than) Task 1's separately-documented pet/minion `skillDamage` gap -- see `timeseries_golden.rs`'s module doc for the full writeup, including why this project's own `dps_targets` (built from the `per_enemy` map, which DOES enumerate every NPC enemy the log tracks) can only be checked for INTERNAL consistency (`sum(dps_targets) == damage_total`) against this fixture, not for an exact per-target match against GW2EI's own narrower `dpsTargets`. Joined by a (profession, `dpsAll[0].damage`, `statsAll[0].appliedCrowdControl`) triple key against this fixture's existing `players[]` rows (verified unique across all 41 rows on both sides, zero collisions) rather than the `anon_account` join every prior task used -- this lets all 41 rows join (including the 4 `Non Squad Player N` placeholder rows Tasks 2-4/M3's account-based join couldn't reach), since none of these four scalars are account-identifying on their own. Task 1 (M13): each squad-member player's `hitStats` object holds a subset of EI's real `statsAll[0]` fields verbatim, extracted the same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, already cross-checked profession+damage+CC with zero mismatches for all 41 rows) -- `criticalRate`/`criticalDmg`/`flankingRate`/`glanceRate`/`againstMovingRate`/`connectedDamageCount`/`connectedDmg`/`connectedDirectDamageCount`/`connectedDirectDmg`/`connectedConditionCount`/`connectedConditionDamage`/`critableDirectDamageCount`/`againstDownedCount`/`againstDownedDamage`/`connectedLifeLeechCount`/`connectedLifeLeechDamage`/`connectedPowerAbove90HPCount`/`connectedPowerAbove90HPDamage`/`connectedConditionAbove90HPCount`/`connectedConditionAbove90HPDamage`. Unlike `skillDamage`'s `damage` scalar (which mirrors `dpsAll[0].damage`, pet-inclusive), `statsAll[0]` -- and therefore every `hitStats` field -- is ACTOR-ONLY (verified: `statsAll[0].connectedDmg` equals `sum(totalDamageDist)` exactly for all 41 players, including the 4 pet/minion-affected accounts `skillDamage`'s own note documents, where it is strictly LESS than `dpsAll[0].damage`/this fixture's own `damage` field) -- see `axilog_core::analysis::hit_stats`'s module doc for the full citation trail. `crates/axilog-core/tests/hit_stats_golden.rs` calibrates `axilog_core::analysis::hit_stats::HitStats` against these fields: all 12 count fields EXACT and all 8 damage-sum fields EXACT (0 measured residual against a 0.5% plan tolerance) across all 37 joined accounts. Task 2 (M13): each squad-member player's `defenses` object holds a subset of EI's real `defenses[0]` fields verbatim, extracted the same index-order join as every prior task (source players[i] -> this fixture's players[i], already cross-checked profession+damage+CC with zero mismatches for all 41 rows) -- blockedCount/evadedCount/missedCount/dodgeCount/invulnedCount/interruptedCount/strikeDamageTaken(Count)/powerDamageTaken(Count)/conditionDamageTaken(Count)/lifeLeechDamageTaken(Count)/damageBarrier(Count)/breakbarDamageTaken(Count). IMPORTANT: GW2EI's own `lifeLeechDamageTakenCount` is 0 for all 41 players here despite nonzero `lifeLeechDamageTaken` sums -- a real, reproducible GW2EI source bug (`DefensePerTargetStatistics.cs`'s life-leech branch increments `LifeLeechDamageTaken++` a second time instead of `LifeLeechDamageTakenCount++`, so the sum field is also inflated by exactly the true count). `crates/axilog-core/tests/defenses_golden.rs` derives the TRUE life-leech count/sum as `powerDamageTaken(Count) - strikeDamageTaken(Count)` instead of trusting the buggy fields directly (verified algebraically exact against `axilog_core::analysis::defenses`'s own module doc, which documents the bug in full). All other fields here are trusted verbatim. `breakbarDamageTaken(Count)` is 0 for every player in this fixture (a real WvW zerg log records no defiance-bar damage against squad players) -- covered by unit tests + a real-log sanity check instead of golden-value calibration. `dodgeCount` (56 total across 41 players) does NOT track `evadedCount` (122 total) at all -- see `analysis::defenses`'s module doc for why (dodge is a self-cast-skill count, evade is an incoming-hit result-byte outcome, genuinely independent concepts). Task 1 (M14): each player's `rotation` array holds EI's raw `rotation[]` entries (`{id, skills:[{castTime,duration,timeGained,quickness}]}`), FILTERED to the `AnimatedCastEvent`-pipeline subset `axilog_core::analysis::rotation` actually computes -- per-CAST (not per-skill-id): `id >= 0 && duration > 1`. Verified against `CombatEventFactory.CreateCastEvents`'s own `RemoveAll(x => x.Caster.IsPlayer && x.ActualDuration <= 1)` filter plus `InstantCastEvent`'s ctor (which ALWAYS hardcodes `ActualDuration = 0`): any surviving `JsonRotation` entry with `duration > 1` MUST be a real surviving `AnimatedCastEvent` (an `InstantCastEvent` can never reach that value); any entry with `duration <= 1` MUST be an `InstantCastEvent`/`WeaponSwapEvent` (a real `AnimatedCastEvent` that short never survives export). This is a PER-CAST signal, not per-skill-id -- a single skill (e.g. a signet: a real activation cast alongside a separate instant passive-proc trigger under the SAME skill id) can legitimately have BOTH shapes, confirmed empirically on a real post-rework capture (`fixtures/local/wvw-postrework.{zevtc,ei.json}`, gitignored, not this committed fixture): `Signet of Fury` (id 14410) has two real ~500ms-duration animated casts AND two duration-0 instant-proc entries on the SAME player, while the source EI JSON's own `skillMap[\"s14410\"].isInstantCast` is `true` -- a coarser per-skill flag that would have wrongly excluded the two genuinely-animated entries too (an earlier version of this extraction used that flag directly; empirically identical result on THIS particular fixture -- 0 disagreements across all 1,732 raw entries -- but the per-cast `duration > 1` signal is the one actually grounded in GW2EI's real filter behavior, not a coincidence of this one fixture's content, so it's what's used here). Same index-order join as every prior task (source `players[i]` -> this fixture's `players[i]`, re-verified zero mismatches on profession + `dpsAll[0].damage` for this task). Of 1,732 total rotation-group cast entries across all 41 players in the source, 1,222 (~71%) pass this animated-only filter and are extracted here -- the remaining ~29% (weapon swaps, procs, extension-sourced instants, etc, GW2EI's separate `InstantCastFinder` family) are a documented, out-of-scope gap, see `analysis::rotation`'s module doc. 37 of 41 players have at least one animated cast (4 have none, all `Non Squad Player N` placeholder rows). `crates/axilog-core/tests/rotation_golden.rs` calibrates against this block: per-player animated cast COUNT and every extracted `{castTime,duration,timeGained,quickness}` field. Task 3 (M15): each player's `combatReplayData` gains the source export's own `iconURL`/`positions`/`orientations`/`dc` (verbatim, same index-order join as every prior task -- re-verified here against the already-present `start`/`end`, which match for all 41 players), and the top-level `combatReplayMetaData` is the source's verbatim. `positions` are GW2EI map-PIXEL coordinates on the 523x750 Green Alpine Borderlands arena image (`combatReplayMetaData.maps[0].url`), sampled on GW2EI's fixed 300ms polling grid; `orientations` are degrees. Neither is PII (no account/character strings ride along -- only the already-anonymized `account` key each row is joined by). ONE normalization: the source's `dc` sentinels read -9223372036854776000/9223372036854776000 because that file was round-tripped through JavaScript, whose Number cannot represent C# `long.MinValue`/`long.MaxValue`; they are restored here to the exact -9223372036854775808/9223372036854775807 GW2EI's own writer emits (and that `axilog_core::analysis::ei_replay` produces). Every other value is byte-verbatim. The four numeric arrays are written on single lines (rather than one element per line) purely to keep this fixture readable and small; `crates/axilog-ei/tests/ei_golden.rs`'s `ei_json_combat_replay_matches_the_golden` compares them as text, not as parsed f64s, because EI serializes C# `float`s and a widened f64 would print e.g. 246.6719970703125 where EI prints 246.672. MEIGAP Task 1c: each player's `defenses` object gained `receivedCrowdControl`/`receivedCrowdControlDuration` (incoming CC; EI reports the duration in MILLISECONDS on this field, unlike `support[0].removedStunDuration`) and `boonStrips`/`boonStripsTime` (incoming boon strips), all four extracted verbatim from the same source export's `players[].defenses[0]`, joined positionally (verified: all 41 rows agree on `blockedCount` + `strikeDamageTaken` with the already-committed defenses fields). `boonStripsTime` is retained as EI emits it even though axilog deliberately does NOT reproduce it: GW2EI computes it with a verified arithmetic bug (`DefensePerTargetStatistics.cs:63` uses `Math.Max(current + removed, LogDuration)` where `Min` was intended), so `ei_golden.rs` asserts axilog's own TRUE duration sum against a reconstruction of that formula rather than against the raw value -- the same treatment `lifeLeechDamageTakenCount` already gets. MEIGAP Task 2 review round 1: `enemyPlayerSkillDist` is real EI's own `targets[0].totalDamageDist[0]` for this log, keyed by skill id, keeping only `totalDamage` and `connectedHits` (180 ids). This export is non-`detailedWvW`, so its single `targets[0]` is the synthetic `Enemy Players` row -- the AGGREGATE over every enemy player -- which is exactly the shape axibridge's own `precomputeGlobalEnemySkillStats` reduces a detailed payload to. `crates/axilog-ei/tests/ei_golden.rs` therefore folds axilog's `enemyPlayer` targets the same way and compares: 180 ids on both sides, zero either-side-only, and both fields exact on all 180. `min` is deliberately NOT extracted: EI's aggregate row carries ONE min over all enemy players combined, while the consumer's `minTotal/minCount` averages per-target mins, so the two are not the same statistic on this export shape. This is the pre-rework-era CI gate for `targets[].totalDamageDist`, and in particular for the phantom-row class review round 1 removed (rows created for combat items GW2EI never turns into a HealthDamageEvent at all). MEIGAP Task 2: the top-level `series1SBuckets` (51) is real EI's own 1S array length for this 49285 ms log -- GW2EI's `InterpolatedGraph` allocation (`GW2EIEvtcParser/EIData/MathUtils/InterpolatedGraph.cs:18-20`: `durationInS + 2` on a partial second, `+ 1` on a whole one), NOT the `(duration/1000)+1 == 50` axilog's `timeseries` module used before that task; `timeSeries.powerDamageTaken1SFinal` per player is the last element of the source's `powerDamageTaken1S[0]` (the `DamageType.Power` half of `damageTaken1S`, i.e. every non-`ConditionDamageBased` incoming row -- `EIData/Actors/Actor.cs:449-451`). Both extracted from the SAME source export as the other `timeSeries` scalars and joined by the same (profession, damage, appliedCrowdControl) triple key (verified unique across all 41 rows on both sides; each row's already-committed `damage1SFinal` re-checked against the joined source row before writing, zero mismatches). MEIGAP Task 3: the minionDamageTaken block, squadHealingDistRows and squadOutgoingHealingAlliesTotal below were extracted verbatim from the same source export _source names, joined POSITIONALLY (verified: all 41 golden rows agree with that export's players[] on activeTimes + defenses[0].blockedCount + statsAll[0].appliedCrowdControl). Guild GUIDs are deliberately NOT extracted from it: evtc::anonymize now zeroes the GUID payload (dst_agent/value/buff_dmg) of every CBTS_GUILD row, mirroring GW2EI's own GuildEvent.Anonymize(), because axilog now decodes those rows into players[].guildID and an anonymized capture must not publish the squad's real guild GUID -- copying them into this file would undo that. fixtures/wvw-small.anon.zevtc was REGENERATED for that scrub (541 bytes changed across the inflated stream, all inside guild rows; no metric-bearing field is touched and every figure in this file is unchanged).",
   "fightName": "World vs World - Green Alpine Borderlands",
   "durationMS": 49285,
+  "series1SBuckets": 51,
+  "enemyPlayerSkillDist": {
+    "720": { "totalDamage": 0, "connectedHits": 0 },
+    "722": { "totalDamage": 0, "connectedHits": 0 },
+    "723": { "totalDamage": 7270, "connectedHits": 144 },
+    "736": { "totalDamage": 10978, "connectedHits": 113 },
+    "737": { "totalDamage": 27080, "connectedHits": 222 },
+    "738": { "totalDamage": 0, "connectedHits": 0 },
+    "861": { "totalDamage": 2343, "connectedHits": 32 },
+    "5487": { "totalDamage": 3502, "connectedHits": 2 },
+    "5489": { "totalDamage": 23053, "connectedHits": 20 },
+    "5496": { "totalDamage": 21535, "connectedHits": 12 },
+    "5522": { "totalDamage": 11704, "connectedHits": 2 },
+    "5525": { "totalDamage": 13693, "connectedHits": 6 },
+    "5537": { "totalDamage": 6297, "connectedHits": 6 },
+    "5550": { "totalDamage": 0, "connectedHits": 0 },
+    "5557": { "totalDamage": 10544, "connectedHits": 2 },
+    "5559": { "totalDamage": 4655, "connectedHits": 4 },
+    "5577": { "totalDamage": 0, "connectedHits": 0 },
+    "5644": { "totalDamage": 108144, "connectedHits": 31 },
+    "5646": { "totalDamage": 38579, "connectedHits": 9 },
+    "5691": { "totalDamage": 55097, "connectedHits": 13 },
+    "5934": { "totalDamage": 301, "connectedHits": 1 },
+    "5936": { "totalDamage": 9057, "connectedHits": 26 },
+    "5965": { "totalDamage": 1175, "connectedHits": 40 },
+    "9081": { "totalDamage": 45142, "connectedHits": 33 },
+    "9087": { "totalDamage": 4692, "connectedHits": 18 },
+    "9091": { "totalDamage": 0, "connectedHits": 0 },
+    "9096": { "totalDamage": 1534, "connectedHits": 8 },
+    "9097": { "totalDamage": 7972, "connectedHits": 17 },
+    "9101": { "totalDamage": 971, "connectedHits": 12 },
+    "9108": { "totalDamage": 429, "connectedHits": 1 },
+    "9109": { "totalDamage": 2512, "connectedHits": 9 },
+    "9110": { "totalDamage": 1145, "connectedHits": 3 },
+    "9111": { "totalDamage": 16199, "connectedHits": 97 },
+    "9112": { "totalDamage": 301, "connectedHits": 4 },
+    "9115": { "totalDamage": 0, "connectedHits": 0 },
+    "9121": { "totalDamage": 10079, "connectedHits": 13 },
+    "9122": { "totalDamage": 439, "connectedHits": 1 },
+    "9140": { "totalDamage": 6357, "connectedHits": 15 },
+    "9143": { "totalDamage": 3753, "connectedHits": 27 },
+    "9144": { "totalDamage": 0, "connectedHits": 0 },
+    "9146": { "totalDamage": 34371, "connectedHits": 21 },
+    "9159": { "totalDamage": 30450, "connectedHits": 19 },
+    "9160": { "totalDamage": 33501, "connectedHits": 21 },
+    "9161": { "totalDamage": 152256, "connectedHits": 184 },
+    "9284": { "totalDamage": 2762, "connectedHits": 5 },
+    "9428": { "totalDamage": 19534, "connectedHits": 9 },
+    "10207": { "totalDamage": 0, "connectedHits": 0 },
+    "10528": { "totalDamage": 615, "connectedHits": 3 },
+    "10545": { "totalDamage": 16970, "connectedHits": 104 },
+    "10546": { "totalDamage": 17591, "connectedHits": 24 },
+    "10555": { "totalDamage": 1379, "connectedHits": 1 },
+    "10561": { "totalDamage": 2667, "connectedHits": 6 },
+    "10596": { "totalDamage": 971, "connectedHits": 5 },
+    "10605": { "totalDamage": 792, "connectedHits": 3 },
+    "10607": { "totalDamage": 2092, "connectedHits": 19 },
+    "10612": { "totalDamage": 3848, "connectedHits": 5 },
+    "10701": { "totalDamage": 19520, "connectedHits": 13 },
+    "12569": { "totalDamage": 0, "connectedHits": 0 },
+    "12812": { "totalDamage": 0, "connectedHits": 0 },
+    "12831": { "totalDamage": 0, "connectedHits": 0 },
+    "12855": { "totalDamage": 0, "connectedHits": 0 },
+    "12860": { "totalDamage": 0, "connectedHits": 0 },
+    "13677": { "totalDamage": 9462, "connectedHits": 18 },
+    "13684": { "totalDamage": 12119, "connectedHits": 14 },
+    "13814": { "totalDamage": 6087, "connectedHits": 192 },
+    "13918": { "totalDamage": 243, "connectedHits": 7 },
+    "14363": { "totalDamage": 706, "connectedHits": 2 },
+    "14364": { "totalDamage": 1148, "connectedHits": 6 },
+    "14365": { "totalDamage": 782, "connectedHits": 3 },
+    "15718": { "totalDamage": 0, "connectedHits": 0 },
+    "19115": { "totalDamage": 2, "connectedHits": 1 },
+    "19116": { "totalDamage": 3220, "connectedHits": 5 },
+    "19117": { "totalDamage": 773, "connectedHits": 5 },
+    "19426": { "totalDamage": 8399, "connectedHits": 137 },
+    "21636": { "totalDamage": 0, "connectedHits": 0 },
+    "21656": { "totalDamage": 0, "connectedHits": 0 },
+    "26557": { "totalDamage": 584, "connectedHits": 11 },
+    "26558": { "totalDamage": 0, "connectedHits": 0 },
+    "26646": { "totalDamage": 1716, "connectedHits": 26 },
+    "27505": { "totalDamage": 1400, "connectedHits": 15 },
+    "27976": { "totalDamage": 1618, "connectedHits": 2 },
+    "28180": { "totalDamage": 282, "connectedHits": 1 },
+    "28253": { "totalDamage": 5771, "connectedHits": 5 },
+    "28472": { "totalDamage": 413, "connectedHits": 6 },
+    "28516": { "totalDamage": 6291, "connectedHits": 31 },
+    "28549": { "totalDamage": 12886, "connectedHits": 22 },
+    "28978": { "totalDamage": 0, "connectedHits": 12 },
+    "29002": { "totalDamage": 118, "connectedHits": 1 },
+    "29180": { "totalDamage": 292, "connectedHits": 1 },
+    "29331": { "totalDamage": 539, "connectedHits": 3 },
+    "29560": { "totalDamage": 831, "connectedHits": 14 },
+    "29705": { "totalDamage": 337, "connectedHits": 1 },
+    "29740": { "totalDamage": 12, "connectedHits": 3 },
+    "29855": { "totalDamage": 17041, "connectedHits": 44 },
+    "29887": { "totalDamage": 11, "connectedHits": 3 },
+    "30121": { "totalDamage": 0, "connectedHits": 0 },
+    "30279": { "totalDamage": 0, "connectedHits": 0 },
+    "30285": { "totalDamage": 9229, "connectedHits": 94 },
+    "30359": { "totalDamage": 0, "connectedHits": 0 },
+    "30488": { "totalDamage": 108, "connectedHits": 1 },
+    "30553": { "totalDamage": 1199, "connectedHits": 4 },
+    "30799": { "totalDamage": 1491, "connectedHits": 3 },
+    "30860": { "totalDamage": 1245, "connectedHits": 1 },
+    "31318": { "totalDamage": 0, "connectedHits": 0 },
+    "31406": { "totalDamage": 0, "connectedHits": 0 },
+    "31496": { "totalDamage": 0, "connectedHits": 0 },
+    "31503": { "totalDamage": 2304, "connectedHits": 5 },
+    "31700": { "totalDamage": 3501, "connectedHits": 16 },
+    "31710": { "totalDamage": 2298, "connectedHits": 21 },
+    "31847": { "totalDamage": 206, "connectedHits": 1 },
+    "38767": { "totalDamage": 3844, "connectedHits": 3 },
+    "38785": { "totalDamage": 0, "connectedHits": 0 },
+    "40624": { "totalDamage": 1634, "connectedHits": 10 },
+    "41243": { "totalDamage": 401, "connectedHits": 8 },
+    "42494": { "totalDamage": 2668, "connectedHits": 15 },
+    "43123": { "totalDamage": 3107, "connectedHits": 8 },
+    "44602": { "totalDamage": 579, "connectedHits": 6 },
+    "44947": { "totalDamage": 0, "connectedHits": 0 },
+    "45047": { "totalDamage": 940, "connectedHits": 10 },
+    "45333": { "totalDamage": 3854, "connectedHits": 19 },
+    "45402": { "totalDamage": 5, "connectedHits": 1 },
+    "45534": { "totalDamage": 1881, "connectedHits": 61 },
+    "56920": { "totalDamage": 1339, "connectedHits": 2 },
+    "57244": { "totalDamage": 1625, "connectedHits": 5 },
+    "62539": { "totalDamage": 7345, "connectedHits": 6 },
+    "62563": { "totalDamage": 240, "connectedHits": 24 },
+    "62611": { "totalDamage": 4153, "connectedHits": 11 },
+    "62655": { "totalDamage": 3396, "connectedHits": 3 },
+    "62667": { "totalDamage": 0, "connectedHits": 0 },
+    "62962": { "totalDamage": 4842, "connectedHits": 6 },
+    "63118": { "totalDamage": 6726, "connectedHits": 4 },
+    "63131": { "totalDamage": 21964, "connectedHits": 16 },
+    "63157": { "totalDamage": 22484, "connectedHits": 22 },
+    "63197": { "totalDamage": 6761, "connectedHits": 6 },
+    "63208": { "totalDamage": 12822, "connectedHits": 4 },
+    "63222": { "totalDamage": 9704, "connectedHits": 4 },
+    "63224": { "totalDamage": 17503, "connectedHits": 3 },
+    "63335": { "totalDamage": 31465, "connectedHits": 9 },
+    "63337": { "totalDamage": 4544, "connectedHits": 2 },
+    "63352": { "totalDamage": 47519, "connectedHits": 39 },
+    "63438": { "totalDamage": 34499, "connectedHits": 25 },
+    "71252": { "totalDamage": 2571, "connectedHits": 5 },
+    "71870": { "totalDamage": 2537, "connectedHits": 7 },
+    "71882": { "totalDamage": 1389, "connectedHits": 6 },
+    "71888": { "totalDamage": 21, "connectedHits": 5 },
+    "71892": { "totalDamage": 0, "connectedHits": 0 },
+    "71998": { "totalDamage": 0, "connectedHits": 0 },
+    "72001": { "totalDamage": 547, "connectedHits": 2 },
+    "72024": { "totalDamage": 1743, "connectedHits": 4 },
+    "72026": { "totalDamage": 7, "connectedHits": 2 },
+    "72052": { "totalDamage": 2727, "connectedHits": 11 },
+    "72088": { "totalDamage": 401, "connectedHits": 2 },
+    "72089": { "totalDamage": 5812, "connectedHits": 6 },
+    "72896": { "totalDamage": 134, "connectedHits": 1 },
+    "72922": { "totalDamage": 6657, "connectedHits": 3 },
+    "72932": { "totalDamage": 68058, "connectedHits": 15 },
+    "72954": { "totalDamage": 2505, "connectedHits": 39 },
+    "72959": { "totalDamage": 3462, "connectedHits": 1 },
+    "72986": { "totalDamage": 110, "connectedHits": 1 },
+    "72993": { "totalDamage": 9569, "connectedHits": 3 },
+    "73007": { "totalDamage": 1983, "connectedHits": 3 },
+    "73014": { "totalDamage": 4096, "connectedHits": 4 },
+    "73020": { "totalDamage": 32731, "connectedHits": 7 },
+    "73030": { "totalDamage": 32114, "connectedHits": 13 },
+    "73043": { "totalDamage": 21791, "connectedHits": 7 },
+    "73059": { "totalDamage": 2910, "connectedHits": 8 },
+    "73110": { "totalDamage": 23486, "connectedHits": 10 },
+    "73112": { "totalDamage": 5668, "connectedHits": 3 },
+    "76506": { "totalDamage": 1255, "connectedHits": 7 },
+    "76708": { "totalDamage": 3527, "connectedHits": 24 },
+    "76746": { "totalDamage": 1874, "connectedHits": 5 },
+    "76816": { "totalDamage": 148, "connectedHits": 2 },
+    "76910": { "totalDamage": 1689, "connectedHits": 4 },
+    "76978": { "totalDamage": 2268, "connectedHits": 4 },
+    "77077": { "totalDamage": 0, "connectedHits": 0 },
+    "77079": { "totalDamage": 1381, "connectedHits": 4 },
+    "77339": { "totalDamage": 10167, "connectedHits": 22 },
+    "78895": { "totalDamage": 3656, "connectedHits": 7 },
+    "79336": { "totalDamage": 23474, "connectedHits": 26 },
+    "79344": { "totalDamage": 3507, "connectedHits": 17 }
+  },
   "friendlyPlayerCount": 41,
   "squadTotalDamage": 2138414,
   "squadAppliedCrowdControl": 34,
@@ -13,6 +196,132 @@
   "squadCondiCleanseSelf": 97,
   "squadBoonStrips": 437,
   "squadResurrects": 6,
+  "minionDamageTaken": {
+    "_note": "Real-EI minion damage-taken aggregates, extracted verbatim from the same source export this file's _source names (axibridge test-fixtures/boon/20260117-181030.json), bucketed by axibridge's own normalizeMinionName (strip a leading 'Juvenile ', collapse anything containing UNKNOWN to 'Unknown'). MEIGAP Task 3b's CI gate. Guild GUIDs are deliberately NOT extracted from that export -- evtc::anonymize scrubs them and copying them here would undo that.",
+    "players": 17,
+    "groups": 45,
+    "rows": 391,
+    "totalDamage": 385881,
+    "byName": {
+      "Air Hare": {
+        "groups": 1,
+        "rows": 0,
+        "totalDamage": 0
+      },
+      "Air Hare (EP)": {
+        "groups": 2,
+        "rows": 1,
+        "totalDamage": 0
+      },
+      "Binding Roots": {
+        "groups": 1,
+        "rows": 13,
+        "totalDamage": 16937
+      },
+      "Black Bear": {
+        "groups": 1,
+        "rows": 0,
+        "totalDamage": 0
+      },
+      "Blood Fiend": {
+        "groups": 1,
+        "rows": 0,
+        "totalDamage": 0
+      },
+      "Brown Bear": {
+        "groups": 4,
+        "rows": 87,
+        "totalDamage": 91408
+      },
+      "Earth Toad (EP)": {
+        "groups": 3,
+        "rows": 2,
+        "totalDamage": 0
+      },
+      "Fire Fox (EP)": {
+        "groups": 2,
+        "rows": 1,
+        "totalDamage": 0
+      },
+      "Frost Spirit": {
+        "groups": 5,
+        "rows": 5,
+        "totalDamage": 0
+      },
+      "Illusionary Avenger": {
+        "groups": 2,
+        "rows": 11,
+        "totalDamage": 3389
+      },
+      "Illusionary Berserker": {
+        "groups": 2,
+        "rows": 58,
+        "totalDamage": 5702
+      },
+      "Illusionary Sharpshooter": {
+        "groups": 3,
+        "rows": 13,
+        "totalDamage": 4960
+      },
+      "Illusionary Warden": {
+        "groups": 1,
+        "rows": 1,
+        "totalDamage": 0
+      },
+      "Jacaranda": {
+        "groups": 1,
+        "rows": 18,
+        "totalDamage": 28815
+      },
+      "Murellow": {
+        "groups": 1,
+        "rows": 33,
+        "totalDamage": 23216
+      },
+      "Polar Bear": {
+        "groups": 3,
+        "rows": 135,
+        "totalDamage": 201273
+      },
+      "Rifle Clone": {
+        "groups": 1,
+        "rows": 2,
+        "totalDamage": 0
+      },
+      "Spirit of Nature Renewal": {
+        "groups": 1,
+        "rows": 1,
+        "totalDamage": 0
+      },
+      "Stone Spirit": {
+        "groups": 3,
+        "rows": 3,
+        "totalDamage": 0
+      },
+      "Sword Clone": {
+        "groups": 1,
+        "rows": 1,
+        "totalDamage": 0
+      },
+      "Unknown": {
+        "groups": 1,
+        "rows": 4,
+        "totalDamage": 10181
+      },
+      "Water Otter": {
+        "groups": 2,
+        "rows": 0,
+        "totalDamage": 0
+      },
+      "Water Otter (EP)": {
+        "groups": 3,
+        "rows": 2,
+        "totalDamage": 0
+      }
+    }
+  },
+  "squadHealingDistRows": 211,
+  "squadOutgoingHealingAlliesTotal": 870718,
   "players": [
     {
       "account": "Anon132.5884",
@@ -294,7 +603,8 @@
         "damage1SFinal": 96084,
         "damageTaken1SFinal": 8993,
         "targetDamage1SFinal": 71362,
-        "dpsTargetsTotalDamage": 71362
+        "dpsTargetsTotalDamage": 71362,
+        "powerDamageTaken1SFinal": 8553
       },
       "hitStats": {
         "criticalRate": 139,
@@ -336,7 +646,11 @@
         "damageBarrier": 387,
         "damageBarrierCount": 4,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 3,
+        "boonStripsTime": 147.855
       },
       "rotation": [
         {
@@ -926,7 +1240,8 @@
         "damage1SFinal": 3154,
         "damageTaken1SFinal": 63506,
         "targetDamage1SFinal": 2404,
-        "dpsTargetsTotalDamage": 2404
+        "dpsTargetsTotalDamage": 2404,
+        "powerDamageTaken1SFinal": 62839
       },
       "hitStats": {
         "criticalRate": 8,
@@ -968,7 +1283,11 @@
         "damageBarrier": 0,
         "damageBarrierCount": 0,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 2,
+        "receivedCrowdControlDuration": 3800,
+        "boonStrips": 3,
+        "boonStripsTime": 106.079
       },
       "rotation": [
         {
@@ -1382,7 +1701,8 @@
         "damage1SFinal": 100089,
         "damageTaken1SFinal": 313,
         "targetDamage1SFinal": 74414,
-        "dpsTargetsTotalDamage": 74414
+        "dpsTargetsTotalDamage": 74414,
+        "powerDamageTaken1SFinal": 251
       },
       "hitStats": {
         "criticalRate": 102,
@@ -1424,7 +1744,11 @@
         "damageBarrier": 20,
         "damageBarrierCount": 1,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 0,
+        "boonStripsTime": 0
       },
       "rotation": [
         {
@@ -2139,7 +2463,8 @@
         "damage1SFinal": 7250,
         "damageTaken1SFinal": 21075,
         "targetDamage1SFinal": 3320,
-        "dpsTargetsTotalDamage": 3320
+        "dpsTargetsTotalDamage": 3320,
+        "powerDamageTaken1SFinal": 20446
       },
       "hitStats": {
         "criticalRate": 5,
@@ -2181,7 +2506,11 @@
         "damageBarrier": 6136,
         "damageBarrierCount": 25,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 1,
+        "receivedCrowdControlDuration": 1500,
+        "boonStrips": 7,
+        "boonStripsTime": 376.559
       },
       "rotation": [
         {
@@ -2739,7 +3068,8 @@
         "damage1SFinal": 14011,
         "damageTaken1SFinal": 13595,
         "targetDamage1SFinal": 12543,
-        "dpsTargetsTotalDamage": 12543
+        "dpsTargetsTotalDamage": 12543,
+        "powerDamageTaken1SFinal": 12938
       },
       "hitStats": {
         "criticalRate": 8,
@@ -2781,7 +3111,11 @@
         "damageBarrier": 1361,
         "damageBarrierCount": 8,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 1,
+        "receivedCrowdControlDuration": 1000,
+        "boonStrips": 4,
+        "boonStripsTime": 319.17
       },
       "rotation": [
         {
@@ -3482,7 +3816,8 @@
         "damage1SFinal": 154899,
         "damageTaken1SFinal": 30832,
         "targetDamage1SFinal": 125809,
-        "dpsTargetsTotalDamage": 125809
+        "dpsTargetsTotalDamage": 125809,
+        "powerDamageTaken1SFinal": 30691
       },
       "hitStats": {
         "criticalRate": 123,
@@ -3524,7 +3859,11 @@
         "damageBarrier": 0,
         "damageBarrierCount": 0,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 4,
+        "boonStripsTime": 197.14
       },
       "rotation": [
         {
@@ -4711,7 +5050,8 @@
         "damage1SFinal": 6848,
         "damageTaken1SFinal": 2318,
         "targetDamage1SFinal": 5506,
-        "dpsTargetsTotalDamage": 5506
+        "dpsTargetsTotalDamage": 5506,
+        "powerDamageTaken1SFinal": 1637
       },
       "hitStats": {
         "criticalRate": 6,
@@ -4753,7 +5093,11 @@
         "damageBarrier": 1176,
         "damageBarrierCount": 4,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 0,
+        "boonStripsTime": 0
       },
       "rotation": [
         {
@@ -5415,7 +5759,8 @@
         "damage1SFinal": 58282,
         "damageTaken1SFinal": 55929,
         "targetDamage1SFinal": 37361,
-        "dpsTargetsTotalDamage": 37361
+        "dpsTargetsTotalDamage": 37361,
+        "powerDamageTaken1SFinal": 53539
       },
       "hitStats": {
         "criticalRate": 79,
@@ -5457,7 +5802,11 @@
         "damageBarrier": 3286,
         "damageBarrierCount": 17,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 4,
+        "receivedCrowdControlDuration": 5000,
+        "boonStrips": 12,
+        "boonStripsTime": 635.916
       },
       "rotation": [
         {
@@ -5959,7 +6308,8 @@
         "damage1SFinal": 8665,
         "damageTaken1SFinal": 623,
         "targetDamage1SFinal": 6542,
-        "dpsTargetsTotalDamage": 6542
+        "dpsTargetsTotalDamage": 6542,
+        "powerDamageTaken1SFinal": 142
       },
       "hitStats": {
         "criticalRate": 14,
@@ -6001,7 +6351,11 @@
         "damageBarrier": 303,
         "damageBarrierCount": 4,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 1,
+        "boonStripsTime": 49.285
       },
       "rotation": [
         {
@@ -6662,7 +7016,8 @@
         "damage1SFinal": 3257,
         "damageTaken1SFinal": 28687,
         "targetDamage1SFinal": 2883,
-        "dpsTargetsTotalDamage": 2883
+        "dpsTargetsTotalDamage": 2883,
+        "powerDamageTaken1SFinal": 27793
       },
       "hitStats": {
         "criticalRate": 0,
@@ -6704,7 +7059,11 @@
         "damageBarrier": 6972,
         "damageBarrierCount": 27,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 3,
+        "receivedCrowdControlDuration": 3530,
+        "boonStrips": 5,
+        "boonStripsTime": 293.982
       },
       "rotation": [
         {
@@ -7253,7 +7612,8 @@
         "damage1SFinal": 113203,
         "damageTaken1SFinal": 7080,
         "targetDamage1SFinal": 66058,
-        "dpsTargetsTotalDamage": 66058
+        "dpsTargetsTotalDamage": 66058,
+        "powerDamageTaken1SFinal": 7034
       },
       "hitStats": {
         "criticalRate": 141,
@@ -7295,7 +7655,11 @@
         "damageBarrier": 4934,
         "damageBarrierCount": 9,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 3,
+        "boonStripsTime": 109.906
       },
       "rotation": [
         {
@@ -8081,7 +8445,8 @@
         "damage1SFinal": 12284,
         "damageTaken1SFinal": 81973,
         "targetDamage1SFinal": 9588,
-        "dpsTargetsTotalDamage": 9588
+        "dpsTargetsTotalDamage": 9588,
+        "powerDamageTaken1SFinal": 80321
       },
       "hitStats": {
         "criticalRate": 7,
@@ -8123,7 +8488,11 @@
         "damageBarrier": 10411,
         "damageBarrierCount": 19,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 16,
+        "boonStripsTime": 620.274
       },
       "rotation": [
         {
@@ -9459,7 +9828,8 @@
         "damage1SFinal": 2135,
         "damageTaken1SFinal": 13983,
         "targetDamage1SFinal": 1645,
-        "dpsTargetsTotalDamage": 1645
+        "dpsTargetsTotalDamage": 1645,
+        "powerDamageTaken1SFinal": 13983
       },
       "hitStats": {
         "criticalRate": 1,
@@ -9501,7 +9871,11 @@
         "damageBarrier": 2433,
         "damageBarrierCount": 7,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 1,
+        "receivedCrowdControlDuration": 1030,
+        "boonStrips": 5,
+        "boonStripsTime": 314.959
       },
       "rotation": [
         {
@@ -10087,7 +10461,8 @@
         "damage1SFinal": 96869,
         "damageTaken1SFinal": 9287,
         "targetDamage1SFinal": 63308,
-        "dpsTargetsTotalDamage": 63308
+        "dpsTargetsTotalDamage": 63308,
+        "powerDamageTaken1SFinal": 9229
       },
       "hitStats": {
         "criticalRate": 119,
@@ -10129,7 +10504,11 @@
         "damageBarrier": 264,
         "damageBarrierCount": 2,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 5,
+        "boonStripsTime": 241.974
       },
       "rotation": [
         {
@@ -10657,7 +11036,8 @@
         "damage1SFinal": 2513,
         "damageTaken1SFinal": 17535,
         "targetDamage1SFinal": 1038,
-        "dpsTargetsTotalDamage": 1038
+        "dpsTargetsTotalDamage": 1038,
+        "powerDamageTaken1SFinal": 17524
       },
       "hitStats": {
         "criticalRate": 2,
@@ -10699,7 +11079,11 @@
         "damageBarrier": 2246,
         "damageBarrierCount": 4,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 11,
+        "boonStripsTime": 549.451
       },
       "rotation": [
         {
@@ -11392,7 +11776,8 @@
         "damage1SFinal": 162652,
         "damageTaken1SFinal": 51760,
         "targetDamage1SFinal": 107269,
-        "dpsTargetsTotalDamage": 107269
+        "dpsTargetsTotalDamage": 107269,
+        "powerDamageTaken1SFinal": 50474
       },
       "hitStats": {
         "criticalRate": 118,
@@ -11434,7 +11819,11 @@
         "damageBarrier": 3651,
         "damageBarrierCount": 7,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 4,
+        "receivedCrowdControlDuration": 6500,
+        "boonStrips": 9,
+        "boonStripsTime": 661.228
       },
       "rotation": [
         {
@@ -12124,7 +12513,8 @@
         "damage1SFinal": 8167,
         "damageTaken1SFinal": 62921,
         "targetDamage1SFinal": 4684,
-        "dpsTargetsTotalDamage": 4684
+        "dpsTargetsTotalDamage": 4684,
+        "powerDamageTaken1SFinal": 60435
       },
       "hitStats": {
         "criticalRate": 4,
@@ -12166,7 +12556,11 @@
         "damageBarrier": 8454,
         "damageBarrierCount": 10,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 1,
+        "receivedCrowdControlDuration": 1000,
+        "boonStrips": 10,
+        "boonStripsTime": 667.98
       },
       "rotation": [
         {
@@ -12649,7 +13043,8 @@
         "damage1SFinal": 9342,
         "damageTaken1SFinal": 4466,
         "targetDamage1SFinal": 5680,
-        "dpsTargetsTotalDamage": 5680
+        "dpsTargetsTotalDamage": 5680,
+        "powerDamageTaken1SFinal": 4065
       },
       "hitStats": {
         "criticalRate": 5,
@@ -12691,7 +13086,11 @@
         "damageBarrier": 1141,
         "damageBarrierCount": 4,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 7,
+        "boonStripsTime": 325.727
       },
       "rotation": [
         {
@@ -13469,7 +13868,8 @@
         "damage1SFinal": 83608,
         "damageTaken1SFinal": 15865,
         "targetDamage1SFinal": 57580,
-        "dpsTargetsTotalDamage": 57580
+        "dpsTargetsTotalDamage": 57580,
+        "powerDamageTaken1SFinal": 15229
       },
       "hitStats": {
         "criticalRate": 28,
@@ -13511,7 +13911,11 @@
         "damageBarrier": 136,
         "damageBarrierCount": 1,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 6,
+        "boonStripsTime": 537.683
       },
       "rotation": [
         {
@@ -14106,7 +14510,8 @@
         "damage1SFinal": 169689,
         "damageTaken1SFinal": 30831,
         "targetDamage1SFinal": 109394,
-        "dpsTargetsTotalDamage": 109394
+        "dpsTargetsTotalDamage": 109394,
+        "powerDamageTaken1SFinal": 30329
       },
       "hitStats": {
         "criticalRate": 153,
@@ -14148,7 +14553,11 @@
         "damageBarrier": 757,
         "damageBarrierCount": 5,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 3,
+        "boonStripsTime": 416.806
       },
       "rotation": [
         {
@@ -15460,7 +15869,8 @@
         "damage1SFinal": 205612,
         "damageTaken1SFinal": 25518,
         "targetDamage1SFinal": 115642,
-        "dpsTargetsTotalDamage": 115642
+        "dpsTargetsTotalDamage": 115642,
+        "powerDamageTaken1SFinal": 24455
       },
       "hitStats": {
         "criticalRate": 224,
@@ -15502,7 +15912,11 @@
         "damageBarrier": 4868,
         "damageBarrierCount": 15,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 1,
+        "boonStripsTime": 300.652
       },
       "rotation": [
         {
@@ -16066,7 +16480,8 @@
         "damage1SFinal": 6508,
         "damageTaken1SFinal": 12143,
         "targetDamage1SFinal": 5993,
-        "dpsTargetsTotalDamage": 5993
+        "dpsTargetsTotalDamage": 5993,
+        "powerDamageTaken1SFinal": 11977
       },
       "hitStats": {
         "criticalRate": 4,
@@ -16108,7 +16523,11 @@
         "damageBarrier": 5585,
         "damageBarrierCount": 14,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 3,
+        "boonStripsTime": 147.855
       },
       "rotation": [
         {
@@ -16901,7 +17320,8 @@
         "damage1SFinal": 128440,
         "damageTaken1SFinal": 21168,
         "targetDamage1SFinal": 79873,
-        "dpsTargetsTotalDamage": 79873
+        "dpsTargetsTotalDamage": 79873,
+        "powerDamageTaken1SFinal": 20997
       },
       "hitStats": {
         "criticalRate": 102,
@@ -16943,7 +17363,11 @@
         "damageBarrier": 7335,
         "damageBarrierCount": 19,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 1,
+        "receivedCrowdControlDuration": 1500,
+        "boonStrips": 4,
+        "boonStripsTime": 197.14
       },
       "rotation": [
         {
@@ -17619,7 +18043,8 @@
         "damage1SFinal": 6861,
         "damageTaken1SFinal": 69438,
         "targetDamage1SFinal": 3870,
-        "dpsTargetsTotalDamage": 3870
+        "dpsTargetsTotalDamage": 3870,
+        "powerDamageTaken1SFinal": 68278
       },
       "hitStats": {
         "criticalRate": 5,
@@ -17661,7 +18086,11 @@
         "damageBarrier": 5644,
         "damageBarrierCount": 14,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 22,
+        "boonStripsTime": 927.131
       },
       "rotation": [
         {
@@ -18249,7 +18678,8 @@
         "damage1SFinal": 2674,
         "damageTaken1SFinal": 27821,
         "targetDamage1SFinal": 2150,
-        "dpsTargetsTotalDamage": 2150
+        "dpsTargetsTotalDamage": 2150,
+        "powerDamageTaken1SFinal": 27364
       },
       "hitStats": {
         "criticalRate": 1,
@@ -18291,7 +18721,11 @@
         "damageBarrier": 5599,
         "damageBarrierCount": 26,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 2,
+        "receivedCrowdControlDuration": 4000,
+        "boonStrips": 14,
+        "boonStripsTime": 743.399
       },
       "rotation": [
         {
@@ -18760,7 +19194,8 @@
         "damage1SFinal": 954,
         "damageTaken1SFinal": 7472,
         "targetDamage1SFinal": 954,
-        "dpsTargetsTotalDamage": 954
+        "dpsTargetsTotalDamage": 954,
+        "powerDamageTaken1SFinal": 7391
       },
       "hitStats": {
         "criticalRate": 1,
@@ -18802,7 +19237,11 @@
         "damageBarrier": 6431,
         "damageBarrierCount": 22,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 1,
+        "receivedCrowdControlDuration": 1000,
+        "boonStrips": 1,
+        "boonStripsTime": 125.516
       },
       "rotation": [
         {
@@ -19246,7 +19685,8 @@
         "damage1SFinal": 149607,
         "damageTaken1SFinal": 4315,
         "targetDamage1SFinal": 113046,
-        "dpsTargetsTotalDamage": 113046
+        "dpsTargetsTotalDamage": 113046,
+        "powerDamageTaken1SFinal": 4290
       },
       "hitStats": {
         "criticalRate": 131,
@@ -19288,7 +19728,11 @@
         "damageBarrier": 2262,
         "damageBarrierCount": 7,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 5,
+        "boonStripsTime": 313.856
       },
       "rotation": [
         {
@@ -20027,7 +20471,8 @@
         "damage1SFinal": 116532,
         "damageTaken1SFinal": 63912,
         "targetDamage1SFinal": 72998,
-        "dpsTargetsTotalDamage": 72998
+        "dpsTargetsTotalDamage": 72998,
+        "powerDamageTaken1SFinal": 62792
       },
       "hitStats": {
         "criticalRate": 93,
@@ -20069,7 +20514,11 @@
         "damageBarrier": 3993,
         "damageBarrierCount": 5,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 19,
+        "boonStripsTime": 862.184
       },
       "rotation": [
         {
@@ -20603,7 +21052,8 @@
         "damage1SFinal": 3907,
         "damageTaken1SFinal": 15334,
         "targetDamage1SFinal": 2981,
-        "dpsTargetsTotalDamage": 2981
+        "dpsTargetsTotalDamage": 2981,
+        "powerDamageTaken1SFinal": 12821
       },
       "hitStats": {
         "criticalRate": 5,
@@ -20645,7 +21095,11 @@
         "damageBarrier": 1710,
         "damageBarrierCount": 10,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 2,
+        "receivedCrowdControlDuration": 1830,
+        "boonStrips": 18,
+        "boonStripsTime": 769.548
       },
       "rotation": [
         {
@@ -21212,7 +21666,8 @@
         "damage1SFinal": 192437,
         "damageTaken1SFinal": 32366,
         "targetDamage1SFinal": 114526,
-        "dpsTargetsTotalDamage": 114526
+        "dpsTargetsTotalDamage": 114526,
+        "powerDamageTaken1SFinal": 31887
       },
       "hitStats": {
         "criticalRate": 153,
@@ -21254,7 +21709,11 @@
         "damageBarrier": 7731,
         "damageBarrierCount": 26,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 3,
+        "boonStripsTime": 189.604
       },
       "rotation": [
         {
@@ -21915,7 +22374,8 @@
         "damage1SFinal": 7952,
         "damageTaken1SFinal": 63116,
         "targetDamage1SFinal": 5923,
-        "dpsTargetsTotalDamage": 5923
+        "dpsTargetsTotalDamage": 5923,
+        "powerDamageTaken1SFinal": 62152
       },
       "hitStats": {
         "criticalRate": 6,
@@ -21957,7 +22417,11 @@
         "damageBarrier": 6802,
         "damageBarrierCount": 22,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 3,
+        "receivedCrowdControlDuration": 4000,
+        "boonStrips": 27,
+        "boonStripsTime": 1121.396
       },
       "rotation": [
         {
@@ -22538,7 +23002,8 @@
         "damage1SFinal": 1503,
         "damageTaken1SFinal": 16330,
         "targetDamage1SFinal": 816,
-        "dpsTargetsTotalDamage": 816
+        "dpsTargetsTotalDamage": 816,
+        "powerDamageTaken1SFinal": 16118
       },
       "hitStats": {
         "criticalRate": 4,
@@ -22580,7 +23045,11 @@
         "damageBarrier": 2690,
         "damageBarrierCount": 11,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 2,
+        "receivedCrowdControlDuration": 2030,
+        "boonStrips": 10,
+        "boonStripsTime": 531.372
       },
       "rotation": [
         {
@@ -23212,7 +23681,8 @@
         "damage1SFinal": 99454,
         "damageTaken1SFinal": 49763,
         "targetDamage1SFinal": 56539,
-        "dpsTargetsTotalDamage": 56539
+        "dpsTargetsTotalDamage": 56539,
+        "powerDamageTaken1SFinal": 48484
       },
       "hitStats": {
         "criticalRate": 96,
@@ -23254,7 +23724,11 @@
         "damageBarrier": 11019,
         "damageBarrierCount": 19,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 2,
+        "receivedCrowdControlDuration": 2500,
+        "boonStrips": 18,
+        "boonStripsTime": 1073.991
       },
       "rotation": [
         {
@@ -23707,7 +24181,8 @@
         "damage1SFinal": 1055,
         "damageTaken1SFinal": 4844,
         "targetDamage1SFinal": 519,
-        "dpsTargetsTotalDamage": 519
+        "dpsTargetsTotalDamage": 519,
+        "powerDamageTaken1SFinal": 3979
       },
       "hitStats": {
         "criticalRate": 2,
@@ -23749,7 +24224,11 @@
         "damageBarrier": 1930,
         "damageBarrierCount": 14,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 1,
+        "receivedCrowdControlDuration": 1000,
+        "boonStrips": 3,
+        "boonStripsTime": 147.855
       },
       "rotation": [
         {
@@ -24410,7 +24889,8 @@
         "damage1SFinal": 4476,
         "damageTaken1SFinal": 27862,
         "targetDamage1SFinal": 1759,
-        "dpsTargetsTotalDamage": 1759
+        "dpsTargetsTotalDamage": 1759,
+        "powerDamageTaken1SFinal": 27606
       },
       "hitStats": {
         "criticalRate": 0,
@@ -24452,7 +24932,11 @@
         "damageBarrier": 11679,
         "damageBarrierCount": 34,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 1,
+        "receivedCrowdControlDuration": 1000,
+        "boonStrips": 11,
+        "boonStripsTime": 379.665
       },
       "rotation": [
         {
@@ -25105,7 +25589,8 @@
         "damage1SFinal": 13132,
         "damageTaken1SFinal": 66177,
         "targetDamage1SFinal": 9982,
-        "dpsTargetsTotalDamage": 9982
+        "dpsTargetsTotalDamage": 9982,
+        "powerDamageTaken1SFinal": 65516
       },
       "hitStats": {
         "criticalRate": 15,
@@ -25147,7 +25632,11 @@
         "damageBarrier": 9621,
         "damageBarrierCount": 28,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 2,
+        "receivedCrowdControlDuration": 3000,
+        "boonStrips": 15,
+        "boonStripsTime": 745.971
       },
       "rotation": [
         {
@@ -25752,7 +26241,8 @@
         "damage1SFinal": 84309,
         "damageTaken1SFinal": 27620,
         "targetDamage1SFinal": 47293,
-        "dpsTargetsTotalDamage": 47293
+        "dpsTargetsTotalDamage": 47293,
+        "powerDamageTaken1SFinal": 27577
       },
       "hitStats": {
         "criticalRate": 127,
@@ -25794,7 +26284,11 @@
         "damageBarrier": 6834,
         "damageBarrierCount": 3,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 3,
+        "boonStripsTime": 153.52
       },
       "rotation": [
         {
@@ -26157,7 +26651,8 @@
         "damage1SFinal": 0,
         "damageTaken1SFinal": 0,
         "targetDamage1SFinal": 0,
-        "dpsTargetsTotalDamage": 0
+        "dpsTargetsTotalDamage": 0,
+        "powerDamageTaken1SFinal": 0
       },
       "hitStats": {
         "criticalRate": 0,
@@ -26199,7 +26694,11 @@
         "damageBarrier": 0,
         "damageBarrierCount": 0,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 0,
+        "boonStripsTime": 0
       },
       "rotation": []
     },
@@ -26299,7 +26798,8 @@
         "damage1SFinal": 0,
         "damageTaken1SFinal": 0,
         "targetDamage1SFinal": 0,
-        "dpsTargetsTotalDamage": 0
+        "dpsTargetsTotalDamage": 0,
+        "powerDamageTaken1SFinal": 0
       },
       "hitStats": {
         "criticalRate": 0,
@@ -26341,7 +26841,11 @@
         "damageBarrier": 0,
         "damageBarrierCount": 0,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 0,
+        "boonStripsTime": 0
       },
       "rotation": []
     },
@@ -26441,7 +26945,8 @@
         "damage1SFinal": 0,
         "damageTaken1SFinal": 0,
         "targetDamage1SFinal": 0,
-        "dpsTargetsTotalDamage": 0
+        "dpsTargetsTotalDamage": 0,
+        "powerDamageTaken1SFinal": 0
       },
       "hitStats": {
         "criticalRate": 0,
@@ -26483,7 +26988,11 @@
         "damageBarrier": 0,
         "damageBarrierCount": 0,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 0,
+        "boonStripsTime": 0
       },
       "rotation": []
     },
@@ -26592,7 +27101,8 @@
         "damage1SFinal": 0,
         "damageTaken1SFinal": 0,
         "targetDamage1SFinal": 0,
-        "dpsTargetsTotalDamage": 0
+        "dpsTargetsTotalDamage": 0,
+        "powerDamageTaken1SFinal": 0
       },
       "hitStats": {
         "criticalRate": 0,
@@ -26634,7 +27144,11 @@
         "damageBarrier": 0,
         "damageBarrierCount": 0,
         "breakbarDamageTaken": 0,
-        "breakbarDamageTakenCount": 0
+        "breakbarDamageTakenCount": 0,
+        "receivedCrowdControl": 0,
+        "receivedCrowdControlDuration": 0,
+        "boonStrips": 0,
+        "boonStripsTime": 0
       },
       "rotation": []
     }

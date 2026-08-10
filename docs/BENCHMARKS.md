@@ -14,7 +14,10 @@ both the committed fixture and a real 583k-event log) are in
 
 Later milestones that add work to a measured stage record their delta here
 too, against the MPERF tip:
-[After MATTRIB Task 1](#after-mattrib-task-1--the-orphaned-instid-repair-pre-pass).
+[After MATTRIB Task 1](#after-mattrib-task-1--the-orphaned-instid-repair-pre-pass),
+[After MEIGAP Task 1](#after-meigap-task-1--incoming-ccstrips-and-the-per-target-split),
+[After MEIGAP Task 2](#after-meigap-task-2--the-power-series-split),
+[After MEIGAP Task 3](#after-meigap-task-3--the-healingminionguild-remainder).
 
 ## Harness
 
@@ -491,6 +494,72 @@ multiply-shift hasher (`repair::AddrHasher`; the map is looked up, never
 iterated, so this cannot affect ordering or determinism) is the whole
 difference. Per-row hashing on a 583k-row scan is not a micro-optimisation.
 
+## After MEIGAP Task 1 — incoming CC/strips and the per-target split
+
+MEIGAP Task 1 adds two always-on units of work to `analysis::analyze`:
+`analysis::per_target` (a new full scan producing the per-(player, enemy)
+offensive split) and two additions inside `analysis::defenses` (incoming
+crowd control, folded into the existing breakbar scan; incoming boon
+strips, one more scan over `BUFFREMOVE_ALL`-shaped rows). The two OPT-IN
+families it adds — the serialized `per_target` block behind
+`--skill-damage`, and `buffs::states` behind `--timeseries` — are outside
+`analyze()` entirely and so outside these numbers. The third always-on
+addition, the `selfBuffs`/`groupBuffs`/`squadBuffs` ei-json arrays, costs
+nothing here: it is a re-serialization of numbers `analyze()` already
+computed, and shows up as payload size (+21.3% compact on the flagless
+ei-json), not CPU.
+
+Same machine and harness as the baseline above, measured 2026-08-10 against
+`730212a` (the MEIGAP base).
+
+**Method matters here, and a first pass got it wrong.** An initial
+single-run-per-side measurement reported `full_pipeline` at +2.6%; a
+reviewer re-measuring independently got +4.3% with non-overlapping
+confidence intervals. Run-to-run drift on this machine is comparable to the
+effect being measured (the real-log `full_pipeline` spans 165.9-169.1 ms
+across three consecutive runs of the *same* binary), so a single
+before/after pair cannot resolve it. The numbers below are the MEDIAN of
+**three alternating base/tip pairs**, run back to back from two prebuilt
+bench binaries so no rebuild or checkout sits between the two sides of a
+pair. All six per-stage samples are listed so the spread is visible.
+
+| Stage | Before (`730212a`) | After | Δ |
+|---|---|---|---|
+| fixture `decode_raw` | 9.183 ms | 9.076 ms | −1.2% (noise) |
+| fixture `model::resolve` | 651.4 µs | 654.9 µs | +0.5% (noise) |
+| fixture `analysis::analyze` | 18.615 ms | 19.395 ms | +4.2% (+0.78 ms) |
+| fixture `full_pipeline` | 28.898 ms | 29.965 ms | **+3.7%** (+1.07 ms) |
+| real-log `decode_raw` | 76.682 ms | 77.081 ms | +0.5% (noise) |
+| real-log `model::resolve` | 3.830 ms | 3.819 ms | −0.3% (noise) |
+| real-log `analysis::analyze` | 86.611 ms | 89.767 ms | +3.6% (+3.16 ms) |
+| real-log `full_pipeline` | 168.620 ms | 171.220 ms | **+1.5%** (+2.60 ms) |
+
+Raw samples (base / tip, three pairs, ms unless noted):
+
+| Stage | base | tip |
+|---|---|---|
+| fixture `analysis::analyze` | 18.547 / 18.615 / 18.618 | 19.698 / 19.362 / 19.395 |
+| fixture `full_pipeline` | 29.148 / 28.681 / 28.898 | 30.115 / 29.844 / 29.965 |
+| real-log `analysis::analyze` | 85.913 / 88.092 / 86.611 | 88.996 / 90.191 / 89.767 |
+| real-log `full_pipeline` | 165.92 / 168.62 / 169.12 | 169.38 / 171.24 / 171.22 |
+
+The gate is `full_pipeline` (the plan's "no >5% pipeline regression"), and
+both arms clear it — the fixture arm by the smaller margin at +3.7%. The
+cost is concentrated in `analyze`, as expected for the extra event-stream
+traversals, and `build_report` dilutes it on the real log.
+
+Worth recording one measurement that went the wrong way first. Merging the
+incoming-CC classification into the pre-existing breakbar scan is a clear
+win on paper — one traversal instead of two — but the obvious way to write
+it, hoisting the shared `squad.contains(&e.dst_agent)` test to the top of
+the loop, made `analysis::analyze` **slower than two separate scans**
+(93.09 ms vs 89.54 ms on the real log, +4% over the unmerged form). The
+`squad` membership test is a `BTreeSet<u64>` probe; the classifications are
+a handful of byte compares that reject almost every row. Ordering the cheap
+byte filters first and the set probe last recovers the win. Same lesson as
+MATTRIB's `BTreeMap` -> `HashMap` finding: on a 583k-row scan, what you do
+*per row* is the whole cost model.
+
 ## CI
 
 `.github/workflows/ci.yml` adds a step (ubuntu leg only) that:
@@ -554,3 +623,148 @@ release build, matched surface: `--format ei-json --replay --skill-damage --time
   axilog computes its documented WvW parity surface (see README's EI-JSON parity table). The
   matched-flag config is the closest apples-to-apples available and is exactly the
   axibridge-production shape.
+
+## After MEIGAP Task 2 — the POWER series split
+
+Same machine and harness as the baseline above, measured 2026-08-10 against
+`eb57bef` (the MEIGAP Task 1 tip). Same method as Task 1's section above:
+the MEDIAN of **three alternating base/tip pairs**, run back to back from
+two prebuilt bench binaries so no rebuild sits between the halves of a pair.
+
+**Only one of this task's four families costs anything here.** The three
+`targets[]` mirrors (`build_enemy_series`, `build_enemy_dist`,
+`target_conditions::build`) are STANDALONE passes, not part of `analyze()` —
+they run only when the ei-json adapter's corresponding flag is set, so
+`analyze()` and every native/table/csv path are untouched by them. What
+`analyze()` gained is family (a): the POWER split inside the existing
+`timeseries::build` pass — one `condition_catalog::is_condition_damage_based`
+probe per already-filtered damage row, plus a second per-bucket delta series
+for `damage_taken` and for each (player, enemy) pair. The 1S-grid fix adds
+at most one extra bucket per series.
+
+| Stage | Before (`eb57bef`) | After | Δ |
+|---|---|---|---|
+| fixture `analysis::analyze` | 19.363 ms | 20.113 ms | +3.9% |
+| fixture `full_pipeline` | 29.613 ms | 30.619 ms | **+3.4%** |
+| real-log `analysis::analyze` | 89.737 ms | 93.353 ms | +4.0% |
+| real-log `full_pipeline` | 170.27 ms | 175.51 ms | **+3.1%** |
+
+The gate is `full_pipeline` ("no >5% pipeline regression") and both arms
+clear it.
+
+**Noise disclosure.** This machine's spread is large relative to the effect:
+across the three base runs in this session the real-log `analysis::analyze`
+median-of-run values were 89.737 / 82.398 / 92.668 ms — a 12% span for the
+*same binary*. The medians above are the honest summary, but the real-log
+`analyze` delta in particular should be read as "a few percent", not as
+4.0% ± something small.
+
+One allocation cleanup was made and re-measured: the per-(player, enemy)
+POWER fallback in `timeseries::build_with_registry` originally built a fresh
+`vec![0; buckets]` per call, which on a real log fires 44 × 624 times. It is
+now a single hoisted `zeros` row. The re-measurement above is the post-hoist
+code; the difference versus the pre-hoist numbers (fixture `full_pipeline`
++1.1%, real-log +3.4% in the first session) sits inside the spread just
+described, so the hoist is recorded as an allocation correctness cleanup,
+not as a measured win.
+
+## After MEIGAP Task 3 — the healing/minion/guild remainder
+
+Same machine and harness as the baseline above, measured 2026-08-10 against
+`dae801d` (the MEIGAP Task 2 tip). Same method as Tasks 1 and 2: the MEDIAN
+of **three alternating base/tip pairs**, run back to back from two prebuilt
+bench binaries so no rebuild sits between the halves of a pair.
+
+**Task 3 adds no work at all to `analysis::analyze`.** All four new passes
+are STANDALONE — `healing_detail::build` and `minions::build` run only when
+the ei-json adapter is going to serialize them (`--skill-damage` /
+`--timeseries`), and `healing_detail::build` additionally checks the
+extension registration before it will even build an `InstidRegistry`, the
+same cold-path hoist `healing::apply` already documents. The outgoing
+boon-strip duration is a refactoring of counting that `support::apply`
+already did (one shared primitive now produces both the count and the
+duration, replacing two inline increments).
+
+The one genuinely always-on addition is the `CBTS_GUILD` decode, and it is
+folded into `markers::resolve_markers`'s existing whole-stream pass rather
+than paying for its own.
+
+| Stage | Before (`dae801d`) | After | Δ |
+|---|---|---|---|
+| fixture `model::resolve` | 658.09 µs | 682 µs | +3.6% |
+| fixture `analysis::analyze` | 20.051 ms | 19.972 ms | −0.4% |
+| fixture `full_pipeline` | 31.503 ms | 30.764 ms | **−2.3%** |
+| real-log `model::resolve` | 4.675 ms | 3.993 ms | −14.6% |
+| real-log `analysis::analyze` | 99.381 ms | 95.485 ms | −3.9% |
+| real-log `full_pipeline` | 176.90 ms | 182.32 ms | **+3.1%** |
+
+Every one of these is inside this machine's run-to-run spread and none of
+them is a real effect: the code path they measure is unchanged except for
+one `u8` compare per event inside an existing loop. The honest reading is
+"no measurable change", and the gate (`full_pipeline`, no >5% regression)
+is cleared on both arms.
+
+**Noise disclosure, again.** Three consecutive base runs of the SAME binary
+span 176.89–181.24 ms on real-log `full_pipeline` and 94.87–112.12 ms on
+real-log `analysis::analyze` — a 18% span on the latter. The +3.1% real-log
+`full_pipeline` figure above is dominated by a single 192.10 ms tip sample
+whose own `decode_raw` (untouched code) also ran long in that pass; the
+other two tip samples are 176.13 and 182.32 ms, straddling the base median.
+
+### One measurement that changed the design
+
+The guild decode was first written as its own `raw.events.iter()` pass in
+`wvw::apply`, beside the existing MAP_ID/WVW_TEAMS `find`s. Measured, that
+cost **+12% on fixture `model::resolve`** (645 → 725 µs) and **+18% on the
+real log** (3.85 → 4.56 ms) for a single `u8` compare per event — the cost
+is the iteration over a multi-hundred-thousand-element `Vec<RawEvent>`, not
+the work. Folding it into `markers::resolve_markers`'s existing pass
+(`markers::resolve_markers_and_guilds`) brought it back inside the noise
+floor. Recorded because it is the same lesson Task 1's CC-scan merge taught
+in the opposite direction: on this event volume, *how many times the stream
+is walked* dominates *what is done per row*.
+
+### Payload sizes (committed fixture, compact `ei-json`)
+
+| Flags | `dae801d` | Task 3 tip | Δ |
+|---|---|---|---|
+| *(none)* | 262,226 | 264,977 | **+1.05%** |
+| `--skill-damage` | 1,003,731 | 1,195,967 | **+19.2%** |
+| `--timeseries` | 1,490,920 | 1,502,833 | **+0.8%** |
+| both | 2,232,425 | 2,433,823 | +9.0% |
+
+The flagless delta is `players[].guildID` (38 of 42 players) plus one
+`support[0].boonStripsTime` number each — the only two always-on additions.
+
+`--skill-damage` carries `outgoingHealingAllies` + `outgoingBarrierAllies`
+(94,436 B, the bulk of it), `totalHealingDist` + `totalBarrierDist`, and
+`minions[]`. `--timeseries` carries `healing1S` (11,913 B).
+
+**The ally matrices were built always-on first and rejected on
+measurement.** GW2EI emits them unconditionally
+(`EXTJsonPlayerHealingStatsBuilder.cs:73` sits outside every
+`RawFormatTimelineArrays` block), so always-on was the faithful shape — but
+it puts the flagless document at 356,662 B (**+36.0%**), past the ~30% band
+every always-on block in this schema has been held to, and the array is
+`players x players`: it grows QUADRATICALLY in squad size (41x41 on this
+fixture, 48x48 on the reference capture, 10,000 cells on a 100-player log).
+They ride `--skill-damage` instead — the same payload-only gate, with the
+same reasoning, MEIGAP Task 2c gave `targets[].totalDamageDist`, and a flag
+axibridge hardcodes to `true`.
+
+Measurement note: these figures are `json.dumps(..., separators=(',',':'))`
+over the rendered document. MEIGAP Task 2's report quoted 289,017 B for the
+flagless base; that came from a different compaction method and is not
+comparable to this table. Base and tip here were measured with one method
+in one session.
+
+### Review-wave note (no re-measurement)
+
+The whole-branch review wave that followed changed only docs, tests, the
+committed golden and dead code, plus two guards: `anonymize_raw_evtc` now
+rejects a non-revision-1 file up front, and `healing_detail`'s extension
+check was hoisted so it is asked once per pass instead of three times (an
+`.any()` that short-circuits on the present path and, on the absent path,
+now runs once before the early return instead of twice). The four rendered
+`ei-json` documents (flagless, `--skill-damage`, `--timeseries`, both) are
+**sha256-identical** across the wave, so the numbers above stand unchanged.

@@ -236,6 +236,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // hoisted out here and shared by both rather than computed
             // twice.
             let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+            // MEIGAP Task 1b: GW2EI-shape boon stack timelines
+            // (`buffUptimes[].states`/`.statesPerSource`) -- gated on
+            // `--timeseries`, mirroring GW2EI's own `RawFormatTimelineArrays`
+            // gate on the same two arrays, and computed only for the format
+            // that can emit them (same "only for the format with a shape for
+            // it" reasoning as `ei_replay_data` above). It re-runs the boon
+            // simulation to recover per-SOURCE stack ownership, which
+            // `analyze()` keeps only in summed form -- see
+            // `axilog_core::analysis::buffs::states`'s module doc.
+            let boon_states = (timeseries && format == Format::EiJson).then(|| {
+                axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons)
+            });
+            // MEIGAP Task 2b/2d: the two `--timeseries`-gated `targets[]`
+            // mirrors, on exactly the same gate and for the same reason
+            // (GW2EI puts `targets[].damage1S`/`.powerDamage1S` behind
+            // `RawFormatTimelineArrays` at `JsonActorBuilder.cs:63`, and
+            // `statesPerSource` behind it at `JsonBuffsUptimeBuilder.cs:52`).
+            // Both are standalone passes, not part of `analyze()`, so a
+            // flagless parse pays nothing for them.
+            // The enemy addr set + representative fold both enemy-side
+            // passes need -- built at most once, and only when one of them
+            // will actually run (a flagless parse pays nothing).
+            let enemy_sets = ((timeseries || skill_damage) && format == Format::EiJson).then(|| {
+                let enemies: std::collections::BTreeSet<u64> =
+                    enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+                let enemy_addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
+                    .enemies
+                    .iter()
+                    .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+                    .collect();
+                (enemies, enemy_addr_to_rep)
+            });
+            let enemy_series = enemy_sets.as_ref().filter(|_| timeseries).map(|(en, rep)| {
+                axilog_core::analysis::timeseries::build_enemy_series(
+                    &enc,
+                    &raw,
+                    &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+                    en,
+                    rep,
+                )
+            });
+            let target_conditions = (timeseries && format == Format::EiJson)
+                .then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+            // MEIGAP Task 2c: `targets[].totalDamageDist` rides
+            // `--skill-damage`, the flag that already gates every other
+            // per-skill block (GW2EI itself emits it unconditionally; this
+            // is a payload gate, and axibridge hardcodes the flag on).
+            let enemy_dist = enemy_sets.as_ref().filter(|_| skill_damage).map(|(en, rep)| {
+                axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep)
+            });
+            // MEIGAP Task 3a/3b. Every healing-detail family is
+            // flag-gated -- `healing1S` on `--timeseries`, the ally
+            // matrices and the two `*Dist` arrays on `--skill-damage` (see
+            // `EiInputs::healing_dist` for the measured payload reason) --
+            // so the PASS itself only runs when at least one of them will
+            // be serialized, and it self-gates to `None` on a log with no
+            // healing extension before it even builds a registry.
+            // `minions[]` is a per-skill distribution and rides
+            // `--skill-damage` outright.
+            let healing_detail = ((skill_damage || timeseries) && format == Format::EiJson)
+                .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
+                .flatten();
+            let minion_rollups = (skill_damage && format == Format::EiJson)
+                .then(|| axilog_core::analysis::minions::build(&raw, &enc));
             // M16: the damage-modifier engine runs ONLY on `--modifiers`
             // (see the flag's doc comment -- it is a separate full event
             // pass, not a copy of something `analyze()` already computed).
@@ -285,6 +349,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 activity: &activity,
                                 replay: ei_replay_data.as_ref(),
                                 modifiers: damage_mods.as_ref(),
+                                boon_states: boon_states.as_ref(),
+                                enemy_series: enemy_series.as_ref(),
+                                enemy_dist: enemy_dist.as_ref(),
+                                target_conditions: target_conditions.as_ref(),
+                                healing_detail: healing_detail.as_ref(),
+                                healing_series: timeseries,
+                                healing_dist: skill_damage,
+                                minions: minion_rollups.as_ref(),
                             },
                         ))?
                     )

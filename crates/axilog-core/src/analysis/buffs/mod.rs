@@ -15,9 +15,16 @@
 pub mod events;
 pub mod generation;
 pub mod simulator;
+/// GW2EI-shape boon stack timelines (`buffUptimes[].states`/
+/// `.statesPerSource`, MEIGAP Task 1b) -- an OPT-IN standalone pass, like
+/// `replay`/`missiles`/`damage_mods`, matching GW2EI's own
+/// `RawFormatTimelineArrays` gate on the same two arrays. See its module
+/// doc for the shape/citation trail.
+pub mod states;
 pub mod uptime;
 
 pub use generation::GenerationStats;
+pub use states::{BoonStates, UNKNOWN_SOURCE};
 pub use uptime::BoonUptime;
 
 /// GW2EI's `ArcDPSEnums.BuffStackType`
@@ -337,7 +344,7 @@ mod tests {
         Player {
             agent_addr: addr, account: format!(":P{addr}.0001"), character: format!("P{addr}"),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(), subgroup: 1,
-            in_squad: true, commander: false, marker: None, commander_tag: None, agent_addrs: addrs,
+            in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None, agent_addrs: addrs,
         }
     }
 

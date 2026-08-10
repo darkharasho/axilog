@@ -175,9 +175,21 @@ pub struct RawExtHealEvent {
     /// every other instid field's "0 = none" convention already used
     /// elsewhere in this project.
     pub src_master_instid: u16,
+    /// Wire `skillid` -- the id GW2EI groups `totalHealingDist` /
+    /// `totalBarrierDist` by (`EXTJsonHealingStatsBuilderCommons.
+    /// BuildHealingDistList` does `GroupBy(x => x.SkillID)`, and
+    /// `EXTHealingEvent`'s `SkillID` is the ordinary `SkillEvent.SkillID`
+    /// every combat row carries). MEIGAP Task 3a.
+    pub skill_id: u32,
     /// Heal or barrier amount, always positive (already sign-flipped from
     /// the wire's negative `value`/`buff_dmg`).
     pub amount: u64,
+    /// `false` for a row GW2EI turns into an `EXTNonDirectHealingEvent`
+    /// (`buff != 0`), i.e. exactly the rows that set
+    /// `EXTJsonHealingDist.IndirectHealing`
+    /// (`EXTJsonHealingStatsBuilderCommons.BuildHealingDist`:
+    /// `list.Exists(x => x is EXTNonDirectHealingEvent)`). MEIGAP Task 3a.
+    pub is_direct: bool,
     pub is_barrier: bool,
     pub against_downed: bool,
     pub src_is_peer: bool,
@@ -237,7 +249,9 @@ pub fn decode_data_event(e: &RawEvent, signature: u32) -> Option<RawExtHealEvent
         src_instid: e.src_instid,
         dst_instid: e.dst_instid,
         src_master_instid: e.src_master_instid,
+        skill_id: e.skillid,
         amount,
+        is_direct,
         is_barrier,
         against_downed,
         src_is_peer,

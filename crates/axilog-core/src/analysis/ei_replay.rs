@@ -2248,7 +2248,7 @@ mod tests {
             in_squad: true,
             commander: false,
             marker: None,
-            commander_tag: None,
+            commander_tag: None, guild_id: None,
             agent_addrs: vec![addr],
         }
     }

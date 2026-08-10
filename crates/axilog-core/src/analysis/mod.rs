@@ -6,6 +6,8 @@ pub mod support;
 /// arcdps healing-extension stats (M10 Task 1) -- see `healing::apply`'s
 /// module doc for the wire format / aggregation writeup.
 pub mod healing;
+pub mod healing_detail;
+pub mod minions;
 /// Combat replay position tracks (M9 Task 1) -- standalone from
 /// [`analyze`]; see `replay::build_replay`.
 pub mod replay;
@@ -47,6 +49,13 @@ pub mod skill_damage;
 /// `timeseries`'s module doc for the GW2EI cumulative-vs-instant citation
 /// and the `dps_targets`-vs-EI-`dpsTargets` scope note.
 pub mod timeseries;
+/// Incoming-condition attribution on ENEMY agents -- GW2EI's
+/// `targets[].buffs[].id`/`.statesPerSource` (MEIGAP Task 2d). A STANDALONE
+/// pass (not wired into [`analyze`], like `replay`/`missiles`/`damage_mods`/
+/// `buffs::states`), gated by the ei-json adapter on `--timeseries` -- see
+/// its module doc for the GW2EI direction citation and the reuse of the boon
+/// simulation machinery.
+pub mod target_conditions;
 /// Outgoing hit-quality stats (M13 Task 1) -- like `skill_damage`/
 /// `timeseries` above, wired into [`analyze`] below (`PlayerMetrics::
 /// hit_stats`), computed unconditionally (cheap: one extra scan reusing
@@ -110,6 +119,16 @@ pub mod damage_mods;
 /// static list.
 pub mod condition_catalog;
 
+/// Per-(player, target) offensive splits (MEIGAP Task 1d) -- like
+/// `hit_stats`/`defenses` above, wired into [`analyze`] below
+/// (`PlayerMetrics::per_target`), computed unconditionally: one extra scan
+/// reusing `hit_stats::classify` and the same squad/enemy membership
+/// predicate, into a SPARSE map (only pairs that actually interacted). See
+/// `per_target`'s module doc for the GW2EI `OffensiveStatistics` citation
+/// trail and why `downContribution` deliberately lives on the
+/// contribution family instead.
+pub mod per_target;
+
 use crate::evtc::RawLog;
 use crate::model::Encounter;
 use std::collections::{BTreeMap, BTreeSet};
@@ -162,7 +181,26 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     /// Per-skill cast list (M14, Task 1) -- see `rotation`'s module doc.
     /// Sorted by skill id ascending; `rotation::total_casts` sums the
     /// per-skill cast counts.
-    pub rotation: rotation::RotationMetrics }
+    pub rotation: rotation::RotationMetrics,
+    /// Per-(enemy representative id) offensive split (MEIGAP Task 1d) --
+    /// see `per_target`'s module doc. Sparse: only enemies this player
+    /// actually interacted with. Sums back to `hit_stats.connected_count`/
+    /// `against_downed_count` and `downs_dealt`/`kills_dealt` by
+    /// construction (identical predicates), minus whatever landed on
+    /// agents outside the `enemies` set.
+    pub per_target: BTreeMap<u64, per_target::PerTargetOffense>,
+    /// Per-(enemy representative id) arcdps-methodology down-contribution
+    /// DAMAGE (MEIGAP Task 1d) -- the per-target split of
+    /// `downs_contribution.damage`, keyed by the enemy whose down this
+    /// player contributed to. Sums back to `downs_contribution.damage`
+    /// exactly (same credits, just not collapsed).
+    ///
+    /// This is the arcdps methodology, NOT GW2EI's own per-target
+    /// `downContribution` (damage inside the target's 90%-to-downstate
+    /// window, `OffensiveStatistics.cs:85-108`) -- the same deliberate,
+    /// documented divergence `downs_contribution` itself already carries;
+    /// see `contribution`'s module doc.
+    pub downs_contribution_per_target: BTreeMap<u64, u64> }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
@@ -342,6 +380,18 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             }
         }
     }
+    // DELIBERATE CARVE-OUT from `damage::is_health_damage_result` (MEIGAP
+    // Task 2, review round 1): unlike every health-damage total in this
+    // crate, this scan still treats a `DamageResult.BreakbarDamage` row
+    // (result 10) as participation. That is on purpose -- the question here
+    // is "did the squad interact with this agent at all", not "did it deal
+    // health damage", and a defiance-bar hit is interaction. The visible
+    // consequence is that an enemy struck ONLY for breakbar damage stays in
+    // `Metrics::combat_participant_enemies` (and therefore in the native
+    // `Report::enemies` list) where a strict health-damage reading would
+    // drop it. Recorded so the two definitions of "countable damage" in
+    // this crate are not silent; see also `contribution::credit_window`,
+    // the other carve-out.
     for e in &raw.events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }
         if e.result == crate::evtc::result::CROWD_CONTROL {
@@ -377,12 +427,12 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             dps: total as f64 / secs, damage_taken: taken,
             per_enemy: per.into_iter().collect(), ..Default::default() }
     }).collect();
-    downs::apply(&mut players, enc, raw, &squad, &enemies, &addr_to_rep);
+    downs::apply_with_registry(&mut players, enc, raw, &registry, &squad, &enemies, &addr_to_rep);
     cc::apply_cc_with_registry(&mut players, raw, &registry, &squad, &enemies, &addr_to_rep);
     support::apply(&mut players, raw, enc, &enemies, &addr_to_rep);
     // M11 Task 2: the arcdps-methodology contribution family
     // (downs_contribution/downed_by) -- see `contribution`'s module doc.
-    contribution::apply_with_registry(&mut players, raw, &registry, enc, &squad, &enemies, &addr_to_rep);
+    contribution::apply_with_registry(&mut players, raw, &registry, enc, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep);
     // M10 Task 1: cheap (a handful of linear scans over `raw.events`), so
     // computed unconditionally like every other pass above -- returns
     // whether the extension was present at all (see `Metrics::
@@ -426,10 +476,22 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // (see `defenses`'s module doc). No `enemies` set needed: unlike
     // `hit_stats`, this is scoped to ANY source hitting a squad player, same
     // as `damage::accumulate_damage_taken`.
-    let defenses_by_rep = defenses::build(raw, &squad, &addr_to_rep);
+    let defenses_by_rep = defenses::build_with_registry(raw, &registry, &squad, &addr_to_rep);
     for p in &mut players {
         if let Some(d) = defenses_by_rep.get(&p.agent_addr) {
             p.defenses = *d;
+        }
+    }
+    // MEIGAP Task 1d: per-(player, target) offensive splits -- one more
+    // pass over the same `squad -> enemies` event family, reusing
+    // `hit_stats::classify` (see `per_target`'s module doc).
+    let per_target_stats =
+        per_target::build(raw, &registry, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep);
+    let player_idx: BTreeMap<u64, usize> =
+        players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
+    for ((src, dst), stats) in per_target_stats {
+        if let Some(&i) = player_idx.get(&src) {
+            players[i].per_target.insert(dst, stats);
         }
     }
     // M14 Task 1: per-player rotation (cast tracking) -- see `rotation`'s
@@ -538,7 +600,7 @@ mod tests {
             agent_addr: 1, // representative (first-seen addr)
             account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1, 2], // pre-relog addr 1, post-relog addr 2
         };
         let enc = Encounter {
@@ -565,7 +627,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1, 2],
         };
         let enc = Encounter {
@@ -593,7 +655,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1],
         };
         let enc = Encounter {
@@ -629,7 +691,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1],
         };
         let enc = Encounter {
