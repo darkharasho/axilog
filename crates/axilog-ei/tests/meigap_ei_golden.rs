@@ -401,10 +401,12 @@ fn ei_json_incoming_cc_and_strips_match_the_reference_export_when_available() {
 const PER_TARGET_FIELDS: &[&str] =
     &["killed", "downed", "connectedDamageCount", "againstDownedCount", "interrupts"];
 
-/// `statsTargets[i][0]` cannot be compared positionally: GW2EI's WvW logic
-/// curates 57 targets on this capture while this project's `targets[]` is
-/// the full unfiltered enemy roster (624 here), and the two name spaces do
-/// not intersect. The join therefore goes through arcdps AGENT IDENTITY --
+/// `statsTargets[i][0]` cannot be compared positionally. Post-MROSTER both
+/// sides list the same KIND of actor (enemy players), but GW2EI regroups
+/// agents sharing an `InstID` into one target
+/// (`AgentManipulationHelper.cs:467-474`) and this project does not -- 71
+/// rows here vs GW2EI's 56 -- and the two name spaces do not intersect
+/// either. The join therefore goes through arcdps AGENT IDENTITY --
 /// the instid GW2EI encodes into its `"<Spec> pl-<instid>"` placeholder
 /// name -> the addr that instid belonged to -> this project's enemy index
 /// -- exactly the M16 pattern `damage_mods_ei_golden.rs` established (see
@@ -424,12 +426,26 @@ fn ei_json_stats_targets_split_matches_the_reference_export_when_available() {
             }
         }
     }
-    let addr_to_enemy_index: BTreeMap<u64, usize> = c
-        .enc
-        .enemies
+    // MROSTER: `targets[]` is the CURATED roster (`Report::ei_targets` --
+    // enemy PLAYERS only, per `WvWLogic.cs`), so an index into
+    // `enc.enemies` is no longer an index into `targets[]`. Route the join
+    // through the enemy's representative addr, which the adapter emits
+    // verbatim as `targets[].id`: that keeps this join correct for whatever
+    // the curation rule is, instead of re-encoding the rule here. An enemy
+    // absent from the curated roster simply yields no index, so the golden
+    // comparison skips it rather than joining to the wrong row.
+    let target_index_by_id: BTreeMap<u64, usize> = c.ours["targets"]
+        .as_array()
+        .expect("targets")
         .iter()
         .enumerate()
-        .flat_map(|(i, e)| e.agent_addrs.iter().map(move |&a| (a, i)))
+        .filter_map(|(i, t)| t["id"].as_u64().map(|id| (id, i)))
+        .collect();
+    let addr_to_enemy_index: BTreeMap<u64, usize> = c.enc
+        .enemies
+        .iter()
+        .filter_map(|e| target_index_by_id.get(&e.id).map(|&i| (e, i)))
+        .flat_map(|(e, i)| e.agent_addrs.iter().map(move |&a| (a, i)))
         .collect();
     // `(our targets[] index, reference targets[] index)`.
     let mut joinable: Vec<(usize, usize)> = Vec::new();

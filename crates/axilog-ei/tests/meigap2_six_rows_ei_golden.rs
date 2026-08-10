@@ -97,11 +97,26 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
             }
         }
     }
+    // MROSTER: `targets[]` is the CURATED roster (`Report::ei_targets` --
+    // enemy PLAYERS only, per `WvWLogic.cs`), so an index into
+    // `enc.enemies` is no longer an index into `targets[]`. Route the join
+    // through the enemy's representative addr, which the adapter emits
+    // verbatim as `targets[].id`: that keeps this join correct for whatever
+    // the curation rule is, instead of re-encoding the rule here. An enemy
+    // absent from the curated roster simply yields no index, so the golden
+    // comparison skips it rather than joining to the wrong row.
+    let target_index_by_id: BTreeMap<u64, usize> = ours["targets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| t["id"].as_u64().map(|id| (id, i)))
+        .collect();
     let addr_to_enemy_index: BTreeMap<u64, usize> = enc
         .enemies
         .iter()
-        .enumerate()
-        .flat_map(|(i, e)| e.agent_addrs.iter().map(move |&a| (a, i)))
+        .filter_map(|e| target_index_by_id.get(&e.id).map(|&i| (e, i)))
+        .flat_map(|(e, i)| e.agent_addrs.iter().map(move |&a| (a, i)))
         .collect();
     let mut joinable: Vec<(usize, usize)> = Vec::new();
     for (g_i, t) in golden["targets"].as_array().expect("reference targets").iter().enumerate() {

@@ -528,7 +528,7 @@ pub fn evaluate_full(
     // Enemy-side twin of `addr_to_rep`, same construction
     // `skill_damage::build_with_registry` already uses for its own
     // `per_target` fold: every addr an enemy account held maps to
-    // `Enemy::id`, which is what `Report::all_enemies[].id` -- and hence
+    // `Enemy::id`, which is what `Report::ei_targets[].id` -- and hence
     // the ei-json `targets[]` index the per-target arrays are positionally
     // keyed to -- carries.
     let enemy_addr_to_rep: BTreeMap<u64, u64> = enc

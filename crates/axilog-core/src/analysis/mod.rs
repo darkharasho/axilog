@@ -296,12 +296,14 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// any calibrated sum, so they can't move a golden metric.
     ///
     /// Deliberately does NOT touch `enc.enemies` itself, and the EI adapter
-    /// (`axilog_ei::to_ei_json`) deliberately does NOT filter by this set --
-    /// real EI's own `targets[]` keeps every enumerated target regardless of
-    /// interaction, so `axilog_schema::build_report`'s `Report::all_enemies`
-    /// (unfiltered, EI-adapter-only) preserves that faithfulness while
-    /// `Report::enemies` (native output + HTML chips) uses this set. See
-    /// `build_report`'s doc comment for the full design-choice writeup.
+    /// (`axilog_ei::to_ei_json`) deliberately does NOT filter by this set:
+    /// GW2EI's `targets[]` genuinely has no interaction filter. It has an
+    /// ACTOR-KIND filter instead, which is a different question, and
+    /// `axilog_schema::build_report`'s `Report::ei_targets` (EI-adapter-only)
+    /// answers that one. So the two derived rosters are INDEPENDENT filters
+    /// over the same `enc.enemies`: this set drives `Report::enemies` (native
+    /// output + HTML chips), and neither is a subset of the other. See both
+    /// fields' doc comments for the full writeup.
     pub combat_participant_enemies: BTreeSet<u64>,
     /// `agent representative addr -> arcdps instid` for every squad player
     /// and every enemy (MEIGAP2 row 3) -- GW2EI's `JsonActor.instanceID`

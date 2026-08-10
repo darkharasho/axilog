@@ -1214,12 +1214,16 @@ fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
         // `GetDamageEvents`, `SingleActor.cs:752-761`/`:735-740`), so the
         // two are compared in AGGREGATE rather than per row. Per-row `<=`
         // would be wrong in one direction on this project's shape: an
-        // enemy's minion is itself a row in the full unfiltered `targets[]`
-        // roster, and its own outgoing damage is credited to its MASTER's
-        // series -- so a minion row legitimately reports a nonzero
-        // `totalDamageDist` beside a zero `damage1S`. (GW2EI's curated
-        // `targets[]` never lists the minion, so the case cannot arise
-        // there.) Summed over the whole roster the fold cancels out.
+        // enemy's minion used to be a row in the pre-MROSTER unfiltered
+        // `targets[]` roster while its own outgoing damage is credited to
+        // its MASTER's series -- so a minion row legitimately reported a
+        // nonzero `totalDamageDist` beside a zero `damage1S`. MROSTER
+        // curated the roster to enemy PLAYERS, so on a WvW log the minion
+        // is no longer listed at all (matching GW2EI, where the case never
+        // arose); the aggregate comparison is kept because it is the
+        // correct one for an actor-only-vs-minion-inclusive pair regardless,
+        // and because a hand-built `Report` can still carry NPC rows.
+        // Summed over the whole roster the fold cancels out.
         dist_grand_total += t["totalDamageDist"][0]
             .as_array()
             .expect("totalDamageDist[0]")

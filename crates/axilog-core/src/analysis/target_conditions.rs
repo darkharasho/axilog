@@ -115,10 +115,15 @@ fn capacity_and_kind(capacities: &BTreeMap<u32, u32>, id: u32) -> (u32, bool) {
 
 /// Build `targets[].buffs[].statesPerSource` for every tracked enemy.
 ///
-/// `enc.enemies` is the FULL roster (matching `Report::all_enemies`, which
-/// is what the adapter's `targets[]` is built from), and every one of an
-/// enemy's `agent_addrs` folds onto its representative `Enemy::id` -- the
-/// same relog fold the squad side applies to `Player::agent_addr`.
+/// Keyed over the FULL `enc.enemies` roster, which is a SUPERSET of the
+/// adapter's `targets[]` (`Report::ei_targets`, curated to enemy players)
+/// -- deliberately, so the lookup the adapter does per emitted target can
+/// never miss. Every one of an enemy's `agent_addrs` folds onto its
+/// representative `Enemy::id` -- the same relog fold the squad side applies
+/// to `Player::agent_addr`. (Producing rows for enemies the adapter will
+/// not emit is wasted work post-MROSTER; it is left alone because this map
+/// is also what makes the superset invariant hold by construction, and the
+/// measured cost is dominated by the event scan, not the map.)
 pub fn build(raw: &RawLog, enc: &Encounter) -> TargetConditionStates {
     build_with_registry(raw, &InstidRegistry::build(raw), enc)
 }
