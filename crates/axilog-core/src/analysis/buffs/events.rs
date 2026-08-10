@@ -159,15 +159,6 @@ pub fn extract_buff_events(raw: &RawLog, boon_ids: &BTreeSet<u32>) -> Vec<BuffEv
     extract_buff_events_with_registry(raw, &InstidRegistry::build(raw), boon_ids)
 }
 
-/// [`extract_buff_events`] against a caller-supplied, already-built
-/// [`InstidRegistry`] (MPERF Task 2) -- see
-/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
-/// comment for why the registry is threaded rather than rebuilt per
-/// consumer. Both era branches take the same registry: `InstidRegistry::
-/// build` is era-agnostic (it scans `src_instid`/`dst_instid`/`*_agent` on
-/// every non-extension row regardless of `is_statechange`), so the pre- and
-/// post-era extractors were already building bit-identical maps. The
-/// `raw`-only wrapper above stays for standalone/test callers.
 /// GW2EI's `BuffRemoveSingleEvent.OverstackOrNaturalEnd` (MBUFFSIM Task 2,
 /// rule 1) -- `GW2EIEvtcParser/ParsedData/CombatEvents/BuffEvents/
 /// BuffRemoves/BuffRemoveSingleEvent.cs`:
@@ -213,6 +204,35 @@ fn is_overstack_or_natural_end(e: &crate::evtc::RawEvent) -> bool {
     e.dst_agent == 0 && e.iff == iff::UNKNOWN
 }
 
+/// GW2EI's old-format `CombatItem.IsBuffApplyEvent` predicate: the shape a
+/// PRE-era (`is_statechange == 0`) apply-or-extension row has, before
+/// `is_offcycle` routes it to one or the other
+/// (`CombatEventFactory.AddBuffApplyEvent`'s pre-
+/// `BuffAppliesAndRemovesAsStateChanges` branch). Factored out in MBUFFSIM
+/// Task 3 because [`apply_conditional_loss_band_aid`] has to re-derive the
+/// same classification from raw rows, and two hand-copied six-clause
+/// predicates that must agree is a defect waiting to happen. Behaviourally
+/// inert: this is the extractor's own condition verbatim, and the era
+/// -equivalence tests below pin both callers.
+fn is_pre_era_apply_shaped(e: &crate::evtc::RawEvent) -> bool {
+    e.is_statechange == 0
+        && e.buff != 0
+        && e.buff_dmg == 0
+        && e.value > 0
+        && e.is_activation == 0
+        && e.is_buffremove == buff_remove::NONE
+}
+
+/// [`extract_buff_events`] against a caller-supplied, already-built
+/// [`InstidRegistry`] (MPERF Task 2) -- see
+/// [`crate::analysis::damage::accumulate_pet_credit_with_registry`]'s doc
+/// comment for why the registry is threaded rather than rebuilt per
+/// consumer. Both era branches take the same registry: `InstidRegistry::
+/// build` is era-agnostic (it scans `src_instid`/`dst_instid`/`*_agent` on
+/// every non-extension row regardless of `is_statechange`), so the pre- and
+/// post-era extractors were already building bit-identical maps. The
+/// `raw`-only wrapper ([`extract_buff_events`]) stays for standalone/test
+/// callers.
 pub fn extract_buff_events_with_registry(
     raw: &RawLog,
     registry: &InstidRegistry,
@@ -276,12 +296,7 @@ pub fn extract_buff_events_with_registry(
         // from `combatItem.IsBuffApplyEvent()`, gated on `IsStateChange ==
         // Combat` (i.e. `is_statechange == 0`), not from the separate
         // `BuffInitial` statechange dispatch.
-        if e.buff != 0
-            && e.buff_dmg == 0
-            && e.value > 0
-            && e.is_activation == 0
-            && e.is_buffremove == buff_remove::NONE
-        {
+        if is_pre_era_apply_shaped(e) {
             if e.is_offcycle != 0 {
                 out.push(BuffEvent {
                     time: e.time,
@@ -404,9 +419,21 @@ pub fn extract_buff_events_with_registry(
 /// so the `!x.OverstackOrNaturalEnd` conjunct is satisfied by construction
 /// and is not re-tested.
 ///
+/// **One documented deviation from "ported whole".** GW2EI runs this over
+/// `BuffExtensionEvent`s whose `ExtendedDuration` has already been rewritten
+/// by `CombatData.OffsetBuffExtensionEvents`
+/// (`ParsedData/CombatData.cs:464-525`); this project consumes the RAW
+/// `value` because `OffsetNewDuration` is a deliberate, separately-ledgered
+/// deferral (see [`BuffEventKind::Extend`]). It can therefore only matter
+/// for a removal whose `totalDuration` reconstruction crosses an extension
+/// event, of which the reference capture has 5 for Stability across the
+/// whole log -- and the calibration below is measured WITH that deviation in
+/// place, so it is bounded, not merely argued. Every other clause of
+/// `BuffsContainer.cs:196-252` is transcribed exactly.
+///
 /// Measured on the post-era WvW reference capture: 181 of Stability's 253
 /// real SINGLE removals hit the rewrite; the mean per-account average-stack
-/// error against GW2EI drops from 0.04124 to 0.00048.
+/// error against GW2EI drops from 0.04124 to 0.00027.
 fn apply_conditional_loss_band_aid(raw: &RawLog, boon_ids: &BTreeSet<u32>, out: &mut [BuffEvent]) {
     // `CombatData.HasStackIDs` (`ParsedData/CombatData.cs:610`). GW2EI's
     // `buffEvents` here is the WHOLE log's buff-event list, not a per-buff
@@ -463,17 +490,7 @@ fn apply_conditional_loss_band_aid(raw: &RawLog, boon_ids: &BTreeSet<u32>, out: 
         }
         let initial = e.is_statechange == sc::BUFF_INITIAL;
         let is_apply = initial
-            || if post {
-                e.is_statechange == sc::BUFF_APPLY
-            } else {
-                e.is_statechange == 0
-                    && e.buff != 0
-                    && e.buff_dmg == 0
-                    && e.value > 0
-                    && e.is_activation == 0
-                    && e.is_buffremove == buff_remove::NONE
-                    && e.is_offcycle == 0
-            };
+            || if post { e.is_statechange == sc::BUFF_APPLY } else { is_pre_era_apply_shaped(e) && e.is_offcycle == 0 };
         if is_apply {
             let applied = i64::from(e.value);
             let original =
@@ -487,13 +504,7 @@ fn apply_conditional_loss_band_aid(raw: &RawLog, boon_ids: &BTreeSet<u32>, out: 
         let is_extension = if post {
             e.is_statechange == sc::BUFF_CHANGE
         } else {
-            e.is_statechange == 0
-                && e.buff != 0
-                && e.buff_dmg == 0
-                && e.value > 0
-                && e.is_activation == 0
-                && e.is_buffremove == buff_remove::NONE
-                && e.is_offcycle != 0
+            is_pre_era_apply_shaped(e) && e.is_offcycle != 0
         };
         if is_extension {
             others

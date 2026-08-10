@@ -165,88 +165,108 @@ impl IdBound {
 /// `Tally::residuals` order.
 const FIELD_NAMES: [&str; 4] = ["hitCount", "totalHitCount", "damageGain", "totalDamage"];
 
-/// The measured calibration contract: 69 ids, 30 of them exact on every row
-/// of every account, 39 carrying a residual.
+/// The measured calibration contract: 69 ids, **31** of them exact on every
+/// row of every account, 38 carrying a residual.
 ///
 /// The residuals have two distinct, independently tracked causes; neither is
 /// a damage-modifier defect, and conflating them would let a future fix for
 /// one claim credit for the other:
 ///
-/// 1. **Buff-state fidelity** (37 ids). Buff-gated modifiers are only as
-///    exact as the per-`(actor, buff)` stack timelines underneath them. This
-///    project's buff simulator reproduces GW2EI's own uptimes on this export
-///    to ~0.01pp, but the stack-count fine structure is approximate --
-///    `boons_golden.rs` already records that (2pp presence, 5% relative
-///    average stacks, with a named Stability `StackingConditionalLoss`
-///    allowlist), and NO non-boon buff has ever been calibrated here at all,
-///    because EI's JSON exposes no per-buff timeline to calibrate against.
-///    The three widest ids are the most stack-sensitive ones:
+/// 1. **Buff-state fidelity** (36 ids). Buff-gated modifiers are only as
+///    exact as the per-`(actor, buff)` stack timelines underneath them.
+///    MBUFFSIM closed the two systematic gaps M16 measured here (see the
+///    re-seed note below), so this class is now dominated by per-hit
+///    boundary effects rather than by a named rule:
 ///    - `d422` "Might 25" uses `GainComputerByExactNumberOfBuffsPresent(25)`,
-///      so it only fires at SATURATION -- a simulation that sits one stack
-///      low still matches `Might >= 20` (`d423`, residual 0.0014) and average
-///      stacks to ~1% while missing most "exactly 25".
+///      so it only fires at SATURATION and is the most stack-sensitive id in
+///      the table. M16 measured it at 0/44 exact rows; it is now 36/44, with
+///      Might's own average-stack error against the EI golden down to
+///      0.000035 relative on the committed fixture.
 ///    - `d312` Relic of Fireworks and `d369` Chant of Action watch
-///      `BuffStackType.Force` buffs (`Buff.cs:120`, capacity 1). The
-///      mechanism is NOT yet isolated: `buffs::simulator`'s `capacity == 1`
-///      branch does replace the held stack (`simulator.rs:196-201`), which
-///      matches `ForceOverrideLogic`, so the earlier "no refresh on
-///      re-application" explanation is wrong. All that is established is
-///      that it is buff-state, not modifier logic -- the same eligible-hit
-///      pools match exactly.
+///      `BuffStackType.Force` buffs (`Buff.cs:120`, capacity 1). M16 could
+///      not isolate the mechanism and said so; MBUFFSIM Task 1 did --
+///      the game re-triggers these every 1-2s and arcdps reports the
+///      displaced stack with an `OverstackOrNaturalEnd` SINGLE removal that
+///      GW2EI drops and this project used to replay, cancelling the buff.
+///      `d369` is now EXACT; `d312`'s presence error against GW2EI's own
+///      `buffUptimes` is 0.00029pp, so its 3/10 exact rows are hit-boundary
+///      noise, not a missing rule.
 /// 2. **An incoming-damage attribution gap** (2 ids are dominated by it,
 ///    `d-126` and `d-62`, and it perturbs every incoming id slightly). See
 ///    [`INCOMING_DEFICIT_ACCOUNTS`] -- it is a denominator/attribution
 ///    difference on ONE account, which no buff simulator can cause or fix.
+///    **Untouched by MBUFFSIM, deliberately** -- it is the separately-tracked
+///    MATTRIB account and must not be claimed as fixed here.
 ///
-/// **MBUFFSIM Task 2, rule 1** (`BuffRemoveSingleEvent.OverstackOrNaturalEnd`
-/// — see `analysis::buffs::events::is_overstack_or_natural_end`) moved this
-/// table's inputs for the first time since M16 seeded it. Row-exactness went
-/// **682/958 -> 730/958**, and no id lost a single exact row:
+/// **MBUFFSIM (Tasks 2-3) re-seeded this whole table.** Two rules in the buff
+/// EVENT PIPELINE -- not the stack simulator -- were ported from GW2EI:
+/// `BuffRemoveSingleEvent.OverstackOrNaturalEnd`
+/// (`analysis::buffs::events::is_overstack_or_natural_end`) and the
+/// `StackingConditionalLoss` `RemovedDuration` band aid
+/// (`events::apply_conditional_loss_band_aid`). Row-exactness went
+/// **682/958 -> 730/958 (rule 1) -> 779/958 (rule 2)**, and **no id lost a
+/// single exact row at either step**:
 ///
-/// | id | name | exact rows before | after |
-/// |---|---|---|---|
-/// | `d422` | Might 25 | 0/44 | **36/44** |
-/// | `d423` | Might >= 20 | 27/44 | 32/44 |
-/// | `d424` | Might <= 15 | 27/44 | 29/44 |
-/// | `d312` | Relic of Fireworks | 0/44 | 3/44 |
-/// | `d369` | Chant of Action | 0/44 | 1/44 |
-/// | `d-425` | Stability >= 1 | 36/44 | 37/44 |
+/// | id | name | M16 | +rule 1 | +rule 2 |
+/// |---|---|---|---|---|
+/// | `d422` | Might 25 | 0/44 | 36/44 | 36/44 |
+/// | `d423` | Might >= 20 | 27/44 | 32/44 | 32/44 |
+/// | `d424` | Might <= 15 | 27/44 | 29/44 | 29/44 |
+/// | `d-427` | Stability >= 5 | 15/44 | 15/44 | **38/44** |
+/// | `d-426` | Stability >= 3 | 25/44 | 25/44 | **39/44** |
+/// | `d-428` | Stability >= 10 | 22/44 | 22/44 | **34/44** |
+/// | `d-425` | Stability >= 1 | 36/44 | 37/44 | 37/44 |
+/// | `d312` | Relic of Fireworks | 0/44 | 3/44 | 3/44 |
+/// | `d369` | Chant of Action | 0/10 | 1/1 | **exact** |
 ///
-/// Two ids nevertheless needed their bound RE-SEEDED UPWARD (`d75`
-/// `damageGain`, `d423` `hitCount`+`damageGain`), which looks like a
-/// regression and is not: [`Tally::residuals`] is an AGGREGATE over all 44
-/// accounts, so per-row errors of opposite sign CANCEL in it. `d423` gained
-/// five exact rows while its aggregate grew, because the remaining rows'
-/// errors stopped cancelling as neatly. Row-exactness is the strong metric
-/// and the aggregate is the weak one; both are recorded above so the trade
-/// is visible. Only these two entries were touched — **re-seeding the ids
-/// that are now far too LOOSE, and promoting the newly-exact ones to
-/// [`IdBound::exact`], is MBUFFSIM Task 3's job**, deliberately not done here.
+/// Ids exact on every row/field/account: **30 -> 31** (`d369` promoted). That
+/// number moves slowly by construction -- an id only counts when ALL 44
+/// accounts agree on ALL FOUR fields, so an id like `d422` going 0/44 -> 36/44
+/// is a large real gain that the id-level counter cannot show. The row counter
+/// (682 -> 779, **+97**) is the honest headline; both are printed.
+///
+/// **Why three bounds went UP while row-exactness improved.**
+/// [`Tally::residuals`] is an AGGREGATE over all 44 accounts, so per-row
+/// errors of OPPOSITE SIGN cancel inside it. `d423` gained five exact rows
+/// while its aggregate grew, because the errors that remain stopped
+/// cancelling as neatly. The genuinely-loosened fields are exactly three --
+/// `d172` `damageGain` (0.076130 -> 0.082318), `d424` `hitCount`
+/// (0.005094 -> 0.005972) and `damageGain` (0.013974 -> 0.014831), plus
+/// `d423`'s two from Task 2 -- every other upward move in this re-seed is
+/// <= 2e-6 of re-rounding. 24 bound FIELDS tightened. Row-exactness is the
+/// strong metric and the aggregate is the weak one; both are recorded so the
+/// trade stays visible rather than being quietly absorbed.
+///
+/// Every `within` bound below is `1.20 x` the residual measured on the
+/// post-era reference capture at commit-time, with that measurement in the
+/// comment above it. Re-seeding means re-running this test with the ids
+/// removed (it then prints the measured 4-tuple) -- never widening a bound to
+/// make a red test green without first establishing WHY the number moved.
 #[rustfmt::skip]
 const ID_BOUNDS: &[IdBound] = &[
     // measured: 0.000398 0.000000 0.001184 0.000069
-    IdBound::within(-431, [0.000478, 0.0, 0.001421, 0.000083]),
-    // measured: 0.078921 0.001265 0.096984 0.000080
-    IdBound::within(-428, [0.094706, 0.001518, 0.116381, 0.000096]),
-    // measured: 0.073823 0.001076 0.143148 0.000069
-    IdBound::within(-427, [0.088588, 0.001292, 0.171778, 0.000083]),
-    // measured: 0.028726 0.001076 0.041476 0.000069
-    IdBound::within(-426, [0.034472, 0.001292, 0.049772, 0.000083]),
-    // measured: 0.001291 0.001076 0.002553 0.000069
-    IdBound::within(-425, [0.001550, 0.001292, 0.003064, 0.000083]),
+    IdBound::within(-431, [0.000478, 0.0, 0.001421, 0.000084]),
+    // measured: 0.002997 0.001265 0.004696 0.000080
+    IdBound::within(-428, [0.003597, 0.001518, 0.005636, 0.000096]),
+    // measured: 0.001197 0.001076 0.002312 0.000069
+    IdBound::within(-427, [0.001437, 0.001292, 0.002775, 0.000084]),
+    // measured: 0.000638 0.001076 0.001366 0.000069
+    IdBound::within(-426, [0.000767, 0.001292, 0.001640, 0.000084]),
+    // measured: 0.001033 0.001076 0.002495 0.000069
+    IdBound::within(-425, [0.001240, 0.001292, 0.002994, 0.000084]),
     IdBound::exact(-411),
     IdBound::exact(-390),
     // measured: 0.000000 0.002721 0.000000 0.000069
-    IdBound::within(-389, [0.0, 0.003266, 0.0, 0.000083]),
+    IdBound::within(-389, [0.0, 0.003265, 0.0, 0.000084]),
     IdBound::exact(-376),
     IdBound::exact(-370),
     // measured: 0.000000 0.000000 0.000000 0.000312
     IdBound::within(-368, [0.0, 0.0, 0.0, 0.000375]),
     // measured: 0.012931 0.016355 0.005230 0.000376
-    IdBound::within(-336, [0.015518, 0.019626, 0.006276, 0.000452]),
+    IdBound::within(-336, [0.015518, 0.019627, 0.006276, 0.000452]),
     IdBound::exact(-176),
     // measured: 0.002227 0.000000 0.001043 0.000000
-    IdBound::within(-132, [0.002673, 0.0, 0.001252, 0.0]),
+    IdBound::within(-132, [0.002673, 0.0, 0.001253, 0.0]),
     IdBound::exact(-129),
     IdBound::exact(-128),
     // measured: 0.000000 0.023569 0.000000 0.001174
@@ -259,11 +279,11 @@ const ID_BOUNDS: &[IdBound] = &[
     IdBound::within(-62, [0.0, 0.009492, 0.0, 0.000209]),
     IdBound::exact(-61),
     // measured: 0.002643 0.002721 0.001042 0.000069
-    IdBound::within(-59, [0.003172, 0.003266, 0.001251, 0.000083]),
+    IdBound::within(-59, [0.003172, 0.003265, 0.001251, 0.000084]),
     // measured: 0.000508 0.000000 0.001996 0.000069
-    IdBound::within(-58, [0.000610, 0.0, 0.002396, 0.000083]),
-    // measured: 0.033191 0.001305 0.059840 0.000071
-    IdBound::within(-57, [0.039830, 0.001566, 0.071808, 0.000086]),
+    IdBound::within(-58, [0.000610, 0.0, 0.002396, 0.000084]),
+    // measured: 0.033191 0.001305 0.059841 0.000071
+    IdBound::within(-57, [0.039829, 0.001566, 0.071810, 0.000085]),
     // measured: 0.000000 0.000000 0.000000 0.000108
     IdBound::within(-54, [0.0, 0.0, 0.0, 0.000130]),
     IdBound::exact(10),
@@ -272,68 +292,65 @@ const ID_BOUNDS: &[IdBound] = &[
     IdBound::exact(21),
     IdBound::exact(25),
     IdBound::exact(36),
-    // measured: 0.019108 0.000000 0.174279 0.000000
-    IdBound::within(44, [0.022930, 0.0, 0.209135, 0.0]),
-    // measured: 0.002380 0.000000 0.051772 0.000000
-    IdBound::within(67, [0.002856, 0.0, 0.062127, 0.0]),
+    // measured: 0.019108 0.000000 0.082318 0.000000
+    IdBound::within(44, [0.022930, 0.0, 0.098782, 0.0]),
+    // measured: 0.002380 0.000000 0.006103 0.000000
+    IdBound::within(67, [0.002856, 0.0, 0.007324, 0.0]),
     // measured: 0.006051 0.000000 0.013848 0.000000
     IdBound::within(74, [0.007262, 0.0, 0.016618, 0.0]),
-    // MBUFFSIM Task 2 (rule 1) re-seed. was: 0.006818 0.000000 0.000573 0.000000
     // measured: 0.007955 0.000000 0.000722 0.000000
     IdBound::within(75, [0.009546, 0.0, 0.000866, 0.0]),
     IdBound::exact(93),
     IdBound::exact(98),
-    // measured: 0.015158 0.000000 0.033767 0.000000
-    IdBound::within(107, [0.018190, 0.0, 0.040521, 0.0]),
+    // measured: 0.015158 0.000000 0.008793 0.000000
+    IdBound::within(107, [0.018190, 0.0, 0.010552, 0.0]),
     // measured: 0.001573 0.000000 0.002285 0.000000
-    IdBound::within(108, [0.001888, 0.0, 0.002742, 0.0]),
+    IdBound::within(108, [0.001888, 0.0, 0.002743, 0.0]),
     // measured: 0.004167 0.000000 0.002758 0.000000
     IdBound::within(109, [0.005001, 0.0, 0.003310, 0.0]),
     // measured: 0.000000 0.000000 0.000447 0.000000
     IdBound::within(111, [0.0, 0.0, 0.000537, 0.0]),
     IdBound::exact(119),
     // measured: 0.001255 0.000000 0.003163 0.000000
-    IdBound::within(124, [0.001506, 0.0, 0.003796, 0.0]),
+    IdBound::within(124, [0.001507, 0.0, 0.003796, 0.0]),
     // measured: 0.001701 0.000000 0.003175 0.000000
-    IdBound::within(125, [0.002042, 0.0, 0.003810, 0.0]),
+    IdBound::within(125, [0.002041, 0.0, 0.003811, 0.0]),
     // measured: 0.025641 0.000000 0.035714 0.000000
     IdBound::within(131, [0.030770, 0.0, 0.042857, 0.0]),
     IdBound::exact(170),
-    // measured: 0.028646 0.000000 0.063441 0.000000
-    IdBound::within(172, [0.034376, 0.0, 0.076130, 0.0]),
+    // measured: 0.028646 0.000000 0.068598 0.000000
+    IdBound::within(172, [0.034375, 0.0, 0.082318, 0.0]),
     // measured: 0.006579 0.000000 0.004592 0.000000
     IdBound::within(173, [0.007895, 0.0, 0.005511, 0.0]),
     // measured: 0.000000 0.000000 0.005516 0.000000
     IdBound::within(174, [0.0, 0.0, 0.006620, 0.0]),
     IdBound::exact(175),
-    // measured: 0.446185 0.000000 0.392927 0.000000
-    IdBound::within(312, [0.535422, 0.0, 0.471513, 0.0]),
+    // measured: 0.020212 0.000000 0.023620 0.000000
+    IdBound::within(312, [0.024255, 0.0, 0.028345, 0.0]),
     IdBound::exact(313),
     // measured: 0.010601 0.000000 0.001767 0.000000
-    IdBound::within(318, [0.012722, 0.0, 0.002121, 0.0]),
+    IdBound::within(318, [0.012721, 0.0, 0.002121, 0.0]),
     IdBound::exact(319),
     // measured: 0.000000 0.000000 0.000200 0.000000
     IdBound::within(334, [0.0, 0.0, 0.000240, 0.0]),
     IdBound::exact(361),
     IdBound::exact(362),
     IdBound::exact(364),
-    // measured: 0.372093 0.000000 0.359495 0.000000
-    IdBound::within(369, [0.446512, 0.0, 0.431394, 0.0]),
+    IdBound::exact(369),
     // measured: 0.004566 0.000000 0.005170 0.000000
     IdBound::within(371, [0.005480, 0.0, 0.006204, 0.0]),
     // measured: 0.013636 0.000000 0.021268 0.000000
     IdBound::within(372, [0.016364, 0.0, 0.025522, 0.0]),
     IdBound::exact(374),
     IdBound::exact(403),
-    // measured: 0.642352 0.018953 0.649957 0.003220
-    IdBound::within(422, [0.770823, 0.022744, 0.779949, 0.003865]),
-    // MBUFFSIM Task 2 (rule 1) re-seed. was: 0.001363 0.000000 0.002842 0.000000
+    // measured: 0.002909 0.000000 0.006944 0.000000
+    IdBound::within(422, [0.003492, 0.0, 0.008334, 0.0]),
     // measured: 0.002272 0.000000 0.003727 0.000000
-    IdBound::within(423, [0.002726, 0.0, 0.004472, 0.0]),
-    // measured: 0.004245 0.000000 0.011645 0.000000
-    IdBound::within(424, [0.005094, 0.0, 0.013974, 0.0]),
+    IdBound::within(423, [0.002727, 0.0, 0.004473, 0.0]),
+    // measured: 0.004977 0.000000 0.012358 0.000000
+    IdBound::within(424, [0.005972, 0.0, 0.014831, 0.0]),
     // measured: 0.001134 0.000000 0.003709 0.000000
-    IdBound::within(429, [0.001361, 0.0, 0.004451, 0.0]),
+    IdBound::within(429, [0.001361, 0.0, 0.004452, 0.0]),
 ];
 
 

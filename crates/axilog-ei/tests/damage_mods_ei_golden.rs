@@ -67,9 +67,11 @@ const COMMITTED_GOLDEN_PATH: &str =
 /// both sides: the count is asserted below, and any id in this list whose
 /// emitted text does NOT match the export fails hard, so the two lists
 /// cannot silently drift apart in the direction that matters.
-const TEXT_EXACT_IDS: [i32; 30] = [
+/// MBUFFSIM Task 3 re-seed: `d369` (Chant of Action) promoted from bounded to
+/// exact once rule 1 stopped cancelling the buff on its own overstack report.
+const TEXT_EXACT_IDS: [i32; 31] = [
     -411, -390, -376, -370, -176, -129, -128, -99, -94, -93, -78, -61, //
-    10, 11, 18, 21, 25, 36, 93, 98, 119, 170, 175, 313, 319, 361, 362, 364, 374, 403,
+    10, 11, 18, 21, 25, 36, 93, 98, 119, 170, 175, 313, 319, 361, 362, 364, 369, 374, 403,
 ];
 
 /// `fixtures/local/` path, honouring `AXILOG_LOCAL_FIXTURES` -- same
@@ -287,9 +289,9 @@ fn ei_json_damage_modifiers_match_the_reference_export_text_when_available() {
     let exact_ids: BTreeSet<i32> = TEXT_EXACT_IDS.into_iter().collect();
     assert_eq!(
         exact_ids.len(),
-        30,
-        "TEXT_EXACT_IDS must hold 30 DISTINCT ids -- it mirrors damage_mods_golden.rs's \
-         30 `IdBound::exact` rows"
+        31,
+        "TEXT_EXACT_IDS must hold 31 DISTINCT ids -- it mirrors damage_mods_golden.rs's \
+         31 `IdBound::exact` rows"
     );
 
     let mut failures: Vec<String> = Vec::new();

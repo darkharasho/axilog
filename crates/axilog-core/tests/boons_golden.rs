@@ -27,8 +27,38 @@ use axilog_core::evtc::{anon_account, decode_raw};
 use axilog_core::model::resolve;
 use std::collections::HashMap;
 
+/// Duration-boon presence, and intensity-boon presence: percentage points.
+///
+/// M3's brief set this at 2pp and it has never been approached. Measured
+/// worst cell after MBUFFSIM: **0.000455pp** (Quickness), i.e. 4400x inside
+/// the bound. Deliberately NOT tightened to match: unlike the average-stack
+/// integral, presence is a step-function boundary quantity, so a log with a
+/// different event cadence (a raid boss rather than this WvW capture, or the
+/// pre-rework era) can legitimately land further out without anything being
+/// wrong. The average-stack tolerance below is the one MBUFFSIM earned the
+/// right to tighten, because its residual has a named, now-eliminated cause.
 const PRESENCE_TOLERANCE_PP: f64 = 2.0;
-const INTENSITY_STACK_RELATIVE_TOLERANCE: f64 = 0.05; // 5%
+
+/// Intensity-boon average stacks: relative error.
+///
+/// **MBUFFSIM tightened this from `0.05` (5%) to `0.005` (0.5%).** M3 chose
+/// 5% because Stability could not do better -- seven cells sat at 0.064-0.098
+/// and had to be allowlisted (see [`INTENSITY_STACK_ALLOWLIST`]). Porting
+/// GW2EI's `BuffsContainer.cs:196-252` band aid removed that cause entirely.
+/// Measured on this fixture after MBUFFSIM:
+///
+/// | | worst cell | mean |
+/// |---|---|---|
+/// | Might | 0.000558 | 0.000035 |
+/// | Stability | 0.000075 | 0.000066 |
+///
+/// `0.005` keeps a **~9x margin** over the worst cell in the fixture while
+/// being 90x tighter than the old bound -- so a regression of the kind
+/// MBUFFSIM just fixed (Stability at 0.06+, Might at 0.0073) now FAILS
+/// instead of passing silently. It is set from the measurement with margin,
+/// not clamped to it: a bound equal to the worst observed value is a bound
+/// that fails on the next log.
+const INTENSITY_STACK_RELATIVE_TOLERANCE: f64 = 0.005;
 
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
@@ -223,9 +253,13 @@ fn check_boon_uptimes_match_ei_golden(bytes: &[u8], golden: &serde_json::Value) 
     let used: Vec<&(&str, u32)> = INTENSITY_STACK_ALLOWLIST
         .iter()
         .filter(|(acct, boon)| {
-            mismatches.iter().any(|m| m.allowlisted && m.account == *acct && {
-                let _ = boon;
-                true
+            // Match on the FULL allowlist key. `Mismatch` carries the boon's
+            // display name rather than its id, so map the id back through
+            // `BOON_IDS` -- comparing on the account alone (as this check
+            // first did) would let an entry for the wrong boon look "used".
+            let boon_name = BOON_IDS.iter().find(|(id, ..)| id == boon).map(|(_, n, _)| *n);
+            mismatches.iter().any(|m| {
+                m.allowlisted && m.account == *acct && Some(m.boon) == boon_name
             })
         })
         .collect();
