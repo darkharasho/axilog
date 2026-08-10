@@ -47,17 +47,23 @@ const PRESENCE_TOLERANCE_PP: f64 = 2.0;
 /// GW2EI's `BuffsContainer.cs:196-252` band aid removed that cause entirely.
 /// Measured on this fixture after MBUFFSIM:
 ///
+/// Measured over ALL 37 cells per boon (not just the formerly-allowlisted
+/// ones -- an early draft of this note quoted 0.000075 for Stability, which
+/// was the max over those seven cells only and understated the real worst by
+/// 6x):
+///
 /// | | worst cell | mean |
 /// |---|---|---|
-/// | Might | 0.000558 | 0.000035 |
-/// | Stability | 0.000075 | 0.000066 |
+/// | Might | 0.000558 (`a133`) | 0.000035 |
+/// | Stability | 0.000476 (`a133`) | 0.000066 |
 ///
 /// `0.005` keeps a **~9x margin** over the worst cell in the fixture while
-/// being 90x tighter than the old bound -- so a regression of the kind
-/// MBUFFSIM just fixed (Stability at 0.06+, Might at 0.0073) now FAILS
-/// instead of passing silently. It is set from the measurement with margin,
-/// not clamped to it: a bound equal to the worst observed value is a bound
-/// that fails on the next log.
+/// being **10x** tighter than the old bound (0.05 -> 0.005). Separately: the
+/// OLD bound sat ~90x above that worst cell, which is exactly how the defect
+/// MBUFFSIM fixed (Stability at 0.06+, Might at 0.0073) passed silently for
+/// two milestones. It is set from the measurement WITH margin, not clamped to
+/// it: a bound equal to the worst observed value is a bound that fails on the
+/// next log.
 const INTENSITY_STACK_RELATIVE_TOLERANCE: f64 = 0.005;
 
 const ANON_FIXTURE_PATH: &str =
@@ -104,7 +110,9 @@ const GOLDEN_JSON_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtu
 /// | a171 | 0.065096 | 0.000045 |
 ///
 /// The worst average-stack cell in the whole fixture is now 0.000558
-/// (Might), 90x inside the tolerance. Keep this list EMPTY:
+/// (Might), ~9x inside the (since-tightened, 0.005) tolerance -- it was 90x
+/// inside the 0.05 bound this shipped with, which is why that bound was
+/// tightened too. Keep this list EMPTY:
 /// `allowlist_is_empty_and_unused` fails if an entry is added back without
 /// a cell that actually needs it.
 const INTENSITY_STACK_ALLOWLIST: &[(&str, u32)] = &[];

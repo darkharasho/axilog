@@ -188,7 +188,8 @@ const FIELD_NAMES: [&str; 4] = ["hitCount", "totalHitCount", "damageGain", "tota
 ///      the game re-triggers these every 1-2s and arcdps reports the
 ///      displaced stack with an `OverstackOrNaturalEnd` SINGLE removal that
 ///      GW2EI drops and this project used to replay, cancelling the buff.
-///      `d369` is now EXACT; `d312`'s presence error against GW2EI's own
+///      `d369` is now exact (on its single exported row); `d312`'s presence
+///      error against GW2EI's own
 ///      `buffUptimes` is 0.00029pp, so its 3/10 exact rows are hit-boundary
 ///      noise, not a missing rule.
 /// 2. **An incoming-damage attribution gap** (2 ids are dominated by it,
@@ -207,35 +208,45 @@ const FIELD_NAMES: [&str; 4] = ["hitCount", "totalHitCount", "damageGain", "tota
 /// **682/958 -> 730/958 (rule 1) -> 779/958 (rule 2)**, and **no id lost a
 /// single exact row at either step**:
 ///
-/// | id | name | M16 | +rule 1 | +rule 2 |
-/// |---|---|---|---|---|
-/// | `d422` | Might 25 | 0/44 | 36/44 | 36/44 |
-/// | `d423` | Might >= 20 | 27/44 | 32/44 | 32/44 |
-/// | `d424` | Might <= 15 | 27/44 | 29/44 | 29/44 |
-/// | `d-427` | Stability >= 5 | 15/44 | 15/44 | **38/44** |
-/// | `d-426` | Stability >= 3 | 25/44 | 25/44 | **39/44** |
-/// | `d-428` | Stability >= 10 | 22/44 | 22/44 | **34/44** |
-/// | `d-425` | Stability >= 1 | 36/44 | 37/44 | 37/44 |
-/// | `d312` | Relic of Fireworks | 0/44 | 3/44 | 3/44 |
-/// | `d369` | Chant of Action | 0/10 | 1/1 | **exact** |
+/// | id | name | rows | M16 | +rule 1 | +rule 2 |
+/// |---|---|---|---|---|---|
+/// | `d422` | Might 25 | 44 | 0 | 36 | 36 |
+/// | `d423` | Might >= 20 | 44 | 27 | 32 | 32 |
+/// | `d424` | Might <= 15 | 44 | 27 | 29 | 29 |
+/// | `d-427` | Stability >= 5 | 44 | 15 | 15 | **38** |
+/// | `d-426` | Stability >= 3 | 44 | 25 | 25 | **39** |
+/// | `d-428` | Stability >= 10 | 38 | 22 | 22 | **34** |
+/// | `d-425` | Stability >= 1 | 44 | 36 | 37 | 37 |
+/// | `d312` | Relic of Fireworks | 10 | 0 | 3 | 3 |
+/// | `d369` | Chant of Action | 1 | 0 | 1 | 1 |
 ///
-/// Ids exact on every row/field/account: **30 -> 31** (`d369` promoted). That
-/// number moves slowly by construction -- an id only counts when ALL 44
-/// accounts agree on ALL FOUR fields, so an id like `d422` going 0/44 -> 36/44
-/// is a large real gain that the id-level counter cannot show. The row counter
-/// (682 -> 779, **+97**) is the honest headline; both are printed.
+/// The `rows` column is load-bearing: the export only carries a row for a
+/// `(player, id)` pair when GW2EI recorded at least one qualifying hit, so an
+/// id's denominator is however many of the 44 joined accounts actually
+/// triggered it -- 44 for the boon-gated ids, 38 for `d-428`, 10 for `d312`,
+/// and **1** for `d369`. An id is [`IdBound::exact`] when EVERY row the
+/// export has for it matches on all four fields, not when 44 accounts do.
 ///
-/// **Why three bounds went UP while row-exactness improved.**
-/// [`Tally::residuals`] is an AGGREGATE over all 44 accounts, so per-row
-/// errors of OPPOSITE SIGN cancel inside it. `d423` gained five exact rows
-/// while its aggregate grew, because the errors that remain stopped
-/// cancelling as neatly. The genuinely-loosened fields are exactly three --
-/// `d172` `damageGain` (0.076130 -> 0.082318), `d424` `hitCount`
-/// (0.005094 -> 0.005972) and `damageGain` (0.013974 -> 0.014831), plus
-/// `d423`'s two from Task 2 -- every other upward move in this re-seed is
-/// <= 2e-6 of re-rounding. 24 bound FIELDS tightened. Row-exactness is the
-/// strong metric and the aggregate is the weak one; both are recorded so the
-/// trade stays visible rather than being quietly absorbed.
+/// Ids exact on that basis: **30 -> 31**. The single promotion is `d369`, and
+/// it rests on the export's ONE row for that id -- a legitimate promotion
+/// (that row is exact on all four fields and its emitted JSON is asserted
+/// text-identical in `crates/axilog-ei/tests/damage_mods_ei_golden.rs`), but
+/// a one-row basis, and worth knowing when reading "31 exact ids". The
+/// id-level counter is also just coarse: `d422` going 0/44 -> 36/44 is 36
+/// newly-correct rows and zero ids. The ROW counter (682 -> 779, **+97**) is
+/// the honest headline; both are printed by this test.
+///
+/// **Why three bounds went UP.** [`Tally::residuals`] is an AGGREGATE over
+/// every joined account, so per-row errors of OPPOSITE SIGN cancel inside it.
+/// For `d423` and `d424` that is demonstrably the story: both gained exact
+/// rows (27 -> 32 and 27 -> 29) while their aggregates grew, because the
+/// errors that remain stopped cancelling as neatly. **`d172` (Berserker's
+/// Power) is NOT explained by that** -- it has 0 exact rows of 4 both before
+/// and after, so nothing about its row structure changed and the
+/// cancellation account cannot apply. Its `damageGain` residual moved
+/// 0.076130 -> 0.082318 for a reason this milestone did not establish: it is
+/// bounded and visible here, not understood. Every other upward move in this
+/// re-seed is <= 2e-6 of re-rounding; 24 bound FIELDS tightened.
 ///
 /// Every `within` bound below is `1.20 x` the residual measured on the
 /// post-era reference capture at commit-time, with that measurement in the
