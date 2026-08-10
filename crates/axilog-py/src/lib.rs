@@ -86,13 +86,15 @@ fn build_report_from_bytes(
 }
 
 /// `build_report_and_activity_from_bytes`'s return tuple. Named because it
-/// grew a fourth member in M16 and `clippy::type_complexity` is right that
+/// grew a fourth member in M16 (and a fifth in MEIGAP) and
+/// `clippy::type_complexity` is right that
 /// the inline form had stopped being readable.
 type EiPipelineOutputs = (
     axilog_schema::Report,
     Vec<axilog_core::analysis::replay::ActivityIntervals>,
     Option<axilog_core::analysis::ei_replay::EiReplay>,
     Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
+    Option<axilog_core::analysis::buffs::BoonStates>,
 );
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
@@ -150,7 +152,14 @@ fn build_report_and_activity_from_bytes(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
     );
-    Ok((report, activity, ei_replay, damage_mods))
+    // MEIGAP Task 1b: GW2EI-shape boon stack timelines
+    // (`buffUptimes[].states`/`.statesPerSource`), gated on the timeseries
+    // flag -- the same setting GW2EI itself gates those two arrays behind
+    // (`RawFormatTimelineArrays`). See
+    // `axilog_core::analysis::buffs::states`'s module doc.
+    let boon_states = want_timeseries
+        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
+    Ok((report, activity, ei_replay, damage_mods, boon_states))
 }
 
 fn report_to_value(report: &axilog_schema::Report) -> PyResult<Value> {
@@ -240,7 +249,7 @@ fn parse_file_ei(
     modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let (report, activity, ei_replay, damage_mods) =
+    let (report, activity, ei_replay, damage_mods, boon_states) =
         build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     let ei = axilog_ei::to_ei_json(
         &report,
@@ -248,6 +257,7 @@ fn parse_file_ei(
             activity: &activity,
             replay: ei_replay.as_ref(),
             modifiers: damage_mods.as_ref(),
+            boon_states: boon_states.as_ref(),
         },
     );
     value_to_py(py, &ei)

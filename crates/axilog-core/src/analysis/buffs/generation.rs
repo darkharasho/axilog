@@ -48,8 +48,9 @@
 //! `simulator::run` already consumes (Task 1/2's verified apply/remove/
 //! extend stack machine), but tracks each held stack's SOURCE (the
 //! applier's account-representative addr) and accumulates generated-ms per
-//! source instead of a stack-count timeline -- see `run_duration_ms`/
-//! `run_intensity_ms` below, which mirror `simulator::run_duration`/
+//! source instead of a stack-count timeline -- see
+//! `run_duration_segments`/`run_intensity_segments` below, which mirror
+//! `simulator::run_duration`/
 //! `run_intensity` branch-for-branch (reusing the same removal-matching
 //! helper, `simulator::find_single_removal_match`) so any future fix to
 //! the count-timeline model doesn't silently diverge from this one.
@@ -59,7 +60,7 @@ use super::simulator::{self, find_single_removal_match};
 use super::BOON_IDS;
 use crate::evtc::RawLog;
 use crate::model::{Encounter, Player};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// Self/group/squad generation rollups for one (source player, boon) pair,
 /// on the same 0-100 (duration boons) / raw-average-stack-count (intensity
@@ -82,6 +83,23 @@ pub struct GenerationStats {
 // Per-(target, buff) simulation: generated-ms per source.
 // ---------------------------------------------------------------------
 
+/// One stretch of time during which one SOURCE's stack was held on the
+/// target (MEIGAP Task 1b). `[start, end)`, absolute arcdps time.
+///
+/// This is the raw material both consumers of this module reduce: summing
+/// `end - start` per source gives the generated-ms map
+/// (`simulate_boon_generation_ms`, unchanged in behaviour -- the two
+/// `run_*_ms` entry points below are now thin sums over exactly the
+/// segments they used to accumulate inline), while counting overlaps per
+/// source gives GW2EI's `statesPerSource` stack timeline
+/// (`super::states::build`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeldSegment {
+    pub source: u64,
+    pub start: u64,
+    pub end: u64,
+}
+
 /// A duration-type (Queue) boon's held stack, carrying its source alongside
 /// the remaining-ms value `simulator::run_duration`'s `DurationStack`
 /// already tracks (see that function's doc comment for the frozen-queue
@@ -92,8 +110,19 @@ struct DSlot {
     source: u64,
 }
 
+/// Sums [`HeldSegment`]s into the per-source generated-ms map every
+/// pre-MEIGAP caller of this module expects. Zero-length segments
+/// contribute nothing, exactly as the old inline `+= 0` did.
+fn segments_to_gen_ms(segments: &[HeldSegment]) -> BTreeMap<u64, u64> {
+    let mut out: BTreeMap<u64, u64> = BTreeMap::new();
+    for s in segments {
+        *out.entry(s.source).or_default() += s.end.saturating_sub(s.start);
+    }
+    out
+}
+
 /// Mirrors `simulator::advance_duration` exactly, but credits elapsed
-/// active-slot ms to `gen_ms[stack[0].source]` as it consumes them --
+/// active-slot ms as a [`HeldSegment`] owned by `stack[0].source` --
 /// GW2EI only ever attributes DURATION-type generation to whichever
 /// source's stack currently occupies the active slot (`Stacks[0]`), never
 /// to a frozen queued stack.
@@ -101,7 +130,7 @@ fn advance_duration_ms(
     stack: &mut Vec<DSlot>,
     clock: &mut u64,
     to_t: u64,
-    gen_ms: &mut BTreeMap<u64, u64>,
+    segments: &mut Vec<HeldSegment>,
 ) {
     loop {
         if *clock >= to_t {
@@ -113,12 +142,16 @@ fn advance_duration_ms(
         };
         let budget = to_t - *clock;
         if active.remaining > budget {
-            *gen_ms.entry(active.source).or_default() += budget;
+            segments.push(HeldSegment { source: active.source, start: *clock, end: to_t });
             stack[0].remaining -= budget;
             *clock = to_t;
             break;
         }
-        *gen_ms.entry(active.source).or_default() += active.remaining;
+        segments.push(HeldSegment {
+            source: active.source,
+            start: *clock,
+            end: *clock + active.remaining,
+        });
         *clock += active.remaining;
         stack.remove(0);
     }
@@ -130,14 +163,18 @@ fn advance_duration_ms(
 /// `events` is never earlier than the caller's window start by
 /// construction, since it's a subset of the same raw event stream the
 /// window itself is derived from).
-fn run_duration_ms(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) -> BTreeMap<u64, u64> {
+fn run_duration_segments(
+    mut events: Vec<BuffEvent>,
+    capacity: u32,
+    log_end_ms: u64,
+) -> Vec<HeldSegment> {
     events.sort_by_key(|e| e.time);
     let mut stack: Vec<DSlot> = Vec::new();
     let mut clock = events.first().map(|e| e.time).unwrap_or(0);
-    let mut gen_ms: BTreeMap<u64, u64> = BTreeMap::new();
+    let mut segments: Vec<HeldSegment> = Vec::new();
 
     for e in &events {
-        advance_duration_ms(&mut stack, &mut clock, e.time, &mut gen_ms);
+        advance_duration_ms(&mut stack, &mut clock, e.time, &mut segments);
         match e.kind {
             BuffEventKind::Apply { duration_ms, is_shields } => {
                 let duration_ms = duration_ms as u64;
@@ -187,8 +224,8 @@ fn run_duration_ms(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) -
             }
         }
     }
-    advance_duration_ms(&mut stack, &mut clock, log_end_ms, &mut gen_ms);
-    gen_ms
+    advance_duration_ms(&mut stack, &mut clock, log_end_ms, &mut segments);
+    segments
 }
 
 /// An intensity-type (Might, Stability) boon's held stack, carrying its
@@ -214,16 +251,15 @@ impl IStack {
 /// (`end_t` is always >= `s.start` at every call site: expiry/removal
 /// times are always >= the stack's own apply time, and the final
 /// still-held sweep clamps at `log_end_ms`, which is >= every event's
-/// time by construction), to `gen_ms[s.source]`.
-fn credit(gen_ms: &mut BTreeMap<u64, u64>, s: &IStack, end_t: u64) {
-    let ms = end_t.saturating_sub(s.start);
-    *gen_ms.entry(s.source).or_default() += ms;
+/// time by construction), as a [`HeldSegment`] owned by `s.source`.
+fn credit(segments: &mut Vec<HeldSegment>, s: &IStack, end_t: u64) {
+    segments.push(HeldSegment { source: s.source, start: s.start, end: end_t.max(s.start) });
 }
 
 /// Mirrors `simulator::run_intensity`'s `flush_expiries`, additionally
 /// crediting each naturally-expired stack's full lifetime (`start` to its
 /// own `expiry()`, NOT `upto`) to its source.
-fn flush_expiries_ms(stacks: &mut Vec<IStack>, gen_ms: &mut BTreeMap<u64, u64>, upto: u64) {
+fn flush_expiries_ms(stacks: &mut Vec<IStack>, segments: &mut Vec<HeldSegment>, upto: u64) {
     loop {
         let next = stacks
             .iter()
@@ -234,7 +270,7 @@ fn flush_expiries_ms(stacks: &mut Vec<IStack>, gen_ms: &mut BTreeMap<u64, u64>, 
         match next {
             Some((i, exp)) => {
                 let s = stacks.remove(i);
-                credit(gen_ms, &s, exp);
+                credit(segments, &s, exp);
             }
             None => break,
         }
@@ -246,13 +282,17 @@ fn flush_expiries_ms(stacks: &mut Vec<IStack>, gen_ms: &mut BTreeMap<u64, u64>, 
 /// source (GW2EI's `BuffSimulationItemIntensity.SetBuffDistributionItem`
 /// credits every `RegroupedStack`, not just an "active" one -- see module
 /// docs).
-fn run_intensity_ms(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) -> BTreeMap<u64, u64> {
+fn run_intensity_segments(
+    mut events: Vec<BuffEvent>,
+    capacity: u32,
+    log_end_ms: u64,
+) -> Vec<HeldSegment> {
     events.sort_by_key(|e| e.time);
     let mut stacks: Vec<IStack> = Vec::new();
-    let mut gen_ms: BTreeMap<u64, u64> = BTreeMap::new();
+    let mut segments: Vec<HeldSegment> = Vec::new();
 
     for e in &events {
-        flush_expiries_ms(&mut stacks, &mut gen_ms, e.time);
+        flush_expiries_ms(&mut stacks, &mut segments, e.time);
         match e.kind {
             BuffEventKind::Apply { duration_ms, .. } => {
                 let new_stack = IStack { start: e.time, duration: duration_ms as u64, source: e.agent };
@@ -262,7 +302,7 @@ fn run_intensity_ms(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) 
                     stacks.iter().enumerate().min_by_key(|(_, s)| s.remaining_at(e.time))
                 {
                     let evicted = stacks[i];
-                    credit(&mut gen_ms, &evicted, e.time);
+                    credit(&mut segments, &evicted, e.time);
                     stacks[i] = new_stack;
                 }
             }
@@ -274,12 +314,12 @@ fn run_intensity_ms(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) 
                     removed_duration_ms as i64,
                 ) {
                     let s = stacks.remove(order[pos]);
-                    credit(&mut gen_ms, &s, e.time);
+                    credit(&mut segments, &s, e.time);
                 }
             }
             BuffEventKind::RemoveAll => {
                 for s in stacks.drain(..) {
-                    credit(&mut gen_ms, &s, e.time);
+                    credit(&mut segments, &s, e.time);
                 }
             }
             BuffEventKind::Extend { extended_ms, new_duration_ms } => {
@@ -301,15 +341,15 @@ fn run_intensity_ms(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) 
             }
         }
     }
-    flush_expiries_ms(&mut stacks, &mut gen_ms, log_end_ms);
+    flush_expiries_ms(&mut stacks, &mut segments, log_end_ms);
     // Anything still held past `log_end_ms` is credited only up to
     // `log_end_ms` -- mirrors GW2EI's `GetClampedDuration(start, end)`
     // (phase-clamped generation), same convention `uptime::compute` already
     // uses for its own window.
     for s in &stacks {
-        credit(&mut gen_ms, s, log_end_ms);
+        credit(&mut segments, s, log_end_ms);
     }
-    gen_ms
+    segments
 }
 
 /// Simulates every tracked boon's generated-ms breakdown for every squad
@@ -367,44 +407,122 @@ pub(crate) fn simulate_boon_generation_ms_with_inputs(
     inputs: &super::BoonInputs,
     enc: &Encounter,
 ) -> BTreeMap<(u64, u32), BTreeMap<u64, u64>> {
+    let log_end_ms = log_end_of(raw);
+    grouped_boon_events(inputs, enc)
+        .into_iter()
+        .map(|((rep, buff_id), evs)| {
+            let (capacity, is_intensity) = capacity_and_kind(inputs, buff_id);
+            (
+                (rep, buff_id),
+                segments_to_gen_ms(&run_segments(evs, capacity, is_intensity, log_end_ms)),
+            )
+        })
+        .collect()
+}
+
+/// The log's final absolute event time -- the window both simulations tick
+/// stacks against (see the two `*_with_inputs` doc comments).
+fn log_end_of(raw: &RawLog) -> u64 {
+    raw.events.last().map(|e| e.time).unwrap_or(0)
+}
+
+/// `(arcdps-reported-or-hardcoded capacity, is intensity)` for one buff.
+fn capacity_and_kind(inputs: &super::BoonInputs, buff_id: u32) -> (u32, bool) {
+    let capacity = inputs
+        .capacities
+        .get(&buff_id)
+        .copied()
+        .unwrap_or_else(|| simulator::capacity_for(buff_id));
+    let is_intensity = BOON_IDS
+        .iter()
+        .any(|&(id, _, is_intensity)| id == buff_id && is_intensity);
+    (capacity, is_intensity)
+}
+
+/// The `(target representative addr, buff id) -> events` grouping BOTH
+/// reductions in this module consume, with the source addr already folded
+/// onto its account representative.
+///
+/// A relogged source folds onto ONE key instead of splitting its credit
+/// across pre/post-relog addrs (the same relog-fold reasoning the target
+/// side uses). A source that isn't a known squad addr at all (enemy, NPC,
+/// unrecognized) keeps its raw addr -- see
+/// [`simulate_boon_generation_ms`]'s doc comment.
+fn grouped_boon_events(
+    inputs: &super::BoonInputs,
+    enc: &Encounter,
+) -> BTreeMap<(u64, u32), Vec<BuffEvent>> {
     let addr_to_rep: BTreeMap<u64, u64> = enc
         .players
         .iter()
         .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
         .collect();
-    let intensity_ids: BTreeSet<u32> =
-        BOON_IDS.iter().filter(|&&(_, _, is_intensity)| is_intensity).map(|&(id, _, _)| id).collect();
-
-    let arcdps_capacities = &inputs.capacities;
-
     let mut grouped: BTreeMap<(u64, u32), Vec<BuffEvent>> = BTreeMap::new();
     for &(mut e) in &inputs.events {
         let Some(&rep) = addr_to_rep.get(&e.owner) else { continue };
-        // Fold a relogged source onto its account representative too, so a
-        // player who relogged mid-fight still gets ONE source key instead
-        // of splitting their generation credit across pre/post-relog addrs
-        // (same relog-fold reasoning as `owner` above). A source that
-        // isn't a known squad addr at all (enemy/NPC/unrecognized) keeps
-        // its raw addr -- see this function's doc comment.
         e.agent = addr_to_rep.get(&e.agent).copied().unwrap_or(e.agent);
         grouped.entry((rep, e.buff_id)).or_default().push(e);
     }
-
-    let log_end_ms = raw.events.last().map(|e| e.time).unwrap_or(0);
     grouped
+}
+
+/// Stack-type dispatch for the two segment simulators -- the single place
+/// the intensity/duration choice is made, shared by
+/// [`simulate_boon_generation_ms_with_inputs`] and
+/// [`simulate_boon_held_segments_with_inputs`] so the two views can never
+/// diverge on it.
+fn run_segments(
+    events: Vec<BuffEvent>,
+    capacity: u32,
+    is_intensity: bool,
+    log_end_ms: u64,
+) -> Vec<HeldSegment> {
+    if is_intensity {
+        run_intensity_segments(events, capacity, log_end_ms)
+    } else {
+        run_duration_segments(events, capacity, log_end_ms)
+    }
+}
+
+/// The per-(target representative addr, buff id) HELD SEGMENT lists behind
+/// [`simulate_boon_generation_ms_with_inputs`]'s own generated-ms rollup
+/// (MEIGAP Task 1b) -- the input `super::states::build` reduces into
+/// GW2EI's `statesPerSource` stack timelines.
+///
+/// Same grouping, same relog folds, same simulators as the generated-ms
+/// pass, which is now literally a sum over these segments -- so a source's
+/// `statesPerSource` timeline and its `generated`/`squadBuffs` numbers can
+/// never describe different simulations.
+///
+/// **Opt-in, not wired into `analyze()`**: it is a second full run of the
+/// boon simulation (the first, inside `analyze`, keeps only the summed
+/// form), so the caller runs it exactly when the EI-shape state timelines
+/// were requested -- the standalone-pass convention `replay`/`missiles`/
+/// `damage_mods` already use.
+pub fn simulate_boon_held_segments(
+    raw: &RawLog,
+    enc: &Encounter,
+) -> BTreeMap<(u64, u32), Vec<HeldSegment>> {
+    let registry = crate::analysis::damage::InstidRegistry::build(raw);
+    simulate_boon_held_segments_with_inputs(
+        raw,
+        &super::extract_boon_inputs_with_registry(raw, &registry),
+        enc,
+    )
+}
+
+/// [`simulate_boon_held_segments`] against caller-supplied, already-
+/// extracted [`super::BoonInputs`].
+pub fn simulate_boon_held_segments_with_inputs(
+    raw: &RawLog,
+    inputs: &super::BoonInputs,
+    enc: &Encounter,
+) -> BTreeMap<(u64, u32), Vec<HeldSegment>> {
+    grouped_boon_events(inputs, enc)
         .into_iter()
         .map(|((rep, buff_id), evs)| {
-            let capacity = arcdps_capacities
-                .get(&buff_id)
-                .copied()
-                .unwrap_or_else(|| simulator::capacity_for(buff_id));
-            let is_intensity = intensity_ids.contains(&buff_id);
-            let gen_ms = if is_intensity {
-                run_intensity_ms(evs, capacity, log_end_ms)
-            } else {
-                run_duration_ms(evs, capacity, log_end_ms)
-            };
-            ((rep, buff_id), gen_ms)
+            let (capacity, is_intensity) = capacity_and_kind(inputs, buff_id);
+            ((rep, buff_id), run_segments(evs, capacity, is_intensity, log_end_of(raw)))
         })
         .collect()
 }

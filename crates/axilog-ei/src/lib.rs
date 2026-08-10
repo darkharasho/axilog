@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use serde_json::{json, Value};
-use axilog_core::analysis::buffs::BOON_IDS;
+use axilog_core::analysis::buffs::{BoonStates, BOON_IDS};
 use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
 use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::analysis::replay::{ActivityIntervals, Interval};
@@ -269,6 +269,14 @@ fn ei_time_secs(ms: u64) -> Value {
     Value::from(r)
 }
 
+/// `buffUptimes[].states`/`.statesPerSource`: `[[time, stacks], ...]`
+/// (MEIGAP Task 1b). A `buffUptimes` entry for a boon this player never
+/// held gets `[]`, matching GW2EI's own empty-graph case
+/// (`JsonBuffsUptimeBuilder.cs:68-76` returns an empty list there).
+fn ei_states_json(states: &[(u64, u32)]) -> Value {
+    Value::Array(states.iter().map(|&(t, v)| json!([t, v])).collect())
+}
+
 /// One of the three boon-generation attribution arrays
 /// (`selfBuffs`/`groupBuffs`/`squadBuffs`), `pick` selecting which scope of
 /// [`axilog_schema::GenerationOut`] to read -- see the call sites' doc
@@ -413,6 +421,40 @@ pub struct EiInputs<'a> {
     /// `damageModifiersTarget` 497,702, `incomingDamageModifiersTarget`
     /// 356,375, `damageModMap` 19,325.
     pub modifiers: Option<&'a DamageModifierResults>,
+    /// `boon_states` (MEIGAP Task 1b): the GW2EI-shape boon stack timelines
+    /// from `axilog_core::analysis::buffs::states::build`, or `None`. This
+    /// is the OPT-IN gate for `buffUptimes[].states` and
+    /// `buffUptimes[].statesPerSource`.
+    ///
+    /// GW2EI puts those same two arrays behind its own
+    /// `RawFormatTimelineArrays` setting
+    /// (`GW2EIBuilders/JsonModels/JsonActorUtilities/JsonBuffsUptimeBuilder.cs:52`)
+    /// -- the setting axibridge already maps onto axilog's `--timeseries`
+    /// -- so every caller computes this exactly when `--timeseries`/SDK
+    /// `timeseries: true` was requested, i.e. the same request that
+    /// populates `axilog_schema::PlayerOut::per_second`. Reproducing EI's
+    /// own gate rather than inventing one is what keeps the two payloads
+    /// shaped alike under the same settings.
+    ///
+    /// It arrives as a side-channel input rather than a `Report` field for
+    /// the same reason `activity`/`replay` do: it is EI-SHAPE data
+    /// (LOG-RELATIVE ms with GW2EI's mandatory leading `[0, 0]` pair,
+    /// keyed by source CHARACTER NAME), which the native schema
+    /// deliberately does not carry -- `Metrics::boons` is this project's
+    /// own absolute-time, addr-keyed shape.
+    ///
+    /// Joined to `report.players` by `PlayerOut::agent_addr` -- a real key,
+    /// not a position, so a mismatch yields an absent entry rather than a
+    /// mis-attributed timeline.
+    ///
+    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, pretty-printed,
+    /// 41 players x 12 boons over a 49s fight):** `--format ei-json
+    /// --timeseries` grows 3,878,210 -> 4,855,657 bytes (**+25.2%**). The
+    /// flagless payload is byte-identical to before (763,450 both sides).
+    /// It scales with transitions, i.e. roughly `players x boons x
+    /// applications`, which is why it stays behind the flag GW2EI itself
+    /// puts it behind.
+    pub boon_states: Option<&'a BoonStates>,
 }
 
 /// Render a [`Report`] plus its EI-only side inputs as Elite-Insights-
@@ -421,7 +463,7 @@ pub struct EiInputs<'a> {
 /// See [`EiInputs`] for what each input gates; `EiInputs::default()` renders
 /// everything that is derivable from the `Report` alone.
 pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
-    let EiInputs { activity, replay, modifiers } = *inputs;
+    let EiInputs { activity, replay, modifiers, boon_states } = *inputs;
     // Positional join guard: the tracks must be `report.players` followed by
     // the enemy-PLAYER subset of `report.all_enemies`, in those orders. A
     // caller that hand-builds a `Report` (every unit test below) can violate
@@ -734,19 +776,47 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             // entry we can honestly attribute to a specific character name is the
             // player's own self-generation — emitted as `{ <own character>:
             // self_pct }` rather than fabricating group/squad members' names.
+            //
+            // MEIGAP Task 1b: `states` and `statesPerSource` join each
+            // entry exactly when `EiInputs::boon_states` was supplied (see
+            // that field's doc comment for GW2EI's own
+            // `RawFormatTimelineArrays` gate, which it mirrors). Both are
+            // `[[time_ms_from_log_start, stackCount], ...]`;
+            // `statesPerSource` keys by source CHARACTER name, with
+            // GW2EI's own `"UNKNOWN"` placeholder for an unresolved source
+            // -- see `axilog_core::analysis::buffs::states`'s module doc
+            // for the full shape/citation trail, including why a leading
+            // `[0, 0]` pair is always present.
             "buffUptimes": p.boons.iter().map(|b| {
                 let (uptime, presence) = match b.avg_stacks {
                     Some(avg) => (avg, b.presence_pct), // intensity boon
                     None => (b.presence_pct, 0.0),      // duration boon
                 };
-                json!({
+                let mut entry = json!({
                     "id": b.id,
                     "buffData": [ {
                         "uptime": uptime,
                         "presence": presence,
                         "generated": { &p.character: b.generation.self_pct }
                     } ]
-                })
+                });
+                if let Some(bs) = boon_states {
+                    let obj = entry.as_object_mut().expect("buffUptimes entry is an object");
+                    let key = (p.agent_addr, b.id);
+                    obj.insert(
+                        "states".to_string(),
+                        ei_states_json(bs.total.get(&key).map(|v| v.as_slice()).unwrap_or(&[])),
+                    );
+                    let per_source: BTreeMap<&str, Value> = bs
+                        .per_source
+                        .get(&key)
+                        .into_iter()
+                        .flatten()
+                        .map(|(name, states)| (name.as_str(), ei_states_json(states)))
+                        .collect();
+                    obj.insert("statesPerSource".to_string(), json!(per_source));
+                }
+                entry
             }).collect::<Vec<_>>(),
             // `selfBuffs`/`groupBuffs`/`squadBuffs` (MEIGAP Task 1a): the
             // boon-generation ATTRIBUTION arrays, i.e. "how much boon-time

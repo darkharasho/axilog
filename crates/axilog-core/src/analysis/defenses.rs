@@ -632,21 +632,47 @@ fn accumulate(events: &[RawEvent], squad: &BTreeSet<u64>, post_era: bool) -> BTr
 
 /// Defiance-bar damage taken -- a wholly separate scan from `accumulate`
 /// above (see module doc's `breakbar_count`/`breakbar_damage` section).
-fn accumulate_breakbar(events: &[RawEvent], squad: &BTreeSet<u64>, out: &mut BTreeMap<u64, DefenseStats>) {
+/// Breakbar damage taken, and (MEIGAP Task 1c) incoming crowd control --
+/// two result-byte classifications over the same `dst in squad` event
+/// family, so they share one scan rather than paying for two full passes
+/// over a 583k-event log (see `docs/BENCHMARKS.md`'s MEIGAP entry).
+fn accumulate_breakbar_and_received_cc(
+    events: &[RawEvent],
+    squad: &BTreeSet<u64>,
+    post_era: bool,
+    out: &mut BTreeMap<u64, DefenseStats>,
+) {
     for e in events {
-        if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
-            continue;
-        }
-        if e.result != result::BREAKBAR_DAMAGE {
+        // Byte-level classification BEFORE the `squad` set lookup: the
+        // membership test is a `BTreeSet<u64>` probe and by far the most
+        // expensive thing in this loop, while both classifications are a
+        // handful of byte compares that reject the overwhelming majority
+        // of rows. (Measured: hoisting the `squad` check to the top of the
+        // loop instead cost +4% on `analysis::analyze` over the real log.)
+        //
+        // `cc::is_cc` carries its own era-gated statechange/buff handling
+        // (see [`DefenseStats::received_cc_count`]); a CC row is never a
+        // breakbar row.
+        let is_cc = crate::analysis::cc::is_cc(e, post_era);
+        let is_breakbar = !is_cc
+            && e.is_statechange == 0
+            && e.is_activation == 0
+            && e.is_buffremove == 0
+            && e.result == result::BREAKBAR_DAMAGE;
+        if !is_cc && !is_breakbar {
             continue;
         }
         if !squad.contains(&e.dst_agent) {
             continue;
         }
-        let dmg = e.value.max(0) as u64;
         let stats = out.entry(e.dst_agent).or_default();
-        stats.breakbar_count += 1;
-        stats.breakbar_damage += dmg;
+        if is_cc {
+            stats.received_cc_count += 1;
+            stats.received_cc_duration_ms += e.value.max(0) as u64;
+        } else {
+            stats.breakbar_count += 1;
+            stats.breakbar_damage += e.value.max(0) as u64;
+        }
     }
 }
 
@@ -672,30 +698,6 @@ fn accumulate_dodges(raw: &RawLog, squad: &BTreeSet<u64>, post_era: bool, out: &
 /// Compute per-squad-player incoming-defense stats (M13 Task 2),
 /// account-folded via `addr_to_rep` (relog fold, same convention every
 /// other pass in this codebase uses).
-/// Incoming crowd-control applications, keyed by the RAW victim addr
-/// (MEIGAP Task 1c) -- see [`DefenseStats::received_cc_count`] for the full
-/// GW2EI citation trail and the two documented asymmetries vs the outgoing
-/// pass. Reuses `cc::is_cc` rather than re-deriving the predicate, so the
-/// M2/M13-verified era gating cannot drift between the two directions.
-fn accumulate_received_cc(
-    events: &[RawEvent],
-    squad: &BTreeSet<u64>,
-    post_era: bool,
-    out: &mut BTreeMap<u64, DefenseStats>,
-) {
-    for e in events {
-        if !crate::analysis::cc::is_cc(e, post_era) {
-            continue;
-        }
-        if !squad.contains(&e.dst_agent) {
-            continue;
-        }
-        let stats = out.entry(e.dst_agent).or_default();
-        stats.received_cc_count += 1;
-        stats.received_cc_duration_ms += e.value.max(0) as u64;
-    }
-}
-
 /// Every boon-strip this squad player SUFFERED, as `(boon id, removed
 /// duration ms)` in log order, keyed by the player's account-representative
 /// addr (MEIGAP Task 1c).
@@ -764,9 +766,8 @@ pub fn incoming_boon_strips(
 pub fn build(raw: &RawLog, squad: &BTreeSet<u64>, addr_to_rep: &BTreeMap<u64, u64>) -> BTreeMap<u64, DefenseStats> {
     let post_era = raw.header.is_post_buff_rework();
     let mut by_addr = accumulate(&raw.events, squad, post_era);
-    accumulate_breakbar(&raw.events, squad, &mut by_addr);
+    accumulate_breakbar_and_received_cc(&raw.events, squad, post_era, &mut by_addr);
     accumulate_dodges(raw, squad, post_era, &mut by_addr);
-    accumulate_received_cc(&raw.events, squad, post_era, &mut by_addr);
 
     let mut by_rep: BTreeMap<u64, DefenseStats> = BTreeMap::new();
     for (addr, stats) in by_addr {

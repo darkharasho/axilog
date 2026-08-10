@@ -153,6 +153,7 @@ fn build_report_and_activity_from_bytes(
     Vec<axilog_core::analysis::replay::ActivityIntervals>,
     Option<axilog_core::analysis::ei_replay::EiReplay>,
     Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
+    Option<axilog_core::analysis::buffs::BoonStates>,
 )> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -185,7 +186,14 @@ fn build_report_and_activity_from_bytes(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
     );
-    Ok((report, activity, ei_replay, damage_mods))
+    // MEIGAP Task 1b: GW2EI-shape boon stack timelines
+    // (`buffUptimes[].states`/`.statesPerSource`), gated on the timeseries
+    // flag -- the same setting GW2EI itself gates those two arrays behind
+    // (`RawFormatTimelineArrays`). See
+    // `axilog_core::analysis::buffs::states`'s module doc.
+    let boon_states = want_timeseries
+        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
+    Ok((report, activity, ei_replay, damage_mods, boon_states))
 }
 
 fn report_to_value(report: &axilog_schema::Report) -> Result<Value> {
@@ -251,7 +259,7 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
     let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let (report, activity, ei_replay, damage_mods) = build_report_and_activity_from_bytes(
+    let (report, activity, ei_replay, damage_mods, boon_states) = build_report_and_activity_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
         want_modifiers,
     )?;
@@ -261,6 +269,7 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
             activity: &activity,
             replay: ei_replay.as_ref(),
             modifiers: damage_mods.as_ref(),
+            boon_states: boon_states.as_ref(),
         },
     ))
 }

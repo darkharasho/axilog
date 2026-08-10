@@ -14,7 +14,8 @@ both the committed fixture and a real 583k-event log) are in
 
 Later milestones that add work to a measured stage record their delta here
 too, against the MPERF tip:
-[After MATTRIB Task 1](#after-mattrib-task-1--the-orphaned-instid-repair-pre-pass).
+[After MATTRIB Task 1](#after-mattrib-task-1--the-orphaned-instid-repair-pre-pass),
+[After MEIGAP Task 1](#after-meigap-task-1--incoming-ccstrips-and-the-per-target-split).
 
 ## Harness
 
@@ -490,6 +491,47 @@ figure. Replacing it with a `HashMap` behind a three-instruction
 multiply-shift hasher (`repair::AddrHasher`; the map is looked up, never
 iterated, so this cannot affect ordering or determinism) is the whole
 difference. Per-row hashing on a 583k-row scan is not a micro-optimisation.
+
+## After MEIGAP Task 1 — incoming CC/strips and the per-target split
+
+MEIGAP Task 1 adds two always-on units of work to `analysis::analyze`:
+`analysis::per_target` (a new full scan producing the per-(player, enemy)
+offensive split) and two additions inside `analysis::defenses` (incoming
+crowd control, folded into the existing breakbar scan; incoming boon
+strips, one more scan over `BUFFREMOVE_ALL`-shaped rows). The two OPT-IN
+families it adds — the serialized `per_target` block behind
+`--skill-damage`, and `buffs::states` behind `--timeseries` — are outside
+`analyze()` entirely and so outside these numbers.
+
+Same machine and harness as the baseline above. Measured 2026-08-10 against
+`730212a` (the MEIGAP base).
+
+| Stage | Before (`730212a`) | After | Δ |
+|---|---|---|---|
+| fixture `decode_raw` | 9.177 ms | 9.138 ms | −0.4% (noise) |
+| fixture `model::resolve` | 651.98 µs | 667.51 µs | +2.4% (noise) |
+| fixture `analysis::analyze` | 18.733 ms | 19.677 ms | +5.0% (+0.94 ms) |
+| fixture `full_pipeline` | 29.096 ms | 29.854 ms | **+2.6%** (+0.76 ms) |
+| real-log `decode_raw` | 77.460 ms | 76.585 ms | −1.1% (noise) |
+| real-log `model::resolve` | 3.741 ms | 3.813 ms | +1.9% (noise) |
+| real-log `analysis::analyze` | 85.253 ms | 89.046 ms | +4.4% (+3.79 ms) |
+| real-log `full_pipeline` | 167.54 ms | 171.08 ms | **+2.1%** (+3.54 ms) |
+
+The gate is `full_pipeline` (the plan's "no >5% pipeline regression"), and
+both arms land at roughly half of it. The cost is concentrated in
+`analyze`, as expected for three extra event-stream traversals.
+
+Worth recording one measurement that went the wrong way first. Merging the
+incoming-CC classification into the pre-existing breakbar scan is a clear
+win on paper — one traversal instead of two — but the obvious way to write
+it, hoisting the shared `squad.contains(&e.dst_agent)` test to the top of
+the loop, made `analysis::analyze` **slower than two separate scans**
+(93.09 ms vs 89.54 ms on the real log, +4% over the unmerged form). The
+`squad` membership test is a `BTreeSet<u64>` probe; the classifications are
+a handful of byte compares that reject almost every row. Ordering the cheap
+byte filters first and the set probe last recovers the win. Same lesson as
+MATTRIB's `BTreeMap` -> `HashMap` finding: on a 583k-row scan, what you do
+*per row* is the whole cost model.
 
 ## CI
 

@@ -735,7 +735,7 @@ fn ei_json_combat_replay_matches_the_golden() {
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None });
+    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None });
 
     // -- combatReplayMetaData: EXACT, field by field, as text --
     let meta = &ei["combatReplayMetaData"];
@@ -849,7 +849,7 @@ fn ei_json_replay_fields_do_not_disturb_the_always_on_surface() {
 
     let without = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, ..Default::default() });
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let mut with = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None });
+    let mut with = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None });
 
     // Sanity: the replay-on document really does carry the new surface
     // (otherwise this test would pass vacuously).
@@ -917,7 +917,7 @@ fn ei_json_combat_replay_matches_the_local_postrework_export() {
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None });
+    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None });
 
     // metaData: text-exact against the export's own object.
     let want_meta = &golden["combatReplayMetaData"];

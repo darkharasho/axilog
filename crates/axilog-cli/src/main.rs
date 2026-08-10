@@ -236,6 +236,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // hoisted out here and shared by both rather than computed
             // twice.
             let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+            // MEIGAP Task 1b: GW2EI-shape boon stack timelines
+            // (`buffUptimes[].states`/`.statesPerSource`) -- gated on
+            // `--timeseries`, mirroring GW2EI's own `RawFormatTimelineArrays`
+            // gate on the same two arrays, and computed only for the format
+            // that can emit them (same "only for the format with a shape for
+            // it" reasoning as `ei_replay_data` above). It re-runs the boon
+            // simulation to recover per-SOURCE stack ownership, which
+            // `analyze()` keeps only in summed form -- see
+            // `axilog_core::analysis::buffs::states`'s module doc.
+            let boon_states = (timeseries && format == Format::EiJson).then(|| {
+                axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons)
+            });
             // M16: the damage-modifier engine runs ONLY on `--modifiers`
             // (see the flag's doc comment -- it is a separate full event
             // pass, not a copy of something `analyze()` already computed).
@@ -285,6 +297,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 activity: &activity,
                                 replay: ei_replay_data.as_ref(),
                                 modifiers: damage_mods.as_ref(),
+                                boon_states: boon_states.as_ref(),
                             },
                         ))?
                     )

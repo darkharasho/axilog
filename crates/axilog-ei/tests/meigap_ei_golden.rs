@@ -72,7 +72,11 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let activity = build_activity_intervals(&raw, &enc);
     let report =
         axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true, false, None);
-    let ours = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, ..Default::default() });
+    let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
+    let ours = axilog_ei::to_ei_json(
+        &report,
+        &EiInputs { activity: &activity, boon_states: Some(&boon_states), ..Default::default() },
+    );
     Some(Calibration { ours, golden, raw, enc })
 }
 
@@ -468,6 +472,260 @@ fn ei_json_stats_targets_split_matches_the_reference_export_when_available() {
         "ei_json_stats_targets_split: {checked} cells exact ({nonzero} nonzero) across \
          {joined_players} accounts x {} joined targets",
         joinable.len()
+    );
+}
+
+// ---------------------------------------------------------------------
+// (b) buffUptimes[].states / .statesPerSource
+// ---------------------------------------------------------------------
+
+/// Per-instant bound for INTENSITY boons (Might, Stability), where both
+/// sides are a 25-stack simulation and an instantaneous count legitimately
+/// differs by a few stacks while the time-average agrees to four decimal
+/// places. DURATION boons get a bound of 1 (i.e. exact, since their graph
+/// is 0/1 on both sides) -- measured 397 of 398 such timelines are
+/// sample-for-sample identical to the reference.
+///
+/// The meaningful bar for these timelines is their INTEGRAL -- that is
+/// literally `buffData[0].uptime` for an intensity boon, which
+/// `boons_golden.rs` already pins to 0.5% relative
+/// (`INTENSITY_STACK_RELATIVE_TOLERANCE`). So the mean of the sampled
+/// series is checked against [`STATE_MEAN_TOLERANCE_STACKS`] (the tight,
+/// meaningful bar) and the instantaneous deviation is bounded here purely
+/// so a structural break cannot hide behind a matching average.
+///
+/// Measured worst instantaneous delta on the reference export: 13 stacks,
+/// on ONE account's Might at a 25-stack burst boundary (2 of 169,614
+/// sampled instants exceed 9). Pinned at 16 for margin -- set from the
+/// measurement with headroom, not clamped to it.
+const INTENSITY_STATE_STACK_BOUND: i64 = 16;
+
+/// Per-timeline bound on `|mean(ours) - mean(reference)|` over the 1s
+/// sample grid, in stacks. This is the tight bar: it is the same quantity
+/// `buffData[0].uptime` reports for an intensity boon, and 0/1 presence for
+/// a duration one.
+///
+/// Measured worst on the reference export: 0.052 stacks. Pinned at 0.2.
+const STATE_MEAN_TOLERANCE_STACKS: f64 = 0.2;
+
+/// Fraction of sampled instants allowed to differ AT ALL, across every
+/// timeline. Transition times differ by milliseconds between the two
+/// simulators (an expiry landing a tick either side of a sample point),
+/// which is a timing residual rather than a stack-count one; this bounds
+/// how often that can happen. Measured: 83 of 169,614 instants (0.05%).
+/// Pinned at 1%.
+const STATE_SAMPLE_MISMATCH_FRACTION: f64 = 0.01;
+
+/// `statesPerSource` must sum back to `states`. Not exact, deliberately:
+/// this project runs TWO boon simulations kept independent ON PURPOSE (see
+/// `axilog_core::analysis::buffs::generation`'s module doc -- one tracks
+/// stack COUNT, the other stack OWNERSHIP, and deriving either from the
+/// other would remove the cross-check between them). `states` comes from
+/// the count simulator (the one `uptime`/`presence` in the same `buffData`
+/// are derived from, so those agree by construction); `statesPerSource`
+/// from the ownership simulator. This bounds their disagreement. Measured
+/// worst on the reference export: 2 stacks. Pinned at 6.
+const SOURCE_SUM_STACK_BOUND: i64 = 6;
+
+/// Reads a `[[t, v], ...]` step timeline's value at `t`.
+fn state_value_at(states: &[Value], t: i64) -> i64 {
+    let mut v = 0i64;
+    for s in states {
+        let time = s[0].as_i64().unwrap_or(0);
+        if time > t {
+            break;
+        }
+        v = s[1].as_i64().unwrap_or(0);
+    }
+    v
+}
+
+fn as_states(v: &Value) -> &[Value] {
+    v.as_array().map(|a| a.as_slice()).unwrap_or(&[])
+}
+
+/// The two INTENSITY-type boons (`BOON_IDS`' own flag): everything else is
+/// a duration boon whose `states` is 0/1 on both sides.
+fn is_intensity_boon(id: i64) -> bool {
+    axilog_core::analysis::buffs::BOON_IDS
+        .iter()
+        .any(|&(bid, _, intensity)| bid as i64 == id && intensity)
+}
+
+/// `states` is compared by SAMPLING both step functions on a fixed 1s grid
+/// rather than by comparing transition lists pairwise: GW2EI fuses its
+/// segments and this project's simulator emits its own, so the two lists
+/// legitimately have different lengths for the same stack history, while
+/// the FUNCTION they describe is the thing both sides actually mean (and
+/// the thing axibridge integrates -- `computeStabPerformance.ts` and
+/// `computeCommanderStats.ts` both time-average these).
+///
+/// Two structural properties ARE asserted exactly, because they are
+/// contract rather than simulation: every non-empty array starts with the
+/// mandatory `[0, 0]` pair, and times are non-decreasing.
+#[test]
+fn ei_json_buff_states_match_the_reference_export_when_available() {
+    let Some(c) = render_and_reference("ei-json buff states") else { return };
+    let ours_by_account = players_by_account(&c.ours);
+    let golden_by_account = players_by_account(&c.golden);
+    let duration_ms = c.golden["durationMS"].as_i64().expect("reference durationMS");
+
+    let mut joined = 0usize;
+    let mut compared = 0usize;
+    let mut samples = 0usize;
+    let mut mismatched = 0usize;
+    let mut worst_instant = 0i64;
+    let mut worst_mean = 0.0f64;
+    let mut worst_source_sum = 0i64;
+    let mut with_sources = 0usize;
+    let mut duration_exact = 0usize;
+    let mut duration_total = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+
+    for (account, o) in &ours_by_account {
+        let Some(g) = golden_by_account.get(account) else { continue };
+        joined += 1;
+        let g_by_id: BTreeMap<i64, &Value> = g["buffUptimes"]
+            .as_array()
+            .expect("reference buffUptimes")
+            .iter()
+            .filter_map(|b| b["id"].as_i64().map(|id| (id, b)))
+            .collect();
+
+        for b in o["buffUptimes"].as_array().expect("emitted buffUptimes") {
+            let id = b["id"].as_i64().expect("boon id");
+            let ours = as_states(&b["states"]);
+
+            // -- structure, exact --
+            //
+            // An EMPTY array is the one legal exception: this adapter emits
+            // a `buffUptimes` entry for all 12 tracked boons including ones
+            // the player never held, where GW2EI would carry no entry at
+            // all and its own builder returns `[]` for an absent graph
+            // (`JsonBuffsUptimeBuilder.cs:68-76`).
+            if !ours.is_empty() {
+                assert_eq!(
+                    ours.first().map(|s| (s[0].as_i64(), s[1].as_i64())),
+                    Some((Some(0), Some(0))),
+                    "{account} boon {id}: states must lead with the mandatory [0, 0] pair"
+                );
+            }
+            let mut prev = -1i64;
+            for s in ours {
+                let t = s[0].as_i64().expect("state time is an integer");
+                assert!(t >= prev, "{account} boon {id}: states must be non-decreasing in time");
+                prev = t;
+            }
+            // A duration boon's graph is 0/1 on BOTH sides -- GW2EI's
+            // `BuffSimulationItemDuration.GetStacks()` is the single active
+            // stack, and every one of the reference export's ten duration
+            // boons tops out at 1 (measured). This is a hard shape
+            // assertion, not a tolerance.
+            if !is_intensity_boon(id) {
+                for s in ours {
+                    assert!(
+                        s[1].as_i64().unwrap_or(0) <= 1,
+                        "{account} boon {id}: a duration boon's states must be 0/1, got {}",
+                        s[1]
+                    );
+                }
+            }
+
+            // -- statesPerSource sums back to states (bounded) --
+            let per_source = b["statesPerSource"].as_object().expect("statesPerSource object");
+            if !per_source.is_empty() {
+                with_sources += 1;
+            }
+            for s in ours {
+                let t = s[0].as_i64().expect("state time");
+                let sum: i64 = per_source.values().map(|v| state_value_at(as_states(v), t)).sum();
+                let total = s[1].as_i64().expect("state value");
+                worst_source_sum = worst_source_sum.max((sum - total).abs());
+                if (sum - total).abs() > SOURCE_SUM_STACK_BOUND {
+                    failures.push(format!(
+                        "{account} boon {id} @{t}ms: statesPerSource sums to {sum}, states says \
+                         {total} (over the {SOURCE_SUM_STACK_BOUND}-stack bound)"
+                    ));
+                }
+            }
+
+            // -- value comparison vs the reference, sampled on a 1s grid --
+            let Some(gb) = g_by_id.get(&id) else { continue };
+            let theirs = as_states(&gb["states"]);
+            if theirs.is_empty() {
+                continue;
+            }
+            compared += 1;
+            let bound = if is_intensity_boon(id) { INTENSITY_STATE_STACK_BOUND } else { 1 };
+            let (mut sum_ours, mut sum_theirs, mut n) = (0i64, 0i64, 0i64);
+            let mut all_equal = true;
+            let mut t = 0i64;
+            while t <= duration_ms {
+                let (a, b2) = (state_value_at(ours, t), state_value_at(theirs, t));
+                samples += 1;
+                n += 1;
+                sum_ours += a;
+                sum_theirs += b2;
+                let delta = (a - b2).abs();
+                worst_instant = worst_instant.max(delta);
+                if delta != 0 {
+                    mismatched += 1;
+                    all_equal = false;
+                }
+                if delta > bound {
+                    failures.push(format!(
+                        "{account} boon {id} @{t}ms: ours={a} reference={b2} (delta {delta} > \
+                         {bound} stacks)"
+                    ));
+                }
+                t += 1000;
+            }
+            if !is_intensity_boon(id) {
+                duration_total += 1;
+                if all_equal {
+                    duration_exact += 1;
+                }
+            }
+            let mean_delta =
+                ((sum_ours - sum_theirs) as f64 / n.max(1) as f64).abs();
+            worst_mean = worst_mean.max(mean_delta);
+            if mean_delta > STATE_MEAN_TOLERANCE_STACKS {
+                failures.push(format!(
+                    "{account} boon {id}: sampled mean ours={:.3} reference={:.3} (delta \
+                     {mean_delta:.3} > {STATE_MEAN_TOLERANCE_STACKS})",
+                    sum_ours as f64 / n.max(1) as f64,
+                    sum_theirs as f64 / n.max(1) as f64
+                ));
+            }
+        }
+    }
+
+    assert!(joined >= 30, "expected at least 30 joined accounts, got {joined}");
+    assert!(compared >= 200, "expected >=200 comparable boon timelines, got {compared}");
+    assert!(
+        with_sources >= 100,
+        "expected >=100 entries with a populated statesPerSource, got {with_sources}"
+    );
+    assert!(
+        failures.is_empty(),
+        "{} boon-state failure(s) (sampled {samples} instants across {compared} timelines):\n{}",
+        failures.len(),
+        failures.iter().take(20).cloned().collect::<Vec<_>>().join("\n")
+    );
+    let frac = mismatched as f64 / samples.max(1) as f64;
+    assert!(
+        frac <= STATE_SAMPLE_MISMATCH_FRACTION,
+        "{mismatched}/{samples} sampled instants differ ({:.2}%), over the {:.0}% bound",
+        frac * 100.0,
+        STATE_SAMPLE_MISMATCH_FRACTION * 100.0
+    );
+    println!(
+        "ei_json_buff_states: {samples} instants across {compared} timelines / {joined} \
+         accounts; {mismatched} differ ({:.2}%), worst instant {worst_instant} stack(s), worst \
+         sampled-mean delta {worst_mean:.3}; {duration_exact}/{duration_total} duration-boon \
+         timelines sample-for-sample EXACT; statesPerSource sums within {worst_source_sum} \
+         stack(s) on {with_sources} populated entries",
+        frac * 100.0
     );
 }
 

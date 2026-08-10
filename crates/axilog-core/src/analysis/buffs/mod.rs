@@ -15,9 +15,16 @@
 pub mod events;
 pub mod generation;
 pub mod simulator;
+/// GW2EI-shape boon stack timelines (`buffUptimes[].states`/
+/// `.statesPerSource`, MEIGAP Task 1b) -- an OPT-IN standalone pass, like
+/// `replay`/`missiles`/`damage_mods`, matching GW2EI's own
+/// `RawFormatTimelineArrays` gate on the same two arrays. See its module
+/// doc for the shape/citation trail.
+pub mod states;
 pub mod uptime;
 
 pub use generation::GenerationStats;
+pub use states::{BoonStates, UNKNOWN_SOURCE};
 pub use uptime::BoonUptime;
 
 /// GW2EI's `ArcDPSEnums.BuffStackType`
