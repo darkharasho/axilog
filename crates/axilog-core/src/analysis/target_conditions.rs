@@ -5,11 +5,11 @@
 //!
 //! `targets[]` entries carry a `buffs` array built by
 //! `JsonNPCBuilder.GetNPCJsonBuffsUptime`
-//! (`GW2EIBuilders/JsonModels/JsonActors/JsonNPCBuilder.cs:87-118`) from
+//! (`GW2EIBuilders/JsonModels/JsonActors/JsonNPCBuilder.cs:89-118`) from
 //! `npc.GetBuffs(ParserHelper.BuffEnum.Self, log, ...)` -- buffs **held BY
 //! the enemy**, i.e. what the squad put ON it. Each entry then goes through
 //! the very same `JsonBuffsUptimeBuilder.BuildJsonBuffsUptime` a player's
-//! `buffUptimes` entry does (`:117`), so `states`/`statesPerSource` mean
+//! `buffUptimes` entry does (`:116`), so `states`/`statesPerSource` mean
 //! exactly what MEIGAP Task 1b already established for players
 //! (`buffs::states`'s module doc has the full transcription):
 //! `statesPerSource` is `{source character name -> [[time, stacks], ...]}`,
@@ -68,6 +68,20 @@
 //! `buffs::states`, and gated by the adapter on `--timeseries`, GW2EI's own
 //! `RawFormatTimelineArrays` gate on `statesPerSource`
 //! (`JsonBuffsUptimeBuilder.cs:52`).
+//!
+//! ## The residual is BOUNDED, not root-caused
+//!
+//! Calibration finds the (target, condition, squad-source) KEY SET exactly
+//! right (0 missing, 0 extra over 1,299 keys) and the sampled step functions
+//! within 0.09% of instants, worst 8 stacks instantaneous / 0.074 stacks
+//! time-averaged. Those residual instants are **not** explained here: they
+//! are inherited from this project's buff simulator, the same class MBUFFSIM
+//! and MEIGAP Task 1b already document for boons (transition timings landing
+//! a tick either side of a sample point, and the stacking-logic gaps
+//! `BuffStackType`'s own doc comment records). No attempt was made to
+//! attribute them per-condition, and the pinned bounds in
+//! `meigap2_ei_golden.rs` are exactly that -- bounds set from measurement to
+//! stop the gap widening, not evidence that the gap is understood.
 
 use crate::analysis::buffs::events::BuffEvent;
 use crate::analysis::buffs::states::{self, StateTimeline};

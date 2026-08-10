@@ -199,7 +199,7 @@ fn build_report_and_activity_from_bytes(
     // MEIGAP Task 2b/2c/2d: the three `targets[]` mirrors. `enemy_series`
     // and `target_conditions` ride the timeseries flag (GW2EI's own
     // `RawFormatTimelineArrays` gate on `targets[].damage1S` at
-    // `JsonActorBuilder.cs:102` and on `statesPerSource` at
+    // `JsonActorBuilder.cs:63` and on `statesPerSource` at
     // `JsonBuffsUptimeBuilder.cs:52`); `enemy_dist` rides the skill-damage
     // flag, the one that already gates every other per-skill block. All
     // three are standalone passes -- `analyze()` above does not compute

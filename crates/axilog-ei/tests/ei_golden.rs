@@ -1270,3 +1270,128 @@ fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
          {want_len} long, power <= all everywhere"
     );
 }
+
+/// MEIGAP Task 2c, review round 1: the committed-fixture (PRE-rework era)
+/// calibration for `targets[].totalDamageDist`, against real Elite Insights
+/// output -- and the CI gate for the phantom-row class.
+///
+/// The source export for this fixture is non-`detailedWvW`, so its single
+/// `targets[0]` is GW2EI's synthetic `Enemy Players` row: the AGGREGATE of
+/// every enemy player's outgoing per-skill damage. That is exactly the shape
+/// axibridge's own `precomputeGlobalEnemySkillStats`
+/// (`packages/bridge-metrics/src/computePlayerAggregation.ts:490-509`)
+/// reduces a detailed payload to, so folding axilog's `enemyPlayer` targets
+/// the same way makes the two directly comparable.
+///
+/// This is the assertion that would have caught review finding 1 in CI:
+/// before the fix, `build_enemy_dist` created a row for any non-statechange
+/// combat item, including pre-rework buff APPLICATION rows, and 208 of 488
+/// emitted rows on this very fixture were all-zero phantoms GW2EI never
+/// emits. Comparing the folded ID SET is what makes that visible; comparing
+/// only values would let a phantom pass as `0 == 0`.
+///
+/// `min` is deliberately not compared: EI's aggregate row carries one `min`
+/// over all enemy players combined, while the consumer's `minTotal/minCount`
+/// averages per-target mins -- not the same statistic on this export shape.
+/// The per-target and detailed-aggregate calibrations live in
+/// `meigap2_ei_golden.rs` (local export, skipped in CI).
+#[test]
+fn ei_json_enemy_player_skill_dist_matches_the_golden_aggregate() {
+    let golden: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/wvw-small.ei.json"
+        ))
+        .expect("read committed golden"),
+    )
+    .expect("parse committed golden");
+    let want: std::collections::BTreeMap<i64, (i64, i64)> = golden["enemyPlayerSkillDist"]
+        .as_object()
+        .expect("enemyPlayerSkillDist")
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.parse::<i64>().expect("skill id key"),
+                (
+                    v["totalDamage"].as_i64().expect("totalDamage"),
+                    v["connectedHits"].as_i64().expect("connectedHits"),
+                ),
+            )
+        })
+        .collect();
+    assert!(want.len() >= 150, "degenerate golden aggregate: {} ids", want.len());
+
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let activity = build_activity_intervals(&raw, &enc);
+    let enemies: std::collections::BTreeSet<u64> =
+        enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+    let enemy_addr_to_rep: std::collections::BTreeMap<u64, u64> =
+        enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id))).collect();
+    let dist =
+        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &enemy_addr_to_rep);
+    let report = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, true, false, false, None,
+    );
+    let ei = axilog_ei::to_ei_json(
+        &report,
+        &EiInputs { activity: &activity, enemy_dist: Some(&dist), ..Default::default() },
+    );
+
+    let mut ours: std::collections::BTreeMap<i64, (i64, i64)> = std::collections::BTreeMap::new();
+    for t in ei["targets"].as_array().expect("targets") {
+        if !t["enemyPlayer"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        for e in t["totalDamageDist"][0].as_array().into_iter().flatten() {
+            let Some(id) = e["id"].as_i64() else { continue };
+            if id == 0 {
+                continue;
+            }
+            let slot = ours.entry(id).or_insert((0, 0));
+            slot.0 += e["totalDamage"].as_i64().unwrap_or(0);
+            slot.1 += e["connectedHits"].as_i64().unwrap_or(0);
+        }
+    }
+
+    let phantom: Vec<i64> = ours.keys().filter(|k| !want.contains_key(k)).copied().collect();
+    let missing: Vec<i64> = want.keys().filter(|k| !ours.contains_key(k)).copied().collect();
+    assert!(
+        phantom.is_empty(),
+        "{} PHANTOM skill id(s) in our enemy-player aggregate that real EI never emits: {:?}",
+        phantom.len(),
+        &phantom[..phantom.len().min(20)]
+    );
+    assert!(
+        missing.is_empty(),
+        "{} skill id(s) real EI emits that our enemy-player aggregate lacks: {:?}",
+        missing.len(),
+        &missing[..missing.len().min(20)]
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for (id, (wd, wh)) in &want {
+        let (od, oh) = ours[id];
+        if od != *wd {
+            failures.push(format!("skill {id}.totalDamage: ours={od} reference={wd}"));
+        }
+        if oh != *wh {
+            failures.push(format!("skill {id}.connectedHits: ours={oh} reference={wh}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} enemy-player aggregate mismatch(es) over {} skill ids:\n{}",
+        failures.len(),
+        want.len(),
+        failures.iter().take(25).cloned().collect::<Vec<_>>().join("\n")
+    );
+    println!(
+        "ei_json_enemy_player_skill_dist_matches_the_golden_aggregate: {} skill ids, \
+         totalDamage + connectedHits EXACT on all of them, 0 phantom / 0 missing rows",
+        want.len()
+    );
+}

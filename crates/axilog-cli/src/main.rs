@@ -251,7 +251,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // MEIGAP Task 2b/2d: the two `--timeseries`-gated `targets[]`
             // mirrors, on exactly the same gate and for the same reason
             // (GW2EI puts `targets[].damage1S`/`.powerDamage1S` behind
-            // `RawFormatTimelineArrays` at `JsonActorBuilder.cs:102`, and
+            // `RawFormatTimelineArrays` at `JsonActorBuilder.cs:63`, and
             // `statesPerSource` behind it at `JsonBuffsUptimeBuilder.cs:52`).
             // Both are standalone passes, not part of `analyze()`, so a
             // flagless parse pays nothing for them.

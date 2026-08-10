@@ -117,7 +117,7 @@ fn accumulate_outgoing_direct(
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
             continue;
         }
-        if e.result == result::CROWD_CONTROL {
+        if !crate::analysis::damage::is_health_damage_result(e.result) {
             continue;
         }
         if !squad.contains(&e.src_agent) || !enemies.contains(&e.dst_agent) {
@@ -160,7 +160,7 @@ fn accumulate_outgoing_pet_credit(
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
             continue;
         }
-        if e.result == result::CROWD_CONTROL {
+        if !crate::analysis::damage::is_health_damage_result(e.result) {
             continue;
         }
         if e.iff == 0 {
@@ -203,7 +203,7 @@ fn accumulate_taken(events: &[RawEvent], squad: &BTreeSet<u64>) -> BTreeMap<u64,
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
             continue;
         }
-        if e.result == result::CROWD_CONTROL {
+        if !crate::analysis::damage::is_health_damage_result(e.result) {
             continue;
         }
         if !squad.contains(&e.dst_agent) {
@@ -378,7 +378,7 @@ pub fn build_with_registry(
 /// first statement is `JsonActorBuilder.FillJsonActor(jsonNPC, npc, ...)`
 /// -- so an NPC's `totalDamageDist` is the SAME field a player's is, just
 /// over an NPC actor: `JsonActorBuilder.BuildDamageDistData`
-/// (`GW2EIBuilders/JsonModels/JsonActors/JsonActorBuilder.cs:130-137`)
+/// (`GW2EIBuilders/JsonModels/JsonActors/JsonActorBuilder.cs:109-122`)
 /// feeds it `actor.GetJustActorDamageEvents(null, log, ...)`. That is the
 /// enemy's **OUTGOING** damage, to anyone (`null` target), grouped by skill
 /// id. It is what axibridge's `precomputeGlobalEnemySkillStats`
@@ -467,17 +467,37 @@ pub fn build_enemy_dist(
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
             continue;
         }
-        if e.result == result::CROWD_CONTROL {
+        if !crate::analysis::damage::is_health_damage_result(e.result) {
             continue;
         }
         if !enemies.contains(&e.src_agent) {
+            continue;
+        }
+        // `SingleActor.InitDamageEvents` (`EIData/Actors/SingleActor.cs:734`)
+        // filters `.Where(x => !x.ToFriendly)`, and `ToFriendly` is
+        // `_iff == IFF.Friend` (`ParsedData/CombatEvents/SkillEvent.cs:17`),
+        // i.e. this project's `iff == 0`. Same filter
+        // `damage::pet_credit_events` already applies on the friendly side.
+        if e.iff == 0 {
+            continue;
+        }
+        // The row must actually become a `HealthDamageEvent` before it may
+        // create a dist entry -- see `creates_health_damage_event`. Without
+        // this gate the entry was created for ANY non-statechange row,
+        // including pre-rework-era buff APPLICATION rows, which GW2EI
+        // consumes in an earlier dispatch branch entirely: measured 208 of
+        // 488 emitted rows on the committed fixture and 78 of 546 on the
+        // local post-rework capture were all-zero phantoms that GW2EI never
+        // emits (e.g. Taunt 27705 on a Juvenile Brown Bear).
+        if !creates_health_damage_event(e, post_era) {
             continue;
         }
         let rep = enemy_addr_to_rep.get(&e.src_agent).copied().unwrap_or(e.src_agent);
         let entry = by_rep.entry(rep).or_default().entry(e.skillid).or_default();
         // GW2EI's per-skill `IndirectDamage` flag is `dmList.Exists(x => x is
         // NonDirectHealthDamageEvent)` -- set from the WHOLE row list, hits
-        // and non-hits alike, so it is recorded before the `has_hit` gate.
+        // and non-hits alike, so it is recorded after the event-creation gate
+        // but before the `has_hit` one.
         if e.buff == 1 {
             entry.indirect = true;
         }
@@ -509,6 +529,87 @@ pub fn build_enemy_dist(
             )
         })
         .collect()
+}
+
+/// Does this row become a `HealthDamageEvent` at all -- i.e. may it create
+/// a `totalDamageDist` entry?
+///
+/// GW2EI decides this in two steps, and reproducing only the second one is
+/// what produced the phantom rows described in [`build_enemy_dist`].
+///
+/// **Step 1, the dispatch order** (`ParsedData/CombatData.cs:558-584`):
+///
+/// ```text
+/// if      (combatItem.IsCastEvent())            { ... }
+/// else if (combatItem.IsBuffApplyOrRemoveEvent()){ ... }
+/// else if (combatItem.IsDamageEvent())          { AddDirect... / AddBuffDamage... }
+/// ```
+///
+/// Buff APPLY/REMOVE rows are consumed BEFORE the damage branch is ever
+/// reached. Post-rework they are statechanges (`CombatItem.cs:336-338`) and
+/// this pass's caller already drops them, but **pre-rework a buff apply is
+/// an ordinary combat row** -- `IsBuff != 0 && BuffDmg == 0 && Value > 0`
+/// (`CombatItem.cs:341-343`) -- while `IsBuffDamageEvent` pre-rework
+/// additionally requires `Value == 0` (`CombatItem.cs:234-238`). That is the
+/// bulk of the phantoms on the committed (pre-rework) fixture.
+///
+/// **Step 2, the result switch.** `AddDirectDamageEvent`
+/// (`CombatEventFactory.cs:822-850`) creates a `DirectHealthDamageEvent` for
+/// `DirectNormal`/`DirectCrit`/`DirectGlance`/`DirectBlock`/`DirectEvade`/
+/// `DirectOrBuffAbsorb`/`DirectBlind`/`DirectOrBuffInvert`, and routes
+/// `Interrupt`/`KillingBlow`/`Downed` to a `NoDamageHealthDamageEvent`
+/// (`:814-818`) -- which IS in the list, so it still creates a dist entry
+/// (with `hits` 0, since `IsNotADamageEvent`). `BreakbarDamage` and
+/// `CrowdControl` go to other lists entirely, and everything else hits
+/// `default: break` and becomes nothing. `AddBuffDamageDamageEvent`
+/// (`:852-894`) is the same shape over the buff results post-rework, and
+/// pre-rework accepts any `ConditionResult` other than `Unknown` (values
+/// 0-4; `>= 5` decodes as `Unknown` and is dropped).
+///
+/// **Zero-damage rows are deliberately still allowed through.** A fully
+/// blocked or evaded strike is a real `HealthDamageEvent` with
+/// `hits > 0, connectedHits = 0`, and the reference export carries 53 such
+/// all-zero rows. Dropping them would trade one row-set error for another.
+fn creates_health_damage_event(e: &RawEvent, post_era: bool) -> bool {
+    // Cast events (`IsCastEvent`) and buff removals are taken by earlier
+    // dispatch branches on both eras.
+    if e.is_activation != 0 || e.is_buffremove != 0 {
+        return false;
+    }
+    if e.buff == 0 {
+        return matches!(
+            e.result,
+            result::NORMAL
+                | result::CRIT
+                | result::GLANCE
+                | result::BLOCK
+                | result::EVADE
+                | result::INTERRUPT
+                | result::ABSORB
+                | result::BLIND
+                | result::KILLING_BLOW
+                | result::DOWNED
+                | result::INVERT
+        );
+    }
+    if post_era {
+        return matches!(
+            e.result,
+            result::INTERRUPT
+                | result::KILLING_BLOW
+                | result::DOWNED
+                | result::ABSORB
+                | result::INVERT
+                | result::BUFF_CYCLE
+                | result::BUFF_NOT_CYCLE
+                | result::BUFF_NOT_CYCLE_DMG_TO_TARGET_ON_HIT
+                | result::BUFF_NOT_CYCLE_DMG_TO_SOURCE_ON_HIT
+                | result::BUFF_NOT_CYCLE_DMG_TO_TARGET_ON_STACK_REMOVE
+        );
+    }
+    // Pre-rework buff row: an APPLY (`Value > 0`) never reaches the damage
+    // branch, and only `ConditionResult` 0-4 construct an event.
+    e.value == 0 && e.result <= 4
 }
 
 /// `HealthDamageEvent.HasHit` (see [`build_enemy_dist`]'s doc comment for
@@ -733,6 +834,101 @@ mod tests {
         assert_eq!(s.hits, 3);
         assert_eq!(s.crit_hits, 1);
         assert_eq!(s.flank_hits, 1);
+    }
+
+    /// MEIGAP Task 2c, review fix 1: `build_enemy_dist` must create a row
+    /// only for rows GW2EI turns into a `HealthDamageEvent`.
+    ///
+    /// The pre-rework buff APPLY row is the case that produced 208 of 488
+    /// phantom rows on the committed fixture: `buff == 1, buff_dmg == 0,
+    /// value > 0` is `IsBuffApplyEvent` (`CombatItem.cs:341-343`), consumed
+    /// by an earlier dispatch branch, never a damage event.
+    #[test]
+    fn enemy_dist_skips_pre_era_buff_apply_rows() {
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let mut apply = strike(9, 1, 27705, 0); // Taunt application
+        apply.buff = 1;
+        apply.value = 3000; // apply duration, NOT damage
+        apply.buff_dmg = 0;
+        let raw = raw_from(vec![apply]);
+        let out = build_enemy_dist(&raw, &enemies, &BTreeMap::new());
+        assert!(out.is_empty(), "a buff APPLY row must not create a dist entry at all");
+
+        // ... while a pre-era buff DAMAGE tick (`value == 0`) does.
+        let mut tick = strike(9, 1, 736, 0);
+        tick.buff = 1;
+        tick.value = 0;
+        tick.buff_dmg = 120;
+        let raw = raw_from(vec![tick]);
+        let out = build_enemy_dist(&raw, &enemies, &BTreeMap::new());
+        let rows = out.get(&9).expect("enemy present");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].skill_id, 736);
+        assert_eq!(rows[0].total, 120);
+        assert_eq!(rows[0].hits, 1, "connectedHits");
+    }
+
+    /// A row whose result byte GW2EI's switch drops (`default: break`) must
+    /// not create an entry either -- here a `buff == 0` breakbar-damage row
+    /// (`BreakbarDamage` goes to a different list, `CombatEventFactory.cs:
+    /// 799-809`).
+    #[test]
+    fn enemy_dist_skips_rows_whose_result_creates_no_health_damage_event() {
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let mut brk = strike(9, 1, 500, 400);
+        brk.result = result::BREAKBAR_DAMAGE;
+        let raw = raw_from(vec![brk]);
+        assert!(build_enemy_dist(&raw, &enemies, &BTreeMap::new()).is_empty());
+    }
+
+    /// A fully BLOCKED strike IS a real `HealthDamageEvent`
+    /// (`DirectHealthDamageEvent`, `HasHit == false`), so it must still
+    /// create an all-zero row -- the reference export carries 53 of them.
+    /// Dropping zero rows would trade one row-set error for another.
+    #[test]
+    fn enemy_dist_keeps_legitimate_all_zero_rows() {
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let mut blocked = strike(9, 1, 600, 0);
+        blocked.result = result::BLOCK;
+        let raw = raw_from(vec![blocked]);
+        let rows = build_enemy_dist(&raw, &enemies, &BTreeMap::new()).remove(&9).expect("enemy");
+        assert_eq!(rows.len(), 1, "a blocked strike still creates a dist row");
+        assert_eq!(rows[0].skill_id, 600);
+        assert_eq!((rows[0].total, rows[0].hits, rows[0].min, rows[0].max), (0, 0, 0, 0));
+    }
+
+    /// `!ToFriendly` (`SingleActor.cs:734`, `SkillEvent.cs:17`): an enemy's
+    /// friend-directed row never enters its own outgoing dist.
+    #[test]
+    fn enemy_dist_excludes_friend_directed_rows() {
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let mut friendly = strike(9, 10, 700, 250);
+        friendly.iff = 0;
+        let raw = raw_from(vec![friendly, strike(9, 1, 700, 50)]);
+        let rows = build_enemy_dist(&raw, &enemies, &BTreeMap::new()).remove(&9).expect("enemy");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].total, 50, "only the foe-directed row counts");
+    }
+
+    /// A CONDITION skill reports `crit: 0, flank: 0` because GW2EI guards
+    /// both behind `!IndirectDamage` (`JsonDamageDistBuilder.cs:59-70`), and
+    /// the flag is per-SKILL over the whole row list.
+    #[test]
+    fn enemy_dist_zeroes_crit_and_flank_on_indirect_skills() {
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let mut tick = strike(9, 1, 736, 0);
+        tick.buff = 1;
+        tick.value = 0;
+        tick.buff_dmg = 90;
+        // Pre-era `ConditionResult.ExpectedToHit`; the `is_flanking` byte is
+        // set anyway, which EI would refuse to report on an indirect skill.
+        tick.result = 0;
+        tick.is_flanking = 1;
+        let raw = raw_from(vec![tick]);
+        let rows = build_enemy_dist(&raw, &enemies, &BTreeMap::new()).remove(&9).expect("enemy");
+        assert_eq!(rows[0].total, 90);
+        assert_eq!(rows[0].hits, 1);
+        assert_eq!((rows[0].crit_hits, rows[0].flank_hits), (0, 0), "IndirectDamage zeroes both");
     }
 
     /// Account-fold: a relogged squad member's outgoing damage (two raw

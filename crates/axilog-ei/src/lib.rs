@@ -505,7 +505,7 @@ pub struct EiInputs<'a> {
     /// `targets[].powerDamage1S`.
     ///
     /// GW2EI gates the same two arrays on `RawFormatTimelineArrays`
-    /// (`GW2EIBuilders/JsonModels/JsonActors/JsonActorBuilder.cs:102-121`,
+    /// (`GW2EIBuilders/JsonModels/JsonActors/JsonActorBuilder.cs:63-80`,
     /// the shared actor builder `JsonNPCBuilder` runs first), so every
     /// caller computes this exactly when `--timeseries`/SDK
     /// `timeseries: true` was requested -- the same request that populates
@@ -525,7 +525,7 @@ pub struct EiInputs<'a> {
     /// `targets[].totalDamageDist`.
     ///
     /// Unlike its two siblings here, GW2EI emits this UNCONDITIONALLY
-    /// (`JsonActorBuilder.cs:124` sits outside every
+    /// (`JsonActorBuilder.cs:87` sits outside every
     /// `RawFormatTimelineArrays` block). It rides `--skill-damage` here for
     /// the same reason the player-side `totalDamageDist` already does --
     /// payload -- and axibridge hardcodes that flag to `true`, so the read
@@ -1139,7 +1139,7 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             // GW2EI emits `powerDamageTaken1S` beside `damageTaken1S` from
             // the identical `GetDamageTakenGraph` call with
             // `DamageType.Power` instead of `.All`
-            // (`JsonPlayerBuilder.cs:75-76`), and `targetPowerDamage1S`
+            // (`JsonPlayerBuilder.cs:76-77`), and `targetPowerDamage1S`
             // beside `targetDamage1S` likewise (`:99-100`). POWER is "not
             // `ConditionDamageBased`" (`Actor.cs:449-451`) -- strike AND
             // life-leech AND the non-catalogued `buff == 1` bucket, NOT
@@ -1372,9 +1372,10 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
     // the way `players[]` can.)
     // Bucket count for an enemy that never dealt damage (MEIGAP Task 2b):
     // read off any enemy that did, since every series in the map is built
-    // to the one `(duration_ms / 1000) + 1` length. Falling back to a
-    // player's own `per_second.damage` length keeps the arrays aligned even
-    // on the degenerate log where no enemy dealt any damage at all.
+    // to the one length `axilog_core::analysis::timeseries::ei_grid`
+    // computes (GW2EI's own `InterpolatedGraph` allocation). Falling back to
+    // a player's own `per_second.damage` length keeps the arrays aligned
+    // even on the degenerate log where no enemy dealt any damage at all.
     let enemy_buckets = enemy_series
         .and_then(|m| m.values().next().map(|s| s.damage.len()))
         .or_else(|| report.players.iter().find_map(|p| p.per_second.as_ref()).map(|ps| ps.damage.len()))
@@ -1389,7 +1390,7 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             if let Some(track) = enemy_track.as_mut().and_then(|it| it.next()) {
                 // Correction to the earlier audit fix: `combatReplayData` is
                 // NOT gated on the actor having any polled positions.
-                // GW2EI's `JsonActorBuilder.cs:104-105` builds it
+                // GW2EI's `JsonActorBuilder.cs:103-104` builds it
                 // UNCONDITIONALLY (`if (log.CanCombatReplay) jsonActor.
                 // CombatReplayData = Build(...)`, keyed only on whether
                 // replay was requested at all), and
@@ -1436,7 +1437,7 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             // `targets[].damage1S`/`.powerDamage1S` are this enemy's OUTGOING
             // damage, `[phase][second]`-shaped exactly like the player-side
             // `damage1S` -- built by the SHARED `JsonActorBuilder.
-            // FillJsonActor:108-109` over an NPC actor
+            // FillJsonActor` (`JsonActorBuilder.cs:72-73`) over an NPC actor
             // (`JsonNPCBuilder.cs:20` calls it first). An enemy that never
             // dealt damage gets a full-length zero series, not an absent
             // key, matching EI's always-present arrays.
@@ -2342,7 +2343,7 @@ mod tests {
     /// list (the `NonSquadPlayer`/no-`forcePolling` case -- see
     /// `axilog_core::analysis::ei_replay::build_world_track`'s doc comment)
     /// still gets a `combatReplayData` object -- GW2EI's own
-    /// `JsonActorBuilder.cs:104-105` builds it unconditionally whenever
+    /// `JsonActorBuilder.cs:103-104` builds it unconditionally whenever
     /// replay was requested at all (`SingleActorCombatReplayDescription`'s
     /// ctor assigns `Positions`/`Rotations` straight from whatever the
     /// actor polled, empty or not); it does NOT gate on

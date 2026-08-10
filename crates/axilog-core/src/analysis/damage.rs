@@ -136,9 +136,9 @@ pub fn accumulate(
     let mut out: BTreeMap<u64, (u64, BTreeMap<u64, u64>)> = BTreeMap::new();
     for e in events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }
-        // Crowd-control application events reuse `value`/`buff_dmg` to carry
-        // CC duration (ms), not damage — see `result::CROWD_CONTROL` docs.
-        if e.result == result::CROWD_CONTROL { continue; }
+        // CC-application and breakbar rows are damage-SHAPED but are not
+        // health damage -- see `is_health_damage_result`.
+        if !is_health_damage_result(e.result) { continue; }
         if !squad.contains(&e.src_agent) || !enemies.contains(&e.dst_agent) { continue; }
         let dmg = if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
         if dmg == 0 { continue; }
@@ -210,6 +210,58 @@ pub fn accumulate_pet_credit_with_registry(
     out
 }
 
+/// Does a combat row's `result` byte mean GW2EI turns it into a
+/// **health**-damage event at all?
+///
+/// Two `DamageResult` values are damage-SHAPED (they carry a number in
+/// `value`/`buff_dmg`) but are routed by `CombatEventFactory` to lists other
+/// than `hpDamage`, so none of their magnitude is health damage:
+///
+/// - `CrowdControl` (12) -> `crowdControlEvents`
+///   (`GW2EIEvtcParser/CombatEventFactory.cs:811-813`); its number is a CC
+///   duration in ms. Excluded by this project since M2.
+/// - `BreakbarDamage` (10) -> `brkBarDamage`/`brkBarRecovered`
+///   (`CombatEventFactory.cs:799-809`); its number is defiance-bar damage.
+///   **Added by MEIGAP Task 2's review round 1**, which found it was being
+///   summed into `damage_total`. The dispatch is identical for both eras and
+///   both `buff` values (`AddDirectDamageEvent:830-836`,
+///   `AddBuffDamageDamageEvent:862-868` both delegate to
+///   `AddNonDamageDamageEvent`), so no era gating is needed -- same
+///   reasoning `cc::timeline`'s own comment already gives for the CC half.
+///
+/// Measured impact of the breakbar half on the local post-rework capture:
+/// **27 of 44 accounts** had defiance-bar damage summed into their health
+/// `damage_total`/`dps`/`damage1S`/`per_enemy`/`skill_damage`, worst 2,000
+/// on one account (3.1% relative, 0.26% median). The committed fixture
+/// carries **zero** breakbar rows, which is why every committed golden was
+/// exact and CI never saw it -- so the rule is pinned by this module's
+/// `breakbar_damage_rows_are_not_health_damage` unit test rather than left
+/// to fixture coverage, with the real-log envelope asserted by
+/// `axilog-ei`'s `ei_json_damage_1s_whole_series_is_bounded_against_the_reference`.
+///
+/// Marker results (`Interrupt`/`KillingBlow`/`Downed`) are deliberately NOT
+/// in this list: GW2EI does build a `HealthDamageEvent` for them
+/// (`NoDamageHealthDamageEvent`), it just never assigns `HealthDamage`, so
+/// they contribute 0 -- and on this capture they carry `value == 0` on the
+/// wire anyway (verified: zero such rows with a nonzero payload), so the
+/// existing `dmg == 0` skip already handles them.
+/// **A related GW2EI filter this function does NOT cover, deliberately.**
+/// `SingleActor.InitDamageEvents` also drops `x.ToFriendly`
+/// (`EIData/Actors/SingleActor.cs:734`; `ToFriendly` is
+/// `_iff == IFF.Friend`, `ParsedData/CombatEvents/SkillEvent.cs:17`). On the
+/// SQUAD side this project reaches the same result by a different route --
+/// [`accumulate`] requires `enemies.contains(dst)`, which is strictly
+/// narrower than "not friendly" -- so adding the `iff` test there would be
+/// redundant, and [`pet_credit_events_with_skill`] applies it explicitly
+/// because its destination is unrestricted. The ENEMY-side passes added by
+/// MEIGAP Task 2 (`timeseries::build_enemy_series`,
+/// `skill_damage::build_enemy_dist`) have no such destination restriction,
+/// so they apply the `iff != 0` test directly; see their own comments.
+#[inline]
+pub fn is_health_damage_result(result_byte: u8) -> bool {
+    result_byte != result::CROWD_CONTROL && result_byte != result::BREAKBAR_DAMAGE
+}
+
 /// Event-level pet/minion damage credit records: `(time, owner, dst, dmg)`.
 /// Shared by `accumulate_pet_credit` (per-owner totals) and
 /// `cc::timeline` (per-second buckets) so both stay consistent with each
@@ -267,7 +319,7 @@ pub fn pet_credit_events_with_skill(
     let mut out = Vec::new();
     for e in &raw.events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }
-        if e.result == result::CROWD_CONTROL { continue; }
+        if !is_health_damage_result(e.result) { continue; }
         if e.iff == 0 { continue; } // FRIEND: never damage
         if squad.contains(&e.src_agent) { continue; } // real players: handled by `accumulate`
         if agent_team.get(&e.src_agent).copied() != friendly_team { continue; } // not our pet
@@ -295,7 +347,7 @@ pub fn accumulate_damage_taken(
     let mut out: BTreeMap<u64, u64> = BTreeMap::new();
     for e in events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }
-        if e.result == result::CROWD_CONTROL { continue; }
+        if !is_health_damage_result(e.result) { continue; }
         if !squad.contains(&e.dst_agent) { continue; }
         let dmg = if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
         if dmg == 0 { continue; }
@@ -314,6 +366,41 @@ mod tests {
             src_master_instid:0, dst_master_instid:0, iff:1, buff:0, result:0,
             is_activation:0, is_buffremove:0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
+    /// MEIGAP Task 2 review fix 3: `DamageResult.BreakbarDamage` (10) rows
+    /// are damage-SHAPED but carry DEFIANCE-bar damage, and GW2EI routes
+    /// them to `brkBarDamage` via `AddNonDamageDamageEvent`
+    /// (`CombatEventFactory.cs:799-809`), never to `hpDamage`. They must not
+    /// reach any health-damage total, in EITHER direction.
+    ///
+    /// This was a real, shipped defect: 27 of 44 accounts on the local
+    /// post-rework capture had defiance-bar damage summed into
+    /// `damage_total`/`dps`/`damage1S`/`per_enemy`/`skill_damage`, worst
+    /// 2,000. The committed fixture carries zero breakbar rows, which is
+    /// exactly why no committed golden caught it -- so the rule is pinned
+    /// here as a unit test rather than left to fixture coverage.
+    #[test]
+    fn breakbar_damage_rows_are_not_health_damage() {
+        assert!(!is_health_damage_result(result::BREAKBAR_DAMAGE));
+        assert!(!is_health_damage_result(result::CROWD_CONTROL));
+        for r in [result::NORMAL, result::CRIT, result::GLANCE, result::BLOCK, result::EVADE] {
+            assert!(is_health_damage_result(r), "result {r} is health damage");
+        }
+
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let mut brk = strike(1, 9, 2000);
+        brk.result = result::BREAKBAR_DAMAGE;
+        let evs = vec![strike(1, 9, 100), brk];
+        // Outgoing.
+        let dmg = accumulate(&evs, &squad, &enemies);
+        assert_eq!(dmg.get(&1).expect("player").0, 100, "breakbar damage must not be summed");
+        // Incoming (mirror direction, same predicate).
+        let mut brk_in = strike(9, 1, 500);
+        brk_in.result = result::BREAKBAR_DAMAGE;
+        let taken = accumulate_damage_taken(&[strike(9, 1, 70), brk_in], &squad);
+        assert_eq!(taken.get(&1).copied().unwrap_or(0), 70);
+    }
+
     #[test]
     fn sums_physical_damage_to_enemy() {
         let squad = [1u64].into_iter().collect();

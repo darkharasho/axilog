@@ -75,10 +75,10 @@
 //! GW2EI emits a three-way `All`/`Power`/`Condition` split of every one of
 //! these series: `damageTaken1S`/`powerDamageTaken1S`/
 //! `conditionDamageTaken1S` (`GW2EIBuilders/JsonModels/JsonActors/
-//! JsonPlayerBuilder.cs:75-78`), `targetDamage1S`/`targetPowerDamage1S`/
-//! `targetConditionDamage1S` (`:99-101`) and, on the NPC side,
+//! JsonPlayerBuilder.cs:76-77`), `targetDamage1S`/`targetPowerDamage1S`/
+//! `targetConditionDamage1S` (`:99-100`) and, on the NPC side,
 //! `damage1S`/`powerDamage1S`/`conditionDamage1S`
-//! (`JsonActorBuilder.cs:108-110`). All three come from the same
+//! (`JsonActorBuilder.cs:72-74`). All three come from the same
 //! `GetDamageGraph`/`GetDamageTakenGraph` call with a different
 //! `ParserHelper.DamageType`, and the filter itself is a one-liner
 //! (`EIData/Actors/Actor.cs:449-451`):
@@ -120,7 +120,7 @@
 //! opposite ends.
 //!
 //! Minion scope matches EI's: `SingleActor.InitDamageEvents`
-//! (`EIData/Actors/SingleActor.cs:735-740`) folds `mins.GetDamageEvents`
+//! (`EIData/Actors/SingleActor.cs:736-739`) folds `mins.GetDamageEvents`
 //! into the actor's damage list, so an NPC's `damage1S` INCLUDES its
 //! minions -- the mirror image of the friendly pet-credit fold this module
 //! already applies on the squad side, and reproduced here with the same
@@ -130,7 +130,7 @@
 
 use super::damage;
 use crate::analysis::condition_catalog;
-use crate::evtc::{result, RawLog};
+use crate::evtc::RawLog;
 use crate::model::Encounter;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -220,6 +220,19 @@ pub struct EnemySeries {
 /// at `t = 1ms` lands in bucket 1, not bucket 0, and only a hit exactly on
 /// a second boundary stays in its own. The pre-MEIGAP formula floored,
 /// which put every mid-second hit one bucket early.
+///
+/// **CI coverage caveat.** These two rules are checked at two different
+/// strengths. The LENGTH is verified against real GW2EI output on the
+/// committed fixture (`timeseries_golden.rs`'s
+/// `timeseries_bucket_count_matches_ei_golden`, against the golden's
+/// `series1SBuckets: 51` extracted verbatim from the source export), so CI
+/// gates it properly. The CEILING index is only checked in CI by
+/// `tests::ei_grid_and_bucket_match_gw2ei`, a unit test of the FORMULA
+/// against itself; the evidence that the formula is the right one is the
+/// whole-series calibration in `axilog-ei`'s `meigap2_ei_golden.rs`, which
+/// is gated on the gitignored local export and therefore does NOT run in
+/// CI. A regression that re-floored the index would keep the array length
+/// correct and would be caught only by re-running that local calibration.
 ///
 /// Both corrections were found while calibrating `powerDamageTaken1S`
 /// against the reference export and apply to the WHOLE `*1S` family
@@ -344,7 +357,7 @@ pub fn build_with_registry(
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
             continue;
         }
-        if e.result == result::CROWD_CONTROL {
+        if !damage::is_health_damage_result(e.result) {
             continue;
         }
         let dmg = if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
@@ -513,7 +526,7 @@ pub fn build_with_registry(
 /// `targets[].damage1S` / `targets[].powerDamage1S` (MEIGAP Task 2b). See
 /// this module's enemy-side section for the direction citation
 /// (`JsonActorBuilder.FillJsonActor:108-110` over an NPC actor) and the
-/// minion-inclusive scope (`SingleActor.cs:735-740`).
+/// minion-inclusive scope (`SingleActor.cs:736-739`).
 ///
 /// **Standalone, NOT wired into `analyze()`** -- the same opt-in convention
 /// `replay`/`missiles`/`damage_mods`/`buffs::states` use. It is a second
@@ -547,7 +560,17 @@ pub fn build_enemy_series(
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
             continue;
         }
-        if e.result == result::CROWD_CONTROL {
+        if !damage::is_health_damage_result(e.result) {
+            continue;
+        }
+        // `SingleActor.InitDamageEvents` (`EIData/Actors/SingleActor.cs:734`)
+        // filters `.Where(x => !x.ToFriendly)`, and `ToFriendly` is
+        // `_iff == IFF.Friend` (`ParsedData/CombatEvents/SkillEvent.cs:17`),
+        // i.e. this project's `iff == 0`. Reproduced here so an enemy healing
+        // or otherwise "damaging" one of its own allies can never enter its
+        // outgoing series -- the same filter `damage::pet_credit_events`
+        // already applies on the friendly side.
+        if e.iff == 0 {
             continue;
         }
         let dmg_v = if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
@@ -560,7 +583,7 @@ pub fn build_enemy_series(
         // a tracked "enemy" -- crediting the source to itself first would
         // leave every minion's damage on the minion's own row and the
         // master's `damage1S` short by exactly its minions' output, which is
-        // what GW2EI's `InitDamageEvents` fold (`SingleActor.cs:735-740`)
+        // what GW2EI's `InitDamageEvents` fold (`SingleActor.cs:736-739`)
         // puts there. Measured on the reference export before the order was
         // fixed: the ONLY three joined targets that disagreed were the only
         // three with minions (two Virtuosos' Illusionary Berserkers, a
@@ -597,7 +620,7 @@ pub fn build_enemy_series(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::evtc::RawEvent;
+    use crate::evtc::{result, RawEvent};
     use crate::model::{Encounter, Player};
 
     fn strike(time: u64, src: u64, dst: u64, dmg: i32) -> RawEvent {
