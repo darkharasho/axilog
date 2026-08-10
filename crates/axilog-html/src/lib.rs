@@ -99,6 +99,7 @@ mod tests {
                     removed_stun_duration_ms: 0,
                 },
                 downs_contribution: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
+                per_target: None,
                 downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
                 boons: vec![],
                 support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },

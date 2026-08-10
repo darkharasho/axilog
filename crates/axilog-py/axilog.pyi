@@ -132,6 +132,24 @@ class PerEnemyOut(TypedDict):
     enemy_id: int
     total: int
 
+class PerTargetStatsOut(TypedDict):
+    """One `(player, enemy)` pair's offensive split -- mirrors
+    `axilog_schema::PerTargetStatsOut` / EI's `statsTargets[i][0]`.
+    `connected_hits`/`against_downed_count` are the actor-only hit-quality
+    counts restricted to that enemy; `downed`/`killed` are minion-inclusive
+    last-hit attributions, matching GW2EI. `downs_contribution_damage` is
+    the arcdps-methodology per-target down-contribution, NOT EI's own
+    90%-to-downstate-window algorithm."""
+
+    enemy_id: int
+    connected_hits: int
+    connected_damage: int
+    against_downed_count: int
+    downed: int
+    killed: int
+    interrupts: int
+    downs_contribution_damage: int
+
 class DamageOut(TypedDict):
     total: int
     dps: float
@@ -465,8 +483,14 @@ class PlayerOut(_PlayerOutRequired, total=False):
     requested via `rotation=True` (see `parse_file`/`parse_bytes`); measured
     +66.9% native JSON size on the committed fixture when always-on. The
     underlying `PlayerMetrics.rotation` is ALWAYS computed (so `--view
-    rotation` works flag-free); only this serialized key is gated."""
+    rotation` works flag-free); only this serialized key is gated.
+    `per_target` (MEIGAP, Task 1d) rides the SAME `skill_damage=True` flag
+    as `skill_damage` itself (it is the other per-target family) -- omitted
+    unless requested; measured +56.5% rendered-HTML size when always-on.
+    Like `rotation`, the underlying pass always runs; only the serialized
+    key is gated."""
 
+    per_target: List[PerTargetStatsOut]
     marker: str
     commander_tag: CommanderTagOut
     healing: HealingOut

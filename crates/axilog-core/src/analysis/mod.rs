@@ -110,6 +110,16 @@ pub mod damage_mods;
 /// static list.
 pub mod condition_catalog;
 
+/// Per-(player, target) offensive splits (MEIGAP Task 1d) -- like
+/// `hit_stats`/`defenses` above, wired into [`analyze`] below
+/// (`PlayerMetrics::per_target`), computed unconditionally: one extra scan
+/// reusing `hit_stats::classify` and the same squad/enemy membership
+/// predicate, into a SPARSE map (only pairs that actually interacted). See
+/// `per_target`'s module doc for the GW2EI `OffensiveStatistics` citation
+/// trail and why `downContribution` deliberately lives on the
+/// contribution family instead.
+pub mod per_target;
+
 use crate::evtc::RawLog;
 use crate::model::Encounter;
 use std::collections::{BTreeMap, BTreeSet};
@@ -162,7 +172,26 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     /// Per-skill cast list (M14, Task 1) -- see `rotation`'s module doc.
     /// Sorted by skill id ascending; `rotation::total_casts` sums the
     /// per-skill cast counts.
-    pub rotation: rotation::RotationMetrics }
+    pub rotation: rotation::RotationMetrics,
+    /// Per-(enemy representative id) offensive split (MEIGAP Task 1d) --
+    /// see `per_target`'s module doc. Sparse: only enemies this player
+    /// actually interacted with. Sums back to `hit_stats.connected_count`/
+    /// `against_downed_count` and `downs_dealt`/`kills_dealt` by
+    /// construction (identical predicates), minus whatever landed on
+    /// agents outside the `enemies` set.
+    pub per_target: BTreeMap<u64, per_target::PerTargetOffense>,
+    /// Per-(enemy representative id) arcdps-methodology down-contribution
+    /// DAMAGE (MEIGAP Task 1d) -- the per-target split of
+    /// `downs_contribution.damage`, keyed by the enemy whose down this
+    /// player contributed to. Sums back to `downs_contribution.damage`
+    /// exactly (same credits, just not collapsed).
+    ///
+    /// This is the arcdps methodology, NOT GW2EI's own per-target
+    /// `downContribution` (damage inside the target's 90%-to-downstate
+    /// window, `OffensiveStatistics.cs:85-108`) -- the same deliberate,
+    /// documented divergence `downs_contribution` itself already carries;
+    /// see `contribution`'s module doc.
+    pub downs_contribution_per_target: BTreeMap<u64, u64> }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
@@ -377,12 +406,12 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             dps: total as f64 / secs, damage_taken: taken,
             per_enemy: per.into_iter().collect(), ..Default::default() }
     }).collect();
-    downs::apply(&mut players, enc, raw, &squad, &enemies, &addr_to_rep);
+    downs::apply_with_registry(&mut players, enc, raw, &registry, &squad, &enemies, &addr_to_rep);
     cc::apply_cc_with_registry(&mut players, raw, &registry, &squad, &enemies, &addr_to_rep);
     support::apply(&mut players, raw, enc, &enemies, &addr_to_rep);
     // M11 Task 2: the arcdps-methodology contribution family
     // (downs_contribution/downed_by) -- see `contribution`'s module doc.
-    contribution::apply_with_registry(&mut players, raw, &registry, enc, &squad, &enemies, &addr_to_rep);
+    contribution::apply_with_registry(&mut players, raw, &registry, enc, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep);
     // M10 Task 1: cheap (a handful of linear scans over `raw.events`), so
     // computed unconditionally like every other pass above -- returns
     // whether the extension was present at all (see `Metrics::
@@ -430,6 +459,18 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     for p in &mut players {
         if let Some(d) = defenses_by_rep.get(&p.agent_addr) {
             p.defenses = *d;
+        }
+    }
+    // MEIGAP Task 1d: per-(player, target) offensive splits -- one more
+    // pass over the same `squad -> enemies` event family, reusing
+    // `hit_stats::classify` (see `per_target`'s module doc).
+    let per_target_stats =
+        per_target::build(raw, &registry, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep);
+    let player_idx: BTreeMap<u64, usize> =
+        players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
+    for ((src, dst), stats) in per_target_stats {
+        if let Some(&i) = player_idx.get(&src) {
+            players[i].per_target.insert(dst, stats);
         }
     }
     // M14 Task 1: per-player rotation (cast tracking) -- see `rotation`'s

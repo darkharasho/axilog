@@ -1014,3 +1014,83 @@ fn round3_ties_even(x: f64) -> f64 {
     };
     rounded / 1000.0
 }
+
+/// MEIGAP Task 1d: the `statsTargets[i][0]` split is gated on the SAME
+/// `--skill-damage` presence signal as `totalDamageDist`, and when present
+/// its columns sum back to their `statsAll[0]` counterparts.
+///
+/// The sum invariant is the structural half of the per-target calibration
+/// (the exact-vs-EI half lives in `meigap_ei_golden.rs`, which needs the
+/// gitignored local export): each column is the SAME already-calibrated
+/// whole-fight predicate restricted to one enemy, so the two must agree
+/// modulo events landing on an agent outside the `enemies` set -- which
+/// `statsAll` counts and the split cannot. Hence `<=`, with at least one
+/// player asserted to hit exact equality so the check cannot go vacuous.
+#[test]
+fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
+    let bytes = std::fs::read(ANON_FIXTURE_PATH)
+        .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let raw = decode_raw(&bytes).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+
+    // -- gated off: today's `totalDmg`-only row, split keys ABSENT (not 0) --
+    let plain =
+        axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
+    let plain_ei = axilog_ei::to_ei_json(&plain, &EiInputs::default());
+    for p in plain_ei["players"].as_array().expect("players") {
+        for t in p["statsTargets"].as_array().expect("statsTargets") {
+            let row = t[0].as_object().expect("statsTargets row");
+            assert_eq!(
+                row.keys().collect::<Vec<_>>(),
+                vec!["totalDmg"],
+                "without --skill-damage the split keys must be OMITTED, not emitted as zeros \
+                 (axibridge's own `sawTargetSplit` guard keys off exactly that)"
+            );
+        }
+    }
+
+    // -- gated on: the full split, summing back to statsAll[0] --
+    let full =
+        axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, false, false, None);
+    let ei = axilog_ei::to_ei_json(&full, &EiInputs::default());
+    let mut exact_players = 0usize;
+    let mut checked = 0usize;
+    for p in ei["players"].as_array().expect("players") {
+        let targets = p["statsTargets"].as_array().expect("statsTargets");
+        let mut all_equal = true;
+        for (split_field, all_field) in [
+            ("killed", "killed"),
+            ("downed", "downed"),
+            ("connectedDamageCount", "connectedDamageCount"),
+            ("againstDownedCount", "againstDownedCount"),
+        ] {
+            let sum: i64 =
+                targets.iter().map(|t| t[0][split_field].as_i64().expect("integer")).sum();
+            let whole = p["statsAll"][0][all_field].as_i64().expect("integer");
+            checked += 1;
+            assert!(
+                sum <= whole,
+                "{}: statsTargets sum of {split_field} ({sum}) exceeds statsAll[0].{all_field} \
+                 ({whole}) -- the split can only ever be a subset",
+                p["account"]
+            );
+            if sum != whole {
+                all_equal = false;
+            }
+        }
+        if all_equal {
+            exact_players += 1;
+        }
+    }
+    assert!(checked >= 100, "expected a non-degenerate comparison, checked {checked}");
+    assert!(
+        exact_players > 0,
+        "expected at least one player whose per-target split sums EXACTLY to statsAll -- all \
+         {exact_players} short means the split is systematically dropping events"
+    );
+    println!(
+        "ei_json_stats_targets_split_is_gated_and_sums_to_stats_all: {checked} column sums \
+         checked, {exact_players} players exact"
+    );
+}

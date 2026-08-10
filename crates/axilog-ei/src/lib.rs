@@ -528,10 +528,71 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
         // interaction, and `statsTargets[][]` is positionally keyed to
         // `targets[]` below, so both must stay in lockstep off the same
         // unfiltered list to preserve that faithfulness.
+        //
+        // MEIGAP Task 1d: the per-target OFFENSIVE SPLIT joins `totalDmg`
+        // here, exactly when this player's native `per_target` block is
+        // present (`--skill-damage`/SDK `skill_damage: true` -- the same
+        // flag that gates `targetDamageDist` below, and the same
+        // "presence, not a flag" convention every other opt-in block in
+        // this function uses). Without it the row keeps today's
+        // `totalDmg`-only shape: the split keys are OMITTED, never emitted
+        // as zeros, so a consumer can still tell "not computed" from
+        // "genuinely none" -- which is exactly what axibridge's own
+        // `!sawTargetSplit` guard (`src/main/detailsProcessing.ts`) keys
+        // off. The fields are -- `killed`, `downed`, `connectedDamageCount`,
+        // `connectedDmg`, `againstDownedCount`, `interrupts` and
+        // `downContribution`, from `p.per_target`
+        // (`axilog_core::analysis::per_target`, whose module doc carries
+        // the per-field `OffensiveStatistics` citation trail). Real EI
+        // computes all of them from the SAME statistics class as
+        // `statsAll[0]`, only with a non-null `target`
+        // (`JsonPlayerBuilder.cs:122` -> `SingleActor.cs:680-691`), and
+        // this reproduces that relationship exactly: each field is the
+        // already-calibrated whole-fight pass' own predicate, restricted to
+        // one enemy, so the per-target column sums back to its `statsAll`
+        // counterpart by construction.
+        //
+        // `connectedHits` is NOT an EI field name -- axibridge reads it
+        // through a `connectedHits ?? connectedDamageCount ?? hits` chain
+        // (`computeFightDiffMode.ts:78-90`) and real EI only ever emits
+        // `connectedDamageCount` (verified across the whole reference
+        // export). So `connectedDamageCount` is what's emitted; inventing
+        // an EI-shaped key EI itself never writes would be the wrong kind
+        // of compatibility.
+        //
+        // `downContribution` is this project's arcdps-methodology number
+        // (`p.per_target[].downs_contribution_damage`), NOT EI's own
+        // 90%-to-downstate-window algorithm -- the identical deliberate
+        // divergence, with the identical honesty caveat, that
+        // `statsAll[0].downContribution` above already carries. It is the
+        // one field in this block that is a "closest real EI field for
+        // this concept" placement rather than a parity claim.
+        //
+        // Everything else real EI carries on `statsTargets[i][0]` (the
+        // full connected*/critable*/flanking/glance/moving family, the
+        // miss/evade/block/invuln outcomes, the per-target
+        // appliedCrowdControl* split, `againstDownedDamage`) is still not
+        // computed per-target here, and stays omitted rather than faked.
         let stats_targets: Vec<Value> = report.all_enemies.iter().map(|e| {
             let dmg = p.damage.per_enemy.iter().find(|pe| pe.enemy_id == e.id)
                 .map(|pe| pe.total).unwrap_or(0);
-            json!([ { "totalDmg": dmg } ])
+            let mut row = json!({ "totalDmg": dmg });
+            if let Some(split) = &p.per_target {
+                let t = split.iter().find(|t| t.enemy_id == e.id);
+                let obj = row.as_object_mut().expect("statsTargets row is an object");
+                for (k, v) in [
+                    ("killed", t.map(|t| t.killed).unwrap_or(0) as u64),
+                    ("downed", t.map(|t| t.downed).unwrap_or(0) as u64),
+                    ("connectedDamageCount", t.map(|t| t.connected_hits).unwrap_or(0) as u64),
+                    ("connectedDmg", t.map(|t| t.connected_damage).unwrap_or(0)),
+                    ("againstDownedCount", t.map(|t| t.against_downed_count).unwrap_or(0) as u64),
+                    ("interrupts", t.map(|t| t.interrupts).unwrap_or(0) as u64),
+                    ("downContribution", t.map(|t| t.downs_contribution_damage).unwrap_or(0)),
+                ] {
+                    obj.insert(k.to_string(), json!(v));
+                }
+            }
+            json!([row])
         }).collect();
         let mut v = json!({
             "account": p.account,
@@ -1472,6 +1533,7 @@ mod tests {
                 damage_taken: 0,
                 cc: CcOut { applied_total: 0, applied_duration_ms: 0, stun_breaks: 0, removed_stun_duration_ms: 0 },
                 downs_contribution: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
+                per_target: None,
                 downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
                 boons: vec![],
                 support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
@@ -1604,6 +1666,7 @@ mod tests {
             downs_dealt: 0, kills_dealt: 0, downs_taken: 0, deaths: 0, damage_taken: 0,
             cc: CcOut { applied_total: 0, applied_duration_ms: 0, stun_breaks: 0, removed_stun_duration_ms: 0 },
             downs_contribution: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
+            per_target: None,
             downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
             boons: vec![],
             support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },

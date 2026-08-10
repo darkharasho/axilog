@@ -321,6 +321,45 @@ pub struct TeamOut {
 pub struct DamageOut { pub total: u64, pub dps: f64, pub per_enemy: Vec<PerEnemyOut> }
 #[derive(Serialize)]
 pub struct PerEnemyOut { pub enemy_id: u64, pub total: u64 }
+/// One `(player, enemy)` pair's offensive split (MEIGAP Task 1d) -- mirrors
+/// `axilog_core::analysis::per_target::PerTargetOffense` field-for-field,
+/// plus the arcdps-methodology per-target down-contribution damage from
+/// `PlayerMetrics::downs_contribution_per_target` (see that field's doc
+/// comment for why it is NOT GW2EI's own per-target `downContribution`).
+///
+/// SPARSE: one entry per enemy this player actually interacted with, not
+/// one per enumerated target -- a real WvW log enumerates hundreds of
+/// targets almost none of which a given player touched.
+///
+/// **Opt-in, gated by `include_skill_damage`** (`--skill-damage` / SDK
+/// `skill_damage: true`), the same flag that already gates the other
+/// per-target damage family, `SkillDamageOut::per_target`. Measured, and
+/// the reason: on the committed WvW fixture (41 players) the always-on
+/// variant grew the rendered HTML report from 260,520 to 407,826 bytes
+/// (**+56.5%**), far past the ~30% guideline every other block in this
+/// schema was measured against before being gated (see
+/// `crates/axilog-html/tests/golden_html.rs`'s budget comment for that
+/// guideline's own provenance). Sparse though it is, ~50 enemies x 8
+/// fields per player is simply 5x the shape of `DamageOut::per_enemy`.
+///
+/// The underlying pass itself is NOT gated -- `analyze()` computes
+/// `PlayerMetrics::per_target` unconditionally (one shared scan; see
+/// `per_target`'s module doc), so this is a serialization gate only, and
+/// the ei-json adapter's `statsTargets` split keys off this field's
+/// PRESENCE the same way `totalDamageDist` keys off `skill_damage`'s.
+#[derive(Serialize)]
+pub struct PerTargetStatsOut {
+    pub enemy_id: u64,
+    pub connected_hits: u32,
+    pub connected_damage: u64,
+    pub against_downed_count: u32,
+    pub downed: u32,
+    pub killed: u32,
+    pub interrupts: u32,
+    /// arcdps-methodology down-contribution DAMAGE credited to this player
+    /// for downs of this specific enemy.
+    pub downs_contribution_damage: u64,
+}
 /// One skill id's aggregated hit stats within some grouping (M12, Task 1) --
 /// mirrors `axilog_core::analysis::skill_damage::SkillEntry` field-for-field.
 /// `hits`/`min`/`max` count only CONTRIBUTING (`dmg > 0`) events, matching
@@ -597,6 +636,13 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// Per-tracked-boon uptime/generation summary (M3, Tasks 1-4), one
     /// entry per `buffs::BOON_IDS` id, in that table's order.
     pub boons: Vec<BoonOut>,
+    /// Per-enemy offensive split (MEIGAP Task 1d) -- see
+    /// [`PerTargetStatsOut`], including the measured size numbers behind
+    /// the gate. Sorted by `enemy_id`, sparse; `None` (omitted from the
+    /// JSON entirely, not `null`) unless `--skill-damage`/SDK
+    /// `skill_damage: true` was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_target: Option<Vec<PerTargetStatsOut>>,
     /// Support-stat counts (M3, Task 3).
     pub support: SupportOut,
     /// arcdps healing-extension totals (M10, Task 1). `None` (omitted from
@@ -977,6 +1023,39 @@ pub fn build_report(
                     generation: GenerationOut { self_pct: g.self_pct, group_pct: g.group_pct, squad_pct: g.squad_pct },
                 }
             }).collect(),
+            per_target: if !include_skill_damage {
+                None
+            } else {
+                m.map(|m| {
+                    // Union of the two sparse per-enemy maps: an enemy can
+                    // appear in the down-contribution map (a credit inside
+                    // its down window) without having taken a HIT from this
+                    // player in the whole fight, and vice versa.
+                    let mut ids: std::collections::BTreeSet<u64> =
+                        m.per_target.keys().copied().collect();
+                    ids.extend(m.downs_contribution_per_target.keys().copied());
+                    ids.into_iter()
+                        .map(|enemy_id| {
+                            let o = m.per_target.get(&enemy_id).copied().unwrap_or_default();
+                            PerTargetStatsOut {
+                                enemy_id,
+                                connected_hits: o.connected_hits,
+                                connected_damage: o.connected_damage,
+                                against_downed_count: o.against_downed_count,
+                                downed: o.downed,
+                                killed: o.killed,
+                                interrupts: o.interrupts,
+                                downs_contribution_damage: m
+                                    .downs_contribution_per_target
+                                    .get(&enemy_id)
+                                    .copied()
+                                    .unwrap_or(0),
+                            }
+                        })
+                        .collect()
+                })
+                .or(Some(Vec::new()))
+            },
             support: m.map(|m| SupportOut {
                 cleanses: m.support.cleanses, cleanses_self: m.support.cleanses_self,
                 strips: m.support.strips, resurrects: m.support.resurrects,

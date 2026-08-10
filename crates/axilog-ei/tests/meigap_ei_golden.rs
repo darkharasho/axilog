@@ -357,6 +357,120 @@ fn ei_json_incoming_cc_and_strips_match_the_reference_export_when_available() {
     );
 }
 
+// ---------------------------------------------------------------------
+// (d) statsTargets[i][0] -- the per-target offensive split
+// ---------------------------------------------------------------------
+
+/// The per-target fields asserted EXACT. `totalDmg` is pre-existing (M10)
+/// and already calibrated elsewhere; `downContribution` is deliberately
+/// absent -- it is this project's arcdps methodology, not EI's
+/// 90%-to-downstate-window algorithm (see the adapter's own comment on the
+/// `statsTargets` block, and `contribution`'s module doc).
+const PER_TARGET_FIELDS: &[&str] =
+    &["killed", "downed", "connectedDamageCount", "againstDownedCount", "interrupts"];
+
+/// `statsTargets[i][0]` cannot be compared positionally: GW2EI's WvW logic
+/// curates 57 targets on this capture while this project's `targets[]` is
+/// the full unfiltered enemy roster (624 here), and the two name spaces do
+/// not intersect. The join therefore goes through arcdps AGENT IDENTITY --
+/// the instid GW2EI encodes into its `"<Spec> pl-<instid>"` placeholder
+/// name -> the addr that instid belonged to -> this project's enemy index
+/// -- exactly the M16 pattern `damage_mods_ei_golden.rs` established (see
+/// that file's long comment for the full reasoning, including why
+/// `Enemy::instid` cannot shortcut it).
+#[test]
+fn ei_json_stats_targets_split_matches_the_reference_export_when_available() {
+    let Some(c) = render_and_reference("ei-json statsTargets split") else { return };
+    let ours_by_account = players_by_account(&c.ours);
+    let golden_by_account = players_by_account(&c.golden);
+
+    let mut instid_to_addrs: BTreeMap<u16, std::collections::BTreeSet<u64>> = BTreeMap::new();
+    for ev in &c.raw.events {
+        for (instid, addr) in [(ev.src_instid, ev.src_agent), (ev.dst_instid, ev.dst_agent)] {
+            if instid != 0 && addr != 0 {
+                instid_to_addrs.entry(instid).or_default().insert(addr);
+            }
+        }
+    }
+    let addr_to_enemy_index: BTreeMap<u64, usize> = c
+        .enc
+        .enemies
+        .iter()
+        .enumerate()
+        .flat_map(|(i, e)| e.agent_addrs.iter().map(move |&a| (a, i)))
+        .collect();
+    // `(our targets[] index, reference targets[] index)`.
+    let mut joinable: Vec<(usize, usize)> = Vec::new();
+    for (g_i, t) in c.golden["targets"].as_array().expect("reference targets").iter().enumerate() {
+        let Some(instid) = t["name"]
+            .as_str()
+            .and_then(|n| n.rsplit_once("pl-"))
+            .and_then(|(_, s)| s.parse::<u16>().ok())
+        else {
+            continue;
+        };
+        let indices: std::collections::BTreeSet<usize> = instid_to_addrs
+            .get(&instid)
+            .into_iter()
+            .flatten()
+            .filter_map(|a| addr_to_enemy_index.get(a).copied())
+            .collect();
+        if indices.len() == 1 {
+            joinable.push((*indices.iter().next().expect("len == 1"), g_i));
+        }
+    }
+    assert!(joinable.len() >= 40, "expected at least 40 joinable targets, got {}", joinable.len());
+
+    let mut joined_players = 0usize;
+    let mut checked = 0usize;
+    let mut nonzero = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+
+    for (account, o) in &ours_by_account {
+        let Some(g) = golden_by_account.get(account) else { continue };
+        joined_players += 1;
+        let (o_st, g_st) = (&o["statsTargets"], &g["statsTargets"]);
+        for &(o_i, g_i) in &joinable {
+            let (op, gp) = (&o_st[o_i][0], &g_st[g_i][0]);
+            for &field in PER_TARGET_FIELDS {
+                let gv = gp[field].as_i64().unwrap_or(0);
+                let ov = op[field].as_i64().unwrap_or_else(|| {
+                    panic!("{account}.statsTargets[{o_i}][0].{field} must be an integer")
+                });
+                checked += 1;
+                if gv != 0 || ov != 0 {
+                    nonzero += 1;
+                }
+                if ov != gv {
+                    failures.push(format!(
+                        "{account}.statsTargets[our {o_i} / ref {g_i}][0].{field}: ours={ov} \
+                         reference={gv}"
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(joined_players >= 30, "expected at least 30 joined accounts, got {joined_players}");
+    assert!(
+        nonzero >= 100,
+        "expected a materially non-degenerate comparison, got only {nonzero} nonzero cells"
+    );
+    assert!(
+        failures.is_empty(),
+        "{} per-target mismatch(es) (checked {checked} cells across {joined_players} accounts x \
+         {} joined targets):\n{}",
+        failures.len(),
+        joinable.len(),
+        failures.iter().take(25).cloned().collect::<Vec<_>>().join("\n")
+    );
+    println!(
+        "ei_json_stats_targets_split: {checked} cells exact ({nonzero} nonzero) across \
+         {joined_players} accounts x {} joined targets",
+        joinable.len()
+    );
+}
+
 /// `Math.Round(x, 3)`, .NET's half-to-even default -- see
 /// `axilog_ei`'s own `round3_ties_even` (private; duplicated here because
 /// an integration test cannot reach into the crate's private items, and

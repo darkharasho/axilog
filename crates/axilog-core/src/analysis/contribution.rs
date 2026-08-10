@@ -162,6 +162,13 @@ pub fn apply(
     enemies: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
 ) {
+    // Standalone/test callers get the enemy relog fold derived from `enc`
+    // itself -- `analyze` passes its own already-built map instead.
+    let enemy_addr_to_rep: BTreeMap<u64, u64> = enc
+        .enemies
+        .iter()
+        .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+        .collect();
     apply_with_registry(
         players,
         raw,
@@ -170,6 +177,7 @@ pub fn apply(
         squad,
         enemies,
         addr_to_rep,
+        &enemy_addr_to_rep,
     );
 }
 
@@ -182,6 +190,7 @@ pub fn apply(
 /// Note the sibling `HealthTracker::build(raw)` below is deliberately NOT
 /// hoisted here: it is this module's only consumer, so it is already built
 /// exactly once per parse.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_with_registry(
     players: &mut [PlayerMetrics],
     raw: &RawLog,
@@ -190,6 +199,7 @@ pub fn apply_with_registry(
     squad: &BTreeSet<u64>,
     enemies: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
+    enemy_addr_to_rep: &BTreeMap<u64, u64>,
 ) {
     let idx: BTreeMap<u64, usize> =
         players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
@@ -317,9 +327,22 @@ pub fn apply_with_registry(
 
         match down.dir {
             Direction::Outgoing => {
+                // MEIGAP Task 1d: the same credits, additionally split by
+                // the DOWNED TARGET, for `statsTargets[i][0].
+                // downContribution`. Keyed by the target's enemy
+                // representative id (relog fold), so it lines up with
+                // `Report::all_enemies`/`PlayerOut::damage.per_enemy`; a
+                // target whose addr never resolves keeps its raw addr, the
+                // same convention every other per-enemy map here uses.
+                let target_rep =
+                    enemy_addr_to_rep.get(&target).copied().unwrap_or(target);
                 for (contributor, c) in credits {
                     if let Some(&i) = idx.get(&rep(contributor)) {
                         players[i].downs_contribution.merge(c);
+                        *players[i]
+                            .downs_contribution_per_target
+                            .entry(target_rep)
+                            .or_default() += c.damage;
                     }
                 }
             }

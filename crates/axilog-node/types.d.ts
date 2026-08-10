@@ -65,6 +65,26 @@ export interface PerEnemyOut {
   total: number
 }
 
+/**
+ * One `(player, enemy)` pair's offensive split -- mirrors
+ * `axilog_schema::PerTargetStatsOut` / EI's `statsTargets[i][0]`.
+ * `connected_hits`/`against_downed_count` are the actor-only hit-quality
+ * counts restricted to that enemy; `downed`/`killed` are minion-inclusive
+ * last-hit attributions, matching GW2EI. `downs_contribution_damage` is the
+ * arcdps-methodology per-target down-contribution, NOT EI's own
+ * 90%-to-downstate-window algorithm.
+ */
+export interface PerTargetStatsOut {
+  enemy_id: number
+  connected_hits: number
+  connected_damage: number
+  against_downed_count: number
+  downed: number
+  killed: number
+  interrupts: number
+  downs_contribution_damage: number
+}
+
 export interface DamageOut {
   total: number
   dps: number
@@ -310,6 +330,14 @@ export interface PlayerOut {
   downed_by: ContributionOut
   /** One entry per tracked boon id, in `axilog_core::analysis::buffs::BOON_IDS` order. */
   boons: BoonOut[]
+  /**
+   * Per-enemy offensive split (MEIGAP, Task 1d), sorted by `enemy_id` and
+   * SPARSE (only enemies this player interacted with). Rides the same
+   * `skillDamage: true` flag as `skill_damage` itself -- omitted entirely
+   * unless requested; measured +56.5% rendered-HTML size when always-on.
+   * The underlying pass always runs; only this serialized key is gated.
+   */
+  per_target?: PerTargetStatsOut[]
   support: SupportOut
   /**
    * arcdps healing-extension totals (M10, Task 1). Omitted entirely (not
