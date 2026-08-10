@@ -774,13 +774,41 @@ pub struct EiInputs<'a> {
 /// points below do.
 struct LazySeq<'f, 'a> {
     len: usize,
-    f: &'f std::cell::RefCell<Box<dyn FnMut(usize) -> Value + 'a>>,
+    rows: &'f LazyRows<'a>,
+}
+
+/// A stateful row builder plus its take-once guard (MSTREAM review).
+///
+/// The guard has to live HERE, next to the `FnMut`, rather than on
+/// [`LazySeq`]: `LazySeq` values are constructed fresh inside
+/// [`EiDoc::serialize`], so a flag on them would reset on every
+/// serialization and never catch the bug it exists to catch. The closure
+/// (owned by [`EiDoc`]) is the actual once-consumable resource.
+struct LazyRows<'a> {
+    f: std::cell::RefCell<Box<dyn FnMut(usize) -> Value + 'a>>,
+    /// Set on first consumption; a second one would silently resume the
+    /// partly-consumed builder and emit garbage rather than the same array
+    /// again. Debug-only -- release builds keep the (correct,
+    /// single-serialization) path with no added behaviour.
+    consumed: std::cell::Cell<bool>,
+}
+
+impl<'a> LazyRows<'a> {
+    fn new(f: Box<dyn FnMut(usize) -> Value + 'a>) -> Self {
+        LazyRows { f: std::cell::RefCell::new(f), consumed: std::cell::Cell::new(false) }
+    }
 }
 
 impl serde::Serialize for LazySeq<'_, '_> {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeSeq;
-        let mut f = self.f.borrow_mut();
+        debug_assert!(
+            !self.rows.consumed.replace(true),
+            "LazySeq is take-once: its FnMut element builder is stateful, so a \
+             second serialization would resume a partly-consumed builder \
+             instead of re-emitting the array (see LazyRows' doc comment)"
+        );
+        let mut f = self.rows.f.borrow_mut();
         let mut seq = s.serialize_seq(Some(self.len))?;
         for i in 0..self.len {
             // `f(i)` is built, handed to the serializer, and dropped before
@@ -813,9 +841,9 @@ struct EiDoc<'a> {
     duration_ms: u64,
     recorded_by: Option<&'a str>,
     player_count: usize,
-    player_json: std::cell::RefCell<Box<dyn FnMut(usize) -> Value + 'a>>,
+    player_json: LazyRows<'a>,
     target_count: usize,
-    target_json: std::cell::RefCell<Box<dyn FnMut(usize) -> Value + 'a>>,
+    target_json: LazyRows<'a>,
     buff_map: BTreeMap<String, Value>,
     skill_map: BTreeMap<String, Value>,
     damage_mod_map: Option<BTreeMap<String, Value>>,
@@ -840,14 +868,14 @@ impl serde::Serialize for EiDoc<'_> {
         m.serialize_entry("fightName", &self.fight_name)?;
         m.serialize_entry(
             "players",
-            &LazySeq { len: self.player_count, f: &self.player_json },
+            &LazySeq { len: self.player_count, rows: &self.player_json },
         )?;
         m.serialize_entry("recordedBy", &self.recorded_by)?;
         m.serialize_entry("skillMap", &self.skill_map)?;
         m.serialize_entry("success", &true)?;
         m.serialize_entry(
             "targets",
-            &LazySeq { len: self.target_count, f: &self.target_json },
+            &LazySeq { len: self.target_count, rows: &self.target_json },
         )?;
         m.serialize_entry("wvWMapData", &self.wvw_map_data)?;
         m.end()
@@ -2226,9 +2254,9 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
         duration_ms: report.encounter.duration_ms,
         recorded_by: report.encounter.recorded_by.as_deref(),
         player_count: report.players.len(),
-        player_json: std::cell::RefCell::new(player_json),
+        player_json: LazyRows::new(player_json),
         target_count: report.all_enemies.len(),
-        target_json: std::cell::RefCell::new(target_json),
+        target_json: LazyRows::new(target_json),
         buff_map,
         skill_map,
         damage_mod_map,
