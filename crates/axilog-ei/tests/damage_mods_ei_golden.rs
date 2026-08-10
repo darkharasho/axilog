@@ -158,7 +158,7 @@ fn ei_json_damage_modifiers_match_the_reference_export_text_when_available() {
     );
     let ours = axilog_ei::to_ei_json(
         &report,
-        &EiInputs { activity: &activity, replay: None, modifiers: Some(&mods), boon_states: None },
+        &EiInputs { activity: &activity, replay: None, modifiers: Some(&mods), boon_states: None, ..Default::default() },
     );
 
     // ---- damageModMap: the descriptor table, character for character ----
@@ -491,7 +491,7 @@ fn committed_fixture_damage_modifier_emission_is_correctly_shaped_and_gated() {
     );
     let ei = axilog_ei::to_ei_json(
         &report,
-        &EiInputs { activity: &activity, replay: None, modifiers: Some(&mods), boon_states: None },
+        &EiInputs { activity: &activity, replay: None, modifiers: Some(&mods), boon_states: None, ..Default::default() },
     );
 
     let map = ei["damageModMap"].as_object().expect("damageModMap present when requested");
@@ -580,7 +580,7 @@ fn committed_fixture_damage_modifier_emission_is_correctly_shaped_and_gated() {
     // -- determinism: the same inputs must produce byte-identical JSON --
     let again = axilog_ei::to_ei_json(
         &report,
-        &EiInputs { activity: &activity, replay: None, modifiers: Some(&mods), boon_states: None },
+        &EiInputs { activity: &activity, replay: None, modifiers: Some(&mods), boon_states: None, ..Default::default() },
     );
     assert_eq!(
         serde_json::to_string(&ei).unwrap(),

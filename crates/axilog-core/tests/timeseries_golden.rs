@@ -194,6 +194,7 @@ fn check_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
     let mut damage_mismatches: Vec<(String, u64, i64)> = Vec::new();
     let mut taken_mismatches: Vec<(String, u64, i64)> = Vec::new();
     let mut superset_violations: Vec<(String, u64, i64)> = Vec::new();
+    let mut power_split_mismatches: Vec<(String, u64, i64)> = Vec::new();
 
     for p in &enc.players {
         let Some(pm) = pm_by_addr.get(&p.agent_addr) else { continue };
@@ -217,6 +218,30 @@ fn check_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
         if (our_taken_final as i64 - golden_taken_final).abs() > TAKEN_ABS_TOLERANCE {
             taken_mismatches.push((p.account.clone(), our_taken_final, golden_taken_final));
         }
+
+        // MEIGAP Task 2a: the POWER half is calibrated as a SPLIT of the
+        // `All` half, not standalone -- its residual against the reference
+        // must equal `damageTaken1S`'s own residual exactly. See
+        // `axilog-ei`'s `meigap2_ei_golden.rs` for the full-series version
+        // of the same statement; this is the committed-fixture,
+        // final-element form of it, so CI gates the split without the
+        // gitignored export.
+        let our_power_final = pm.timeseries.power_damage_taken.last().copied().unwrap_or(0);
+        let golden_power_final =
+            ts["powerDamageTaken1SFinal"].as_i64().expect("powerDamageTaken1SFinal");
+        let (power_residual, taken_residual) = (
+            our_power_final as i64 - golden_power_final,
+            our_taken_final as i64 - golden_taken_final,
+        );
+        if power_residual != taken_residual {
+            power_split_mismatches.push((p.account.clone(), our_power_final, golden_power_final));
+        }
+        assert!(
+            our_power_final <= our_taken_final,
+            "{}: power_damage_taken final ({our_power_final}) must be <= damage_taken final \
+             ({our_taken_final})",
+            p.account
+        );
 
         let our_dps_targets_sum: u64 = pm.timeseries.dps_targets.iter().map(|d| d.damage).sum();
         let golden_dps_targets_total = ts["dpsTargetsTotalDamage"].as_i64().expect("dpsTargetsTotalDamage");
@@ -242,6 +267,17 @@ fn check_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
             .collect();
         panic!("{} account(s) where timeseries.damage_taken.last() != golden damageTaken1SFinal:\n{}", taken_mismatches.len(), report.join("\n"));
     }
+    if !power_split_mismatches.is_empty() {
+        let report: Vec<String> = power_split_mismatches.iter()
+            .map(|(a, o, g)| format!("{a}: ours={o} golden={g}"))
+            .collect();
+        panic!(
+            "{} account(s) where the POWER split introduces a residual its `All` sibling \
+             (damageTaken1S) does not have:\n{}",
+            power_split_mismatches.len(),
+            report.join("\n")
+        );
+    }
     if !superset_violations.is_empty() {
         let report: Vec<String> = superset_violations.iter()
             .map(|(a, o, g)| format!("{a}: our dps_targets sum={o} < golden dpsTargetsTotalDamage={g}"))
@@ -255,8 +291,8 @@ fn check_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
     }
 
     println!(
-        "timeseries_matches_ei_golden: {joined} accounts joined, 0 damage1SFinal/damageTaken1SFinal \
-         mismatches, dps_targets superset relationship holds for all"
+        "timeseries_matches_ei_golden: {joined} accounts joined, 0 damage1SFinal/damageTaken1SFinal/\
+         powerDamageTaken1SFinal-split mismatches, dps_targets superset relationship holds for all"
     );
 }
 
@@ -264,6 +300,53 @@ fn check_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
 fn timeseries_matches_ei_golden() {
     let golden = read_golden_json();
     check_matches_ei_golden(&read_anon_fixture(), &golden);
+}
+
+/// MEIGAP Task 2: this project's 1S grid must be the same LENGTH real EI
+/// produced for this exact log.
+///
+/// The golden's `series1SBuckets` (51) is extracted verbatim from the
+/// source export's own `players[].damage1S[0]` array
+/// (`fixtures/wvw-small.ei.json`'s `_note`), so this is a direct check of
+/// `analysis::timeseries::ei_grid` against real GW2EI output rather than
+/// against a re-derivation of its formula: 49,285 ms is not a whole number
+/// of seconds, so `InterpolatedGraph` allocates `49 + 2 == 51` slots where
+/// this project's pre-MEIGAP `(duration / 1000) + 1` produced 50. Every
+/// series in the family must share that length, including the POWER ones
+/// this task added.
+#[test]
+fn timeseries_bucket_count_matches_ei_golden() {
+    let golden = read_golden_json();
+    let want = golden["series1SBuckets"].as_u64().expect("series1SBuckets") as usize;
+    let raw = decode_raw(&read_anon_fixture()).expect("decode committed fixture");
+    let enc = resolve(&raw);
+    let metrics = analyze(&enc, &raw);
+    assert_eq!(
+        golden["durationMS"].as_u64().expect("durationMS"),
+        enc.duration_ms,
+        "the golden and the decoded fixture must describe the same log length"
+    );
+    assert!(!metrics.players.is_empty());
+    for p in &metrics.players {
+        assert_eq!(p.timeseries.damage.len(), want, "agent {:#x}: damage", p.agent_addr);
+        assert_eq!(p.timeseries.damage_taken.len(), want, "agent {:#x}: damage_taken", p.agent_addr);
+        assert_eq!(
+            p.timeseries.power_damage_taken.len(),
+            want,
+            "agent {:#x}: power_damage_taken",
+            p.agent_addr
+        );
+        for t in &p.timeseries.per_target {
+            assert_eq!(t.damage.len(), want, "agent {:#x}: per_target damage", p.agent_addr);
+            assert_eq!(
+                t.power_damage.len(),
+                want,
+                "agent {:#x}: per_target power_damage",
+                p.agent_addr
+            );
+        }
+    }
+    println!("timeseries_bucket_count_matches_ei_golden: {want} buckets, real EI's own length");
 }
 
 #[test]
@@ -295,12 +378,30 @@ fn timeseries_present_and_sane_on_local_postrework_when_available() {
     assert!(any_damage, "a real WvW squad fight should show nonzero cumulative damage somewhere");
     assert!(any_taken, "a real WvW squad fight should show nonzero cumulative damage_taken somewhere");
 
-    // Bucket count sanity: `(duration_ms / 1000) + 1`, same formula
-    // `cc::timeline` uses -- every player's series must share that length.
-    let expected_buckets = (enc.duration_ms / 1000) + 1;
+    // Bucket count sanity: GW2EI's own `InterpolatedGraph` allocation
+    // (`GW2EIEvtcParser/EIData/MathUtils/InterpolatedGraph.cs:18-20`) --
+    // `durationInS + 2` slots when the log is not a whole number of
+    // seconds, `+ 1` when it is. MEIGAP Task 2 replaced this module's
+    // earlier `(duration_ms / 1000) + 1` guess with EI's real formula after
+    // the reference export turned out to carry 350 buckets for this
+    // capture's 348,362 ms where the old formula produced 349; see
+    // `analysis::timeseries::ei_grid`. The POWER series added by the same
+    // task must share the length exactly.
+    let secs = enc.duration_ms / 1000;
+    let expected_buckets = if secs * 1000 == enc.duration_ms { secs + 1 } else { secs + 2 };
     for p in &metrics.players {
-        assert_eq!(p.timeseries.damage.len() as u64, expected_buckets, "agent {:#x}: damage series length must match the bucket formula", p.agent_addr);
-        assert_eq!(p.timeseries.damage_taken.len() as u64, expected_buckets, "agent {:#x}: damage_taken series length must match the bucket formula", p.agent_addr);
+        assert_eq!(p.timeseries.damage.len() as u64, expected_buckets, "agent {:#x}: damage series length must match GW2EI's grid", p.agent_addr);
+        assert_eq!(p.timeseries.damage_taken.len() as u64, expected_buckets, "agent {:#x}: damage_taken series length must match GW2EI's grid", p.agent_addr);
+        assert_eq!(p.timeseries.power_damage_taken.len() as u64, expected_buckets, "agent {:#x}: power_damage_taken series length must match GW2EI's grid", p.agent_addr);
+        for t in &p.timeseries.per_target {
+            assert_eq!(t.damage.len() as u64, expected_buckets, "agent {:#x}: per_target damage length", p.agent_addr);
+            assert_eq!(t.power_damage.len() as u64, expected_buckets, "agent {:#x}: per_target power_damage length", p.agent_addr);
+            assert!(t.power_damage.iter().zip(t.damage.iter()).all(|(p, a)| p <= a), "per_target power <= all");
+        }
+        assert!(
+            p.timeseries.power_damage_taken.iter().zip(p.timeseries.damage_taken.iter()).all(|(x, y)| x <= y),
+            "agent {:#x}: power_damage_taken must be element-wise <= damage_taken", p.agent_addr
+        );
     }
 
     println!(
