@@ -594,6 +594,31 @@ arcdps-methodology down contribution, boons + generation, support, healing, per-
 per-second series, hit quality, defenses, rotation — in under a fifth of a second, single-threaded,
 with no `unsafe`.
 
+### vs Elite Insights
+
+Head-to-head against the Elite Insights CLI v3.27 (+ its bundled .NET 8 runtime), measured
+2026-08-10 on axilog **v0.3.0**, same machine, medians of 3 runs after a warmup. "Matched" =
+axibridge's production EI configuration (detailed WvW, damage modifiers, combat replay, raw
+timeline arrays, phases) vs axilog's equivalent
+`--format ei-json --replay --skill-damage --timeseries --rotation --modifiers` — the closest
+honest apples-to-apples; EI additionally computes phases and its full skill-DB surface, while
+axilog emits its documented WvW parity surface (larger in places, e.g. full 624-target rosters).
+
+| | Real 5:48 zerg fight (583k events, 48 players) | 49 s skirmish (120k events, 42 players) |
+|---|---|---|
+| Elite Insights CLI | 7.25 s · 857 MiB peak | 2.43 s · 373 MiB peak |
+| **axilog, matched surface** | **2.49 s (2.9×) · 117 MiB (7.3× less)** | **0.25 s (9.7×) · 24 MiB (15× less)** |
+| axilog, matched + gzip output | 2.86 s · 117 MiB | — |
+| **axilog, default native JSON** | **0.36 s (20×) · 86 MiB (10× less)** | **0.06 s (40×) · 20 MiB (18× less)** |
+
+Two structural notes behind the numbers. EI pays ~2 s of .NET startup + JIT **per spawned
+parse** (axibridge spawns per uploaded log), so the small-log column is the realistic
+per-upload ratio; axilog's fixed cost is effectively zero. And the memory column used to be
+EI's one win (axilog peaked at 2.4 GiB building the full ei-json document in RAM) — MSTREAM's
+streaming serializer removed that entirely (−95% peak, output verified byte-identical across
+96 flag/output combinations), so axilog now leads every cell. Full methodology, raw samples,
+and the per-milestone history are in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
 The MPERF milestone made `analysis::analyze` 2.1× faster on the fixture and 2.6× faster on the real
 log (1.75× / 1.87× end to end), with every step verified byte-identical against the previous
 output. The benchmark harness (`crates/axilog-cli/benches/pipeline.rs`, criterion), the full

@@ -968,3 +968,32 @@ the old tree-builder was the WORST of the three is a `json!` detail:
 `Vec<Value>` while the original is still alive — so the old builder briefly
 held two copies of the document. The parse-back option loses for the
 obvious reason (it pays a full serialize AND a full parse).
+
+## axilog vs Elite Insights — v0.3.0 rerun (2026-08-10, post-MSTREAM)
+
+Same methodology as the v0.2.0 section above (EI CLI v3.27 + .NET 8.0.25, axibridge's
+production `settings.conf`; axilog release build, matched flag set; medians of 3 after a
+warmup; `/usr/bin/time` wall + peak RSS). Both sides re-run in the same session. The matched
+axilog surface is LARGER than v0.2.0's (MEIGAP/MEIGAP2 roughly doubled the ei-json document),
+and still got faster and 10x lighter thanks to MSTREAM.
+
+### Large log (7.6 MB zevtc, 583,194 events, 48 players, 5:48)
+
+| pipeline | wall (median of 3) | peak RSS |
+|---|---|---|
+| Elite Insights CLI | 7.25 s (6.75/7.25/7.36) | 857 MiB |
+| axilog, matched ei-json surface | **2.49 s (2.9×)** | **117 MiB (7.3× less)** |
+| axilog, matched + gzip | 2.86 s | 117 MiB |
+| axilog, default native JSON | **0.36 s (20×)** | **84 MiB (10× less)** |
+
+### Small log (1.5 MB zevtc, 120,435 events, 42 players, 49 s)
+
+| pipeline | wall (median of 3) | peak RSS |
+|---|---|---|
+| Elite Insights CLI | 2.43 s | 373 MiB |
+| axilog, matched ei-json surface | **0.25 s (9.7×)** | **24 MiB (15× less)** |
+| axilog, default native JSON | **0.06 s (40×)** | **20 MiB (18× less)** |
+
+The v0.2.0 section's honest note about EI winning the matched-surface memory column is now
+resolved: MSTREAM's streaming serializer (byte-identical, 96/96 combos) flipped 1.5×-worse
+into 7.3×-better. The remaining axilog peak is analysis state, not serialization.
