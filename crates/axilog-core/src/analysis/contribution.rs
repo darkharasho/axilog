@@ -314,7 +314,7 @@ pub fn apply_with_registry(
         // (without it, the range would be inverted and panic).
         let end = by_time.partition_point(|e| e.time <= t_down);
         let start = by_time.partition_point(|e| e.time < lo).min(end);
-        let credits = credit_window(
+        let (credits, credits_by_skill) = credit_window(
             by_time[start..end].iter().copied(),
             registry,
             lo,
@@ -343,6 +343,15 @@ pub fn apply_with_registry(
                             .downs_contribution_per_target
                             .entry(target_rep)
                             .or_default() += c.damage;
+                    }
+                }
+                // MEIGAP2 row 1: the same credits split by skill instead.
+                // Folded through the same `rep()`/`idx` identity resolution
+                // so a relogged account's per-skill split lands on the one
+                // row its scalar does.
+                for ((contributor, skill), dmg) in credits_by_skill {
+                    if let Some(&i) = idx.get(&rep(contributor)) {
+                        *players[i].downs_contribution_per_skill.entry(skill).or_default() += dmg;
                     }
                 }
             }
@@ -446,8 +455,15 @@ fn credit_window<'a>(
     exclude_side: &BTreeSet<u64>,
     boon_ids: &BTreeSet<u32>,
     post_era: bool,
-) -> BTreeMap<u64, ContributionMetrics> {
+) -> (BTreeMap<u64, ContributionMetrics>, BTreeMap<(u64, u32), u64>) {
     let mut out: BTreeMap<u64, ContributionMetrics> = BTreeMap::new();
+    // MEIGAP2 row 1: the damage half of the same credits, additionally
+    // keyed by skill id -- a pure split of `out[_].damage`, accumulated at
+    // the one site that assigns it so the two can never describe different
+    // event sets. Only populated for the damage branch: GW2EI's per-skill
+    // down contribution is a damage dictionary
+    // (`OffensiveStatistics.cs:81-108`), with no CC/strip analogue.
+    let mut by_skill: BTreeMap<(u64, u32), u64> = BTreeMap::new();
     for e in events {
         if e.time < lo || e.time > hi {
             continue;
@@ -497,6 +513,7 @@ fn credit_window<'a>(
                             let dmg =
                                 if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
                             entry.damage += dmg;
+                            *by_skill.entry((c, e.skillid)).or_default() += dmg;
                         }
                     }
                 }
@@ -620,7 +637,7 @@ fn credit_window<'a>(
             }
         }
     }
-    out
+    (out, by_skill)
 }
 
 #[cfg(test)]

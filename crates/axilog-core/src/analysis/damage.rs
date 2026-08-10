@@ -46,6 +46,21 @@ pub struct InstidRegistry {
     /// u64)>` contents, and `resolve_at`'s `partition_point` query over
     /// them, are untouched.
     by_instid: Vec<Vec<(u64, u64)>>,
+    /// The REVERSE index (MEIGAP2 row 3): `agent addr -> the instid that
+    /// addr was FIRST registered under`, i.e. GW2EI's `AgentItem.InstID`
+    /// (`EvtcParser.CompleteAgents` assigns an agent its instid from the
+    /// first combat row that names it; `JsonActorBuilder.cs:31` writes that
+    /// straight out as `instanceID`).
+    ///
+    /// Derived from [`Self::by_instid`] AFTER the scan rather than filled
+    /// inside it: the scan runs twice per event on a ~600k-event log, and a
+    /// `BTreeMap` probe there would cost more than the whole reverse index
+    /// does. The registration lists are tiny by comparison (one entry per
+    /// ownership CHANGE, not per event), so folding them afterwards is
+    /// linear in registrations, not in events. Ties are broken by
+    /// registration time, then by instid, so the map is deterministic
+    /// regardless of `by_instid`'s index order.
+    instid_of_addr: BTreeMap<u64, u16>,
 }
 
 /// Number of distinct arcdps instids -- the full `u16` key space
@@ -90,7 +105,29 @@ impl InstidRegistry {
                 Self::register(&mut by_instid, e.dst_instid, e.time, e.dst_agent);
             }
         }
-        InstidRegistry { by_instid }
+        // Reverse index: earliest registration wins per addr (see
+        // `instid_of_addr`'s doc comment).
+        let mut first_seen: BTreeMap<u64, (u64, u16)> = BTreeMap::new();
+        for (instid, entries) in by_instid.iter().enumerate() {
+            let instid = instid as u16;
+            for &(time, addr) in entries {
+                if addr == 0 {
+                    continue;
+                }
+                match first_seen.entry(addr) {
+                    std::collections::btree_map::Entry::Vacant(v) => {
+                        v.insert((time, instid));
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut o) => {
+                        if (time, instid) < *o.get() {
+                            o.insert((time, instid));
+                        }
+                    }
+                }
+            }
+        }
+        let instid_of_addr = first_seen.into_iter().map(|(addr, (_, instid))| (addr, instid)).collect();
+        InstidRegistry { by_instid, instid_of_addr }
     }
 
     fn register(map: &mut [Vec<(u64, u64)>], instid: u16, time: u64, addr: u64) {
@@ -108,6 +145,14 @@ impl InstidRegistry {
             }
         }
         entries.push((time, addr));
+    }
+
+    /// The instid an agent addr was first registered under -- GW2EI's
+    /// `AgentItem.InstID`, exported as `instanceID` (MEIGAP2 row 3). `None`
+    /// for an addr that never appeared as `src_agent`/`dst_agent` on a
+    /// non-extension row carrying a nonzero instid.
+    pub fn instid_of(&self, addr: u64) -> Option<u16> {
+        self.instid_of_addr.get(&addr).copied()
     }
 
     /// The addr registered to `instid` at time `t` -- i.e. the latest

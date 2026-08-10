@@ -312,6 +312,32 @@ pub struct DefenseStats {
     pub barrier_damage: u64,
     pub breakbar_count: u32,
     pub breakbar_damage: u64,
+    /// **OUTGOING**, unlike every other field on this struct (MEIGAP2 row
+    /// 6): the raw `value` sum of this player's own dealt defiance-bar
+    /// damage, minion-INCLUSIVE -- GW2EI's `dpsAll[0].breakbarDamage`
+    /// (`DamageStatistics.cs:60`, `Math.Round(actor.
+    /// GetBreakbarDamageEvents(target, log, start, end).Sum(x =>
+    /// x.BreakbarDamage), 1)` over the minion-folded
+    /// `SingleActor.InitBreakbarDamageEvents` list, `!ToFriendly`-filtered
+    /// at `SingleActor.cs:869`).
+    ///
+    /// It lives here, on the *incoming* stats struct, for one reason:
+    /// dealt and taken breakbar rows are the same result byte, so this
+    /// shares [`accumulate_breakbar_and_received_cc`]'s existing scan
+    /// instead of paying for a second full pass over the event list -- the
+    /// same fold that already put incoming CC in this scan (see that
+    /// function's doc comment). Consumers read it as an outgoing number:
+    /// `axilog_schema::PlayerOut::breakbar_damage_dealt` ->
+    /// `dpsAll[0].breakbarDamage`.
+    ///
+    /// **Raw arcdps units**, i.e. ten times GW2EI's own number:
+    /// `BreakbarDamageEvent`'s ctor is `BreakbarDamage = Math.Round(
+    /// evtcItem.Value / 10.0, 1)`
+    /// (`ParsedData/CombatEvents/NonDamageEvents/BreakbarDamageEvent.cs:8`).
+    /// The `/10` is applied once, at the EI-adapter boundary, so this
+    /// field stays an exact integer sum (and matches the raw-unit
+    /// convention `breakbar_damage` above already uses).
+    pub breakbar_damage_dealt: u64,
     /// EI's `defenses[].receivedCrowdControl` -- the number of crowd-
     /// control applications this player RECEIVED (MEIGAP Task 1c).
     ///
@@ -423,6 +449,7 @@ impl DefenseStats {
         self.barrier_damage += o.barrier_damage;
         self.breakbar_count += o.breakbar_count;
         self.breakbar_damage += o.breakbar_damage;
+        self.breakbar_damage_dealt += o.breakbar_damage_dealt;
         self.received_cc_count += o.received_cc_count;
         self.received_cc_duration_ms += o.received_cc_duration_ms;
         self.boon_strips_taken += o.boon_strips_taken;
@@ -648,6 +675,7 @@ fn accumulate(events: &[RawEvent], squad: &BTreeSet<u64>, post_era: bool) -> BTr
 /// over a 583k-event log (see `docs/BENCHMARKS.md`'s MEIGAP entry).
 fn accumulate_breakbar_and_received_cc(
     events: &[RawEvent],
+    registry: &crate::analysis::damage::InstidRegistry,
     squad: &BTreeSet<u64>,
     post_era: bool,
     out: &mut BTreeMap<u64, DefenseStats>,
@@ -671,6 +699,26 @@ fn accumulate_breakbar_and_received_cc(
             && e.result == result::BREAKBAR_DAMAGE;
         if !is_cc && !is_breakbar {
             continue;
+        }
+        // MEIGAP2 row 6: the OUTGOING half of the breakbar rows this scan
+        // already visits (see `DefenseStats::breakbar_damage_dealt`). Kept
+        // above the `dst in squad` gate on purpose -- a squad player's
+        // breakbar damage lands on an ENEMY, so the incoming test below
+        // would reject every row this needs. GW2EI's `!ToFriendly` filter
+        // (`SingleActor.cs:869`) is the `iff` byte, and the minion fold is
+        // the same `src_master_instid` -> owner resolution the squad-side
+        // damage pet credit uses.
+        if is_breakbar && e.iff != 0 {
+            let owner = if squad.contains(&e.src_agent) {
+                Some(e.src_agent)
+            } else if e.src_master_instid != 0 {
+                registry.resolve_at(e.src_master_instid, e.time).filter(|a| squad.contains(a))
+            } else {
+                None
+            };
+            if let Some(owner) = owner {
+                out.entry(owner).or_default().breakbar_damage_dealt += e.value.max(0) as u64;
+            }
         }
         if !squad.contains(&e.dst_agent) {
             continue;
@@ -819,7 +867,7 @@ pub fn build_with_registry(
 ) -> BTreeMap<u64, DefenseStats> {
     let post_era = raw.header.is_post_buff_rework();
     let mut by_addr = accumulate(&raw.events, squad, post_era);
-    accumulate_breakbar_and_received_cc(&raw.events, squad, post_era, &mut by_addr);
+    accumulate_breakbar_and_received_cc(&raw.events, registry, squad, post_era, &mut by_addr);
     accumulate_dodges(raw, squad, post_era, &mut by_addr);
 
     let mut by_rep: BTreeMap<u64, DefenseStats> = BTreeMap::new();

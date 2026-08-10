@@ -159,6 +159,8 @@ fn build_report_and_activity_from_bytes(
     Option<axilog_core::analysis::target_conditions::TargetConditionStates>,
     Option<axilog_core::analysis::healing_detail::HealingDetail>,
     Option<axilog_core::analysis::minions::MinionRollups>,
+    Option<std::collections::BTreeMap<u64, axilog_core::analysis::dist_outcomes::DistOutcomes>>,
+    Option<std::collections::BTreeMap<u64, Vec<(u64, f64)>>>,
 )> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -241,6 +243,13 @@ fn build_report_and_activity_from_bytes(
         .flatten();
     let minion_rollups =
         want_skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
+    // MEIGAP2 rows 1 and 2 -- same gates the CLI uses (`--skill-damage`
+    // for the distributions' outcome columns, `--timeseries` for the
+    // health series, GW2EI's own `RawFormatTimelineArrays`).
+    let dist_outcomes =
+        want_skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
+    let health_percents =
+        want_timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
     Ok((
         report,
         activity,
@@ -252,6 +261,8 @@ fn build_report_and_activity_from_bytes(
         target_conditions,
         healing_detail,
         minion_rollups,
+        dist_outcomes,
+        health_percents,
     ))
 }
 
@@ -319,7 +330,7 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
     let (report, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist,
-         target_conditions, healing_detail, minion_rollups) = build_report_and_activity_from_bytes(
+         target_conditions, healing_detail, minion_rollups, dist_outcomes, health_percents) = build_report_and_activity_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
         want_modifiers,
     )?;
@@ -337,6 +348,8 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
             healing_series: want_timeseries,
             healing_dist: want_skill_damage,
             minions: minion_rollups.as_ref(),
+            dist_outcomes: dist_outcomes.as_ref(),
+            health_percents: health_percents.as_ref(),
         },
     ))
 }

@@ -128,6 +128,10 @@ pub mod condition_catalog;
 /// trail and why `downContribution` deliberately lives on the
 /// contribution family instead.
 pub mod per_target;
+/// Per-skill hit-OUTCOME columns for the two player-side damage
+/// distributions (MEIGAP2 row 1) -- opt-in, not run by `analyze()`; see
+/// `dist_outcomes`'s module doc.
+pub mod dist_outcomes;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;
@@ -200,7 +204,21 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     /// window, `OffensiveStatistics.cs:85-108`) -- the same deliberate,
     /// documented divergence `downs_contribution` itself already carries;
     /// see `contribution`'s module doc.
-    pub downs_contribution_per_target: BTreeMap<u64, u64> }
+    pub downs_contribution_per_target: BTreeMap<u64, u64>,
+    /// The same credits again, split by SKILL id instead of by target
+    /// (MEIGAP2 row 1) -- GW2EI's `totalDamageDist[][].downContribution`
+    /// (`JsonDamageDistBuilder.cs:44-47`, fed by
+    /// `OffensiveStatistics.downContributionPerSkillID`). Sums back to
+    /// `downs_contribution.damage` exactly, same as
+    /// `downs_contribution_per_target` above.
+    ///
+    /// Carries the SAME two documented divergences the scalar does, and no
+    /// new ones: it is the arcdps methodology's window (over-99% anchor
+    /// minus a 2s lead-in), not GW2EI's 90%-to-downstate window, and it
+    /// inherits `credit_window`'s deliberate breakbar carve-out. Splitting
+    /// by skill makes the second one per-skill visible, which is exactly
+    /// why it is stated here as well as there.
+    pub downs_contribution_per_skill: BTreeMap<u32, u64> }
 #[derive(Debug, Clone)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
@@ -285,6 +303,40 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// `Report::enemies` (native output + HTML chips) uses this set. See
     /// `build_report`'s doc comment for the full design-choice writeup.
     pub combat_participant_enemies: BTreeSet<u64>,
+    /// `agent representative addr -> arcdps instid` for every squad player
+    /// and every enemy (MEIGAP2 row 3) -- GW2EI's `JsonActor.instanceID`
+    /// (`JsonActorBuilder.cs:31`, `jsonActor.InstanceID = actor.InstID`).
+    ///
+    /// Read straight off the ONE `InstidRegistry` `analyze()` already
+    /// builds (`damage::InstidRegistry::instid_of`), so this costs no extra
+    /// scan over `raw.events`. An addr with no registration at all is
+    /// simply absent (rather than reported as instid `0`), so a consumer
+    /// can tell "unknown" from "really zero".
+    ///
+    /// Deliberately keyed by REPRESENTATIVE addr: a relogged account is one
+    /// `PlayerMetrics` here where GW2EI would emit two `players[]` entries
+    /// with two different instids, so the representative's own instid is
+    /// the one carried.
+    pub instance_ids: BTreeMap<u64, u16>,
+    /// `enemy representative addr -> total OUTGOING health damage that
+    /// enemy dealt` (MEIGAP2 row 5) -- GW2EI's `targets[].dpsAll[0].damage`
+    /// (`JsonActorBuilder.cs:46` over `SingleActor.GetDamageStats(log,
+    /// phase)`, i.e. `GetDamageEvents(null, ...)`).
+    ///
+    /// GW2EI's set is `log.CombatData.GetDamageData(agent).Where(x =>
+    /// !x.ToFriendly)` PLUS every minion's own damage
+    /// (`SingleActor.InitDamageEvents`, `SingleActor.cs:727-748`) -- so it
+    /// is minion-INCLUSIVE and filtered by the arcdps `iff` byte
+    /// (`SkillEvent.ToFriendly => _iff == IFF.Friend`), not by a
+    /// destination-side roster test. Reproduced exactly here, including
+    /// the minion fold (via the same `InstidRegistry` owner resolution
+    /// `damage::accumulate_pet_credit_with_registry` uses for the squad
+    /// side).
+    ///
+    /// Folded into the always-on `combat_participant_enemies` scan rather
+    /// than paid for as its own pass (MPERF: that loop already walks every
+    /// event with the same statechange/activation/buffremove skip).
+    pub enemy_damage_out: BTreeMap<u64, u64>,
     /// Best-effort skillMap (M14, Task 2) -- see `skill_map`'s module doc.
     /// Scoped to only the skill ids squad players' `skill_damage`/
     /// `rotation`/tracked-boons actually reference, not a dump of the whole
@@ -392,6 +444,14 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // drop it. Recorded so the two definitions of "countable damage" in
     // this crate are not silent; see also `contribution::credit_window`,
     // the other carve-out.
+    // MEIGAP2 row 5: enemy OUTGOING health damage, folded into this same
+    // scan -- see `Metrics::enemy_damage_out`'s doc comment for the GW2EI
+    // definition (minion-inclusive, `iff`-filtered).
+    let mut enemy_damage_out: BTreeMap<u64, u64> = BTreeMap::new();
+    // Damage from agents that are neither squad nor a known enemy -- an
+    // enemy's minion, until proven otherwise (resolved after the scan).
+    let mut unowned_damage: BTreeMap<u64, u64> = BTreeMap::new();
+    let mut unowned_link: BTreeMap<u64, (u16, u64)> = BTreeMap::new();
     for e in &raw.events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 { continue; }
         if e.result == crate::evtc::result::CROWD_CONTROL {
@@ -410,6 +470,45 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             if let Some(&rep) = enemy_addr_to_rep.get(&e.src_agent) {
                 combat_participant_enemies.insert(rep);
             }
+        }
+        // MEIGAP2 row 5: the same rows, summed per enemy. Unlike the
+        // membership test above this one applies GW2EI's own two filters
+        // (`is_health_damage_result` -- `damage::accumulate`'s predicate,
+        // which drops the breakbar/CC result bytes GW2EI routes away from
+        // `HealthDamageEvent` -- and `!ToFriendly`, the raw `iff` byte),
+        // and it credits an enemy's MINION to the enemy, exactly as
+        // `SingleActor.InitDamageEvents` folds `mins.GetDamageEvents` in.
+        if e.iff == 0 || !damage::is_health_damage_result(e.result) { continue; }
+        if squad.contains(&e.src_agent) {
+            continue;
+        }
+        // Parked by SOURCE ADDR and attributed after the scan, because
+        // ownership has to be an AGENT-level fact rather than a per-row
+        // one -- the lesson MEIGAP Task 3b's `minions::build` records at
+        // length: arcdps emits many of a minion's rows with
+        // `src_master_instid == 0`, so a per-row master test silently
+        // drops them (measured there: 49 of 586 rows). It also matters in
+        // the other direction here: this project's enemy roster enumerates
+        // an enemy's pets as enemies of their own, so crediting by
+        // `src_agent`'s own roster entry would leave a ranger's pet damage
+        // on the pet, where GW2EI folds it onto the ranger
+        // (`SingleActor.InitDamageEvents`). Parking keeps the whole thing
+        // in ONE pass, rather than the extra full scan `minions::build`
+        // can afford as an opt-in builder.
+        *unowned_damage.entry(e.src_agent).or_default() += d as u64;
+        if e.src_master_instid != 0 {
+            unowned_link.entry(e.src_agent).or_insert((e.src_master_instid, e.time));
+        }
+    }
+    for (addr, dmg) in unowned_damage {
+        // A recorded master link wins over the agent's own roster entry;
+        // an agent with no link is its own owner.
+        let owner = unowned_link
+            .get(&addr)
+            .and_then(|&(instid, time)| registry.resolve_at(instid, time))
+            .unwrap_or(addr);
+        if let Some(&rep) = enemy_addr_to_rep.get(&owner) {
+            *enemy_damage_out.entry(rep).or_default() += dmg;
         }
     }
 
@@ -569,8 +668,17 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // referenced, plus the always-tracked boon ids -- see `skill_map`'s
     // module doc.
     let skill_map = skill_map::build(raw, &players);
+    // MEIGAP2 row 3: `instanceID`, read off the registry built at the top
+    // of this function -- no extra scan (see `Metrics::instance_ids`).
+    let instance_ids: BTreeMap<u64, u16> = enc
+        .players
+        .iter()
+        .map(|p| p.agent_addr)
+        .chain(enc.enemies.iter().map(|e| e.id))
+        .filter_map(|addr| registry.instid_of(addr).map(|instid| (addr, instid)))
+        .collect();
     Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings, has_healing_extension,
-        combat_participant_enemies, skill_map }
+        combat_participant_enemies, instance_ids, enemy_damage_out, skill_map }
 }
 
 #[cfg(test)]

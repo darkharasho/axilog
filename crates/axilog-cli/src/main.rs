@@ -300,6 +300,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .flatten();
             let minion_rollups = (skill_damage && format == Format::EiJson)
                 .then(|| axilog_core::analysis::minions::build(&raw, &enc));
+            // MEIGAP2 row 1: the player-side distributions' outcome columns
+            // ride `--skill-damage`, the same gate as the distributions they
+            // annotate -- so this pass cannot run for output that would not
+            // carry it. See `axilog_core::analysis::dist_outcomes`'s module
+            // doc for why it is a standalone pass rather than more work
+            // inside `analyze()`.
+            let dist_outcomes = (skill_damage && format == Format::EiJson)
+                .then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
+            // MEIGAP2 row 2: `players[].healthPercents` rides
+            // `--timeseries`, GW2EI's own `RawFormatTimelineArrays` gate on
+            // that field.
+            let health_percents = (timeseries && format == Format::EiJson)
+                .then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
             // M16: the damage-modifier engine runs ONLY on `--modifiers`
             // (see the flag's doc comment -- it is a separate full event
             // pass, not a copy of something `analyze()` already computed).
@@ -357,6 +370,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 healing_series: timeseries,
                                 healing_dist: skill_damage,
                                 minions: minion_rollups.as_ref(),
+                                dist_outcomes: dist_outcomes.as_ref(),
+                                health_percents: health_percents.as_ref(),
                             },
                         ))?
                     )
