@@ -40,9 +40,10 @@
 //!   seeding, owner-vs-applier field resolution) all lives inside
 //!   `extract_buff_events_with_registry` and is inherited for free.
 //! - The one thing it must supply that the boon path gets from `BOON_IDS` is
-//!   whether a buff is intensity-stacking; there is no full buff catalog in
-//!   this project yet, so each definition declares it
-//!   ([`super::model::BuffTracker::intensity`]).
+//!   whether a buff is intensity-stacking (and its capacity). That is a
+//!   property of the BUFF, so M16 Task 2 transcribes GW2EI's own `Buff`
+//!   table for the ids the catalog watches -- see
+//!   [`super::catalog::buff_stack`].
 //!
 //! ## Keying
 //!
@@ -98,10 +99,15 @@ impl BuffStates {
             // Same capacity preference order `simulate_boons_with_inputs`
             // uses: arcdps's own `sc::BUFF_INFO`-reported capacity when the
             // log carries one, else the hardcoded table.
-            let capacity = capacities
-                .get(&buff_id)
-                .copied()
-                .unwrap_or_else(|| simulator::capacity_for(buff_id));
+            // Capacity preference order: arcdps's own `sc::BUFF_INFO`
+            // capacity when the log carries one, then GW2EI's catalogued
+            // capacity (`super::catalog::buff_stack`), then M3's boon
+            // fallback table.
+            let capacity = capacities.get(&buff_id).copied().unwrap_or_else(|| {
+                super::catalog::buff_stack::stack_info(buff_id)
+                    .map(|b| b.capacity)
+                    .unwrap_or_else(|| simulator::capacity_for(buff_id))
+            });
             let intensity = wanted.get(&buff_id).copied().unwrap_or(false);
             out.timelines
                 .insert((key, buff_id), simulator::run(group, capacity, intensity, log_end_ms));

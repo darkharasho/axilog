@@ -1,5 +1,5 @@
-//! Damage modifiers -- definition framework + evaluation engine (M16,
-//! Task 1).
+//! Damage modifiers -- definition framework, evaluation engine (M16 Task 1)
+//! and definition catalog (Task 2).
 //!
 //! This is the Rust counterpart of GW2EI's
 //! `GW2EIEvtcParser/EIData/DamageModifiers/` subsystem: the "+X% while
@@ -7,12 +7,23 @@
 //! `damageModifiers` / `incomingDamageModifiers` blocks and the top-level
 //! `damageModMap` descriptor table.
 //!
-//! **Scope of Task 1: framework + engine only.** The catalog is one real
-//! definition ([`catalog::MOVING_BONUS`], Task 2 fills the table) and
-//! NOTHING is emitted anywhere -- no native-schema field, no ei-json key,
-//! no CLI/SDK surface. This module is a pure, standalone analysis (like
-//! `analysis::health` or `analysis::replay` before they were wired), so
-//! every existing output is byte-identical with it present.
+//! **Nothing is emitted anywhere yet** -- no native-schema field, no
+//! ei-json key, no CLI/SDK surface (Task 3 wires it). This module is a
+//! pure, standalone analysis (like `analysis::health` or `analysis::replay`
+//! before they were wired), so every existing output is byte-identical with
+//! it present. See the `catalog` module for what the table covers and, just as
+//! importantly, the definitions it deliberately does NOT carry.
+//!
+//! # Spec gating
+//!
+//! A definition is only offered to actors GW2EI would offer it to:
+//! `SingleActorDamageModifierHelper.cs:67-88` unions the four universal
+//! sources (`Item`, `Gear`, `Common`, `EncounterSpecific`) with
+//! `GetPersonalOutgoingModifiersPerSpec(Spec)`, and
+//! `ParserHelper.SpecToSources` (`:401-460`) maps a spec to exactly its
+//! base profession plus its elite spec. Without this every Firebrand would
+//! be credited with `Empowered` (a Warrior trait) on every hit -- see
+//! `model::ModSource::applies_to`.
 //!
 //! # The four fields, exactly
 //!
@@ -117,8 +128,20 @@
 //!   resolves as far as the wire allows.
 //! - **Early-exit checkers** (`_earlyExitCheckers`, ORed, abort the whole
 //!   modifier for an actor) and **gain adjusters** (`DamageGainAdjuster`,
-//!   e.g. the vulnerability adjuster) are not modelled; no definition needs
-//!   them yet. Both are additive to [`model::DamageModifierDef`].
+//!   e.g. the vulnerability adjuster) are not modelled. Early exit is
+//!   always paired with a minion-identity predicate in the definitions that
+//!   use it (`Mod_BeastlyWarden_Pet`, `Mod_EmpoweredIllusions`), which this
+//!   project cannot express either, so both are skipped together -- see the
+//!   `catalog` module's skipped table. Both are additive to
+//!   [`model::DamageModifierDef`].
+//! - **Buff STACK COUNT fidelity.** Buff-gated modifiers are only as exact
+//!   as the stack timelines underneath them. M3's simulator is calibrated
+//!   to a tolerance for the twelve boons and has never been calibrated for
+//!   non-boon buffs (EI's JSON exposes no per-buff timeline to calibrate
+//!   against), and it has one duration simulator where GW2EI has three
+//!   (`Queue`, `Regeneration`, `Force`). The measured consequence, per id,
+//!   is the calibration table in `tests/damage_mods_golden.rs`; the
+//!   flag-based modifiers, which need no buff state, are exact.
 //! - **`Skip` fast paths.** GW2EI short-circuits an actor entirely when the
 //!   tracked buff graph is empty (or full, for `ByAbsence`)
 //!   (`BuffOnActorDamageModifier.cs:64-66`). That is a pure performance
@@ -234,6 +257,10 @@ struct Hit<'a> {
     /// `GetFoe` through `GetFinalMaster()` --
     /// [`DamageModifierDef::foe_always_master`].
     foe_master_buff_key: u64,
+    /// Buff-timeline key for `dl.To` -- the DESTINATION of the damage row,
+    /// irrespective of direction (the foe outgoing, the squad player
+    /// incoming). Only [`HitCheck::DstLacksBuff`] reads it.
+    dst_buff_key: u64,
     /// True when the dealer is a minion rather than the player.
     from_minion: bool,
     incoming: bool,
@@ -246,7 +273,10 @@ struct Hit<'a> {
     is_src_moving: bool,
     is_against_moving: bool,
     is_over_ninety: bool,
+    is_against_under_fifty: bool,
     is_against_downed: bool,
+    is_flanking: bool,
+    has_shield_damage: bool,
 }
 
 impl Hit<'_> {
@@ -417,6 +447,24 @@ pub fn evaluate(
         enemies,
     };
 
+    // `SingleActorDamageModifierHelper.cs:67-88`: an actor is only ever
+    // offered the four universal sources plus
+    // `GetPersonalOutgoingModifiersPerSpec(Spec)`. Without this a Firebrand
+    // would be credited with `Empowered` (a Warrior trait) on every hit --
+    // the reference export has no such row, and the calibration says so
+    // loudly. Precomputed per representative addr, as a bitmask over
+    // `active`, so the hot loop is a single `&`-test per (hit, definition).
+    let eligible_defs: BTreeMap<u64, Vec<bool>> = enc
+        .players
+        .iter()
+        .map(|p| {
+            (
+                p.agent_addr,
+                active.iter().map(|d| d.applies_to_spec(&p.profession, &p.elite_spec)).collect(),
+            )
+        })
+        .collect();
+
     let mut totals: BTreeMap<u64, ActorTotals> = BTreeMap::new();
     let mut running: BTreeMap<(u64, i32), Running> = BTreeMap::new();
 
@@ -433,7 +481,11 @@ pub fn evaluate(
             }
         }
 
-        for def in &active {
+        let spec_ok = eligible_defs.get(&hit.actor);
+        for (i, def) in active.iter().enumerate() {
+            if spec_ok.is_some_and(|m| !m[i]) {
+                continue;
+            }
             if !is_eligible(def, &hit) {
                 continue;
             }
@@ -444,7 +496,7 @@ pub fn evaluate(
             // (`BuffOnActorDamageModifier.cs:97`,
             // `ComputeGain(...) && CheckCondition(...)`).
             let Some(gain) = compute_gain(def, &hit, &scope.states) else { continue };
-            if !checks_pass(def, &hit) {
+            if !checks_pass(def, &hit, &scope.states) {
                 continue;
             }
             run.hit_count += 1;
@@ -496,26 +548,31 @@ fn is_supported(def: &DamageModifierDef) -> bool {
 /// The `(buff id -> is_intensity)` set the active definitions need.
 fn wanted_buffs(active: &[&DamageModifierDef]) -> BTreeMap<u32, bool> {
     let mut out = BTreeMap::new();
-    let mut add = |t: &model::BuffTracker| {
+    fn add(out: &mut BTreeMap<u32, bool>, t: &model::BuffTracker) {
         for &id in t.ids {
-            // An id declared intensity by ANY definition is simulated as
-            // intensity; the flag is a property of the buff, so a
-            // disagreement between two definitions is a catalog bug, not a
-            // per-definition choice.
-            let e = out.entry(id).or_insert(t.intensity);
-            *e = *e || t.intensity;
+            // Stacking kind is a property of the BUFF, so it comes from the
+            // catalog's transcription of GW2EI's own `Buff` table rather
+            // than from the definition that happens to watch it -- a
+            // tracker over the twelve boons mixes intensity (Might,
+            // Stability) and duration ids, so a per-tracker flag cannot be
+            // right. See `catalog::buff_stack`.
+            out.insert(id, catalog::buff_stack::is_intensity(id));
         }
-    };
+    }
     for d in active {
         match &d.trigger {
-            Trigger::BuffOnActor { tracker, .. } => add(tracker),
+            Trigger::BuffOnActor { tracker, .. } => add(&mut out, tracker),
             Trigger::BuffOnFoe { tracker, actor_check, .. } => {
-                add(tracker);
+                add(&mut out, tracker);
                 if let Some(c) = actor_check {
-                    add(&c.tracker);
+                    add(&mut out, &c.tracker);
                 }
             }
             Trigger::Hit | Trigger::Skill(_) => {}
+        }
+        // `HitCheck::DstLacksBuff` consults a timeline too.
+        for id in d.checks.iter().filter_map(|c| c.buff_id()) {
+            out.insert(id, catalog::buff_stack::is_intensity(id));
         }
     }
     out
@@ -623,6 +680,10 @@ fn classify_hit<'a>(ev: &'a RawEvent, scope: &Scope<'_>) -> Option<Hit<'a>> {
         actor_master_buff_key,
         foe_buff_key,
         foe_master_buff_key,
+        // `dl.To` is the destination of the row: the foe outgoing, the
+        // squad player incoming -- which is exactly `foe_buff_key` in the
+        // first case and `actor` in the second.
+        dst_buff_key: if incoming { actor } else { foe_buff_key },
         from_minion,
         incoming,
         dmg: c.dmg,
@@ -635,7 +696,17 @@ fn classify_hit<'a>(ev: &'a RawEvent, scope: &Scope<'_>) -> Option<Hit<'a>> {
         is_src_moving: (ev.is_moving & 1) != 0,
         is_against_moving: c.is_against_moving,
         is_over_ninety: c.is_above_ninety,
+        // `SkillEvent.cs:37`, `AgainstUnderFifty = evtcItem.IsFifty > 0`.
+        is_against_under_fifty: ev.is_fifty != 0,
         is_against_downed: c.is_against_downed,
+        // `SkillEvent.cs:40`, `IsFlanking = evtcItem.IsFlanking > 0`.
+        is_flanking: ev.is_flanking != 0,
+        // `DirectHealthDamageEvent.cs:17` / `NonDirectHealthDamageEvent.cs:17`
+        // -- the shield amount is `OverstackValue` on a direct row and the
+        // health damage itself on a non-direct one, so "> 0" is
+        // `is_shields` plus a non-zero magnitude in the matching field.
+        has_shield_damage: ev.is_shields != 0
+            && if c.is_direct_hit { ev.overstack > 0 } else { c.dmg > 0 },
     })
 }
 
@@ -774,15 +845,19 @@ fn compute_gain(def: &DamageModifierDef, hit: &Hit<'_>, states: &BuffStates) -> 
 
 /// `CheckCondition` -- every checker ANDed
 /// (`DamageModifierDescriptor.cs:128-130`).
-fn checks_pass(def: &DamageModifierDef, hit: &Hit<'_>) -> bool {
+fn checks_pass(def: &DamageModifierDef, hit: &Hit<'_>, states: &BuffStates) -> bool {
     def.checks.iter().all(|c| match *c {
         HitCheck::SrcMoving => hit.is_src_moving,
         HitCheck::AgainstMoving => hit.is_against_moving,
         HitCheck::OverNinety => hit.is_over_ninety,
+        HitCheck::AgainstUnderFifty => hit.is_against_under_fifty,
         HitCheck::AgainstDowned => hit.is_against_downed,
         HitCheck::Crit => hit.is_crit,
         HitCheck::Glance => hit.is_glance,
+        HitCheck::Flanking => hit.is_flanking,
+        HitCheck::ShieldDamage => hit.has_shield_damage,
         HitCheck::SkillId(id) => hit.ev.skillid == id,
+        HitCheck::DstLacksBuff(id) => states.stack_at(hit.dst_buff_key, id, hit.ev.time) == 0,
     })
 }
 

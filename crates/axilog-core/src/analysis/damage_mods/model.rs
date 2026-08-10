@@ -209,14 +209,44 @@ pub enum HitCheck {
     /// (see [`crate::evtc::RawEvent::is_ninety`]'s doc comment for the
     /// "source's own health, not the target's" nuance).
     OverNinety,
+    /// `HealthDamageEvent.AgainstUnderFifty` -- the TARGET is below 50%
+    /// health. `SkillEvent.cs:37`: `AgainstUnderFifty = evtcItem.IsFifty > 0`
+    /// (see [`crate::evtc::RawEvent::is_fifty`]).
+    AgainstUnderFifty,
     /// `HealthDamageEvent.AgainstDowned`.
     AgainstDowned,
     /// `HealthDamageEvent.HasCrit`.
     Crit,
     /// `HealthDamageEvent.HasGlanced`.
     Glance,
+    /// `HealthDamageEvent.IsFlanking` -- the SOURCE is flanking the target.
+    /// `SkillEvent.cs:40`: `IsFlanking = evtcItem.IsFlanking > 0`.
+    Flanking,
+    /// `dl.ShieldDamage > 0` -- the hit ate barrier.
+    /// `DirectHealthDamageEvent.cs:17` (`IsShields > 0 ? OverstackValue : 0`)
+    /// and `NonDirectHealthDamageEvent.cs:17` (`IsShields > 0 ?
+    /// HealthDamage : 0`).
+    ShieldDamage,
     /// `dl.SkillID == id`.
     SkillId(u32),
+    /// "the hit's DESTINATION does not carry buff `id`". GW2EI writes this
+    /// as `evt.To.HasBuff(log, id, evt.Time)` inside a named checker
+    /// (`SharedDamageModifiers.VulnerabilityActiveCheck`, `:14-31`) rather
+    /// than as a flag on the row, so unlike every other variant here this
+    /// one consults a buff timeline -- the DESTINATION's, which is the foe
+    /// for an outgoing modifier and the squad player for an incoming one.
+    DstLacksBuff(u32),
+}
+
+impl HitCheck {
+    /// The buff ids this check needs a timeline for (so
+    /// `super::wanted_buffs` can request them).
+    pub fn buff_id(self) -> Option<u32> {
+        match self {
+            HitCheck::DstLacksBuff(id) => Some(id),
+            _ => None,
+        }
+    }
 }
 
 /// GW2EI's `BuffsTracker` (`DamageModifiers/BuffsTrackers/`) -- which buff
@@ -234,12 +264,6 @@ pub struct BuffTracker {
     /// (`stack += bgms[key].GetStackCount(time) > 0 ? 1 : 0`), never a sum
     /// of stacks.
     pub multi: bool,
-    /// Whether the watched buff is an intensity (stacking) buff, for the
-    /// [`crate::analysis::buffs::simulator`] run that produces its
-    /// stack-count timeline. GW2EI reads this off its own `Buff` catalog
-    /// (`BuffStackType`); this project has no full buff catalog yet
-    /// (`BOON_IDS` covers only the 12 boons), so a definition declares it.
-    pub intensity: bool,
 }
 
 /// What makes a hit "qualify" -- GW2EI's `DamageModifierDescriptor`
@@ -353,9 +377,40 @@ pub enum ModSource {
     Common,
     /// Encounter-specific (`EncounterDamageModifiers.cs`).
     Encounter,
-    /// A profession/elite-spec modifier; the string is the spec name as
-    /// this project spells it in `Player::elite_spec`/`profession`.
+    /// A profession/elite-spec modifier. The string is GW2EI's `Source`
+    /// name verbatim -- either a base profession (`"Guardian"`), an elite
+    /// spec (`"Firebrand"`), or the core-only marker
+    /// (`"BaseGuardianOnly"`), which are exactly the two entries
+    /// `ParserHelper.SpecToSources` maps each `Spec` to (`:401-460`).
     Spec(&'static str),
+}
+
+impl ModSource {
+    /// `SingleActorDamageModifierHelper` offers a modifier to an actor iff
+    /// it is one of the four universal sources (`:67-84`, `Item`, `Gear`,
+    /// `Common`, `EncounterSpecific`) or its source is in
+    /// `SpecToSources(actor.Spec)` (`:88`,
+    /// `GetPersonalOutgoingModifiersPerSpec`).
+    ///
+    /// `profession` is the base name (`"Guardian"`) and `elite_spec` the
+    /// elite one (`"Firebrand"`, empty for a core build) -- exactly this
+    /// project's `Player` split.
+    pub fn applies_to(self, profession: &str, elite_spec: &str) -> bool {
+        match self {
+            ModSource::Item | ModSource::Gear | ModSource::Common | ModSource::Encounter => true,
+            ModSource::Spec(s) => {
+                if s == profession {
+                    return true;
+                }
+                if elite_spec.is_empty() {
+                    // `{ Spec.Guardian, [Source.Guardian, Source.BaseGuardianOnly] }`
+                    s.strip_prefix("Base").and_then(|r| r.strip_suffix("Only")) == Some(profession)
+                } else {
+                    s == elite_spec
+                }
+            }
+        }
+    }
 }
 
 /// One damage-modifier definition.
@@ -382,6 +437,14 @@ pub struct DamageModifierDef {
     /// baked into the catalog.
     pub description: &'static str,
     pub source: ModSource,
+    /// `.UsingSpecSpecificShared()` (`DamageModifierDescriptor.cs:117-121`):
+    /// the modifier remembers its spec for display, but
+    /// `DamageModifiersContainer` files it under `Source.Common`
+    /// (`:89-96`), i.e. it is offered to EVERY actor. Real and
+    /// WvW-relevant -- e.g. `Mod_LuminarysBlessing`
+    /// (`LuminaryHelper.cs:73-85`), which the reference export shows on ten
+    /// accounts of eight different specs.
+    pub spec_specific_shared: bool,
     /// PERCENT per stack; GW2EI's ctor throws on `0.0`
     /// (`DamageModifierDescriptor.cs:60`). Negative for damage REDUCTION
     /// modifiers (which the same formulas handle: `-10/(100-10)`).
@@ -473,6 +536,13 @@ impl DamageModifierDef {
     /// [`DamageSource::Incoming`] (both GW2EI ctors assert the equivalence).
     pub fn incoming(&self) -> bool {
         self.dmg_src == DamageSource::Incoming
+    }
+
+    /// Whether this definition is offered to a player of the given spec at
+    /// all -- see [`ModSource::applies_to`]. `spec_specific_shared` demotes
+    /// the source to `Common`, so it is offered to everyone.
+    pub fn applies_to_spec(&self, profession: &str, elite_spec: &str) -> bool {
+        self.spec_specific_shared || self.source.applies_to(profession, elite_spec)
     }
 
     /// The signed id used as the `damageModMap` key (minus the `"d"`

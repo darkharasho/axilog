@@ -49,7 +49,7 @@ mod tests {
     fn ev(time: u64, src: u64, dst: u64, value: i32, result_: u8, sc: u8) -> RawEvent {
         RawEvent { time, src_agent: src, dst_agent: dst, value, buff_dmg: 0, overstack: 0,
             skillid: 1, src_instid: 0, dst_instid: 0, src_master_instid: 0, dst_master_instid: 0,
-            iff: 1, buff: 0, result: result_, is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: sc, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
+            iff: 1, buff: 0, result: result_, is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: sc, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
     #[test]
     fn counts_downs_dealt_and_kills_dealt() {

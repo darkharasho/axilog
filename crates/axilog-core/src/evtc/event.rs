@@ -791,7 +791,16 @@ pub struct RawEvent {
     /// deviates from a naive reading of "above90" as being about the
     /// target).
     pub is_ninety: u8,
-    /// Offset 55, between `is_fifty` (54, NOT decoded) and `is_statechange`
+    /// Offset 54, between `is_ninety` (53) and `is_moving` (55). Decoded
+    /// starting M16 Task 2: three catalogued damage modifiers gate on it
+    /// (`Mod_RelicOfTheEagle`, `Mod_CloseToDeath`, `Mod_BoltToTheHeart`).
+    /// Per the live arcdps EVTC reference (`CBTS_COMBAT` block):
+    /// "`is_fifty: target is below 50% health`" -- unlike `is_ninety` this
+    /// one IS about the TARGET, which is why GW2EI names the two asymmetrically
+    /// (`SkillEvent.cs:36-37`, `IsOverNinety = evtcItem.IsNinety > 0` vs
+    /// `AgainstUnderFifty = evtcItem.IsFifty > 0`).
+    pub is_fifty: u8,
+    /// Offset 55, between `is_fifty` (54) and `is_statechange`
     /// (56). Decoded starting M13 Task 1 (`analysis::hit_stats`'s
     /// `moving_count` needs it). Per the live arcdps EVTC reference
     /// (`CBTS_COMBAT` block): "`is_moving: bit0 set if src is moving, bit1
@@ -889,6 +898,7 @@ pub fn decode_events(buf: &[u8], count: usize) -> Result<Vec<RawEvent>, EvtcErro
             is_activation: e[51],
             is_buffremove: e[52],
             is_ninety: e[53],
+            is_fifty: e[54],
             is_moving: e[55],
             is_statechange: e[56],
             is_flanking: e[57],

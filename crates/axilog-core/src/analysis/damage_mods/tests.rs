@@ -99,7 +99,7 @@ fn blank(time: u64, src: u64, dst: u64) -> RawEvent {
         result: result::NORMAL,
         is_activation: 0,
         is_buffremove: 0,
-        is_ninety: 0,
+        is_ninety: 0, is_fifty: 0,
         is_moving: 0,
         is_statechange: 0,
         is_flanking: 0,
@@ -149,6 +149,7 @@ fn def_template() -> DamageModifierDef {
         icon: "",
         description: "",
         source: model::ModSource::Common,
+        spec_specific_shared: false,
         gain_per_stack: 10.0,
         gain: GainComputer::ByPresence,
         trigger: Trigger::Hit,
@@ -472,7 +473,7 @@ fn buff_on_actor_by_stack_reads_the_stack_count_at_hit_time() {
         gain_per_stack: 3.0,
         gain: GainComputer::ByStack,
         trigger: Trigger::BuffOnActor {
-            tracker: model::BuffTracker { ids: &MIGHT, multi: false, intensity: true },
+            tracker: model::BuffTracker { ids: &MIGHT, multi: false },
             from_foe: false,
         },
         ..def_template()
@@ -500,7 +501,7 @@ fn buff_on_actor_by_absence_pays_before_the_buff_lands() {
         gain_per_stack: 10.0,
         gain: GainComputer::ByAbsence,
         trigger: Trigger::BuffOnActor {
-            tracker: model::BuffTracker { ids: &STAB, multi: false, intensity: true },
+            tracker: model::BuffTracker { ids: &STAB, multi: false },
             from_foe: false,
         },
         ..def_template()
@@ -526,7 +527,7 @@ fn multi_tracker_counts_distinct_present_buffs_not_stacks() {
         gain_per_stack: 5.0,
         gain: GainComputer::ByMultiPresence,
         trigger: Trigger::BuffOnActor {
-            tracker: model::BuffTracker { ids: &IDS, multi: true, intensity: true },
+            tracker: model::BuffTracker { ids: &IDS, multi: true },
             from_foe: false,
         },
         ..def_template()
@@ -555,7 +556,7 @@ fn buff_on_foe_modifiers_are_dropped_in_wvw() {
     static VULN: [u32; 1] = [738];
     let def = DamageModifierDef {
         trigger: Trigger::BuffOnFoe {
-            tracker: model::BuffTracker { ids: &VULN, multi: false, intensity: true },
+            tracker: model::BuffTracker { ids: &VULN, multi: false },
             actor_check: None,
             from_actor: false,
         },
@@ -575,7 +576,7 @@ fn from_foe_buff_definitions_are_skipped_as_unsupported() {
     static IDS: [u32; 1] = [crate::analysis::buffs::MIGHT];
     let def = DamageModifierDef {
         trigger: Trigger::BuffOnActor {
-            tracker: model::BuffTracker { ids: &IDS, multi: false, intensity: true },
+            tracker: model::BuffTracker { ids: &IDS, multi: false },
             from_foe: true,
         },
         ..def_template()
@@ -759,7 +760,7 @@ fn actor_always_master_reads_the_owners_buff_state_for_a_minion_hit() {
         gain: GainComputer::ByPresence,
         dmg_src: DamageSource::All,
         trigger: Trigger::BuffOnActor {
-            tracker: model::BuffTracker { ids: &MIGHT, multi: false, intensity: true },
+            tracker: model::BuffTracker { ids: &MIGHT, multi: false },
             from_foe: false,
         },
         ..def_template()
@@ -798,6 +799,7 @@ fn foe_always_master_selects_the_targets_owner_key() {
         actor_master_buff_key: 1,
         foe_buff_key: 88,
         foe_master_buff_key: 9,
+        dst_buff_key: 88,
         from_minion: true,
         incoming: false,
         dmg: 1,
@@ -809,7 +811,10 @@ fn foe_always_master_selects_the_targets_owner_key() {
         is_src_moving: false,
         is_against_moving: false,
         is_over_ninety: false,
+        is_against_under_fifty: false,
         is_against_downed: false,
+        is_flanking: false,
+        has_shield_damage: false,
     };
     assert_eq!(hit.actor_key(&base), 77);
     assert_eq!(hit.foe_key(&base), 88);
@@ -838,7 +843,7 @@ fn from_actor_foe_buff_definitions_are_skipped_as_unsupported() {
     static VULN: [u32; 1] = [738];
     let def = DamageModifierDef {
         trigger: Trigger::BuffOnFoe {
-            tracker: model::BuffTracker { ids: &VULN, multi: false, intensity: true },
+            tracker: model::BuffTracker { ids: &VULN, multi: false },
             actor_check: None,
             from_actor: true,
         },
@@ -907,7 +912,7 @@ fn validate_rejects_gw2ei_impossible_definitions() {
     static TWO: [u32; 2] = [740, 725];
     assert!(DamageModifierDef {
         trigger: Trigger::BuffOnActor {
-            tracker: model::BuffTracker { ids: &TWO, multi: false, intensity: true },
+            tracker: model::BuffTracker { ids: &TWO, multi: false },
             from_foe: false,
         },
         ..def_template()

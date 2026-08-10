@@ -516,7 +516,7 @@ mod tests {
         RawEvent { time: 0, src_agent: src, dst_agent: dst, value: dmg, buff_dmg: 0,
             overstack: 0, skillid: 1, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 1, buff: 0, result: 0,
-            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
 
     fn raw_from(events: Vec<RawEvent>) -> RawLog {
@@ -719,7 +719,7 @@ mod tests {
                 time: 0, src_agent: 1, dst_agent: 2, value: 5000, buff_dmg: 0,
                 overstack: 0, skillid: buffs::MIGHT, src_instid: 0, dst_instid: 0,
                 src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 1, result: 0,
-                is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: sc::BUFF_APPLY,
+                is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: sc::BUFF_APPLY,
                 is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
             }],
             guid_map: vec![],

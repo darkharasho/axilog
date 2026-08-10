@@ -1240,7 +1240,7 @@ mod tests {
                 time: 0, src_agent: 1, dst_agent: u64::from_le_bytes(dst), value: 0,
                 buff_dmg: 0, overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
                 src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
-                is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: sc::POSITION,
+                is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: sc::POSITION,
                 is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
             }],
             guid_map: vec![],
@@ -1284,7 +1284,7 @@ mod tests {
                 time, src_agent: src, dst_agent: dst, value: 0, buff_dmg: 0, overstack: 0,
                 skillid: 0, src_instid: 0, dst_instid: 0, src_master_instid: 0,
                 dst_master_instid: 0, iff: 0, buff: 0, result: 0, is_activation: 0,
-                is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: statechange, is_flanking, is_shields: 0,
+                is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: statechange, is_flanking, is_shields: 0,
                 is_offcycle: 0, pad,
             }
         }
