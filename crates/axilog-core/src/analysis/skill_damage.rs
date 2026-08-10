@@ -589,7 +589,7 @@ pub fn build_enemy_dist(
 /// blocked or evaded strike is a real `HealthDamageEvent` with
 /// `hits > 0, connectedHits = 0`, and the reference export carries 53 such
 /// all-zero rows. Dropping them would trade one row-set error for another.
-fn creates_health_damage_event(e: &RawEvent, post_era: bool) -> bool {
+pub(crate) fn creates_health_damage_event(e: &RawEvent, post_era: bool) -> bool {
     // Cast events (`IsCastEvent`) and buff removals are taken by earlier
     // dispatch branches on both eras.
     if e.is_activation != 0 || e.is_buffremove != 0 {

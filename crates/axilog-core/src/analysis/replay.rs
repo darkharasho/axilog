@@ -557,7 +557,7 @@ mod tests {
             in_squad: true,
             commander: true,
             marker: None,
-            commander_tag: None,
+            commander_tag: None, guild_id: None,
             agent_addrs: vec![addr],
         }
     }

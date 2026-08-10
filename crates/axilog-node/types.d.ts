@@ -208,6 +208,13 @@ export interface SupportOut {
   cleanses: number
   cleanses_self: number
   strips: number
+  /**
+   * True total remaining duration (ms) of every boon counted by `strips`
+   * (MEIGAP Task 3e). NOT the same number as EI's own
+   * `support[0].boonStripsTime`, whose accumulator is buggy -- see the
+   * Rust doc on `SupportMetrics::strips_duration_ms`.
+   */
+  strips_duration_ms: number
   resurrects: number
 }
 
@@ -327,6 +334,12 @@ export interface PlayerOut {
   marker?: string
   /** Present when `commander` is true. */
   commander_tag?: CommanderTagOut
+  /**
+   * Guild GUID from `CBTS_GUILD` (MEIGAP Task 3c), uppercase
+   * dash-separated. Omitted when the log carries no guild row for this
+   * account.
+   */
+  guild_id?: string
   damage: DamageOut
   downs_dealt: number
   kills_dealt: number

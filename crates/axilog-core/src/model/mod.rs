@@ -30,6 +30,13 @@ pub struct Player { pub agent_addr: u64, pub account: String, pub character: Str
     /// ever_commander`'s doc comment for the real-log finding that drove
     /// this.
     pub commander_tag: Option<CommanderTag>,
+    /// Guild GUID from `CBTS_GUILD`, uppercase dash-separated, or `None`
+    /// when the log carries no guild row for any of this account's addrs
+    /// (MEIGAP Task 3c). This is GW2EI's `players[].guildID` verbatim,
+    /// including the all-zero GUID an unrepresented player reports -- see
+    /// `crate::wvw::guilds` for the byte permutation and why no external
+    /// data is needed.
+    pub guild_id: Option<String>,
     /// Every raw agent addr observed for this account (relogs / build
     /// swaps each get a new addr from arcdps). `agent_addr` above is the
     /// representative; this always contains at least that value.
@@ -170,7 +177,7 @@ pub fn resolve(raw: &RawLog) -> Encounter {
                 players.push(Player {
                     agent_addr: a.addr, account, character, profession, elite_spec,
                     team: String::new(), subgroup: sub.unwrap_or(0),
-                    in_squad: true, commander: false, marker: None, commander_tag: None,
+                    in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
                     agent_addrs: vec![a.addr],
                 });
             }

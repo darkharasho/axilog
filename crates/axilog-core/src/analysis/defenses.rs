@@ -434,7 +434,7 @@ impl DefenseStats {
 /// taken breakdown" section). One variant per branch of
 /// `DefensePerTargetStatistics`'s ctor -- including `PowerOnly`, the FOURTH
 /// BUCKET that MCONDCAT Task 1 made representable.
-enum HitKind {
+pub(crate) enum HitKind {
     /// `buff == 0`, not catalogued: `strike_*` AND `power_*`.
     Strike,
     /// Skill id ∈ `condition_catalog`: `condition_*` ONLY (never power).
@@ -455,7 +455,7 @@ enum HitKind {
 /// One incoming damage-shaped row's classification -- unlike `hit_stats::
 /// Classified` (which only exists for HITS), this covers every outcome
 /// `DefensePerTargetStatistics` tracks, hit or not.
-enum Outcome {
+pub(crate) enum Outcome {
     Hit { dmg: u64, kind: HitKind, shield_dmg: u64 },
     Blocked,
     Evaded,
@@ -471,6 +471,10 @@ enum Outcome {
 /// any buff==1 row whose `result` GW2EI silently drops with no event at
 /// all). Reuses `hit_stats::classify`'s exact era/result-byte semantics,
 /// just widened to also surface the non-hit outcomes.
+pub(crate) fn classify_outcome(e: &RawEvent, post_era: bool) -> Option<Outcome> {
+    classify(e, post_era)
+}
+
 fn classify(e: &RawEvent, post_era: bool) -> Option<Outcome> {
     let dmg = if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
 

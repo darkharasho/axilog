@@ -264,6 +264,10 @@ class SupportOut(TypedDict):
     cleanses: int
     cleanses_self: int
     strips: int
+    #: True total remaining duration (ms) of every boon counted by
+    #: ``strips`` (MEIGAP Task 3e). NOT EI's own ``boonStripsTime``, whose
+    #: accumulator is buggy -- see ``SupportMetrics::strips_duration_ms``.
+    strips_duration_ms: int
     resurrects: int
 
 # --- contribution family (M11, Task 2) --------------------------------------
@@ -505,6 +509,10 @@ class PlayerOut(_PlayerOutRequired, total=False):
     per_target: List[PerTargetStatsOut]
     marker: str
     commander_tag: CommanderTagOut
+    #: Guild GUID from ``CBTS_GUILD`` (MEIGAP Task 3c), uppercase
+    #: dash-separated. Omitted when the log has no guild row for this
+    #: account.
+    guild_id: str
     healing: HealingOut
     skill_damage: SkillDamageOut
     per_second: PlayerPerSecondOut

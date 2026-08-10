@@ -508,7 +508,14 @@ pub struct BoonOut {
 /// counts stay on `CcOut` (already there since M1) rather than duplicated
 /// here -- see the Task 5 brief.
 #[derive(Serialize)]
-pub struct SupportOut { pub cleanses: u32, pub cleanses_self: u32, pub strips: u32, pub resurrects: u32 }
+pub struct SupportOut { pub cleanses: u32, pub cleanses_self: u32, pub strips: u32,
+    /// True total remaining duration (ms) of every boon counted by
+    /// `strips` (MEIGAP Task 3e) -- see
+    /// `axilog_core::analysis::support::SupportMetrics::strips_duration_ms`
+    /// for why GW2EI's own exported `boonStripsTime` is a different (buggy)
+    /// number.
+    pub strips_duration_ms: u64,
+    pub resurrects: u32 }
 /// The arcdps-methodology contribution family's four stats (M11, Task 2) --
 /// mirrors `axilog_core::analysis::contribution::ContributionMetrics`
 /// field-for-field. Used for BOTH `PlayerOut::downs_contribution`
@@ -636,6 +643,12 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// tag.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commander_tag: Option<CommanderTagOut>,
+    /// Guild GUID from `CBTS_GUILD` (MEIGAP Task 3c) -- GW2EI's
+    /// `players[].guildID`, uppercase dash-separated. Omitted when the log
+    /// carries no guild row for this account. See
+    /// `axilog_core::wvw::guilds`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild_id: Option<String>,
     pub damage: DamageOut, pub downs_dealt: u32, pub kills_dealt: u32,
     pub downs_taken: u32, pub deaths: u32, pub damage_taken: u64,
     pub cc: CcOut,
@@ -1002,6 +1015,7 @@ pub fn build_report(
             commander: p.commander,
             marker: p.marker.clone(),
             commander_tag: p.commander_tag.as_ref().map(|t| CommanderTagOut { variant: t.variant.clone(), guid: t.guid.clone() }),
+            guild_id: p.guild_id.clone(),
             damage: DamageOut {
                 total: m.map(|m| m.damage_total).unwrap_or(0),
                 dps: m.map(|m| m.dps).unwrap_or(0.0),
@@ -1071,8 +1085,9 @@ pub fn build_report(
             },
             support: m.map(|m| SupportOut {
                 cleanses: m.support.cleanses, cleanses_self: m.support.cleanses_self,
-                strips: m.support.strips, resurrects: m.support.resurrects,
-            }).unwrap_or(SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 }),
+                strips: m.support.strips, strips_duration_ms: m.support.strips_duration_ms,
+                resurrects: m.support.resurrects,
+            }).unwrap_or(SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 }),
             healing: if metrics.has_healing_extension {
                 Some(m.map(|m| HealingOut {
                     healing_out_total: m.healing.healing_out_total,
@@ -1273,7 +1288,7 @@ mod tests {
             duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"".into(),
-            team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]}],
+            team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]}],
             enemies:vec![], markers:vec![], tick_rate:None };
         let m = Metrics { players: vec![PlayerMetrics{agent_addr:1,damage_total:500,
             dps:500.0,..Default::default()}],
@@ -1309,10 +1324,10 @@ mod tests {
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
-                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
                 Player{agent_addr:2,account:":B.1".into(),character:"B".into(),
                     profession:"Guardian".into(),elite_spec:"".into(),team:"red".into(),
-                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![2]},
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![2]},
             ],
             enemies:vec![], markers:vec![], tick_rate:None };
         let m = Metrics { players: vec![
@@ -1353,7 +1368,7 @@ mod tests {
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
-                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
             enemies:vec![], markers:vec![], tick_rate:None };
         let entry = SkillEntry { skill_id: 100, total: 50, hits: 1, min: 50, max: 50, crit_hits: 0, flank_hits: 0 };
@@ -1402,7 +1417,7 @@ mod tests {
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
-                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
             enemies:vec![], markers:vec![], tick_rate:None };
         let m = Metrics { players: vec![
@@ -1462,7 +1477,7 @@ mod tests {
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
-                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]},
+                    subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
             enemies:vec![], markers:vec![], tick_rate:None };
         let m = Metrics { players: vec![
@@ -1541,7 +1556,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "Alice".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: true, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: true, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1],
         };
         let enc = Encounter {
@@ -1590,7 +1605,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "Alice".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1],
         };
         let enc = Encounter {

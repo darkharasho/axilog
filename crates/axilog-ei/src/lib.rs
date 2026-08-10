@@ -4,6 +4,8 @@ use axilog_core::analysis::buffs::{BoonStates, BOON_IDS};
 use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
 use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::analysis::replay::{ActivityIntervals, Interval};
+use axilog_core::analysis::healing_detail::{HealDistEntry, HealingDetail};
+use axilog_core::analysis::minions::MinionRollups;
 use axilog_core::analysis::skill_damage::SkillEntry;
 use axilog_core::analysis::target_conditions::TargetConditionStates;
 use axilog_core::analysis::timeseries::EnemySeries;
@@ -188,6 +190,37 @@ fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
 /// (EI's attempt count) stays absent rather than being filled with a number
 /// that means something else; the exact residual is stated in
 /// `skill_damage::build_enemy_dist`'s doc comment.
+/// `extHealingStats.totalHealingDist[0]` / `extBarrierStats
+/// .totalBarrierDist[0]` (MEIGAP Task 3a) -- GW2EI's `EXTJsonHealingDist`
+/// / `EXTJsonBarrierDist` shape, field-for-field.
+///
+/// `total_key` is `"totalHealing"` or `"totalBarrier"`; `indirect_key`
+/// follows it (`"indirectHealing"` / `"indirectBarrier"`).
+/// `with_downed` adds `totalDownedHealing`, which exists only on the
+/// healing side (`EXTJsonBarrierDist` has no downed field at all).
+fn heal_dist_json(rows: &[HealDistEntry], total_key: &str, with_downed: bool) -> Value {
+    Value::Array(
+        rows.iter()
+            .map(|r| {
+                let mut o = serde_json::Map::new();
+                o.insert("id".into(), Value::from(r.skill_id));
+                o.insert(total_key.into(), Value::from(r.total));
+                if with_downed {
+                    o.insert("totalDownedHealing".into(), Value::from(r.total_downed));
+                }
+                o.insert("hits".into(), Value::from(r.hits));
+                o.insert("min".into(), Value::from(r.min));
+                o.insert("max".into(), Value::from(r.max));
+                o.insert(
+                    if with_downed { "indirectHealing".into() } else { "indirectBarrier".to_string() },
+                    Value::from(r.indirect),
+                );
+                Value::Object(o)
+            })
+            .collect(),
+    )
+}
+
 fn enemy_skill_entry_ei_json(e: &SkillEntry) -> Value {
     json!({
         "id": e.skill_id,
@@ -544,6 +577,52 @@ pub struct EiInputs<'a> {
     /// (`JsonBuffsUptimeBuilder.cs:52`), the same gate the player-side
     /// [`Self::boon_states`] rides.
     pub target_conditions: Option<&'a TargetConditionStates>,
+    /// `healing_detail` (MEIGAP Task 3a): per-ally / per-skill / per-second
+    /// healing and barrier from
+    /// `axilog_core::analysis::healing_detail::build`, or `None` (which is
+    /// also what that function returns on a log with no healing
+    /// extension). Positionally joined to `report.players`, in both the
+    /// outer index and the inner ally index.
+    ///
+    /// The OPT-IN gate for `extHealingStats.outgoingHealingAllies` /
+    /// `.totalHealingDist` / `.healing1S` and
+    /// `extBarrierStats.outgoingBarrierAllies` / `.totalBarrierDist`. The
+    /// three families are gated SEPARATELY once this input is present --
+    /// see [`Self::healing_series`] and [`Self::healing_dist`], which are
+    /// the two flag bits the caller sets alongside it.
+    ///
+    /// Side-channel rather than a `Report` field for the same reason
+    /// [`Self::enemy_dist`] is: it is a per-(player, ally) matrix and a
+    /// per-skill map that the native schema deliberately reduces to the
+    /// five `HealingOut` scalars.
+    pub healing_detail: Option<&'a HealingDetail>,
+    /// Emit `extHealingStats.healing1S` -- set by the caller exactly when
+    /// `--timeseries`/SDK `timeseries: true` was requested, GW2EI's own
+    /// gate on that field
+    /// (`EXTJsonPlayerHealingStatsBuilder.cs:30`, inside
+    /// `if (settings.RawFormatTimelineArrays)`). Ignored when
+    /// [`Self::healing_detail`] is `None`.
+    pub healing_series: bool,
+    /// Emit `extHealingStats.outgoingHealingAllies` / `.totalHealingDist`
+    /// and `extBarrierStats.outgoingBarrierAllies` / `.totalBarrierDist` --
+    /// set by the caller exactly when `--skill-damage`/SDK
+    /// `skill_damage: true` was requested. GW2EI emits all four
+    /// unconditionally; they ride the per-skill flag here for PAYLOAD (the
+    /// ally matrices alone are +36.0% on the flagless committed fixture and
+    /// grow quadratically in squad size), the same treatment
+    /// `totalDamageDist` already gets, and axibridge hardcodes that flag to
+    /// `true`. Ignored when [`Self::healing_detail`] is `None`.
+    pub healing_dist: bool,
+    /// `minions` (MEIGAP Task 3b): per-player minion damage-taken rollups
+    /// from `axilog_core::analysis::minions::build`, or `None`. The OPT-IN
+    /// gate for `players[].minions[]`, positionally joined to
+    /// `report.players`.
+    ///
+    /// Gated by the caller on `--skill-damage` -- it is a per-skill
+    /// distribution like every other `*Dist` block. See
+    /// `axilog_core::analysis::minions`' module doc for the (very small)
+    /// read surface this reproduces.
+    pub minions: Option<&'a MinionRollups>,
 }
 
 /// Render a [`Report`] plus its EI-only side inputs as Elite-Insights-
@@ -560,7 +639,17 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
         enemy_series,
         enemy_dist,
         target_conditions,
+        healing_detail,
+        healing_series,
+        healing_dist,
+        minions,
     } = *inputs;
+    // Positional-join guards, same convention `replay` uses just below: a
+    // hand-built `Report` (every unit test) can violate them, and dropping
+    // the whole surface beats mis-attributing one player's healing to
+    // another.
+    let healing_detail = healing_detail.filter(|d| d.len() == report.players.len());
+    let minions = minions.filter(|m| m.len() == report.players.len());
     // Positional join guard: the tracks must be `report.players` followed by
     // the enemy-PLAYER subset of `report.all_enemies`, in those orders. A
     // caller that hand-builds a `Report` (every unit test below) can violate
@@ -859,6 +948,17 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 "condiCleanse": p.support.cleanses,
                 "condiCleanseSelf": p.support.cleanses_self,
                 "boonStrips": p.support.strips,
+                // MEIGAP Task 3e: the outgoing twin of
+                // `defenses[0].boonStripsTime`, and the same deliberate,
+                // calibrated divergence -- axilog emits the TRUE sum in
+                // seconds, GW2EI's own export carries the value its buggy
+                // `Math.Max(foeTime + RemovedDuration, LogDuration)`
+                // accumulator produces
+                // (`SupportPerAllyStatistics.cs`). See
+                // `axilog_core::analysis::support::SupportMetrics::
+                // strips_duration_ms` for the full transcription and what
+                // the calibration's reconstruction pins.
+                "boonStripsTime": ei_time_secs(p.support.strips_duration_ms),
                 "resurrects": p.support.resurrects
             } ],
             // `buffUptimes[]` (M3 Task 5): one entry per tracked boon (the 12 in
@@ -1188,6 +1288,17 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 .collect();
             obj.insert("dpsTargets".to_string(), json!(dps_targets));
         }
+        // `guildID` (MEIGAP Task 3c): GW2EI's own field, decoded from the
+        // `CBTS_GUILD` statechange -- see `axilog_core::wvw::guilds` for
+        // the byte permutation and for why this needs no GW2-API lookup.
+        // Inserted conditionally rather than as a `json!` key so a log
+        // without guild rows carries no `"guildID": null` noise; axibridge
+        // guards with `typeof player?.guildID === 'string'`
+        // (`src/shared/squadGuilds.ts:18`) either way.
+        if let Some(g) = &p.guild_id {
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
+            obj.insert("guildID".to_string(), Value::from(g.clone()));
+        }
         // `extHealingStats`/`extBarrierStats` (M10 Task 1): only when this
         // log carries the healing extension at all (`p.healing` is `None`
         // otherwise -- `axilog_schema::PlayerOut.healing`'s doc comment).
@@ -1210,27 +1321,123 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
         // which has no direct EI-field-name equivalent to reuse here) --
         // omitted rather than faked, same convention as `statsTargets`/
         // `support` above.
+        //
+        // MEIGAP Task 3a fills in three of those gaps --
+        // `outgoingHealingAllies`, `totalHealingDist`, `healing1S` (and
+        // the two barrier twins) -- from `EiInputs::healing_detail`. The
+        // rest of the sentence above still stands: the skill-type
+        // breakdown, `incomingHealing` and every `allied*`/`*Received1S`
+        // array remain uncomputed and unemitted.
         if let Some(h) = &p.healing {
+            let detail = healing_detail.and_then(|d| d.get(player_idx));
+            let mut healing = json!({
+                "outgoingHealing": [ {
+                    "healing": h.healing_out_total,
+                    "hps": (h.healing_out_total as f64 / duration_secs).round() as i64,
+                    "downedHealing": h.downed_healing_out,
+                    "downedHps": (h.downed_healing_out as f64 / duration_secs).round() as i64,
+                } ]
+            });
+            let mut barrier = json!({
+                "outgoingBarrier": [ {
+                    "barrier": h.barrier_out,
+                    "bps": (h.barrier_out as f64 / duration_secs).round() as i64,
+                } ]
+            });
+            if let Some(d) = detail {
+                let ho = healing.as_object_mut().expect("object literal");
+                let bo = barrier.as_object_mut().expect("object literal");
+                // `outgoingHealingAllies[allyIndex][phase]` /
+                // `outgoingBarrierAllies[allyIndex][phase]`: one row per
+                // `players[]` entry, in that order, single-phase like every
+                // other array in this document.
+                //
+                // GW2EI emits both unconditionally
+                // (`EXTJsonPlayerHealingStatsBuilder.cs:73` sits outside
+                // every `RawFormatTimelineArrays` block). They ride
+                // `--skill-damage` here purely for PAYLOAD -- measured
+                // always-on on `fixtures/wvw-small.anon.zevtc` they grow
+                // the flagless compact ei-json 262,226 -> 356,662 bytes
+                // (+36.0%), past the ~30% band every always-on block in
+                // this schema has been held to, and they grow
+                // QUADRATICALLY in squad size (41x41 cells here, 48x48 on
+                // the real capture). Same treatment, same flag, and the
+                // same Task-2c precedent as `targets[].totalDamageDist`,
+                // which GW2EI also emits unconditionally; axibridge
+                // hardcodes the flag to `true`, so the read surface is
+                // unchanged.
+                if healing_dist {
+                ho.insert(
+                    "outgoingHealingAllies".to_string(),
+                    Value::Array(
+                        d.ally_healing
+                            .iter()
+                            .map(|c| json!([ { "healing": c.healing, "downedHealing": c.downed_healing } ]))
+                            .collect(),
+                    ),
+                );
+                bo.insert(
+                    "outgoingBarrierAllies".to_string(),
+                    Value::Array(
+                        d.ally_barrier.iter().map(|&b| json!([ { "barrier": b } ])).collect(),
+                    ),
+                );
+                }
+                if healing_dist {
+                    ho.insert(
+                        "totalHealingDist".to_string(),
+                        json!([ heal_dist_json(&d.healing_dist, "totalHealing", true) ]),
+                    );
+                    bo.insert(
+                        "totalBarrierDist".to_string(),
+                        json!([ heal_dist_json(&d.barrier_dist, "totalBarrier", false) ]),
+                    );
+                }
+                if healing_series {
+                    ho.insert("healing1S".to_string(), json!([ d.healing_1s ]));
+                }
+            }
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
+            obj.insert("extHealingStats".to_string(), healing);
+            obj.insert("extBarrierStats".to_string(), barrier);
+        }
+        // `minions[]` (MEIGAP Task 3b): emitted only under
+        // `--skill-damage` (the caller supplies `EiInputs::minions` exactly
+        // then), and only for a player that actually has minions -- GW2EI
+        // omits the key entirely for a player with none, and axibridge's
+        // readers both start with an `Array.isArray(...) ? ... : []` guard,
+        // so an empty array and an absent key are equivalent to it. Absent
+        // is the smaller and the more faithful of the two.
+        if let Some(groups) = minions.and_then(|m| m.get(player_idx)).filter(|g| !g.is_empty()) {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert(
-                "extHealingStats".to_string(),
-                json!({
-                    "outgoingHealing": [ {
-                        "healing": h.healing_out_total,
-                        "hps": (h.healing_out_total as f64 / duration_secs).round() as i64,
-                        "downedHealing": h.downed_healing_out,
-                        "downedHps": (h.downed_healing_out as f64 / duration_secs).round() as i64,
-                    } ]
-                }),
-            );
-            obj.insert(
-                "extBarrierStats".to_string(),
-                json!({
-                    "outgoingBarrier": [ {
-                        "barrier": h.barrier_out,
-                        "bps": (h.barrier_out as f64 / duration_secs).round() as i64,
-                    } ]
-                }),
+                "minions".to_string(),
+                Value::Array(
+                    groups
+                        .iter()
+                        .map(|g| {
+                            json!({
+                                "id": g.species_id,
+                                "name": g.name,
+                                "totalDamageTakenDist": [ g.taken.iter().map(|r| json!({
+                                    "id": r.skill_id,
+                                    "totalDamage": r.total,
+                                    "hits": r.hits,
+                                    "connectedHits": r.connected_hits,
+                                    "min": r.min,
+                                    "max": r.max,
+                                    "blocked": r.blocked,
+                                    "evaded": r.evaded,
+                                    "glance": r.glance,
+                                    "missed": r.missed,
+                                    "invulned": r.invulned,
+                                    "interrupted": r.interrupted,
+                                    "indirectDamage": r.indirect,
+                                })).collect::<Vec<_>>() ]
+                            })
+                        })
+                        .collect(),
+                ),
             );
         }
         // `rotation[]` (M14, Task 3): only present when this player's
@@ -1637,10 +1844,10 @@ mod tests {
             duration_ms:1000,build:"".into(),revision:1,recorded_by:Some(":A.1".into()),
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"Daredevil".into(),
-            team:"red".into(),subgroup:2,in_squad:true,commander:true,marker:None,commander_tag:None,agent_addrs:vec![1]},
+            team:"red".into(),subgroup:2,in_squad:true,commander:true,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             Player{agent_addr:2,account:":B.2".into(),
             character:"B".into(),profession:"Guardian".into(),elite_spec:"".into(),
-            team:"red".into(),subgroup:2,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![2]}],
+            team:"red".into(),subgroup:2,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![2]}],
             enemies:vec![Enemy{id:9,instid:9,name:"Foe".into(),team:"blue".into(),
             is_player:true,marker:None,agent_addrs:vec![9]},
             Enemy{id:10,instid:10,name:"Gadget".into(),team:"blue".into(),
@@ -1731,7 +1938,7 @@ mod tests {
             duration_ms:1000,build:"".into(),revision:1,recorded_by:None,
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"Nim Iss".into(),profession:"Thief".into(),elite_spec:"".into(),
-            team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,agent_addrs:vec![1]}],
+            team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]}],
             enemies:vec![],markers:vec![],tick_rate:None};
         let mut boon_uptime = std::collections::BTreeMap::new();
         // Might (intensity): avg_stacks=3.5, presence_pct=100.0.
@@ -1742,7 +1949,7 @@ mod tests {
         boon_generation.insert((1u64, buffs::MIGHT), GenerationStats { self_pct: 1.5, group_pct: 2.0, squad_pct: 3.0 });
         let m = Metrics{
             players: vec![PlayerMetrics{agent_addr:1,
-                support: SupportMetrics { cleanses: 5, cleanses_self: 2, strips: 7, resurrects: 1 },
+                support: SupportMetrics { cleanses: 5, cleanses_self: 2, strips: 7, strips_duration_ms: 12345, resurrects: 1 },
                 ..Default::default()}],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime, boon_generation,
@@ -1814,7 +2021,7 @@ mod tests {
             PlayerOut {
                 account: account.to_string(), character: account.to_string(),
                 profession: "Guardian".into(), elite_spec: "".into(), team: "red".into(),
-                subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+                subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
                 damage: DamageOut { total: 0, dps: 0.0, per_enemy: vec![] },
                 downs_dealt: 0, kills_dealt: 0, downs_taken: 0, deaths: 0,
                 damage_taken: 0,
@@ -1823,7 +2030,7 @@ mod tests {
                 per_target: None,
                 downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
                 boons: vec![],
-                support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
+                support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 },
                 healing,
                 skill_damage: None,
                 per_second: None,
@@ -1948,7 +2155,7 @@ mod tests {
         PlayerOut {
             account: ":A.1".into(), character: "A".into(), profession: "Guardian".into(),
             elite_spec: "".into(), team: "red".into(), subgroup: 1, in_squad: true,
-            commander: false, marker: None, commander_tag: None,
+            commander: false, marker: None, commander_tag: None, guild_id: None,
             damage: DamageOut { total: 0, dps: 0.0, per_enemy: vec![] },
             downs_dealt: 0, kills_dealt: 0, downs_taken: 0, deaths: 0, damage_taken: 0,
             cc: CcOut { applied_total: 0, applied_duration_ms: 0, stun_breaks: 0, removed_stun_duration_ms: 0 },
@@ -1956,7 +2163,7 @@ mod tests {
             per_target: None,
             downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
             boons: vec![],
-            support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, resurrects: 0 },
+            support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 },
             healing: None,
             skill_damage, per_second, dps_targets,
             hit_stats: HitStatsOut::default(),

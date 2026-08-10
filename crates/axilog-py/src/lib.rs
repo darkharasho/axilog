@@ -98,6 +98,8 @@ type EiPipelineOutputs = (
     Option<std::collections::BTreeMap<u64, axilog_core::analysis::timeseries::EnemySeries>>,
     Option<std::collections::BTreeMap<u64, Vec<axilog_core::analysis::skill_damage::SkillEntry>>>,
     Option<axilog_core::analysis::target_conditions::TargetConditionStates>,
+    Option<axilog_core::analysis::healing_detail::HealingDetail>,
+    Option<axilog_core::analysis::minions::MinionRollups>,
 );
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
@@ -195,6 +197,16 @@ fn build_report_and_activity_from_bytes(
         .map(|(en, rep)| axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep));
     let target_conditions =
         want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+    // MEIGAP Task 3a/3b. Every healing-detail family is flag-gated in the
+    // adapter (`healing1S` on timeseries; the ally matrices and the two
+    // `*Dist` arrays on skill-damage -- see `EiInputs::healing_dist`), so
+    // the pass only runs when at least one of them will be serialized. It
+    // self-gates to `None` on a log with no healing extension.
+    let healing_detail = (want_skill_damage || want_timeseries)
+        .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
+        .flatten();
+    let minion_rollups =
+        want_skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
     Ok((
         report,
         activity,
@@ -204,6 +216,8 @@ fn build_report_and_activity_from_bytes(
         enemy_series,
         enemy_dist,
         target_conditions,
+        healing_detail,
+        minion_rollups,
     ))
 }
 
@@ -294,7 +308,8 @@ fn parse_file_ei(
     modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let (report, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist, target_conditions) =
+    let (report, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist,
+         target_conditions, healing_detail, minion_rollups) =
         build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     let ei = axilog_ei::to_ei_json(
         &report,
@@ -306,6 +321,10 @@ fn parse_file_ei(
             enemy_series: enemy_series.as_ref(),
             enemy_dist: enemy_dist.as_ref(),
             target_conditions: target_conditions.as_ref(),
+            healing_detail: healing_detail.as_ref(),
+            healing_series: timeseries,
+            healing_dist: skill_damage,
+            minions: minion_rollups.as_ref(),
         },
     );
     value_to_py(py, &ei)

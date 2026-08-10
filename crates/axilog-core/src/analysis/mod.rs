@@ -6,6 +6,8 @@ pub mod support;
 /// arcdps healing-extension stats (M10 Task 1) -- see `healing::apply`'s
 /// module doc for the wire format / aggregation writeup.
 pub mod healing;
+pub mod healing_detail;
+pub mod minions;
 /// Combat replay position tracks (M9 Task 1) -- standalone from
 /// [`analyze`]; see `replay::build_replay`.
 pub mod replay;
@@ -598,7 +600,7 @@ mod tests {
             agent_addr: 1, // representative (first-seen addr)
             account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1, 2], // pre-relog addr 1, post-relog addr 2
         };
         let enc = Encounter {
@@ -625,7 +627,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1, 2],
         };
         let enc = Encounter {
@@ -653,7 +655,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1],
         };
         let enc = Encounter {
@@ -689,7 +691,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1],
         };
         let enc = Encounter {

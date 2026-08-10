@@ -245,13 +245,13 @@ pub struct EnemySeries {
 /// `duration/1000 + 1` scheme: that is a native surface with its own
 /// consumers, not an EI mirror. The two are no longer bucket-aligned, and
 /// this module's doc comment says so.
-fn ei_grid(duration_ms: u64) -> usize {
+pub(crate) fn ei_grid(duration_ms: u64) -> usize {
     let secs = duration_ms / 1000;
     if secs * 1000 != duration_ms { (secs + 2) as usize } else { (secs + 1) as usize }
 }
 
 /// `Math.Ceiling((t - t0) / 1000.0)`, clamped to the grid (see [`ei_grid`]).
-fn ei_bucket(t: u64, t0: u64, buckets: usize) -> Option<usize> {
+pub(crate) fn ei_bucket(t: u64, t0: u64, buckets: usize) -> Option<usize> {
     let rel = t.saturating_sub(t0);
     let b = (rel / 1000 + u64::from(rel % 1000 != 0)) as usize;
     if b < buckets {
@@ -848,7 +848,7 @@ mod tests {
         let player = Player {
             agent_addr: 1, account: ":A.1".into(), character: "A".into(),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+            subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1, 2], // relogged: two raw addrs, one rep
         };
         let enc = Encounter {

@@ -672,7 +672,7 @@ mod tests {
             players: squad_addrs.iter().map(|&a| Player {
                 agent_addr: a, account: format!(":P{a}.1"), character: format!("P{a}"),
                 profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
-                subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None,
+                subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
                 agent_addrs: vec![a],
             }).collect(),
             enemies: enemy_player_addrs.iter().map(|&a| Enemy {

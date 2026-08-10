@@ -196,6 +196,76 @@ pub fn apply_with_registry(
     let idx: BTreeMap<u64, usize> =
         players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
 
+    for r in attributed_events(raw, registry, squad, addr_to_rep) {
+        let Some(&pi) = idx.get(&r.healer_rep) else { continue };
+        let m = &mut players[pi].healing;
+        if r.is_barrier {
+            m.barrier_out += r.amount;
+            continue;
+        }
+        m.healing_out_total += r.amount;
+        if r.target_rep == r.healer_rep {
+            m.healing_out_self += r.amount;
+        }
+        if r.against_downed {
+            m.downed_healing_out += r.amount;
+        }
+    }
+    for p in players.iter_mut() {
+        p.healing.healing_out_allies = p.healing.healing_out_total - p.healing.healing_out_self;
+    }
+
+    true
+}
+
+/// One healing-extension data row, fully resolved, peer-sanitized and
+/// attributed to a squad player -- the single source of truth every
+/// consumer of the extension in this crate reduces (MEIGAP Task 3a).
+///
+/// [`apply_with_registry`] folds these into [`HealingMetrics`]'s scalars;
+/// [`crate::analysis::healing_detail`] groups the very same rows by ally,
+/// by skill and by second. Sharing one producer is what makes it
+/// impossible for `extHealingStats.outgoingHealing[0].healing` and the sum
+/// of `outgoingHealingAllies` / `totalHealingDist` / the last element of
+/// `healing1S` to describe different event sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttributedHeal {
+    pub time: u64,
+    /// Account-representative addr of the squad player credited as healer
+    /// (after peer sanitization and the pet/minion owner fold).
+    pub healer_rep: u64,
+    /// Account-representative addr of the recipient. May be ANY friendly
+    /// agent, including one that is not a squad player (another player's
+    /// pet) -- see the module doc's `healing_out_allies` section.
+    pub target_rep: u64,
+    pub skill_id: u32,
+    pub amount: u64,
+    /// `false` for GW2EI's `EXTNonDirectHealingEvent`, which is exactly
+    /// what sets `EXTJsonHealingDist.IndirectHealing`.
+    pub is_direct: bool,
+    pub is_barrier: bool,
+    pub against_downed: bool,
+}
+
+/// Decode, resolve, peer-sanitize and attribute every healing-extension
+/// data row in `raw`, in wire order (so the result is already sorted by
+/// `time`, which `healing_detail`'s 1S graph relies on).
+///
+/// Returns an empty vec when the extension is absent. Every rule applied
+/// here -- instid resolution, `SanitizeForSrc`, the `src_master_instid`
+/// owner fold, the account fold -- is transcribed in this module's own doc
+/// comment; this function is that doc comment's implementation and the
+/// ONLY place it lives.
+pub fn attributed_events(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) -> Vec<AttributedHeal> {
+    if !ext_healing::healing_extension_present(raw) {
+        return Vec::new();
+    }
+
     // Decode every data row, resolving healer/target via the instid
     // registry (module doc: raw src_agent/dst_agent on these rows are not
     // valid). Rows that fail to resolve (no registration yet at that time
@@ -218,7 +288,9 @@ pub fn apply_with_registry(
         healer: u64,
         target: u64,
         src_master_instid: u16,
+        skill_id: u32,
         amount: u64,
+        is_direct: bool,
         is_barrier: bool,
         against_downed: bool,
         src_is_peer: bool,
@@ -238,7 +310,9 @@ pub fn apply_with_registry(
             healer,
             target,
             src_master_instid: ev.src_master_instid,
+            skill_id: ev.skill_id,
             amount: ev.amount,
+            is_direct: ev.is_direct,
             is_barrier: ev.is_barrier,
             against_downed: ev.against_downed,
             src_is_peer: ev.src_is_peer,
@@ -268,6 +342,7 @@ pub fn apply_with_registry(
         }
     }
 
+    let mut out: Vec<AttributedHeal> = Vec::new();
     for (i, r) in resolved.iter().enumerate() {
         if !keep[i] {
             continue;
@@ -288,26 +363,18 @@ pub fn apply_with_registry(
         };
         let Some(attributed_healer) = attributed_healer else { continue };
         let rep = addr_to_rep.get(&attributed_healer).copied().unwrap_or(attributed_healer);
-        let Some(&pi) = idx.get(&rep) else { continue };
-        let m = &mut players[pi].healing;
-        if r.is_barrier {
-            m.barrier_out += r.amount;
-            continue;
-        }
-        m.healing_out_total += r.amount;
-        let target_rep = addr_to_rep.get(&r.target).copied().unwrap_or(r.target);
-        if target_rep == rep {
-            m.healing_out_self += r.amount;
-        }
-        if r.against_downed {
-            m.downed_healing_out += r.amount;
-        }
+        out.push(AttributedHeal {
+            time: r.time,
+            healer_rep: rep,
+            target_rep: addr_to_rep.get(&r.target).copied().unwrap_or(r.target),
+            skill_id: r.skill_id,
+            amount: r.amount,
+            is_direct: r.is_direct,
+            is_barrier: r.is_barrier,
+            against_downed: r.against_downed,
+        });
     }
-    for p in players.iter_mut() {
-        p.healing.healing_out_allies = p.healing.healing_out_total - p.healing.healing_out_self;
-    }
-
-    true
+    out
 }
 
 #[cfg(test)]

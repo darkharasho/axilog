@@ -286,6 +286,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let enemy_dist = enemy_sets.as_ref().filter(|_| skill_damage).map(|(en, rep)| {
                 axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep)
             });
+            // MEIGAP Task 3a/3b. Every healing-detail family is
+            // flag-gated -- `healing1S` on `--timeseries`, the ally
+            // matrices and the two `*Dist` arrays on `--skill-damage` (see
+            // `EiInputs::healing_dist` for the measured payload reason) --
+            // so the PASS itself only runs when at least one of them will
+            // be serialized, and it self-gates to `None` on a log with no
+            // healing extension before it even builds a registry.
+            // `minions[]` is a per-skill distribution and rides
+            // `--skill-damage` outright.
+            let healing_detail = ((skill_damage || timeseries) && format == Format::EiJson)
+                .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
+                .flatten();
+            let minion_rollups = (skill_damage && format == Format::EiJson)
+                .then(|| axilog_core::analysis::minions::build(&raw, &enc));
             // M16: the damage-modifier engine runs ONLY on `--modifiers`
             // (see the flag's doc comment -- it is a separate full event
             // pass, not a copy of something `analyze()` already computed).
@@ -339,6 +353,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 enemy_series: enemy_series.as_ref(),
                                 enemy_dist: enemy_dist.as_ref(),
                                 target_conditions: target_conditions.as_ref(),
+                                healing_detail: healing_detail.as_ref(),
+                                healing_series: timeseries,
+                                healing_dist: skill_damage,
+                                minions: minion_rollups.as_ref(),
                             },
                         ))?
                     )

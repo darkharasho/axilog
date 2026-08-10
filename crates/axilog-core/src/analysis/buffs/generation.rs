@@ -647,7 +647,7 @@ mod tests {
         Player {
             agent_addr: addr, account: format!(":P{addr}.0001"), character: format!("P{addr}"),
             profession: "Thief".into(), elite_spec: "".into(), team: "red".into(), subgroup,
-            in_squad: true, commander: false, marker: None, commander_tag: None,
+            in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![addr],
         }
     }

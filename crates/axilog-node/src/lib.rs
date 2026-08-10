@@ -157,6 +157,8 @@ fn build_report_and_activity_from_bytes(
     Option<std::collections::BTreeMap<u64, axilog_core::analysis::timeseries::EnemySeries>>,
     Option<std::collections::BTreeMap<u64, Vec<axilog_core::analysis::skill_damage::SkillEntry>>>,
     Option<axilog_core::analysis::target_conditions::TargetConditionStates>,
+    Option<axilog_core::analysis::healing_detail::HealingDetail>,
+    Option<axilog_core::analysis::minions::MinionRollups>,
 )> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -229,6 +231,16 @@ fn build_report_and_activity_from_bytes(
         .map(|(en, rep)| axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep));
     let target_conditions =
         want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+    // MEIGAP Task 3a/3b. Every healing-detail family is flag-gated in the
+    // adapter (`healing1S` on timeseries; the ally matrices and the two
+    // `*Dist` arrays on skill-damage -- see `EiInputs::healing_dist`), so
+    // the pass only runs when at least one of them will be serialized. It
+    // self-gates to `None` on a log with no healing extension.
+    let healing_detail = (want_skill_damage || want_timeseries)
+        .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
+        .flatten();
+    let minion_rollups =
+        want_skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
     Ok((
         report,
         activity,
@@ -238,6 +250,8 @@ fn build_report_and_activity_from_bytes(
         enemy_series,
         enemy_dist,
         target_conditions,
+        healing_detail,
+        minion_rollups,
     ))
 }
 
@@ -304,7 +318,8 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
     let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let (report, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist, target_conditions) = build_report_and_activity_from_bytes(
+    let (report, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist,
+         target_conditions, healing_detail, minion_rollups) = build_report_and_activity_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
         want_modifiers,
     )?;
@@ -318,6 +333,10 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
             enemy_series: enemy_series.as_ref(),
             enemy_dist: enemy_dist.as_ref(),
             target_conditions: target_conditions.as_ref(),
+            healing_detail: healing_detail.as_ref(),
+            healing_series: want_timeseries,
+            healing_dist: want_skill_damage,
+            minions: minion_rollups.as_ref(),
         },
     ))
 }
