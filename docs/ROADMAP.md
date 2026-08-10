@@ -77,10 +77,14 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   M11 down-contribution row, Later list).
 
 ## Queued (autonomous — build in order; reorder only for dependency)
-- M16 Damage modifiers (IN FLIGHT, feat/m16-damage-modifiers): engine + EiInputs refactor done
-  (Task 1, reviewed); 205-definition catalog done (Task 2, reviewed — 69/75 reference ids,
-  buff-free ids exact 44/44, buff-gated tolerance ACCEPTED as documented deviation pending
-  MBUFFSIM); fix round then Task 3 emission remain.
+- M16 Damage modifiers COMPLETE (merged 1545930, reviewed SHIP): EiInputs refactor; GW2EI-cited
+  engine (10 GainComputers, AlwaysMaster); 205-definition catalog regenerable from GW2EI source
+  (scripts/gen_damage_mod_catalog.py, regen diff empty; 69/75 reference ids); emission behind
+  --modifiers (native +44.2%, ei-json +441.5% incl. WvW Target variants; damageGain f64 text
+  discipline). 30 ids hard-exact all-fields x 44 accounts; 39 bounded per-field (residual proven
+  simulator-side -> MBUFFSIM); 69/69 damageModMap identical; 207/207 + 1,978/1,978 rows
+  text-identical. NOTE for next MDOCS touch: /axilog/accuracy on the wiki needs a damage-modifier
+  row (coverage + bounded-class statement).
 - MBUFFSIM Buff-simulator fidelity: GW2EI's NoID duration simulator has THREE stacking logics
   (Queue / Healing-Regeneration / ForceOverride) + StackingConditionalLoss eviction; axilog has
   two models (M3). First-measured on non-boon buffs by M16's calibration (worst residuals:
