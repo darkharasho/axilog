@@ -244,6 +244,13 @@ export interface HitStatsOut {
  * counting bug in its own `lifeLeechDamageTakenCount` is deliberately not
  * reproduced). Purely additive alongside `downs_taken`/`deaths`/
  * `damage_taken`/`cc`. Always present (not gated), like `hit_stats`.
+ *
+ * `received_cc_count`/`received_cc_duration_ms` (ms) are the INCOMING
+ * mirror of the outgoing `cc` block, and count CC from every source
+ * (friendly included) with no pet/minion fold -- GW2EI's own two
+ * asymmetries. `boon_strips_taken`/`boon_strips_taken_duration_ms` (ms) are
+ * boons stripped OFF this player; the duration is the TRUE sum, not a
+ * reproduction of GW2EI's own (verified buggy) `boonStripsTime`.
  */
 export interface DefensesOut {
   blocked_count: number
@@ -264,6 +271,10 @@ export interface DefensesOut {
   barrier_damage: number
   breakbar_count: number
   breakbar_damage: number
+  received_cc_count: number
+  received_cc_duration_ms: number
+  boon_strips_taken: number
+  boon_strips_taken_duration_ms: number
 }
 
 export interface PlayerOut {

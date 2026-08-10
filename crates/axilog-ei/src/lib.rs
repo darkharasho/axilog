@@ -194,6 +194,102 @@ fn ei_damage_gain(v: f64) -> Value {
     Value::from(v)
 }
 
+/// `Math.Round(x, 3)` with .NET's default `MidpointRounding.ToEven`.
+///
+/// Hand-rolled rather than `f64::round_ties_even`, which is only stable
+/// since Rust 1.77 and this workspace's MSRV is 1.74 (`Cargo.toml`'s
+/// `rust-version`). Ties land on the EVEN scaled integer, exactly as .NET
+/// does; every other value rounds normally. `floor` is toward negative
+/// infinity, so the parity test is correct for negative inputs too (none
+/// of this crate's callers produce them, but the helper is general).
+fn round3_ties_even(x: f64) -> f64 {
+    let scaled = x * 1000.0;
+    let floor = scaled.floor();
+    let frac = scaled - floor;
+    let rounded = if frac == 0.5 {
+        // The tie: land on the even scaled integer.
+        if (floor as i64) % 2 == 0 { floor } else { floor + 1.0 }
+    } else if frac > 0.5 {
+        floor + 1.0
+    } else {
+        floor
+    };
+    rounded / 1000.0
+}
+
+/// One GW2EI buff-percentage number, `Math.Round(x, ParserHelper.BuffDigit)`
+/// with `BuffDigit = 3` (MEIGAP Task 1a).
+///
+/// Every value GW2EI writes into `selfBuffs`/`groupBuffs`/`squadBuffs`'
+/// `buffData[]` goes through that rounding before serialization
+/// (`GW2EIEvtcParser/EIData/Statistics/BuffStatistics.cs:116-121` for the
+/// duration branch, `:135-141` for the intensity branch, `:190-195`/
+/// `:211-216` for the `GetBuffsForSelf` twin; `ParserHelper.BuffDigit = 3`
+/// at `GW2EIEvtcParser/ParserHelpers/ParserHelper.cs:24`), so the reference
+/// export never carries more than three decimals on any of them -- verified
+/// over all 6,371 `generation` values in `fixtures/local/
+/// wvw-postrework.ei.json`.
+///
+/// .NET's `Math.Round(double, int)` is half-to-EVEN (`MidpointRounding.
+/// ToEven` is the documented default), which is what [`round3_ties_even`]
+/// below reproduces. Whole values are emitted as JSON
+/// integers, matching .NET's own serializer (`"generation": 0`, never
+/// `0.0`) -- the same adjustment [`ei_damage_gain`] already makes for
+/// `damageGain`, and for the same reason (`serde_json` would otherwise
+/// write `0.0`).
+///
+/// **Deliberately NOT [`ei_float`]**: these are C# `double`s
+/// (`JsonBuffsGenerationData.Generation`, `GW2EIJSON/JsonActorUtilities/
+/// JsonPlayerUtilities/JsonPlayerBuffsGeneration.cs:16-45`), not the
+/// `float`s M15's replay surface narrows through.
+fn ei_buff_pct(v: f64) -> Value {
+    if !v.is_finite() {
+        return Value::Null;
+    }
+    let r = round3_ties_even(v);
+    if r.fract() == 0.0 && r.abs() < 9.0e15 {
+        return Value::from(r as i64);
+    }
+    Value::from(r)
+}
+
+/// One GW2EI duration-in-seconds number: `Math.Round(ms / 1000.0,
+/// ParserHelper.TimeDigit)` with `TimeDigit = 3` (MEIGAP Task 1c).
+///
+/// The convention every `*Time` field on `JsonStatistics` uses -- e.g.
+/// `GW2EIEvtcParser/EIData/Statistics/DefensePerTargetStatistics.cs:69`
+/// (`boonStripsTime`/`conditionCleansesTime`) and
+/// `SupportStatistics.cs:78` (the outgoing twin). Half-to-even and
+/// whole-value-as-integer for the same reasons [`ei_buff_pct`] documents.
+fn ei_time_secs(ms: u64) -> Value {
+    let r = round3_ties_even(ms as f64 / 1000.0);
+    if r.fract() == 0.0 {
+        return Value::from(r as i64);
+    }
+    Value::from(r)
+}
+
+/// One of the three boon-generation attribution arrays
+/// (`selfBuffs`/`groupBuffs`/`squadBuffs`), `pick` selecting which scope of
+/// [`axilog_schema::GenerationOut`] to read -- see the call sites' doc
+/// comment for the GW2EI citation trail.
+fn buff_generation_json(
+    boons: &[axilog_schema::BoonOut],
+    pick: fn(&axilog_schema::GenerationOut) -> f64,
+) -> Value {
+    Value::Array(
+        boons
+            .iter()
+            .map(|b| {
+                json!({
+                    "id": b.id,
+                    "buffData": [ { "generation": ei_buff_pct(pick(&b.generation)) } ],
+                })
+            })
+            .collect(),
+    )
+}
+
 /// One `{ hitCount, totalHitCount, damageGain, totalDamage }` item, wrapped
 /// in EI's per-PHASE array (`JsonDamageModifierData.DamageModifiers`,
 /// "Length == # of phases"). This project does not model phases, so it is
@@ -503,7 +599,44 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 "damageBarrier": p.defenses.barrier_damage,
                 "damageBarrierCount": p.defenses.barrier_count,
                 "breakbarDamageTaken": p.defenses.breakbar_damage,
-                "breakbarDamageTakenCount": p.defenses.breakbar_count
+                "breakbarDamageTakenCount": p.defenses.breakbar_count,
+                // MEIGAP Task 1c: incoming CC + incoming boon strips, the
+                // last four always-on `defenses[0]` fields axibridge reads.
+                // Mapped from `p.defenses` like every field above -- see
+                // `axilog_core::analysis::defenses::DefenseStats`'s
+                // `received_cc_count`/`boon_strips_taken` doc comments for
+                // the full GW2EI derivation (`JsonStatistics.cs:130-137,
+                // 150-154`, `DefensePerTargetStatistics.cs:48-70,136-141,
+                // 149`).
+                //
+                // `receivedCrowdControlDuration` stays in MILLISECONDS,
+                // EI's own convention on this field (`CrowdControlEvent.
+                // Duration = evtcItem.Value`, summed with no `/1000` at
+                // `DefensePerTargetStatistics.cs:139`) -- the same ms
+                // convention `appliedCrowdControlDuration` above already
+                // uses, and unlike `support[0].removedStunDuration` below,
+                // which EI really does report in seconds.
+                //
+                // `boonStripsTime` IS in seconds (`GetStripData`'s closing
+                // `Math.Round(stripTime / 1000.0, ParserHelper.TimeDigit)`,
+                // `:69`) -- BUT this emits the TRUE duration sum, not a
+                // reproduction of GW2EI's own verified arithmetic bug on
+                // that line's accumulator (`Math.Max(current + removed,
+                // LogDuration)` where `Min` was intended, `:63`), which
+                // inflates the exported number to roughly
+                // `distinct_boons_stripped * logDuration`. Same
+                // "axilog is correct here, not less" convention as
+                // `lifeLeechDamageTakenCount` above; see
+                // `DefenseStats::boon_strips_taken_duration_ms`'s doc
+                // comment for the measured proof on the reference export,
+                // and `crates/axilog-ei/tests/meigap_ei_golden.rs` for the
+                // calibration that pins the removal SET exactly by
+                // reconstructing EI's formula from our own strip detail.
+                // `TimeDigit` is 3, matching the export's own precision.
+                "receivedCrowdControl": p.defenses.received_cc_count,
+                "receivedCrowdControlDuration": p.defenses.received_cc_duration_ms,
+                "boonStrips": p.defenses.boon_strips_taken,
+                "boonStripsTime": ei_time_secs(p.defenses.boon_strips_taken_duration_ms)
             } ],
             // EI places stun-break stats under `support`, not `defenses` — verified
             // against GW2EI's `SupportAllStatistics` (StunBreakCount /
@@ -553,7 +686,62 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                         "generated": { &p.character: b.generation.self_pct }
                     } ]
                 })
-            }).collect::<Vec<_>>()
+            }).collect::<Vec<_>>(),
+            // `selfBuffs`/`groupBuffs`/`squadBuffs` (MEIGAP Task 1a): the
+            // boon-generation ATTRIBUTION arrays, i.e. "how much boon-time
+            // did THIS player generate, for himself / for his subgroup /
+            // for the squad".
+            //
+            // Shape (`GW2EIJSON/JsonActors/JsonPlayer.cs:233,239,251` ->
+            // `GW2EIJSON/JsonActorUtilities/JsonPlayerUtilities/
+            // JsonPlayerBuffsGeneration.cs:53,60`): `[{ id, buffData: [
+            // {...} ] }]`, the inner array being per-phase (one element
+            // here -- this project's one-phase convention, same as
+            // `statsAll`/`totalDamageDist`).
+            //
+            // Scope, verified against `GW2EIEvtcParser/EIData/Actors/
+            // Player.cs:58-69`: `Self` -> `BuffStatistics.GetBuffsForSelf`
+            // (this player as both source and target), `Group` -> every
+            // OTHER player with the same subgroup, `Squad` -> every OTHER
+            // player in `log.PlayerList`. That is exactly the tripartite
+            // split `axilog_core::analysis::buffs::generation`'s
+            // `GenerationStats` already computes and M3 Task 4 calibrated
+            // (see that module's doc comment for the per-scope citation
+            // trail and the ms->percent/avg-stacks scaling, which matches
+            // `BuffStatistics.cs:116-121`/`:135-141` term for term:
+            // duration boons `*100`, intensity boons raw average stacks).
+            //
+            // Emitted fields: `generation` ONLY. Real EI's sibling fields
+            // on the same object -- `generationPresence`, `overstack`
+            // (which is really overstack+generation, `BuffStatistics.cs:117`),
+            // `wasted`, `unknownExtended`, `byExtension`, `extended` --
+            // come from the simulator's WASTE/OVERSTACK/EXTENSION channels
+            // (`GW2EIEvtcParser/EIData/Buffs/BuffSimulators/SimulationItem.cs:81-115`,
+            // `BuffSimulatorNoID/BuffSimulator.cs:67,99,104,117,122`), which
+            // this project's own generation simulator does not model: it
+            // accumulates only the HELD (generation) ms per source. They're
+            // omitted rather than faked, the same "don't fake absent data"
+            // convention `statsTargets`/`support`/`extHealingStats` above
+            // already follow. (`wasted` is the one axibridge also reads;
+            // absent, its reader's `wasted ?? 0` yields a zero wasted-time
+            // column while the generation column -- the metric that matters
+            // -- is fully populated.)
+            //
+            // Id set: one entry per tracked boon, in `BOON_IDS` order, the
+            // SAME set as `buffUptimes` above. That is exactly what real EI
+            // does for `selfBuffs` (verified on the reference export: its
+            // `selfBuffs` id list is character-for-character its
+            // `buffUptimes` id list, 43 of 43 on every player). For
+            // `groupBuffs`/`squadBuffs` real EI additionally filters to
+            // buffs this player appears as a source for at all
+            // (`BuffStatistics.cs:66,100`'s `hasGeneration`), so this array
+            // is a superset that carries explicit `generation: 0` rows
+            // where EI would omit the id entirely -- a zero this player
+            // genuinely did generate, not an invented number, and
+            // indistinguishable to every id-keyed consumer.
+            "selfBuffs": buff_generation_json(&p.boons, |g| g.self_pct),
+            "groupBuffs": buff_generation_json(&p.boons, |g| g.group_pct),
+            "squadBuffs": buff_generation_json(&p.boons, |g| g.squad_pct)
         });
         // `activeTimes`/`combatReplayData` (M11 Task 3): unlike every other
         // block on this player, these are ALWAYS present -- not gated on

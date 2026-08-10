@@ -307,7 +307,14 @@ class DefensesOut(TypedDict):
     `life_leech_count`/`life_leech_damage` are the TRUE values (a real GW2EI
     counting bug in its own `lifeLeechDamageTakenCount` is deliberately not
     reproduced). Purely additive alongside `downs_taken`/`deaths`/
-    `damage_taken`/`cc`. Always present (not gated), like `hit_stats`."""
+    `damage_taken`/`cc`. Always present (not gated), like `hit_stats`.
+
+    `received_cc_count`/`received_cc_duration_ms` (ms) are the INCOMING
+    mirror of the outgoing `cc` block, and count CC from every source
+    (friendly included) with no pet/minion fold -- GW2EI's own two
+    asymmetries. `boon_strips_taken`/`boon_strips_taken_duration_ms` (ms)
+    are boons stripped OFF this player; the duration is the TRUE sum, not a
+    reproduction of GW2EI's own (verified buggy) `boonStripsTime`."""
 
     blocked_count: int
     evaded_count: int
@@ -327,6 +334,10 @@ class DefensesOut(TypedDict):
     barrier_damage: int
     breakbar_count: int
     breakbar_damage: int
+    received_cc_count: int
+    received_cc_duration_ms: int
+    boon_strips_taken: int
+    boon_strips_taken_duration_ms: int
 
 # --- skillMap (M14, Task 2) ------------------------------------------------
 

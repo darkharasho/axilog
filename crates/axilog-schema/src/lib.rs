@@ -552,6 +552,23 @@ pub struct DefensesOut {
     pub barrier_damage: u64,
     pub breakbar_count: u32,
     pub breakbar_damage: u64,
+    /// Incoming crowd control (MEIGAP Task 1c) -- see
+    /// `axilog_core::analysis::defenses::DefenseStats::received_cc_count`
+    /// for the GW2EI citation trail and the two documented asymmetries vs
+    /// the outgoing `cc` block above.
+    pub received_cc_count: u32,
+    /// Milliseconds, same convention as `CcOut::applied_duration_ms` -- see
+    /// `DefenseStats::received_cc_duration_ms`.
+    pub received_cc_duration_ms: u64,
+    /// Boons stripped OFF this player (MEIGAP Task 1c) -- the incoming
+    /// counterpart of `SupportOut::strips`. See
+    /// `DefenseStats::boon_strips_taken`.
+    pub boon_strips_taken: u32,
+    /// The TRUE sum of removed boon duration, in milliseconds -- see
+    /// `DefenseStats::boon_strips_taken_duration_ms` for why this
+    /// deliberately does NOT reproduce EI's own (verified buggy)
+    /// `boonStripsTime`.
+    pub boon_strips_taken_duration_ms: u64,
 }
 #[derive(Serialize)]
 pub struct PlayerOut { pub account: String, pub character: String, pub profession: String,
@@ -1029,6 +1046,10 @@ pub fn build_report(
                 life_leech_count: d.life_leech_count, life_leech_damage: d.life_leech_damage,
                 barrier_count: d.barrier_count, barrier_damage: d.barrier_damage,
                 breakbar_count: d.breakbar_count, breakbar_damage: d.breakbar_damage,
+                received_cc_count: d.received_cc_count,
+                received_cc_duration_ms: d.received_cc_duration_ms,
+                boon_strips_taken: d.boon_strips_taken,
+                boon_strips_taken_duration_ms: d.boon_strips_taken_duration_ms,
             }}).unwrap_or_default(),
             rotation: if include_rotation {
                 Some(m.map(|m| m.rotation.iter().map(|s| SkillRotationOut {

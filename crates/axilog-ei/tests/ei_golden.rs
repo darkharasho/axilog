@@ -438,7 +438,28 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
         "damageBarrierCount",
         "breakbarDamageTaken",
         "breakbarDamageTakenCount",
+        // MEIGAP Task 1c -- incoming CC + incoming strip COUNTS are exact.
+        // `boonStripsTime` is NOT in this list: EI's own exported value is
+        // produced by a verified arithmetic bug (see the reconstruction
+        // check below and `axilog_core::analysis::defenses::DefenseStats::
+        // boon_strips_taken_duration_ms`).
+        "receivedCrowdControl",
+        "receivedCrowdControlDuration",
+        "boonStrips",
     ];
+
+    // MEIGAP Task 1c: the per-boon incoming-strip detail behind the
+    // `boonStripsTime` reconstruction below (see that block's comment).
+    let squad: std::collections::BTreeSet<u64> =
+        enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
+    let addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
+        .players
+        .iter()
+        .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
+        .collect();
+    let strip_detail =
+        axilog_core::analysis::defenses::incoming_boon_strips(&raw, &squad, &addr_to_rep);
+    let log_duration_ms = golden["durationMS"].as_f64().expect("golden durationMS");
 
     let mut joined_hit_stats = 0usize;
     let mut joined_defenses = 0usize;
@@ -489,6 +510,65 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
                 if our_val != golden_val {
                     mismatches.push(format!(
                         "{key} defenses[0].{field}: ours={our_val} golden[defenses.{field}]={golden_val}"
+                    ));
+                }
+            }
+
+            // `boonStripsTime`: the SECOND intentional divergence on this
+            // block (after life-leech below). GW2EI's exported value comes
+            // out of `DefensePerTargetStatistics.cs:63`'s
+            // `Math.Max(currentBoonStripTime + brae.RemovedDuration,
+            // log.LogData.LogDuration)` -- a `Max` where `Min` was plainly
+            // intended -- so it is roughly
+            // `distinct_boons_stripped * logDuration`, not a duration sum.
+            // axilog emits the TRUE sum instead, so the golden's raw value
+            // is joined by RECONSTRUCTING EI's formula from this project's
+            // own per-boon strip detail. That pins the removal set per
+            // player AND per boon (a strictly stronger check than comparing
+            // sums), without enshrining the bug in axilog's output.
+            {
+                let mut per_boon: std::collections::BTreeMap<u32, Vec<u64>> =
+                    std::collections::BTreeMap::new();
+                for &(boon, ms) in
+                    strip_detail.get(&enc.players[player_idx].agent_addr).into_iter().flatten()
+                {
+                    per_boon.entry(boon).or_default().push(ms);
+                }
+                let recon_ms: f64 = per_boon
+                    .values()
+                    .map(|removals| {
+                        let mut current = 0.0f64;
+                        for &ms in removals {
+                            current = (current + ms as f64).max(log_duration_ms);
+                        }
+                        current
+                    })
+                    .sum();
+                let recon = round3_ties_even(recon_ms / 1000.0);
+                let golden_time = de["boonStripsTime"].as_f64().unwrap_or(0.0);
+                if (recon - golden_time).abs() > 0.0005 {
+                    mismatches.push(format!(
+                        "{key} defenses[0].boonStripsTime [EI-bug reconstruction]: ours={recon:.3} \
+                         golden={golden_time:.3}"
+                    ));
+                }
+                // And axilog's own emitted value is the true sum: strictly
+                // below EI's inflated one whenever anything was stripped.
+                let ours_time = our_defenses["boonStripsTime"].as_f64().unwrap_or(-1.0);
+                // `<=`, not `<`: EI's per-boon accumulator only inflates
+                // when the FIRST removal of that boon reported less
+                // remaining duration than the whole log
+                // (`max(r1, L) + r2 + ...`), so on a short fight where every
+                // stripped boon's first removal already exceeded the log
+                // length the buggy total collapses onto the true sum. Two
+                // of this fixture's 37 accounts are exactly that case --
+                // which is a stronger agreement, not a weaker one.
+                if de["boonStrips"].as_i64().unwrap_or(0) > 0
+                    && !(ours_time > 0.0 && ours_time <= golden_time)
+                {
+                    mismatches.push(format!(
+                        "{key} defenses[0].boonStripsTime [emitted]: expected 0 < {ours_time} <= \
+                         {golden_time}"
                     ));
                 }
             }
@@ -912,4 +992,25 @@ fn ei_json_combat_replay_matches_the_local_postrework_export() {
         ang_text_exact * 10 >= joined * 9,
         "orientations text-exact for only {ang_text_exact}/{joined} players"
     );
+}
+
+/// `Math.Round(x, 3)`, .NET's half-to-even default -- see
+/// `axilog_ei`'s own `round3_ties_even` (private; duplicated here because
+/// an integration test cannot reach into the crate's private items, and
+/// pulling it into the public API purely for a test would be worse).
+/// Hand-rolled rather than `f64::round_ties_even` for the workspace's
+/// 1.74 MSRV.
+fn round3_ties_even(x: f64) -> f64 {
+    let scaled = x * 1000.0;
+    let floor = scaled.floor();
+    let frac = scaled - floor;
+    let rounded = if frac == 0.5 {
+        // The tie: land on the even scaled integer.
+        if (floor as i64) % 2 == 0 { floor } else { floor + 1.0 }
+    } else if frac > 0.5 {
+        floor + 1.0
+    } else {
+        floor
+    };
+    rounded / 1000.0
 }
