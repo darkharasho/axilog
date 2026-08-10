@@ -709,4 +709,7 @@ era is fully real-capture calibrated.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Portions are derived from or verified against the MIT-licensed
+[GW2 Elite Insights Parser](https://github.com/baaron4/GW2-Elite-Insights-Parser) — the exact
+relationship (semantics arbiter vs derived data tables vs test-only reference port) and the
+required license text are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
