@@ -768,3 +768,72 @@ check was hoisted so it is asked once per pass instead of three times (an
 now runs once before the early return instead of twice). The four rendered
 `ei-json` documents (flagless, `--skill-damage`, `--timeseries`, both) are
 **sha256-identical** across the wave, so the numbers above stand unchanged.
+
+## MEIGAP2 — the six audit rows (payload + MPERF)
+
+### Runtime: no measurable always-on cost
+
+MEIGAP2 added four things to the default path — the `InstidRegistry`
+reverse index (`instanceID`), the enemy outgoing-damage fold
+(`targets[].dpsAll`), the dealt-breakbar accumulation
+(`dpsAll[0].breakbarDamage`) and the per-skill split of the existing
+down-contribution credits. Every one of them was deliberately shaped to
+ride an existing scan rather than add one:
+
+| Addition | Where it runs |
+|---|---|
+| `instanceID` reverse index | a post-pass over `InstidRegistry`'s registration lists (one entry per ownership CHANGE, not per event) — no event scan at all |
+| enemy outgoing damage | folded into `analyze()`'s existing `combat_participant_enemies` scan, which already walks every event with the same skip set |
+| dealt breakbar | folded into `defenses::accumulate_breakbar_and_received_cc`, the scan that already classifies the same result byte for the incoming side |
+| per-skill down contribution | one extra `+=` inside `contribution::credit_window`'s existing damage branch, over its already-narrowed per-down windows |
+
+The two genuinely new passes (`dist_outcomes::build` and
+`health::ei_health_percents`) are standalone opt-in builders on
+`--skill-damage`/`--timeseries`, so a flagless parse never calls them.
+
+Measured end-to-end, base (`be4a97c`) vs tip, `axilog parse <583k-event
+real log> --format json -o /dev/null`, 12 interleaved A/B runs on a loaded
+desktop, minimum taken (the noise-robust statistic — this machine's
+criterion runs were varying by more than the effect being measured, with
+one ablation that REMOVED work timing 15% slower than the code that
+includes it):
+
+| | base | tip |
+|---|---|---|
+| min | 330.5 ms | **327.3 ms** |
+| mean | 355.7 ms | 359.5 ms |
+
+i.e. no regression distinguishable from this machine's noise floor in
+either direction, well inside the ~0.4% MPERF headroom the milestone was
+given. `cargo bench -p axilog-cli --bench pipeline` remains the canonical
+harness for a quiet machine; the interleaved-min method above is what was
+used here because the machine was not quiet.
+
+### Payload
+
+`wc -c` over the rendered document, base vs tip:
+
+| Document | base | tip | delta |
+|---|---|---|---|
+| native `json`, flagless (fixture and real log) | — | — | **+0.000%** |
+| `ei-json` flagless, committed fixture | 683,155 | 694,919 | +1.72% |
+| `ei-json` flagless, real log | 2,728,519 | 2,803,123 | +2.73% |
+| `ei-json --skill-damage --timeseries`, fixture | 10,691,918 | 11,383,674 | +6.47% |
+| `ei-json --skill-damage --timeseries`, real log | 348,635,208 | 350,320,890 | +0.48% |
+
+**The native schema does not move at all**, by construction: every new
+schema field (`PlayerOut::instid`/`breakbar_damage_dealt`/
+`downs_contribution_per_skill`, `EnemyOut::instid`/`damage_out`) is
+`#[serde(skip)]`, the same EI-adapter-only role `PlayerOut::agent_addr` and
+`Report::all_enemies` already play. That also means no SDK typed surface
+(`axilog.pyi`, `types.d.ts`) gains a field; only the two `parse_file_ei`
+docstrings were updated, to say which flag now gates what.
+
+The flagless `ei-json` growth is three always-on scalars — `instanceID`,
+`dpsAll[0].breakbarDamage` and `targets[].dpsAll` — all of which real EI
+also emits unconditionally and all of which axibridge reads without a flag.
+The real log's larger share is `targets[]`: it has 624 of them, so a
+two-field `dpsAll` object plus an `instanceID` per target dominates. The
+gated growth is the distribution outcome columns (fixture: many small rows,
+hence +6.5%) plus `healthPercents`/`boonsStates` (real log: dwarfed by the
+timeline arrays already there, hence +0.5%).

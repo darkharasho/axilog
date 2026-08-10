@@ -720,6 +720,15 @@ def parse_file_ei(
     what actually let `totalDamageDist`/`damage1S`/`dpsTargets`/etc (M12,
     Task 3's ei-json mapping) surface in the returned JSON -- previously
     this function always omitted them regardless of caller intent.
+    As of MEIGAP2 those two also gate three more GW2EI surfaces:
+    `skill_damage` additionally carries the player distributions' outcome
+    columns (`connectedHits`/`glance`/`missed`/`evaded`/`blocked`/
+    `invulned`/`interrupted`/`indirectDamage`, plus per-skill
+    `downContribution` on the outgoing one), and `timeseries` additionally
+    carries `healthPercents` and `boonsStates` -- GW2EI's own
+    `RawFormatTimelineArrays` gate on both. `instanceID`,
+    `dpsAll[0].breakbarDamage` and `targets[].dpsAll` need no flag,
+    matching GW2EI, which always emits them.
     `rotation` (M14, Task 3, keyword-only) likewise lets the ei-json
     `rotation[]` per-player block surface. `replay` (M15, Task 3) adds
     GW2EI's own combat-replay surface -- per-actor

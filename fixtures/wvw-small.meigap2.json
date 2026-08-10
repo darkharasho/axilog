@@ -1,0 +1,3317 @@
+{
+ "_source": "axibridge test-fixtures/boon/20260117-181030.json (dps.report EI JSON) -- the SAME real export fixtures/wvw-small.ei.json is extracted from, for the same log.",
+ "_note": "MEIGAP2 committed golden for the six audit rows this milestone closes, kept in its own file so the much larger fixtures/wvw-small.ei.json needs no reformatting. Joined POSITIONALLY (source players[i] -> fixtures/wvw-small.ei.json players[i] -> anon_account(raw agent-table index)), the same index-order join every prior task uses; re-verified here on dpsAll[0].damage + statsAll[0].appliedCrowdControl for all 41 rows with zero mismatches before extraction. No account/character strings are copied: rows are positional only. Fields: instanceID = players[].instanceID (GW2EI's JsonActor.InstanceID). breakbarDamage = dpsAll[0].breakbarDamage. boonsAppliedCount = the scalar axibridge itself derives from boonsStates (src/main/detailsProcessing.ts:128-142: the sum of the series' positive deltas), which is the only thing that array is read for. takenOutcomeTotals = per-column sums over totalDamageTaken[0] (the damage-mitigation table's player half). outgoingConnectedHits / outgoingIndirectRows = the two columns axibridge reads off totalDamageDist[0]. healthPercents = a digest of the healthPercents step function (length, first and last pair, and the sum of its percent column) rather than the whole array, which would dominate this file. outgoingBySkill = totalDamageDist[0] as {skill id: [connectedHits, indirectDamage]}, so the outgoing gate can be exact on the skill ids both sides have rather than a bound over a sum this project deliberately widens (its outgoing dist folds pet/minion damage onto the owner; GW2EI's is actor-only).",
+ "players": [
+  {
+   "instanceID": 3875,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 22,
+   "takenOutcomeTotals": {
+    "hits": 26,
+    "connectedHits": 19,
+    "glance": 0,
+    "missed": 0,
+    "evaded": 4,
+    "blocked": 3,
+    "invulned": 0,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 247,
+   "outgoingIndirectRows": 3,
+   "healthPercents": {
+    "count": 11,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     31526,
+     100
+    ],
+    "sum": 1081.79
+   },
+   "outgoingBySkill": {
+    "44530": [
+     5,
+     false
+    ],
+    "57244": [
+     9,
+     true
+    ],
+    "44588": [
+     4,
+     false
+    ],
+    "45756": [
+     4,
+     false
+    ],
+    "736": [
+     36,
+     true
+    ],
+    "42009": [
+     60,
+     false
+    ],
+    "737": [
+     50,
+     true
+    ],
+    "42842": [
+     3,
+     false
+    ],
+    "42163": [
+     0,
+     false
+    ],
+    "5929": [
+     47,
+     false
+    ],
+    "5928": [
+     4,
+     false
+    ],
+    "5931": [
+     4,
+     false
+    ],
+    "30713": [
+     15,
+     false
+    ],
+    "30665": [
+     5,
+     false
+    ],
+    "42521": [
+     1,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 3073,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 19,
+   "takenOutcomeTotals": {
+    "hits": 88,
+    "connectedHits": 78,
+    "glance": 5,
+    "missed": 2,
+    "evaded": 5,
+    "blocked": 3,
+    "invulned": 0,
+    "interrupted": 2
+   },
+   "outgoingConnectedHits": 30,
+   "outgoingIndirectRows": 2,
+   "healthPercents": {
+    "count": 32,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     36328,
+     100
+    ],
+    "sum": 3021.25
+   },
+   "outgoingBySkill": {
+    "54960": [
+     0,
+     false
+    ],
+    "77320": [
+     2,
+     false
+    ],
+    "736": [
+     6,
+     true
+    ],
+    "77357": [
+     0,
+     false
+    ],
+    "5550": [
+     9,
+     false
+    ],
+    "5515": [
+     0,
+     false
+    ],
+    "861": [
+     7,
+     true
+    ],
+    "5549": [
+     2,
+     false
+    ],
+    "5570": [
+     4,
+     false
+    ],
+    "722": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 5266,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 25,
+   "takenOutcomeTotals": {
+    "hits": 15,
+    "connectedHits": 5,
+    "glance": 0,
+    "missed": 0,
+    "evaded": 1,
+    "blocked": 3,
+    "invulned": 6,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 118,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 3,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     23127,
+     100
+    ],
+    "sum": 298.66
+   },
+   "outgoingBySkill": {
+    "62586": [
+     61,
+     false
+    ],
+    "10219": [
+     17,
+     false
+    ],
+    "62616": [
+     15,
+     false
+    ],
+    "861": [
+     15,
+     true
+    ],
+    "35637": [
+     5,
+     false
+    ],
+    "10218": [
+     5,
+     false
+    ],
+    "10311": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 3684,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 35,
+   "takenOutcomeTotals": {
+    "hits": 124,
+    "connectedHits": 79,
+    "glance": 1,
+    "missed": 1,
+    "evaded": 0,
+    "blocked": 14,
+    "invulned": 30,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 67,
+   "outgoingIndirectRows": 3,
+   "healthPercents": {
+    "count": 13,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     27023,
+     100
+    ],
+    "sum": 1278.61
+   },
+   "outgoingBySkill": {
+    "30225": [
+     3,
+     false
+    ],
+    "737": [
+     14,
+     true
+    ],
+    "19426": [
+     6,
+     true
+    ],
+    "45402": [
+     3,
+     false
+    ],
+    "45047": [
+     3,
+     false
+    ],
+    "736": [
+     20,
+     true
+    ],
+    "40624": [
+     9,
+     false
+    ],
+    "9121": [
+     1,
+     false
+    ],
+    "9087": [
+     5,
+     false
+    ],
+    "9111": [
+     3,
+     false
+    ],
+    "9109": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2737,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 26,
+   "takenOutcomeTotals": {
+    "hits": 91,
+    "connectedHits": 49,
+    "glance": 0,
+    "missed": 1,
+    "evaded": 0,
+    "blocked": 13,
+    "invulned": 28,
+    "interrupted": 1
+   },
+   "outgoingConnectedHits": 58,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 27,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     28524,
+     100
+    ],
+    "sum": 2657.71
+   },
+   "outgoingBySkill": {
+    "54960": [
+     0,
+     false
+    ],
+    "30643": [
+     2,
+     false
+    ],
+    "77077": [
+     0,
+     false
+    ],
+    "77306": [
+     3,
+     false
+    ],
+    "72005": [
+     5,
+     false
+    ],
+    "71897": [
+     12,
+     false
+    ],
+    "72007": [
+     0,
+     false
+    ],
+    "76746": [
+     6,
+     false
+    ],
+    "861": [
+     23,
+     true
+    ],
+    "77079": [
+     4,
+     false
+    ],
+    "76931": [
+     3,
+     false
+    ],
+    "71892": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2771,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 30,
+   "takenOutcomeTotals": {
+    "hits": 38,
+    "connectedHits": 22,
+    "glance": 0,
+    "missed": 2,
+    "evaded": 3,
+    "blocked": 9,
+    "invulned": 2,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 177,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 13,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     24923,
+     100
+    ],
+    "sum": 1169.49
+   },
+   "outgoingBySkill": {
+    "62586": [
+     83,
+     false
+    ],
+    "9284": [
+     10,
+     false
+    ],
+    "10333": [
+     0,
+     false
+    ],
+    "10218": [
+     8,
+     false
+    ],
+    "10219": [
+     28,
+     false
+    ],
+    "10311": [
+     0,
+     false
+    ],
+    "73093": [
+     10,
+     false
+    ],
+    "12855": [
+     0,
+     false
+    ],
+    "72957": [
+     4,
+     false
+    ],
+    "35637": [
+     5,
+     false
+    ],
+    "861": [
+     19,
+     true
+    ],
+    "62616": [
+     10,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 4723,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 25,
+   "takenOutcomeTotals": {
+    "hits": 28,
+    "connectedHits": 12,
+    "glance": 1,
+    "missed": 3,
+    "evaded": 1,
+    "blocked": 5,
+    "invulned": 7,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 37,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 7,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     25523,
+     100
+    ],
+    "sum": 699.0
+   },
+   "outgoingBySkill": {
+    "9091": [
+     0,
+     false
+    ],
+    "9111": [
+     5,
+     false
+    ],
+    "737": [
+     3,
+     true
+    ],
+    "9143": [
+     6,
+     false
+    ],
+    "9140": [
+     4,
+     false
+    ],
+    "9122": [
+     1,
+     false
+    ],
+    "9101": [
+     2,
+     false
+    ],
+    "77339": [
+     6,
+     false
+    ],
+    "76708": [
+     5,
+     false
+    ],
+    "9121": [
+     3,
+     false
+    ],
+    "9087": [
+     2,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2509,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 37,
+   "takenOutcomeTotals": {
+    "hits": 165,
+    "connectedHits": 126,
+    "glance": 7,
+    "missed": 0,
+    "evaded": 18,
+    "blocked": 14,
+    "invulned": 7,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 163,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 32,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     40224,
+     100
+    ],
+    "sum": 3081.2
+   },
+   "outgoingBySkill": {
+    "72992": [
+     0,
+     false
+    ],
+    "14356": [
+     4,
+     false
+    ],
+    "14373": [
+     8,
+     false
+    ],
+    "14554": [
+     2,
+     false
+    ],
+    "45534": [
+     55,
+     false
+    ],
+    "43123": [
+     5,
+     false
+    ],
+    "861": [
+     12,
+     true
+    ],
+    "41243": [
+     7,
+     false
+    ],
+    "45333": [
+     24,
+     false
+    ],
+    "44947": [
+     0,
+     false
+    ],
+    "9284": [
+     10,
+     false
+    ],
+    "72958": [
+     2,
+     false
+    ],
+    "73014": [
+     4,
+     false
+    ],
+    "72959": [
+     0,
+     false
+    ],
+    "72897": [
+     6,
+     false
+    ],
+    "74290": [
+     22,
+     false
+    ],
+    "9428": [
+     0,
+     false
+    ],
+    "14447": [
+     1,
+     false
+    ],
+    "12855": [
+     0,
+     false
+    ],
+    "42707": [
+     1,
+     false
+    ],
+    "19426": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 3198,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 16,
+   "takenOutcomeTotals": {
+    "hits": 14,
+    "connectedHits": 7,
+    "glance": 0,
+    "missed": 0,
+    "evaded": 2,
+    "blocked": 4,
+    "invulned": 1,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 53,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 1,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     0,
+     100
+    ],
+    "sum": 100
+   },
+   "outgoingBySkill": {
+    "10170": [
+     3,
+     false
+    ],
+    "30643": [
+     2,
+     false
+    ],
+    "76931": [
+     3,
+     false
+    ],
+    "10171": [
+     2,
+     false
+    ],
+    "10334": [
+     15,
+     false
+    ],
+    "76746": [
+     5,
+     false
+    ],
+    "861": [
+     18,
+     true
+    ],
+    "76552": [
+     0,
+     false
+    ],
+    "77079": [
+     5,
+     false
+    ],
+    "10172": [
+     0,
+     false
+    ],
+    "10186": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 4330,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 29,
+   "takenOutcomeTotals": {
+    "hits": 85,
+    "connectedHits": 71,
+    "glance": 3,
+    "missed": 0,
+    "evaded": 3,
+    "blocked": 10,
+    "invulned": 1,
+    "interrupted": 1
+   },
+   "outgoingConnectedHits": 18,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 16,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     30029,
+     100
+    ],
+    "sum": 1565.77
+   },
+   "outgoingBySkill": {
+    "71963": [
+     1,
+     false
+    ],
+    "71999": [
+     6,
+     false
+    ],
+    "31318": [
+     0,
+     false
+    ],
+    "19426": [
+     11,
+     true
+    ]
+   }
+  },
+  {
+   "instanceID": 5258,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 29,
+   "takenOutcomeTotals": {
+    "hits": 35,
+    "connectedHits": 17,
+    "glance": 0,
+    "missed": 1,
+    "evaded": 0,
+    "blocked": 9,
+    "invulned": 8,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 195,
+   "outgoingIndirectRows": 3,
+   "healthPercents": {
+    "count": 9,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     34824,
+     100
+    ],
+    "sum": 891.39
+   },
+   "outgoingBySkill": {
+    "10545": [
+     44,
+     false
+    ],
+    "9284": [
+     14,
+     false
+    ],
+    "10546": [
+     30,
+     false
+    ],
+    "29604": [
+     13,
+     false
+    ],
+    "723": [
+     13,
+     true
+    ],
+    "29560": [
+     6,
+     false
+    ],
+    "30504": [
+     26,
+     false
+    ],
+    "12855": [
+     0,
+     false
+    ],
+    "861": [
+     2,
+     true
+    ],
+    "30319": [
+     0,
+     false
+    ],
+    "29442": [
+     4,
+     false
+    ],
+    "29458": [
+     0,
+     false
+    ],
+    "30278": [
+     1,
+     false
+    ],
+    "29709": [
+     0,
+     false
+    ],
+    "30825": [
+     2,
+     false
+    ],
+    "29855": [
+     12,
+     false
+    ],
+    "19426": [
+     6,
+     true
+    ],
+    "29740": [
+     3,
+     false
+    ],
+    "29666": [
+     2,
+     false
+    ],
+    "10561": [
+     5,
+     false
+    ],
+    "71813": [
+     3,
+     false
+    ],
+    "71998": [
+     5,
+     false
+    ],
+    "10701": [
+     3,
+     false
+    ],
+    "10528": [
+     1,
+     false
+    ],
+    "38767": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 4414,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 42,
+   "takenOutcomeTotals": {
+    "hits": 164,
+    "connectedHits": 120,
+    "glance": 4,
+    "missed": 2,
+    "evaded": 2,
+    "blocked": 24,
+    "invulned": 16,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 64,
+   "outgoingIndirectRows": 2,
+   "healthPercents": {
+    "count": 45,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     31825,
+     100
+    ],
+    "sum": 4301.42
+   },
+   "outgoingBySkill": {
+    "9143": [
+     10,
+     false
+    ],
+    "9140": [
+     5,
+     false
+    ],
+    "76708": [
+     8,
+     false
+    ],
+    "77339": [
+     7,
+     false
+    ],
+    "76978": [
+     2,
+     false
+    ],
+    "19426": [
+     7,
+     true
+    ],
+    "76924": [
+     0,
+     false
+    ],
+    "77058": [
+     1,
+     false
+    ],
+    "78674": [
+     3,
+     false
+    ],
+    "9121": [
+     4,
+     false
+    ],
+    "9087": [
+     2,
+     false
+    ],
+    "9111": [
+     3,
+     false
+    ],
+    "9109": [
+     3,
+     false
+    ],
+    "9110": [
+     3,
+     false
+    ],
+    "9108": [
+     4,
+     false
+    ],
+    "737": [
+     2,
+     true
+    ]
+   }
+  },
+  {
+   "instanceID": 5298,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 26,
+   "takenOutcomeTotals": {
+    "hits": 35,
+    "connectedHits": 28,
+    "glance": 3,
+    "missed": 1,
+    "evaded": 0,
+    "blocked": 6,
+    "invulned": 0,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 26,
+   "outgoingIndirectRows": 2,
+   "healthPercents": {
+    "count": 12,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     26123,
+     100
+    ],
+    "sum": 1192.15
+   },
+   "outgoingBySkill": {
+    "31710": [
+     5,
+     false
+    ],
+    "31700": [
+     7,
+     false
+    ],
+    "31318": [
+     0,
+     false
+    ],
+    "31406": [
+     0,
+     false
+    ],
+    "19426": [
+     3,
+     true
+    ],
+    "31607": [
+     4,
+     false
+    ],
+    "736": [
+     7,
+     true
+    ]
+   }
+  },
+  {
+   "instanceID": 4184,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 25,
+   "takenOutcomeTotals": {
+    "hits": 35,
+    "connectedHits": 26,
+    "glance": 0,
+    "missed": 0,
+    "evaded": 0,
+    "blocked": 9,
+    "invulned": 0,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 197,
+   "outgoingIndirectRows": 3,
+   "healthPercents": {
+    "count": 4,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     11125,
+     100
+    ],
+    "sum": 389.31
+   },
+   "outgoingBySkill": {
+    "10545": [
+     20,
+     false
+    ],
+    "29855": [
+     14,
+     false
+    ],
+    "29604": [
+     6,
+     false
+    ],
+    "723": [
+     36,
+     true
+    ],
+    "861": [
+     14,
+     true
+    ],
+    "29560": [
+     5,
+     false
+    ],
+    "30504": [
+     82,
+     false
+    ],
+    "30557": [
+     0,
+     false
+    ],
+    "29442": [
+     9,
+     false
+    ],
+    "29458": [
+     4,
+     false
+    ],
+    "30278": [
+     4,
+     false
+    ],
+    "29709": [
+     0,
+     false
+    ],
+    "30825": [
+     0,
+     false
+    ],
+    "12810": [
+     0,
+     false
+    ],
+    "19426": [
+     3,
+     true
+    ]
+   }
+  },
+  {
+   "instanceID": 3173,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 33,
+   "takenOutcomeTotals": {
+    "hits": 43,
+    "connectedHits": 33,
+    "glance": 0,
+    "missed": 1,
+    "evaded": 0,
+    "blocked": 9,
+    "invulned": 0,
+    "interrupted": 1
+   },
+   "outgoingConnectedHits": 12,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 23,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     26423,
+     100
+    ],
+    "sum": 2232.28
+   },
+   "outgoingBySkill": {
+    "77079": [
+     8,
+     false
+    ],
+    "10289": [
+     0,
+     false
+    ],
+    "10291": [
+     1,
+     false
+    ],
+    "71897": [
+     2,
+     false
+    ],
+    "19426": [
+     1,
+     true
+    ],
+    "77306": [
+     0,
+     false
+    ],
+    "71892": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2358,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 32,
+   "takenOutcomeTotals": {
+    "hits": 109,
+    "connectedHits": 101,
+    "glance": 0,
+    "missed": 1,
+    "evaded": 0,
+    "blocked": 7,
+    "invulned": 0,
+    "interrupted": 3
+   },
+   "outgoingConnectedHits": 188,
+   "outgoingIndirectRows": 3,
+   "healthPercents": {
+    "count": 20,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     30325,
+     100
+    ],
+    "sum": 1919.75
+   },
+   "outgoingBySkill": {
+    "10545": [
+     28,
+     false
+    ],
+    "861": [
+     13,
+     true
+    ],
+    "29604": [
+     8,
+     false
+    ],
+    "10546": [
+     32,
+     false
+    ],
+    "10607": [
+     18,
+     false
+    ],
+    "30504": [
+     30,
+     false
+    ],
+    "723": [
+     10,
+     true
+    ],
+    "29442": [
+     2,
+     false
+    ],
+    "29458": [
+     4,
+     false
+    ],
+    "30278": [
+     3,
+     false
+    ],
+    "29855": [
+     9,
+     false
+    ],
+    "30860": [
+     1,
+     false
+    ],
+    "30163": [
+     10,
+     false
+    ],
+    "19426": [
+     8,
+     true
+    ],
+    "29705": [
+     1,
+     false
+    ],
+    "30799": [
+     3,
+     false
+    ],
+    "29867": [
+     3,
+     false
+    ],
+    "30825": [
+     5,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2415,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 32,
+   "takenOutcomeTotals": {
+    "hits": 131,
+    "connectedHits": 115,
+    "glance": 4,
+    "missed": 0,
+    "evaded": 0,
+    "blocked": 16,
+    "invulned": 0,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 45,
+   "outgoingIndirectRows": 2,
+   "healthPercents": {
+    "count": 37,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     36024,
+     100
+    ],
+    "sum": 3498.62
+   },
+   "outgoingBySkill": {
+    "9091": [
+     0,
+     false
+    ],
+    "9121": [
+     6,
+     false
+    ],
+    "9087": [
+     0,
+     false
+    ],
+    "9111": [
+     13,
+     false
+    ],
+    "737": [
+     3,
+     true
+    ],
+    "19426": [
+     8,
+     true
+    ],
+    "9109": [
+     2,
+     false
+    ],
+    "9110": [
+     1,
+     false
+    ],
+    "76924": [
+     1,
+     false
+    ],
+    "76708": [
+     11,
+     false
+    ],
+    "9101": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 5462,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 28,
+   "takenOutcomeTotals": {
+    "hits": 44,
+    "connectedHits": 22,
+    "glance": 0,
+    "missed": 0,
+    "evaded": 1,
+    "blocked": 14,
+    "invulned": 7,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 41,
+   "outgoingIndirectRows": 2,
+   "healthPercents": {
+    "count": 11,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     33325,
+     100
+    ],
+    "sum": 1092.91
+   },
+   "outgoingBySkill": {
+    "76552": [
+     3,
+     false
+    ],
+    "71897": [
+     4,
+     false
+    ],
+    "76746": [
+     1,
+     false
+    ],
+    "861": [
+     10,
+     true
+    ],
+    "77079": [
+     7,
+     false
+    ],
+    "76931": [
+     4,
+     false
+    ],
+    "72005": [
+     2,
+     false
+    ],
+    "77077": [
+     0,
+     false
+    ],
+    "30643": [
+     5,
+     false
+    ],
+    "10289": [
+     1,
+     false
+    ],
+    "10290": [
+     2,
+     false
+    ],
+    "19426": [
+     2,
+     true
+    ],
+    "10291": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 4305,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 32,
+   "takenOutcomeTotals": {
+    "hits": 64,
+    "connectedHits": 46,
+    "glance": 1,
+    "missed": 1,
+    "evaded": 6,
+    "blocked": 7,
+    "invulned": 4,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 197,
+   "outgoingIndirectRows": 2,
+   "healthPercents": {
+    "count": 21,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     33628,
+     100
+    ],
+    "sum": 2062.31
+   },
+   "outgoingBySkill": {
+    "22499": [
+     50,
+     false
+    ],
+    "9087": [
+     1,
+     false
+    ],
+    "9091": [
+     0,
+     false
+    ],
+    "13677": [
+     1,
+     false
+    ],
+    "40624": [
+     15,
+     false
+    ],
+    "45402": [
+     3,
+     false
+    ],
+    "737": [
+     47,
+     true
+    ],
+    "45047": [
+     3,
+     false
+    ],
+    "736": [
+     29,
+     true
+    ],
+    "44602": [
+     0,
+     false
+    ],
+    "72940": [
+     4,
+     false
+    ],
+    "72978": [
+     8,
+     false
+    ],
+    "73132": [
+     11,
+     false
+    ],
+    "73094": [
+     7,
+     false
+    ],
+    "40015": [
+     14,
+     false
+    ],
+    "40635": [
+     4,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 5404,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 26,
+   "takenOutcomeTotals": {
+    "hits": 60,
+    "connectedHits": 44,
+    "glance": 1,
+    "missed": 0,
+    "evaded": 0,
+    "blocked": 5,
+    "invulned": 11,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 216,
+   "outgoingIndirectRows": 4,
+   "healthPercents": {
+    "count": 19,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     40524,
+     100
+    ],
+    "sum": 1806.63
+   },
+   "outgoingBySkill": {
+    "10528": [
+     5,
+     false
+    ],
+    "9284": [
+     10,
+     false
+    ],
+    "10561": [
+     4,
+     false
+    ],
+    "10555": [
+     1,
+     false
+    ],
+    "29604": [
+     7,
+     false
+    ],
+    "10701": [
+     8,
+     false
+    ],
+    "10545": [
+     38,
+     false
+    ],
+    "38767": [
+     1,
+     false
+    ],
+    "10546": [
+     32,
+     false
+    ],
+    "723": [
+     18,
+     true
+    ],
+    "29560": [
+     7,
+     false
+    ],
+    "861": [
+     5,
+     true
+    ],
+    "30504": [
+     30,
+     false
+    ],
+    "12855": [
+     0,
+     false
+    ],
+    "736": [
+     3,
+     true
+    ],
+    "29442": [
+     4,
+     false
+    ],
+    "29458": [
+     4,
+     false
+    ],
+    "738": [
+     0,
+     false
+    ],
+    "30278": [
+     3,
+     false
+    ],
+    "30557": [
+     0,
+     false
+    ],
+    "19426": [
+     5,
+     true
+    ],
+    "69665": [
+     0,
+     false
+    ],
+    "29666": [
+     4,
+     false
+    ],
+    "9428": [
+     1,
+     false
+    ],
+    "29855": [
+     13,
+     false
+    ],
+    "30860": [
+     1,
+     false
+    ],
+    "30163": [
+     3,
+     false
+    ],
+    "29705": [
+     2,
+     false
+    ],
+    "29740": [
+     3,
+     false
+    ],
+    "30105": [
+     3,
+     false
+    ],
+    "30488": [
+     1,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2920,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 24,
+   "takenOutcomeTotals": {
+    "hits": 49,
+    "connectedHits": 33,
+    "glance": 1,
+    "missed": 0,
+    "evaded": 4,
+    "blocked": 7,
+    "invulned": 5,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 319,
+   "outgoingIndirectRows": 3,
+   "healthPercents": {
+    "count": 17,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     35723,
+     100
+    ],
+    "sum": 1624.63
+   },
+   "outgoingBySkill": {
+    "59562": [
+     14,
+     false
+    ],
+    "5936": [
+     29,
+     false
+    ],
+    "5928": [
+     61,
+     false
+    ],
+    "5929": [
+     28,
+     false
+    ],
+    "737": [
+     28,
+     true
+    ],
+    "736": [
+     62,
+     true
+    ],
+    "76493": [
+     1,
+     false
+    ],
+    "5931": [
+     4,
+     false
+    ],
+    "19426": [
+     3,
+     true
+    ],
+    "77209": [
+     3,
+     false
+    ],
+    "77307": [
+     4,
+     false
+    ],
+    "76993": [
+     39,
+     false
+    ],
+    "76806": [
+     7,
+     false
+    ],
+    "76693": [
+     12,
+     false
+    ],
+    "76640": [
+     3,
+     false
+    ],
+    "77013": [
+     2,
+     false
+    ],
+    "77262": [
+     5,
+     false
+    ],
+    "76932": [
+     12,
+     false
+    ],
+    "10596": [
+     2,
+     false
+    ],
+    "31496": [
+     0,
+     false
+    ],
+    "5930": [
+     0,
+     false
+    ],
+    "12856": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2370,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 30,
+   "takenOutcomeTotals": {
+    "hits": 43,
+    "connectedHits": 28,
+    "glance": 0,
+    "missed": 0,
+    "evaded": 2,
+    "blocked": 9,
+    "invulned": 4,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 28,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 16,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     30624,
+     100
+    ],
+    "sum": 1590.34
+   },
+   "outgoingBySkill": {
+    "31700": [
+     3,
+     false
+    ],
+    "31318": [
+     0,
+     false
+    ],
+    "31406": [
+     0,
+     false
+    ],
+    "19426": [
+     6,
+     true
+    ],
+    "12621": [
+     0,
+     false
+    ],
+    "71999": [
+     10,
+     false
+    ],
+    "72088": [
+     2,
+     false
+    ],
+    "71963": [
+     3,
+     false
+    ],
+    "72044": [
+     1,
+     false
+    ],
+    "12620": [
+     3,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2879,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 31,
+   "takenOutcomeTotals": {
+    "hits": 82,
+    "connectedHits": 47,
+    "glance": 2,
+    "missed": 0,
+    "evaded": 24,
+    "blocked": 9,
+    "invulned": 2,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 180,
+   "outgoingIndirectRows": 3,
+   "healthPercents": {
+    "count": 12,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     37523,
+     100
+    ],
+    "sum": 1149.13
+   },
+   "outgoingBySkill": {
+    "59562": [
+     15,
+     false
+    ],
+    "72974": [
+     4,
+     false
+    ],
+    "737": [
+     31,
+     true
+    ],
+    "736": [
+     34,
+     true
+    ],
+    "73143": [
+     4,
+     false
+    ],
+    "76493": [
+     3,
+     false
+    ],
+    "5931": [
+     5,
+     false
+    ],
+    "5928": [
+     19,
+     false
+    ],
+    "5929": [
+     29,
+     false
+    ],
+    "76806": [
+     5,
+     false
+    ],
+    "76693": [
+     8,
+     false
+    ],
+    "861": [
+     2,
+     true
+    ],
+    "77013": [
+     3,
+     false
+    ],
+    "77209": [
+     2,
+     false
+    ],
+    "77307": [
+     2,
+     false
+    ],
+    "72977": [
+     4,
+     false
+    ],
+    "72944": [
+     2,
+     false
+    ],
+    "76568": [
+     4,
+     false
+    ],
+    "5936": [
+     4,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2930,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 51,
+   "takenOutcomeTotals": {
+    "hits": 153,
+    "connectedHits": 115,
+    "glance": 7,
+    "missed": 2,
+    "evaded": 1,
+    "blocked": 15,
+    "invulned": 20,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 46,
+   "outgoingIndirectRows": 2,
+   "healthPercents": {
+    "count": 28,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     34825,
+     100
+    ],
+    "sum": 2328.57
+   },
+   "outgoingBySkill": {
+    "76746": [
+     7,
+     false
+    ],
+    "861": [
+     22,
+     true
+    ],
+    "10289": [
+     1,
+     false
+    ],
+    "19426": [
+     6,
+     true
+    ],
+    "72005": [
+     0,
+     false
+    ],
+    "72007": [
+     0,
+     false
+    ],
+    "76552": [
+     0,
+     false
+    ],
+    "71892": [
+     0,
+     false
+    ],
+    "30643": [
+     5,
+     false
+    ],
+    "10290": [
+     1,
+     false
+    ],
+    "30316": [
+     0,
+     false
+    ],
+    "10277": [
+     1,
+     false
+    ],
+    "10168": [
+     3,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 5110,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 37,
+   "takenOutcomeTotals": {
+    "hits": 98,
+    "connectedHits": 58,
+    "glance": 0,
+    "missed": 2,
+    "evaded": 5,
+    "blocked": 8,
+    "invulned": 25,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 19,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 14,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     32724,
+     100
+    ],
+    "sum": 1319.76
+   },
+   "outgoingBySkill": {
+    "9101": [
+     5,
+     false
+    ],
+    "737": [
+     3,
+     true
+    ],
+    "76708": [
+     1,
+     false
+    ],
+    "77339": [
+     1,
+     false
+    ],
+    "9122": [
+     1,
+     false
+    ],
+    "9121": [
+     0,
+     false
+    ],
+    "9091": [
+     0,
+     false
+    ],
+    "9109": [
+     3,
+     false
+    ],
+    "9087": [
+     5,
+     false
+    ],
+    "51660": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2662,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 25,
+   "takenOutcomeTotals": {
+    "hits": 32,
+    "connectedHits": 24,
+    "glance": 1,
+    "missed": 0,
+    "evaded": 0,
+    "blocked": 7,
+    "invulned": 1,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 7,
+   "outgoingIndirectRows": 0,
+   "healthPercents": {
+    "count": 7,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     28224,
+     100
+    ],
+    "sum": 696.16
+   },
+   "outgoingBySkill": {
+    "31318": [
+     0,
+     false
+    ],
+    "31406": [
+     0,
+     false
+    ],
+    "31503": [
+     2,
+     false
+    ],
+    "31700": [
+     5,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2572,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 29,
+   "takenOutcomeTotals": {
+    "hits": 30,
+    "connectedHits": 15,
+    "glance": 0,
+    "missed": 2,
+    "evaded": 1,
+    "blocked": 9,
+    "invulned": 3,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 196,
+   "outgoingIndirectRows": 4,
+   "healthPercents": {
+    "count": 7,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     39625,
+     100
+    ],
+    "sum": 689.67
+   },
+   "outgoingBySkill": {
+    "10528": [
+     4,
+     false
+    ],
+    "10561": [
+     6,
+     false
+    ],
+    "57244": [
+     12,
+     true
+    ],
+    "29604": [
+     6,
+     false
+    ],
+    "10546": [
+     33,
+     false
+    ],
+    "30670": [
+     5,
+     false
+    ],
+    "19426": [
+     3,
+     true
+    ],
+    "10545": [
+     30,
+     false
+    ],
+    "69665": [
+     0,
+     false
+    ],
+    "30488": [
+     2,
+     false
+    ],
+    "79344": [
+     2,
+     false
+    ],
+    "723": [
+     15,
+     true
+    ],
+    "861": [
+     5,
+     true
+    ],
+    "29705": [
+     5,
+     false
+    ],
+    "29740": [
+     1,
+     false
+    ],
+    "30163": [
+     0,
+     false
+    ],
+    "29855": [
+     0,
+     false
+    ],
+    "29560": [
+     6,
+     false
+    ],
+    "29442": [
+     6,
+     false
+    ],
+    "30504": [
+     38,
+     false
+    ],
+    "12856": [
+     0,
+     false
+    ],
+    "29709": [
+     0,
+     false
+    ],
+    "30557": [
+     1,
+     false
+    ],
+    "30825": [
+     5,
+     false
+    ],
+    "720": [
+     0,
+     false
+    ],
+    "29458": [
+     4,
+     false
+    ],
+    "30278": [
+     3,
+     false
+    ],
+    "10701": [
+     1,
+     false
+    ],
+    "38767": [
+     0,
+     false
+    ],
+    "71813": [
+     2,
+     false
+    ],
+    "72068": [
+     1,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 3884,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 54,
+   "takenOutcomeTotals": {
+    "hits": 117,
+    "connectedHits": 99,
+    "glance": 2,
+    "missed": 2,
+    "evaded": 0,
+    "blocked": 16,
+    "invulned": 0,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 139,
+   "outgoingIndirectRows": 2,
+   "healthPercents": {
+    "count": 27,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     25223,
+     100
+    ],
+    "sum": 2570.31
+   },
+   "outgoingBySkill": {
+    "63208": [
+     4,
+     false
+    ],
+    "63438": [
+     23,
+     false
+    ],
+    "19426": [
+     7,
+     true
+    ],
+    "63352": [
+     22,
+     false
+    ],
+    "723": [
+     25,
+     true
+    ],
+    "12474": [
+     3,
+     false
+    ],
+    "9284": [
+     11,
+     false
+    ],
+    "12487": [
+     3,
+     false
+    ],
+    "63350": [
+     3,
+     false
+    ],
+    "63130": [
+     0,
+     false
+    ],
+    "63157": [
+     24,
+     false
+    ],
+    "63162": [
+     0,
+     false
+    ],
+    "12525": [
+     5,
+     false
+    ],
+    "12580": [
+     0,
+     false
+    ],
+    "63118": [
+     4,
+     false
+    ],
+    "63222": [
+     2,
+     false
+    ],
+    "63337": [
+     1,
+     false
+    ],
+    "63131": [
+     1,
+     false
+    ],
+    "63197": [
+     0,
+     false
+    ],
+    "63335": [
+     1,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2694,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 43,
+   "takenOutcomeTotals": {
+    "hits": 74,
+    "connectedHits": 67,
+    "glance": 1,
+    "missed": 1,
+    "evaded": 0,
+    "blocked": 6,
+    "invulned": 0,
+    "interrupted": 1
+   },
+   "outgoingConnectedHits": 26,
+   "outgoingIndirectRows": 3,
+   "healthPercents": {
+    "count": 33,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     45323,
+     100
+    ],
+    "sum": 3276.08
+   },
+   "outgoingBySkill": {
+    "19426": [
+     3,
+     true
+    ],
+    "5550": [
+     10,
+     false
+    ],
+    "76681": [
+     4,
+     false
+    ],
+    "736": [
+     2,
+     true
+    ],
+    "76914": [
+     3,
+     false
+    ],
+    "77357": [
+     0,
+     false
+    ],
+    "77074": [
+     0,
+     false
+    ],
+    "5570": [
+     3,
+     false
+    ],
+    "5515": [
+     0,
+     false
+    ],
+    "861": [
+     1,
+     true
+    ]
+   }
+  },
+  {
+   "instanceID": 2825,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 32,
+   "takenOutcomeTotals": {
+    "hits": 79,
+    "connectedHits": 52,
+    "glance": 1,
+    "missed": 0,
+    "evaded": 15,
+    "blocked": 12,
+    "invulned": 0,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 248,
+   "outgoingIndirectRows": 4,
+   "healthPercents": {
+    "count": 13,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     34229,
+     100
+    ],
+    "sum": 1260.24
+   },
+   "outgoingBySkill": {
+    "59562": [
+     3,
+     false
+    ],
+    "57244": [
+     10,
+     true
+    ],
+    "5936": [
+     27,
+     false
+    ],
+    "5929": [
+     29,
+     false
+    ],
+    "737": [
+     25,
+     true
+    ],
+    "736": [
+     44,
+     true
+    ],
+    "76806": [
+     11,
+     false
+    ],
+    "76693": [
+     23,
+     false
+    ],
+    "77013": [
+     6,
+     false
+    ],
+    "5928": [
+     37,
+     false
+    ],
+    "19426": [
+     6,
+     true
+    ],
+    "76640": [
+     2,
+     false
+    ],
+    "77262": [
+     5,
+     false
+    ],
+    "76932": [
+     13,
+     false
+    ],
+    "5931": [
+     5,
+     false
+    ],
+    "77209": [
+     0,
+     false
+    ],
+    "5934": [
+     2,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 2044,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 57,
+   "takenOutcomeTotals": {
+    "hits": 153,
+    "connectedHits": 129,
+    "glance": 6,
+    "missed": 1,
+    "evaded": 9,
+    "blocked": 14,
+    "invulned": 0,
+    "interrupted": 3
+   },
+   "outgoingConnectedHits": 69,
+   "outgoingIndirectRows": 2,
+   "healthPercents": {
+    "count": 37,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     40224,
+     100
+    ],
+    "sum": 3474.89
+   },
+   "outgoingBySkill": {
+    "9143": [
+     18,
+     false
+    ],
+    "19426": [
+     12,
+     true
+    ],
+    "737": [
+     1,
+     true
+    ],
+    "77339": [
+     14,
+     false
+    ],
+    "76910": [
+     1,
+     false
+    ],
+    "76924": [
+     1,
+     false
+    ],
+    "9140": [
+     0,
+     false
+    ],
+    "9144": [
+     0,
+     false
+    ],
+    "9109": [
+     2,
+     false
+    ],
+    "9111": [
+     13,
+     false
+    ],
+    "9101": [
+     4,
+     false
+    ],
+    "9091": [
+     0,
+     false
+    ],
+    "9087": [
+     3,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 4255,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 43,
+   "takenOutcomeTotals": {
+    "hits": 64,
+    "connectedHits": 35,
+    "glance": 2,
+    "missed": 3,
+    "evaded": 1,
+    "blocked": 15,
+    "invulned": 10,
+    "interrupted": 1
+   },
+   "outgoingConnectedHits": 28,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 12,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     26726,
+     100
+    ],
+    "sum": 1176.62
+   },
+   "outgoingBySkill": {
+    "71897": [
+     1,
+     false
+    ],
+    "29830": [
+     0,
+     false
+    ],
+    "10192": [
+     0,
+     false
+    ],
+    "19426": [
+     8,
+     true
+    ],
+    "56930": [
+     3,
+     false
+    ],
+    "10334": [
+     9,
+     false
+    ],
+    "30643": [
+     5,
+     false
+    ],
+    "30359": [
+     2,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 4120,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 46,
+   "takenOutcomeTotals": {
+    "hits": 119,
+    "connectedHits": 98,
+    "glance": 2,
+    "missed": 0,
+    "evaded": 7,
+    "blocked": 12,
+    "invulned": 2,
+    "interrupted": 2
+   },
+   "outgoingConnectedHits": 215,
+   "outgoingIndirectRows": 2,
+   "healthPercents": {
+    "count": 19,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     28227,
+     100
+    ],
+    "sum": 1749.34
+   },
+   "outgoingBySkill": {
+    "5644": [
+     5,
+     false
+    ],
+    "5691": [
+     3,
+     false
+    ],
+    "737": [
+     87,
+     true
+    ],
+    "5557": [
+     2,
+     false
+    ],
+    "5496": [
+     23,
+     false
+    ],
+    "62813": [
+     26,
+     false
+    ],
+    "5703": [
+     6,
+     false
+    ],
+    "21656": [
+     2,
+     false
+    ],
+    "21636": [
+     0,
+     false
+    ],
+    "62940": [
+     15,
+     false
+    ],
+    "51662": [
+     3,
+     false
+    ],
+    "861": [
+     20,
+     true
+    ],
+    "5646": [
+     5,
+     false
+    ],
+    "5487": [
+     4,
+     false
+    ],
+    "51646": [
+     2,
+     false
+    ],
+    "5537": [
+     0,
+     false
+    ],
+    "62723": [
+     12,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 4884,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 25,
+   "takenOutcomeTotals": {
+    "hits": 39,
+    "connectedHits": 25,
+    "glance": 1,
+    "missed": 0,
+    "evaded": 7,
+    "blocked": 6,
+    "invulned": 1,
+    "interrupted": 1
+   },
+   "outgoingConnectedHits": 5,
+   "outgoingIndirectRows": 0,
+   "healthPercents": {
+    "count": 5,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     14426,
+     100
+    ],
+    "sum": 497.76
+   },
+   "outgoingBySkill": {
+    "31700": [
+     5,
+     false
+    ],
+    "31406": [
+     0,
+     false
+    ],
+    "31318": [
+     0,
+     false
+    ],
+    "12621": [
+     0,
+     false
+    ],
+    "71999": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 4716,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 34,
+   "takenOutcomeTotals": {
+    "hits": 103,
+    "connectedHits": 64,
+    "glance": 3,
+    "missed": 1,
+    "evaded": 0,
+    "blocked": 15,
+    "invulned": 23,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 24,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 14,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     26425,
+     100
+    ],
+    "sum": 1366.73
+   },
+   "outgoingBySkill": {
+    "77079": [
+     5,
+     false
+    ],
+    "861": [
+     16,
+     true
+    ],
+    "71897": [
+     3,
+     false
+    ],
+    "71892": [
+     0,
+     false
+    ],
+    "77077": [
+     0,
+     false
+    ],
+    "76931": [
+     0,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 4704,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 40,
+   "takenOutcomeTotals": {
+    "hits": 151,
+    "connectedHits": 108,
+    "glance": 0,
+    "missed": 1,
+    "evaded": 0,
+    "blocked": 19,
+    "invulned": 23,
+    "interrupted": 2
+   },
+   "outgoingConnectedHits": 59,
+   "outgoingIndirectRows": 1,
+   "healthPercents": {
+    "count": 28,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     28225,
+     100
+    ],
+    "sum": 2178.03
+   },
+   "outgoingBySkill": {
+    "9121": [
+     4,
+     false
+    ],
+    "9109": [
+     5,
+     false
+    ],
+    "9111": [
+     16,
+     false
+    ],
+    "737": [
+     8,
+     true
+    ],
+    "9149": [
+     0,
+     false
+    ],
+    "76708": [
+     3,
+     false
+    ],
+    "76978": [
+     1,
+     false
+    ],
+    "77339": [
+     7,
+     false
+    ],
+    "76910": [
+     0,
+     false
+    ],
+    "76950": [
+     9,
+     false
+    ],
+    "9101": [
+     3,
+     false
+    ],
+    "9110": [
+     1,
+     false
+    ],
+    "9087": [
+     1,
+     false
+    ],
+    "9143": [
+     1,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 3451,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 29,
+   "takenOutcomeTotals": {
+    "hits": 29,
+    "connectedHits": 24,
+    "glance": 0,
+    "missed": 0,
+    "evaded": 0,
+    "blocked": 4,
+    "invulned": 1,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 224,
+   "outgoingIndirectRows": 3,
+   "healthPercents": {
+    "count": 12,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     30328,
+     100
+    ],
+    "sum": 1130.57
+   },
+   "outgoingBySkill": {
+    "5928": [
+     69,
+     false
+    ],
+    "59562": [
+     1,
+     false
+    ],
+    "736": [
+     45,
+     true
+    ],
+    "5929": [
+     30,
+     false
+    ],
+    "737": [
+     40,
+     true
+    ],
+    "5930": [
+     0,
+     false
+    ],
+    "62621": [
+     11,
+     false
+    ],
+    "62655": [
+     0,
+     false
+    ],
+    "19426": [
+     5,
+     true
+    ],
+    "76806": [
+     3,
+     false
+    ],
+    "76640": [
+     0,
+     false
+    ],
+    "76693": [
+     1,
+     false
+    ],
+    "77262": [
+     2,
+     false
+    ],
+    "12812": [
+     0,
+     false
+    ],
+    "72944": [
+     4,
+     false
+    ],
+    "76932": [
+     2,
+     false
+    ],
+    "73109": [
+     2,
+     false
+    ],
+    "73122": [
+     5,
+     false
+    ],
+    "72977": [
+     4,
+     false
+    ]
+   }
+  },
+  {
+   "instanceID": 5489,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 4,
+   "takenOutcomeTotals": {
+    "hits": 0,
+    "connectedHits": 0,
+    "glance": 0,
+    "missed": 0,
+    "evaded": 0,
+    "blocked": 0,
+    "invulned": 0,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 0,
+   "outgoingIndirectRows": 0,
+   "healthPercents": {
+    "count": 27,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     41126,
+     100
+    ],
+    "sum": 2687.2
+   },
+   "outgoingBySkill": {}
+  },
+  {
+   "instanceID": 4148,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 3,
+   "takenOutcomeTotals": {
+    "hits": 0,
+    "connectedHits": 0,
+    "glance": 0,
+    "missed": 0,
+    "evaded": 0,
+    "blocked": 0,
+    "invulned": 0,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 0,
+   "outgoingIndirectRows": 0,
+   "healthPercents": {
+    "count": 32,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     29726,
+     100
+    ],
+    "sum": 2943.05
+   },
+   "outgoingBySkill": {}
+  },
+  {
+   "instanceID": 4078,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 3,
+   "takenOutcomeTotals": {
+    "hits": 0,
+    "connectedHits": 0,
+    "glance": 0,
+    "missed": 0,
+    "evaded": 0,
+    "blocked": 0,
+    "invulned": 0,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 0,
+   "outgoingIndirectRows": 0,
+   "healthPercents": {
+    "count": 18,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     37826,
+     100
+    ],
+    "sum": 1646.14
+   },
+   "outgoingBySkill": {}
+  },
+  {
+   "instanceID": 2714,
+   "breakbarDamage": 0,
+   "boonsAppliedCount": 2,
+   "takenOutcomeTotals": {
+    "hits": 0,
+    "connectedHits": 0,
+    "glance": 0,
+    "missed": 0,
+    "evaded": 0,
+    "blocked": 0,
+    "invulned": 0,
+    "interrupted": 0
+   },
+   "outgoingConnectedHits": 0,
+   "outgoingIndirectRows": 0,
+   "healthPercents": {
+    "count": 54,
+    "first": [
+     0,
+     100
+    ],
+    "last": [
+     48626,
+     97.68
+    ],
+    "sum": 3925.85
+   },
+   "outgoingBySkill": {}
+  }
+ ]
+}
