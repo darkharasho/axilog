@@ -25,20 +25,19 @@ single-file interactive HTML report.
 
 ## Speed
 
-Release build, Ryzen 9 7900X3D, end to end (decode → resolve → analyze → serialize):
+Release build, Ryzen 9 7900X3D, end to end (decode → resolve → analyze → serialize), medians of 3.
+Elite Insights CLI v3.27 on the same machine and logs for scale:
 
-| Log | Events | Players | Full parse | Peak memory |
+| Log | Events | Players | axilog | Elite Insights |
 | --- | --- | --- | --- | --- |
-| 49 s skirmish | 120,435 | 42 | **60 ms** | 20 MiB |
-| Real 5:48 zerg fight | 583,194 | 48 | **360 ms** | 86 MiB |
+| 49 s skirmish | 120,435 | 42 | **60 ms** · 20 MiB | 2.43 s · 373 MiB |
+| Real 5:48 zerg fight | 583,194 | 48 | **360 ms** · 86 MiB | 7.25 s · 857 MiB |
 
-That is every metric listed above computed on a whole zerg fight in about a third of a second, on
-one thread. Emitting the full Elite Insights-compatible document instead — the heaviest thing
-axilog can produce, replay tracks and all — takes 2.49 s at 117 MiB.
-
-For scale against the reference implementation it is calibrated on, axilog is 2.9–9.7× faster on
-matched output and 20–40× faster in its default configuration, at 7–18× less memory —
-[full head-to-head and methodology](#vs-elite-insights).
+Every metric listed above, computed on a whole zerg fight in about a third of a second on one
+thread — **20–40× faster at 10–18× less memory**. Emitting the full Elite Insights-compatible
+document instead, the heaviest thing axilog can produce (replay tracks and all), takes 2.49 s at
+117 MiB — still 2.9× faster at 7.3× less memory than EI's own equivalent configuration.
+[Full head-to-head and methodology →](#vs-elite-insights)
 
 ## Install
 
