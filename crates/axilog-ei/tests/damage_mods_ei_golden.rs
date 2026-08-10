@@ -11,7 +11,7 @@
 //! included.
 //!
 //! Why text and not values: `damageGain` is a C# `double` on both sides
-//! (`GW2EIEvtcParser/EIData/Statistics/DamageModifierStat.cs:8` and
+//! (`GW2EIEvtcParser/EIData/Statistics/DamageModifierStat.cs:7` and
 //! `GW2EIJSON/.../JsonDamageModifierData.cs:28`), `Math.Round(_, 3)`-ed at
 //! construction. M15's replay work established that this project's floats
 //! must be emitted through whatever numeric WIDTH GW2EI actually used, and

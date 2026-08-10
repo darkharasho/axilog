@@ -115,11 +115,20 @@ enum Cmd {
         /// `axilog_core::analysis::damage_mods`.
         ///
         /// `--format json` embeds `players[].damage_mods.{outgoing,
-        /// incoming}` plus the top-level `damage_mod_map`;
+        /// incoming}` plus the top-level `damage_mod_map`.
+        /// `--format html` carries the SAME native block, because the
+        /// report page embeds the serialized `Report` verbatim
+        /// (`axilog_html::render`) -- it grows 260,515 -> 347,412 bytes on
+        /// the committed fixture, exactly as `--rotation`/`--skill-damage`/
+        /// `--timeseries` already do; there is no modifier-specific HTML
+        /// widget, and the flagless page is unchanged (both HTML size
+        /// budgets are measured flagless and are untouched).
         /// `--format ei-json` embeds Elite Insights' own
         /// `damageModifiers`/`incomingDamageModifiers`/
         /// `damageModifiersTarget`/`incomingDamageModifiersTarget` plus
-        /// `damageModMap`. Every other format ignores it.
+        /// `damageModMap` -- gated by this same flag, and additionally the
+        /// only format that asks the engine for the per-target split.
+        /// `--format table`/`csv` ignore it entirely.
         ///
         /// Off by default, and unlike `--rotation`/`--skill-damage`/
         /// `--timeseries` this flag gates the COMPUTATION, not just the

@@ -85,6 +85,16 @@ fn build_report_from_bytes(
     ))
 }
 
+/// `build_report_and_activity_from_bytes`'s return tuple. Named because it
+/// grew a fourth member in M16 and `clippy::type_complexity` is right that
+/// the inline form had stopped being readable.
+type EiPipelineOutputs = (
+    axilog_schema::Report,
+    Vec<axilog_core::analysis::replay::ActivityIntervals>,
+    Option<axilog_core::analysis::ei_replay::EiReplay>,
+    Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
+);
+
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
 /// but additionally returns the M11 Task 3 activity intervals
 /// (`axilog_core::analysis::replay::build_activity_intervals`) the ei-json
@@ -101,16 +111,6 @@ fn build_report_from_bytes(
 /// `None` here regardless of what the caller asked for). `want_missiles`
 /// is threaded the same way for symmetry with `parse_file`/`parse_bytes`,
 /// even though `to_ei_json` does not currently read `Report::missiles`.
-/// `build_report_and_activity_from_bytes`'s return tuple. Named because it
-/// grew a fourth member in M16 and `clippy::type_complexity` is right that
-/// the inline form had stopped being readable.
-type EiPipelineOutputs = (
-    axilog_schema::Report,
-    Vec<axilog_core::analysis::replay::ActivityIntervals>,
-    Option<axilog_core::analysis::ei_replay::EiReplay>,
-    Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
-);
-
 #[allow(clippy::too_many_arguments)]
 fn build_report_and_activity_from_bytes(
     bytes: &[u8],

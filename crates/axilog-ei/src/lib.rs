@@ -170,7 +170,7 @@ fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
 /// because the replay coordinates it was written for are C# `float`s
 /// (M15's lesson). `DamageGain` is a C# **`double`** on both sides of the
 /// pipeline -- `DamageModifierStat.DamageGain`
-/// (`GW2EIEvtcParser/EIData/Statistics/DamageModifierStat.cs:8`) and
+/// (`GW2EIEvtcParser/EIData/Statistics/DamageModifierStat.cs:7`) and
 /// `JsonDamageModifierItem.DamageGain`
 /// (`GW2EIJSON/.../JsonDamageModifierData.cs:28`) are both `double`, and it
 /// is `Math.Round(x, 3)`-ed at construction (`:14`,

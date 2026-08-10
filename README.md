@@ -162,11 +162,16 @@ hits it applied to and how much of the damage it accounts for. Backed by a 205-d
 transcription of GW2EI's own descriptor tables (`axilog_core::analysis::damage_mods`), with the
 gain formula reproduced exactly: a modifier's share of an observed hit is `g/(100+g)`, not `g/100`,
 because the logged damage already contains the bonus. `--format json` embeds each player's
-`damage_mods` block plus the top-level `damage_mod_map`; `--format ei-json` maps the same data into
-EI's `damageModifiers`/`incomingDamageModifiers`/`damageModifiersTarget`/
-`incomingDamageModifiersTarget` plus `damageModMap`; every other format (including `html`) ignores
-it. Off by default, and unlike `--rotation`/`--skill-damage`/`--timeseries` this flag gates the
-COMPUTATION, not just the serialization — the engine is a separate pass over every damage event
+`damage_mods` block plus the top-level `damage_mod_map`, and `--format html` carries the same
+native block (the report page embeds the serialized `Report` verbatim, so it grows 260,515 →
+347,412 bytes on the committed fixture — exactly as `--rotation`/`--skill-damage`/`--timeseries`
+already do; there is no modifier-specific HTML widget, and the flagless page, which is what both
+HTML size budgets measure, is unchanged). `--format ei-json` maps the same data into EI's
+`damageModifiers`/`incomingDamageModifiers`/`damageModifiersTarget`/
+`incomingDamageModifiersTarget` plus `damageModMap`, gated by this same flag and additionally the
+only format that asks the engine for the per-target split. `--format table`/`csv` ignore it
+entirely. Off by default, and unlike `--rotation`/`--skill-damage`/`--timeseries` this flag gates
+the COMPUTATION, not just the serialization — the engine is a separate pass over every damage event
 crossed with the whole catalogue, so nothing pays for it unless asked. Measured on the committed
 fixture: `--format json` +44.2%, `--format ei-json` +441.5% (the difference is EI's per-target
 arrays, which have no native counterpart), wall clock 0.074s → 0.155s. See **EI-JSON parity** below
@@ -667,9 +672,8 @@ against the full, unfiltered roster, matching real EI's own behavior). Team ids
 truncating cast on dynamic `CBTS_WVWTEAMS` ids (future-proofing; no real fixture currently has an
 id large enough for the truncation to have mattered).
 
-**Later:** PvE encounter logic (boss health phases, mechanics), damage-modifier attribution
-(M16), HTML report extras (tick-rate corner widget, mounts/glider/capping replay eye candy, a
-healing tab — see arcdps-dev-notes). Registry publishing is LIVE (npm `@axiapps/axilog`, PyPI
+**Later:** PvE encounter logic (boss health phases, mechanics), HTML report extras (tick-rate
+corner widget, mounts/glider/capping replay eye candy, a healing tab — see arcdps-dev-notes). Registry publishing is LIVE (npm `@axiapps/axilog`, PyPI
 `axilog` — automated on tag push via NPM_TOKEN + PyPI trusted publishing), and the post-rework
 era is fully real-capture calibrated.
 

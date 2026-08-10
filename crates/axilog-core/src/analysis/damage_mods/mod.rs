@@ -1,5 +1,5 @@
-//! Damage modifiers -- definition framework, evaluation engine (M16 Task 1)
-//! and definition catalog (Task 2).
+//! Damage modifiers -- definition framework and evaluation engine (M16
+//! Task 1), definition catalog (Task 2), emission (Task 3).
 //!
 //! This is the Rust counterpart of GW2EI's
 //! `GW2EIEvtcParser/EIData/DamageModifiers/` subsystem: the "+X% while
@@ -7,11 +7,25 @@
 //! `damageModifiers` / `incomingDamageModifiers` blocks and the top-level
 //! `damageModMap` descriptor table.
 //!
-//! **Nothing is emitted anywhere yet** -- no native-schema field, no
-//! ei-json key, no CLI/SDK surface (Task 3 wires it). This module is a
-//! pure, standalone analysis (like `analysis::health` or `analysis::replay`
-//! before they were wired), so every existing output is byte-identical with
-//! it present. See the `catalog` module for what the table covers and, just as
+//! **Emission is opt-in, and the flag gates the COMPUTATION.** Unlike
+//! `rotation`/`skill_damage`/`timeseries` -- which `analyze()` computes
+//! unconditionally, their flags deciding only whether the schema copies
+//! them -- nothing here runs unless the caller asks: `analyze()` never
+//! touches this module. On CLI `--modifiers` / SDK `modifiers: true` the
+//! caller runs `evaluate_catalog_full` itself and hands the result to
+//! `axilog_schema::build_report` (which fills `players[].damage_mods` and
+//! the top-level `damage_mod_map`) and to `axilog_ei::EiInputs::modifiers`
+//! (which fills EI's `damageModifiers`/`incomingDamageModifiers`/
+//! `damageModifiersTarget`/`incomingDamageModifiersTarget` +
+//! `damageModMap`). Without the flag every output is byte-identical to a
+//! build without this module at all. The per-target split is a second,
+//! internal gate -- see `evaluate_full`. (Plain backticks, not intra-doc
+//! links: this `//!` block is merged with the outer `/// ` comment on
+//! `analysis::mod`'s `pub mod damage_mods;`, so rustdoc resolves its links
+//! in the PARENT module's scope -- which is why every `[`model::...`]`
+//! link further down this doc is already an unresolved-link warning.)
+//!
+//! See the `catalog` module for what the table covers and, just as
 //! importantly, the definitions it deliberately does NOT carry.
 //!
 //! # Spec gating
@@ -387,7 +401,7 @@ struct Running {
 /// The `damageModMap` metadata for one emitted id -- GW2EI's `DamageModDesc`
 /// (`GW2EIBuilders/JsonModels/JsonLogBuilder.cs:308-322`), field for field.
 ///
-/// Carried out of [`evaluate_full`] rather than looked up from
+/// Carried out of [`self::evaluate_full`] rather than looked up from
 /// [`catalog::CATALOG`] by id at emission time, because a signed id is NOT
 /// a unique key over the whole catalog: era variants of the same trait
 /// share an id and are separated only by their build windows, so only the
@@ -407,7 +421,7 @@ pub struct DamageModifierMeta {
     pub incoming: bool,
 }
 
-/// Everything [`evaluate_full`] produces: the whole-fight stats, the
+/// Everything [`self::evaluate_full`] produces: the whole-fight stats, the
 /// optional per-target split, and the definition metadata for exactly the
 /// ids that appear in either.
 #[derive(Debug, Clone, Default)]
@@ -418,7 +432,7 @@ pub struct DamageModifierResults {
     pub overall: BTreeMap<(u64, i32), DamageModifierStat>,
     /// `(player representative addr, ENEMY representative addr, signed
     /// modifier id)` -> stats restricted to damage exchanged with that one
-    /// enemy. Empty unless [`evaluate_full`] was asked for it.
+    /// enemy. Empty unless [`self::evaluate_full`] was asked for it.
     ///
     /// GW2EI's per-target filter is by EXACT destination/source agent, not
     /// by "that actor and its minions": outgoing goes through
@@ -448,7 +462,7 @@ pub struct DamageModifierResults {
 /// ([`model::DamageModifierDef::keep`]), or that use an unmodelled feature
 /// (see the module doc's gap list) are skipped.
 ///
-/// Thin wrapper over [`evaluate_full`] with the per-target split OFF; kept
+/// Thin wrapper over [`self::evaluate_full`] with the per-target split OFF; kept
 /// as the calibration harness's and the unit tests' entry point.
 pub fn evaluate(
     raw: &RawLog,
@@ -683,7 +697,7 @@ pub fn evaluate_catalog(
     evaluate(raw, registry, enc, catalog::CATALOG)
 }
 
-/// [`evaluate_full`] over [`catalog::CATALOG`] -- the emission entry point
+/// [`self::evaluate_full`] over [`catalog::CATALOG`] -- the emission entry point
 /// (CLI `--modifiers` / SDK `modifiers: true`).
 pub fn evaluate_catalog_full(
     raw: &RawLog,

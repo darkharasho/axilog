@@ -87,13 +87,18 @@ pub mod rotation;
 /// citation trail.
 pub mod skill_map;
 
-/// Damage modifiers -- GW2EI's "+X% while ..." framework (M16, Task 1):
-/// definition model + evaluation engine. Deliberately NOT wired into
-/// [`analyze`] and not emitted anywhere yet (Task 2 fills the definition
-/// catalog, Task 3 adds the ei-json surface), so it is a standalone
-/// analysis like `health`/`replay`/`ei_replay`. See its module doc for the
-/// exact GW2EI semantics of the four output fields (`hitCount`/
-/// `totalHitCount`/`damageGain`/`totalDamage`) and the documented gap list.
+/// Damage modifiers -- GW2EI's "+X% while ..." framework (M16): definition
+/// model, evaluation engine and a 205-entry definition catalog.
+/// Deliberately NOT wired into [`analyze`], like `replay`/`ei_replay`/
+/// `missiles`: it is a separate full pass over every damage event crossed
+/// with the whole catalogue, so the caller runs
+/// `damage_mods::evaluate_catalog_full` itself only on CLI `--modifiers` /
+/// SDK `modifiers: true`, and feeds the result to the native schema
+/// (`players[].damage_mods` + `damage_mod_map`) and the ei-json adapter
+/// (`damageModifiers`/`incomingDamageModifiers`/`*Target` +
+/// `damageModMap`). See its module doc for the exact GW2EI semantics of
+/// the four output fields (`hitCount`/`totalHitCount`/`damageGain`/
+/// `totalDamage`) and the documented gap list.
 pub mod damage_mods;
 
 /// GW2EI's `SkillEvent.ConditionDamageBased` skill-id catalog (MCONDCAT
