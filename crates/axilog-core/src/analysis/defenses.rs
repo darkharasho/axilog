@@ -335,8 +335,13 @@ pub struct DefenseStats {
     /// evtcItem.Value / 10.0, 1)`
     /// (`ParsedData/CombatEvents/NonDamageEvents/BreakbarDamageEvent.cs:8`).
     /// The `/10` is applied once, at the EI-adapter boundary, so this
-    /// field stays an exact integer sum (and matches the raw-unit
-    /// convention `breakbar_damage` above already uses).
+    /// field stays an exact integer sum -- the same raw-unit convention
+    /// `breakbar_damage` above uses. (MEIGAP2 review: the adapter converts
+    /// BOTH of them now. It used to emit `breakbarDamageTaken` unconverted,
+    /// which was wrong on the same citation --
+    /// `DefensePerTargetStatistics.cs:143-148` sums the already-divided
+    /// `brk.BreakbarDamage` -- and invisible, since both reference exports
+    /// report 0 for it.)
     pub breakbar_damage_dealt: u64,
     /// EI's `defenses[].receivedCrowdControl` -- the number of crowd-
     /// control applications this player RECEIVED (MEIGAP Task 1c).

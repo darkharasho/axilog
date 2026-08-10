@@ -1037,7 +1037,28 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 "lifeLeechDamageTakenCount": p.defenses.life_leech_count,
                 "damageBarrier": p.defenses.barrier_damage,
                 "damageBarrierCount": p.defenses.barrier_count,
-                "breakbarDamageTaken": p.defenses.breakbar_damage,
+                // MEIGAP2 review: this was emitting RAW arcdps units, ten
+                // times GW2EI's own number, and the milestone that added
+                // the DEALT twin would otherwise have shipped the two
+                // halves of the same quantity on different scales.
+                // `DefensePerTargetStatistics.cs:143-148` accumulates
+                // `brk.BreakbarDamage` -- the value `BreakbarDamageEvent`'s
+                // ctor has ALREADY divided (`BreakbarDamage =
+                // Math.Round(evtcItem.Value / 10.0, 1)`,
+                // `ParsedData/CombatEvents/NonDamageEvents/
+                // BreakbarDamageEvent.cs:8`) -- and rounds the sum to 1
+                // decimal at `:148`. So the same `ei_breakbar` conversion
+                // `dpsAll[0].breakbarDamage` uses applies here, and the
+                // core keeps its raw integer sum on both sides.
+                //
+                // No calibration could catch this: `breakbarDamageTaken` is
+                // 0 for every player in BOTH reference exports (neither a
+                // WvW zerg capture records defiance-bar damage against
+                // squad members), so this is a source-read fix, and it
+                // changes the rendered document only on a log that has
+                // squad-directed breakbar damage. `breakbarDamageTakenCount`
+                // is a count and is untouched.
+                "breakbarDamageTaken": ei_breakbar(p.defenses.breakbar_damage),
                 "breakbarDamageTakenCount": p.defenses.breakbar_count,
                 // MEIGAP Task 1c: incoming CC + incoming boon strips, the
                 // last four always-on `defenses[0]` fields axibridge reads.

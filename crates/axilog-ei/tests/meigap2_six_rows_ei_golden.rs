@@ -243,11 +243,22 @@ fn ei_json_taken_dist_outcome_columns_match_the_reference_export_when_available(
 /// This project's outgoing dist folds friendly pet/minion damage onto the
 /// owner (the documented M12 divergence) where GW2EI's player dist is
 /// actor-only, so the two row sets genuinely differ; the outcome columns
-/// inherit exactly that and nothing else. Measured: **7,120 joined cells,
-/// 4 rows differ and only in `hits`/`connectedHits` (worst 17), 3 reference
-/// rows absent, 30 rows emitted the reference has not, and 0 differences in
-/// `glance`/`missed`/`evaded`/`blocked`/`invulned`/`interrupted`/
-/// `indirectDamage`.**
+/// inherit exactly that and nothing else. Measured (the figures this test
+/// prints): **5,340 joined cells over the six exact columns, all EXACT, and
+/// 0 `indirectDamage` disagreements; 8 `hits`/`connectedHits` cells differ
+/// (worst 17); 3 reference rows absent here; 30 rows emitted the reference
+/// has not.**
+///
+/// The 3 absent reference rows are bounded, not root-caused. The best
+/// hypothesis is GW2EI's SECOND dist builder: `JsonDamageDistBuilder.cs:
+/// 84-100` emits a row for a skill that produced BREAKBAR events but no
+/// health-damage ones at all, incrementing `Hits`/`ConnectedHits` once per
+/// breakbar event. This project's row existence is gated on
+/// `skill_damage::creates_health_damage_event`, which by design excludes
+/// the breakbar result byte -- so a breakbar-only skill has no row on this
+/// side. That fits the shape of what is missing (`total: 0` with a small
+/// nonzero `connectedHits`), and it is a row set GW2EI itself builds from a
+/// different event list, not a miscount of the one this pass reads.
 #[test]
 fn ei_json_outgoing_dist_outcome_columns_match_the_reference_export_when_available() {
     let Some(c) = render_and_reference("ei-json totalDamageDist outcomes") else { return };

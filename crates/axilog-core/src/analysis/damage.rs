@@ -47,10 +47,20 @@ pub struct InstidRegistry {
     /// them, are untouched.
     by_instid: Vec<Vec<(u64, u64)>>,
     /// The REVERSE index (MEIGAP2 row 3): `agent addr -> the instid that
-    /// addr was FIRST registered under`, i.e. GW2EI's `AgentItem.InstID`
-    /// (`EvtcParser.CompleteAgents` assigns an agent its instid from the
-    /// first combat row that names it; `JsonActorBuilder.cs:31` writes that
-    /// straight out as `instanceID`).
+    /// addr was FIRST registered under` -- this project's reading of
+    /// GW2EI's `AgentItem.InstID`, which `JsonActorBuilder.cs:31` writes
+    /// straight out as `instanceID`.
+    ///
+    /// **This is a reconstruction, not a transcription.** GW2EI assigns
+    /// `InstID` inside its own agent-completion pass, which has the whole
+    /// parsed agent table in hand and disambiguates by aware-window; what
+    /// is done here is the narrower "first NON-ZERO instid this address was
+    /// ever seen under", which is not the same algorithm and could in
+    /// principle disagree for an address that several agents recycle, or
+    /// for one whose earliest rows carry a stale instid. It agreed with the
+    /// reference export on 44 of 44 players and 43 of 43 instid-joined
+    /// targets, which is the evidence for it -- not a proof that the two
+    /// rules coincide in general.
     ///
     /// Derived from [`Self::by_instid`] AFTER the scan rather than filled
     /// inside it: the scan runs twice per event on a ~600k-event log, and a
@@ -148,9 +158,11 @@ impl InstidRegistry {
     }
 
     /// The instid an agent addr was first registered under -- GW2EI's
-    /// `AgentItem.InstID`, exported as `instanceID` (MEIGAP2 row 3). `None`
-    /// for an addr that never appeared as `src_agent`/`dst_agent` on a
-    /// non-extension row carrying a nonzero instid.
+    /// `AgentItem.InstID`, exported as `instanceID` (MEIGAP2 row 3) -- see
+    /// [`Self::instid_of_addr`] for why that correspondence is measured
+    /// rather than transcribed. `None` for an addr that never appeared as
+    /// `src_agent`/`dst_agent` on a non-extension row carrying a nonzero
+    /// instid.
     pub fn instid_of(&self, addr: u64) -> Option<u16> {
         self.instid_of_addr.get(&addr).copied()
     }
