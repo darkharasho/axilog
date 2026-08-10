@@ -101,6 +101,15 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   rows 792/958 exact, ids 38/69, all denominator residuals 0.0. 36 local calibration tests now
   run from any worktree via AXILOG_LOCAL_FIXTURES.
 
+## Queued (autonomous)
+- MEIGAP ei-json adapter gap closure for axibridge: the axibridge cutover audit
+  (axibridge:docs/axilog-cutover-report.md) found 30 of 118 read fields blank under axilog's
+  ei-json — chiefly the per-player generation attribution arrays (selfBuffs/groupBuffs/
+  squadBuffs — native generation EXISTS since M3, unmapped), targets[].buffs /
+  targets[].totalDamageDist / targets[].damage1S mirrors, and powerDamageTaken1S. Mostly
+  adapter mapping over existing native data. When closed, axibridge flips its parser default
+  from elite-insights to axilog (toggle already shipped).
+
 ## Parked (user-gated — do NOT do autonomously)
 - axibridge's actual cutover from EI CLI to the axilog SDK (both registries now live, so this is
   unblocked whenever the user wants it).
