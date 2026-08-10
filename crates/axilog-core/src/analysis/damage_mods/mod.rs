@@ -254,6 +254,11 @@ struct Hit<'a> {
     actor_master_buff_key: u64,
     /// Buff-timeline key for the other party (`GetFoe`).
     foe_buff_key: u64,
+    /// The other party's RAW (zero-repaired) agent addr -- `evt.To`
+    /// outgoing, `evt.From` incoming. Distinct from `foe_buff_key`, which
+    /// is squad-folded; this one is what the per-target split resolves
+    /// against the enemy roster.
+    foe_addr: u64,
     /// `GetFoe` through `GetFinalMaster()` --
     /// [`DamageModifierDef::foe_always_master`].
     foe_master_buff_key: u64,
@@ -379,6 +384,59 @@ struct Running {
     damage_gain: f64,
 }
 
+/// The `damageModMap` metadata for one emitted id -- GW2EI's `DamageModDesc`
+/// (`GW2EIBuilders/JsonModels/JsonLogBuilder.cs:308-322`), field for field.
+///
+/// Carried out of [`evaluate_full`] rather than looked up from
+/// [`catalog::CATALOG`] by id at emission time, because a signed id is NOT
+/// a unique key over the whole catalog: era variants of the same trait
+/// share an id and are separated only by their build windows, so only the
+/// set that survived `available`/`keep` for THIS log can answer "what does
+/// `d174` mean here".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DamageModifierMeta {
+    pub name: &'static str,
+    pub icon: &'static str,
+    /// `DamageModifier.Tooltip` -- see
+    /// [`model::DamageModifierDef::tooltip`].
+    pub description: String,
+    pub non_multiplier: bool,
+    pub is_counter: bool,
+    pub skill_based: bool,
+    pub approximate: bool,
+    pub incoming: bool,
+}
+
+/// Everything [`evaluate_full`] produces: the whole-fight stats, the
+/// optional per-target split, and the definition metadata for exactly the
+/// ids that appear in either.
+#[derive(Debug, Clone, Default)]
+pub struct DamageModifierResults {
+    /// `(player representative addr, signed modifier id)` -> stats over the
+    /// whole fight against EVERY foe. GW2EI's `target == null` case
+    /// (`Actor.GetDamageEvents`, `EIData/Actors/Actor.cs:141-143`).
+    pub overall: BTreeMap<(u64, i32), DamageModifierStat>,
+    /// `(player representative addr, ENEMY representative addr, signed
+    /// modifier id)` -> stats restricted to damage exchanged with that one
+    /// enemy. Empty unless [`evaluate_full`] was asked for it.
+    ///
+    /// GW2EI's per-target filter is by EXACT destination/source agent, not
+    /// by "that actor and its minions": outgoing goes through
+    /// `DamageEventByDst[target.EnglobingAgentItem]` and incoming through
+    /// `DamageTakenEventsBySrc[target.EnglobingAgentItem]`
+    /// (`Actor.cs:128-136`, `:161-169`), both keyed on the raw `To`/`From`
+    /// agent. So an enemy MINION's damage is its own target's, never its
+    /// owner's -- reproduced here by resolving the foe addr through the
+    /// enemy roster only (a minion addr is not in it, so the hit
+    /// contributes to `overall` and to no target).
+    pub per_target: BTreeMap<(u64, u64, i32), DamageModifierStat>,
+    /// `signed modifier id` -> [`DamageModifierMeta`], scoped to the ids
+    /// actually present in `overall`/`per_target` -- GW2EI populates
+    /// `damageModMap` the same lazy way, from inside the per-player
+    /// emission loop (`JsonDamageModifierDataBuilder.cs:47-51`).
+    pub meta: BTreeMap<i32, DamageModifierMeta>,
+}
+
 /// Evaluate `defs` over `raw` for every squad player in `enc`.
 ///
 /// Returns `(player representative addr, signed modifier id) ->
@@ -389,12 +447,35 @@ struct Running {
 /// ([`model::DamageModifierDef::available`]), filtered out by mode
 /// ([`model::DamageModifierDef::keep`]), or that use an unmodelled feature
 /// (see the module doc's gap list) are skipped.
+///
+/// Thin wrapper over [`evaluate_full`] with the per-target split OFF; kept
+/// as the calibration harness's and the unit tests' entry point.
 pub fn evaluate(
     raw: &RawLog,
     registry: &InstidRegistry,
     enc: &Encounter,
     defs: &[&DamageModifierDef],
 ) -> BTreeMap<(u64, i32), DamageModifierStat> {
+    evaluate_full(raw, registry, enc, defs, false).overall
+}
+
+/// [`evaluate`] plus, when `per_target` is set, GW2EI's per-target split
+/// (`damageModifiersTarget`/`incomingDamageModifiersTarget`) and the
+/// `damageModMap` metadata for every emitted id.
+///
+/// `per_target` is a parameter rather than always-on because it is the
+/// expensive half: it adds one `(actor, target)` denominator bucket and one
+/// `(actor, target, definition)` accumulator per hit, and the reference WvW
+/// capture has 57 targets, so the per-target maps dominate both time and
+/// memory. Only `--modifiers`-style callers that actually serialize the
+/// target arrays ask for it.
+pub fn evaluate_full(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    enc: &Encounter,
+    defs: &[&DamageModifierDef],
+    per_target: bool,
+) -> DamageModifierResults {
     let modes = ModeContext::from_encounter(enc);
     let (gw2, evtc) = (gw2_build(raw), evtc_build(raw));
     let active: Vec<&DamageModifierDef> = defs
@@ -415,7 +496,7 @@ pub fn evaluate(
         }
     }
     if active.is_empty() {
-        return BTreeMap::new();
+        return DamageModifierResults::default();
     }
 
     // Same squad/enemy/relog-folding construction `analysis::analyze` uses
@@ -430,6 +511,17 @@ pub fn evaluate(
         .collect();
     let enemies: BTreeSet<u64> =
         enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+    // Enemy-side twin of `addr_to_rep`, same construction
+    // `skill_damage::build_with_registry` already uses for its own
+    // `per_target` fold: every addr an enemy account held maps to
+    // `Enemy::id`, which is what `Report::all_enemies[].id` -- and hence
+    // the ei-json `targets[]` index the per-target arrays are positionally
+    // keyed to -- carries.
+    let enemy_addr_to_rep: BTreeMap<u64, u64> = enc
+        .enemies
+        .iter()
+        .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+        .collect();
 
     // Perf follow-up (deferred, M16 Task 1 review): with a one-definition
     // catalog the inner `for def in &active` loop is trivial, but Task 2's
@@ -467,18 +559,38 @@ pub fn evaluate(
 
     let mut totals: BTreeMap<u64, ActorTotals> = BTreeMap::new();
     let mut running: BTreeMap<(u64, i32), Running> = BTreeMap::new();
+    // Per-target twins, populated only when asked -- see `evaluate_full`'s
+    // doc comment for why this is opt-in.
+    let mut totals_t: BTreeMap<(u64, u64), ActorTotals> = BTreeMap::new();
+    let mut running_t: BTreeMap<(u64, u64, i32), Running> = BTreeMap::new();
 
     for ev in &raw.events {
         let Some(hit) = classify_hit(ev, &scope) else { continue };
 
-        let entry = totals.entry(hit.actor).or_default();
-        if hit.incoming {
-            entry.taken.add(&hit);
+        // `Enemy::id` for the OTHER party, or `None` when it is not a
+        // rostered enemy at all (an enemy's minion, or an unaffiliated
+        // agent hitting a squad member) -- see
+        // `DamageModifierResults::per_target`'s doc comment.
+        let target = if per_target {
+            enemy_addr_to_rep.get(&hit.foe_addr).copied()
         } else {
-            entry.with_minions.add(&hit);
-            if !hit.from_minion {
-                entry.actor_only.add(&hit);
+            None
+        };
+
+        let entry = totals.entry(hit.actor).or_default();
+        let accumulate = |entry: &mut ActorTotals| {
+            if hit.incoming {
+                entry.taken.add(&hit);
+            } else {
+                entry.with_minions.add(&hit);
+                if !hit.from_minion {
+                    entry.actor_only.add(&hit);
+                }
             }
+        };
+        accumulate(entry);
+        if let Some(t) = target {
+            accumulate(totals_t.entry((hit.actor, t)).or_default());
         }
 
         let spec_ok = eligible_defs.get(&hit.actor);
@@ -489,8 +601,10 @@ pub fn evaluate(
             if !is_eligible(def, &hit) {
                 continue;
             }
-            let run = running.entry((hit.actor, def.json_id())).or_default();
-            run.total_hit_count += 1;
+            running.entry((hit.actor, def.json_id())).or_default().total_hit_count += 1;
+            if let Some(t) = target {
+                running_t.entry((hit.actor, t, def.json_id())).or_default().total_hit_count += 1;
+            }
 
             // Order matters, and is GW2EI's: gain FIRST, then the checkers
             // (`BuffOnActorDamageModifier.cs:97`,
@@ -499,28 +613,65 @@ pub fn evaluate(
             if !checks_pass(def, &hit, &scope.states) {
                 continue;
             }
+            let credit = gain * hit.dmg as f64;
+            let run = running.entry((hit.actor, def.json_id())).or_default();
             run.hit_count += 1;
-            run.damage_gain += gain * hit.dmg as f64;
+            run.damage_gain += credit;
+            if let Some(t) = target {
+                let run = running_t.entry((hit.actor, t, def.json_id())).or_default();
+                run.hit_count += 1;
+                run.damage_gain += credit;
+            }
         }
     }
 
-    running
-        .into_iter()
+    let def_by_id = |json_id: i32| -> &DamageModifierDef {
+        active.iter().find(|d| d.json_id() == json_id).expect("running keys come from `active`")
+    };
+    let finish = |def: &DamageModifierDef, run: &Running, sums: &ActorTotals| DamageModifierStat {
+        hit_count: run.hit_count,
+        total_hit_count: run.total_hit_count,
+        damage_gain: round_to_3(run.damage_gain),
+        total_damage: total_damage(def, sums),
+    };
+
+    let overall: BTreeMap<(u64, i32), DamageModifierStat> = running
+        .iter()
         .filter(|(_, run)| run.hit_count > 0)
-        .map(|((actor, json_id), run)| {
-            let def = active
-                .iter()
-                .find(|d| d.json_id() == json_id)
-                .expect("running keys come from `active`");
+        .map(|(&(actor, json_id), run)| {
             let sums = totals.get(&actor).copied().unwrap_or_default();
-            ((actor, json_id), DamageModifierStat {
-                hit_count: run.hit_count,
-                total_hit_count: run.total_hit_count,
-                damage_gain: round_to_3(run.damage_gain),
-                total_damage: total_damage(def, &sums),
+            ((actor, json_id), finish(def_by_id(json_id), run, &sums))
+        })
+        .collect();
+    let per_target_out: BTreeMap<(u64, u64, i32), DamageModifierStat> = running_t
+        .iter()
+        .filter(|(_, run)| run.hit_count > 0)
+        .map(|(&(actor, target, json_id), run)| {
+            let sums = totals_t.get(&(actor, target)).copied().unwrap_or_default();
+            ((actor, target, json_id), finish(def_by_id(json_id), run, &sums))
+        })
+        .collect();
+
+    let meta = overall
+        .keys()
+        .map(|&(_, id)| id)
+        .chain(per_target_out.keys().map(|&(_, _, id)| id))
+        .map(|id| {
+            let def = def_by_id(id);
+            (id, DamageModifierMeta {
+                name: def.name,
+                icon: def.icon,
+                description: def.tooltip(),
+                non_multiplier: def.non_multiplier(),
+                is_counter: def.is_counter,
+                skill_based: def.skill_based(),
+                approximate: def.approximate,
+                incoming: def.incoming(),
             })
         })
-        .collect()
+        .collect();
+
+    DamageModifierResults { overall, per_target: per_target_out, meta }
 }
 
 /// Convenience entry point over [`catalog::CATALOG`].
@@ -530,6 +681,17 @@ pub fn evaluate_catalog(
     enc: &Encounter,
 ) -> BTreeMap<(u64, i32), DamageModifierStat> {
     evaluate(raw, registry, enc, catalog::CATALOG)
+}
+
+/// [`evaluate_full`] over [`catalog::CATALOG`] -- the emission entry point
+/// (CLI `--modifiers` / SDK `modifiers: true`).
+pub fn evaluate_catalog_full(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    enc: &Encounter,
+    per_target: bool,
+) -> DamageModifierResults {
+    evaluate_full(raw, registry, enc, catalog::CATALOG, per_target)
 }
 
 /// Whether the engine models everything this definition asks for -- see the
@@ -679,6 +841,7 @@ fn classify_hit<'a>(ev: &'a RawEvent, scope: &Scope<'_>) -> Option<Hit<'a>> {
         actor_buff_key,
         actor_master_buff_key,
         foe_buff_key,
+        foe_addr: if incoming { src_agent } else { dst_agent },
         foe_master_buff_key,
         // `dl.To` is the destination of the row: the foe outgoing, the
         // squad player incoming -- which is exactly `foe_buff_key` in the

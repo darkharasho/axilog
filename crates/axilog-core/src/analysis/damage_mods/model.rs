@@ -72,6 +72,49 @@ impl DamageType {
             DamageType::StrikeAndConditionAndLifeLeech => is_strike || is_condition || is_life_leech,
         }
     }
+
+    /// `ParserHelper.DamageTypeToString`
+    /// (`GW2EIEvtcParser/ParserHelpers/ParserHelper.cs:97-142`) -- the
+    /// human-readable label that goes into
+    /// [`DamageModifierDef::tooltip`]'s `"Applied on ..."` /
+    /// `"Compared against ..."` clauses.
+    ///
+    /// `All` is the `0` flag value and short-circuits to `"All Damage"`
+    /// (`:99-102`); every other value concatenates the set bits in
+    /// `Power, Strike, Condition, Life Leech` order, comma-separated, and
+    /// appends a single trailing `" Damage"` (`:103-141`) -- so
+    /// `StrikeAndCondition` is `"Strike, Condition Damage"`, NOT
+    /// `"Strike Damage, Condition Damage"`.
+    pub fn to_display(self) -> String {
+        if self == DamageType::All {
+            return "All Damage".to_string();
+        }
+        let (power, strike, condition, leech) = match self {
+            DamageType::All => unreachable!("handled above"),
+            DamageType::Power => (true, false, false, false),
+            DamageType::Strike => (false, true, false, false),
+            DamageType::Condition => (false, false, true, false),
+            DamageType::LifeLeech => (false, false, false, true),
+            DamageType::StrikeAndCondition => (false, true, true, false),
+            DamageType::ConditionAndLifeLeech => (false, false, true, true),
+            DamageType::StrikeAndLifeLeech => (false, true, false, true),
+            DamageType::StrikeAndConditionAndLifeLeech => (false, true, true, true),
+        };
+        let mut parts: Vec<&str> = Vec::with_capacity(4);
+        if power {
+            parts.push("Power");
+        }
+        if strike {
+            parts.push("Strike");
+        }
+        if condition {
+            parts.push("Condition");
+        }
+        if leech {
+            parts.push("Life Leech");
+        }
+        format!("{} Damage", parts.join(", "))
+    }
 }
 
 /// GW2EI `DamageSource`
@@ -390,12 +433,15 @@ pub enum ModSource {
     /// `DamageModifiersContainer` files such a modifier under EVERY source
     /// in the set (`:97-104`). Three real call sites use it, all Revenant
     /// (`RevenantHelper.cs:130,204,206`). None is in the WvW reference
-    /// capture's `damageModMap`, and the generator refuses to guess -- it
-    /// takes the FIRST element of the set and would need widening (to
-    /// `&'static [&'static str]`, with `applies_to` becoming an `any()`)
-    /// before any of those three can be transcribed correctly. Until then
-    /// a multi-source definition would be offered to too few specs, never
-    /// too many, so it can only under-report.
+    /// capture's `damageModMap`, and the generator refuses to guess: it
+    /// raises a `Skip` carrying the full source list rather than silently
+    /// taking one element, so a multi-source definition is never
+    /// transcribed at all. Widening this variant (to
+    /// `&'static [&'static str]`, with [`ModSource::applies_to`] becoming
+    /// an `any()`) is what those three need before they can be transcribed
+    /// correctly. Were one ever transcribed single-source anyway, it could
+    /// only be offered to too few specs, never too many -- i.e. it could
+    /// only under-report.
     Spec(&'static str),
 }
 
@@ -563,6 +609,51 @@ impl DamageModifierDef {
     /// prefix): `DamageModifier.cs:26`.
     pub fn json_id(&self) -> i32 {
         if self.incoming() { -self.id } else { self.id }
+    }
+
+    /// `DamageModifier.Tooltip` -- the `damageModMap[].description` string
+    /// (`JsonLogBuilder.cs:318`, `Description = damageModifier.Tooltip`).
+    ///
+    /// GW2EI builds it in `DamageModifier`'s ctor
+    /// (`EIData/DamageModifiers/DamageModifier.cs:34-68`) by appending
+    /// suffixes to the descriptor's `InitialTooltip` -- which is exactly
+    /// what [`DamageModifierDef::description`] holds -- in this fixed
+    /// order, each preceded by a literal `"<br>"`:
+    ///
+    /// 1. the [`DamageSource`] label (`:40-53`) -- note `Incoming` adds
+    ///    NOTHING (it falls through the `default:` arm);
+    /// 2. `"Applied on " + SrcType` (`:54`);
+    /// 3. `"Compared against " + CompareType` (`:55`);
+    /// 4. `"Counter"` when [`Self::is_counter`] (`:56-59`);
+    /// 5. `"Non multiplier"` when NOT [`Self::is_multiplier`] (`:60-63`);
+    /// 6. `"Approximate"` when [`Self::approximate`] (`:64-67`).
+    ///
+    /// Composed here rather than baked into the catalog because every
+    /// input is already a field on this struct -- see
+    /// [`DamageModifierDef::description`]'s own doc comment.
+    pub fn tooltip(&self) -> String {
+        let mut s = String::from(self.description);
+        match self.dmg_src {
+            DamageSource::All => s.push_str("<br>Actor + Minions"),
+            DamageSource::PetsOnly => s.push_str("<br>Minions only"),
+            DamageSource::NoPets => s.push_str("<br>No Minions"),
+            // `default:` -- GW2EI appends nothing for the incoming side.
+            DamageSource::Incoming => {}
+        }
+        s.push_str("<br>Applied on ");
+        s.push_str(&self.src_type.to_display());
+        s.push_str("<br>Compared against ");
+        s.push_str(&self.compare_type.to_display());
+        if self.is_counter {
+            s.push_str("<br>Counter");
+        }
+        if !self.is_multiplier() {
+            s.push_str("<br>Non multiplier");
+        }
+        if self.approximate {
+            s.push_str("<br>Approximate");
+        }
+        s
     }
 
     /// Catalog-time sanity check for combinations GW2EI itself cannot

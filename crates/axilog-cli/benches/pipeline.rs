@@ -84,7 +84,7 @@ fn bench_pipeline(c: &mut Criterion, group_name: &str, bytes: &[u8], sample_size
             // task brief's instruction to pass None/false for opt-in
             // blocks so this measures the always-on path.
             let report = axilog_schema::build_report(
-                &enc, &metrics, "bench", None, None, false, false, false,
+                &enc, &metrics, "bench", None, None, false, false, false, None,
             );
             black_box(report)
         });

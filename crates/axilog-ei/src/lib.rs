@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use serde_json::{json, Value};
 use axilog_core::analysis::buffs::BOON_IDS;
+use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
 use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::analysis::replay::{ActivityIntervals, Interval};
 use axilog_core::icons::prof_icon_url;
@@ -163,6 +164,65 @@ fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
     })
 }
 
+/// `damageModifiers[].damageModifiers[].damageGain` (M16, Task 3).
+///
+/// **Deliberately NOT [`ei_float`].** That helper narrows through `f32`
+/// because the replay coordinates it was written for are C# `float`s
+/// (M15's lesson). `DamageGain` is a C# **`double`** on both sides of the
+/// pipeline -- `DamageModifierStat.DamageGain`
+/// (`GW2EIEvtcParser/EIData/Statistics/DamageModifierStat.cs:8`) and
+/// `JsonDamageModifierItem.DamageGain`
+/// (`GW2EIJSON/.../JsonDamageModifierData.cs:28`) are both `double`, and it
+/// is `Math.Round(x, 3)`-ed at construction (`:14`,
+/// `ParserHelper.DamageModGainDigit = 3`). Narrowing it to `f32` would
+/// corrupt exactly the values that matter: `279362` is past `f32`'s
+/// 24-bit integer range, and `-9690.778` has no `f32` representation whose
+/// shortest decimal is `-9690.778`.
+///
+/// So the value is emitted as the `f64` it already is, with one adjustment:
+/// a whole number is emitted as an INTEGER, because that is what .NET's
+/// serializer writes (the reference export has `"damageGain": 10592`, never
+/// `10592.0`) while `serde_json` would write `10592.0`. Everything else
+/// goes out as `f64`, whose shortest round-tripping decimal is the same
+/// text .NET produces for a `Math.Round(_, 3)`-ed double -- verified
+/// against all 13,905 `damageGain` values in the reference export (5,781
+/// integral, 8,124 with 1-3 decimals, none with more).
+fn ei_damage_gain(v: f64) -> Value {
+    if v.is_finite() && v.fract() == 0.0 && v.abs() < 9.0e15 {
+        return Value::from(v as i64);
+    }
+    Value::from(v)
+}
+
+/// One `{ hitCount, totalHitCount, damageGain, totalDamage }` item, wrapped
+/// in EI's per-PHASE array (`JsonDamageModifierData.DamageModifiers`,
+/// "Length == # of phases"). This project does not model phases, so it is
+/// always a single element -- the same "one array standing in for phase 0
+/// == the whole fight" convention `statsAll`/`totalDamageDist` already use.
+fn ei_damage_mod_rows(rows: &[(i32, &DamageModifierStat)]) -> Vec<Value> {
+    rows.iter()
+        .map(|(id, s)| {
+            json!({
+                "id": id,
+                "damageModifiers": [ {
+                    "hitCount": s.hit_count,
+                    "totalHitCount": s.total_hit_count,
+                    "damageGain": ei_damage_gain(s.damage_gain),
+                    "totalDamage": s.total_damage,
+                } ],
+            })
+        })
+        .collect()
+}
+
+/// Splits one actor's `(id, stat)` rows into EI's outgoing/incoming pair.
+/// The sign of the id IS the direction (`DamageModifier.cs:26`), so no
+/// definition lookup is needed.
+fn ei_damage_mod_split(rows: Vec<(i32, &DamageModifierStat)>) -> (Vec<Value>, Vec<Value>) {
+    let (incoming, outgoing): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(id, _)| *id < 0);
+    (ei_damage_mod_rows(&outgoing), ei_damage_mod_rows(&incoming))
+}
+
 /// The side-channel inputs [`to_ei_json`] needs on top of the native
 /// [`Report`] (M16 Task 1).
 ///
@@ -227,6 +287,36 @@ pub struct EiInputs<'a> {
     /// fight_seconds / 0.3`, so a 6-minute 50-player fight is an order of
     /// magnitude bigger — which is why it stays opt-in.
     pub replay: Option<&'a EiReplay>,
+    /// `modifiers` (M16 Task 3): the damage-modifier engine's output from
+    /// `axilog_core::analysis::damage_mods::evaluate_catalog_full`, or
+    /// `None`. This is the OPT-IN gate for the four per-player arrays
+    /// (`damageModifiers`, `incomingDamageModifiers`,
+    /// `damageModifiersTarget`, `incomingDamageModifiersTarget`) and the
+    /// top-level `damageModMap`; every caller computes it exactly when
+    /// `--modifiers`/SDK `modifiers: true` was requested, i.e. the same
+    /// request that populates `axilog_schema::PlayerOut::damage_mods`.
+    ///
+    /// It arrives here as the RAW engine output rather than being read back
+    /// off `PlayerOut::damage_mods` because the native block is deliberately
+    /// whole-fight only: `DamageModifierResults::per_target` has no native
+    /// counterpart (measured on the committed fixture it is 854,077 bytes
+    /// against the whole-fight arrays' 76,611 -- an 11x multiplier, and
+    /// the same ratio the reference export shows: 1.34 MB vs 108 KB), and
+    /// EI needs it in a positional `[targetIndex]` shape keyed to
+    /// `targets[]`. Rendering both surfaces from the one core result keeps
+    /// them from drifting.
+    ///
+    /// Joined to `report.players` by `PlayerOut::agent_addr` and to
+    /// `report.all_enemies` by `EnemyOut::id` -- both real keys, not
+    /// positions, so a mismatch yields empty arrays rather than
+    /// mis-attributed rows.
+    ///
+    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, compact):**
+    /// `--format ei-json` grows 216,173 -> 1,170,570 bytes (+441.5%) --
+    /// `damageModifiers` 32,121, `incomingDamageModifiers` 44,490,
+    /// `damageModifiersTarget` 497,702, `incomingDamageModifiersTarget`
+    /// 356,375, `damageModMap` 19,325.
+    pub modifiers: Option<&'a DamageModifierResults>,
 }
 
 /// Render a [`Report`] plus its EI-only side inputs as Elite-Insights-
@@ -235,7 +325,7 @@ pub struct EiInputs<'a> {
 /// See [`EiInputs`] for what each input gates; `EiInputs::default()` renders
 /// everything that is derivable from the `Report` alone.
 pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
-    let EiInputs { activity, replay } = *inputs;
+    let EiInputs { activity, replay, modifiers } = *inputs;
     // Positional join guard: the tracks must be `report.players` followed by
     // the enemy-PLAYER subset of `report.all_enemies`, in those orders. A
     // caller that hand-builds a `Report` (every unit test below) can violate
@@ -722,6 +812,58 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 .collect();
             obj.insert("rotation".to_string(), json!(rotation_json));
         }
+        // `damageModifiers` / `incomingDamageModifiers` /
+        // `damageModifiersTarget` / `incomingDamageModifiersTarget` (M16,
+        // Task 3): all four, together, exactly when `EiInputs::modifiers`
+        // is present -- same "presence, not a flag" convention as
+        // `rotation`/`totalDamageDist` above.
+        //
+        // Real EI shape (`JsonDamageModifierDataBuilder.cs:38-160`,
+        // cross-checked field-for-field against the reference WvW export):
+        //
+        // - the whole-fight pair is a flat `[{ id, damageModifiers: [ ... ] }]`,
+        //   the inner array being per-phase (one element here, see
+        //   `ei_damage_mod_rows`);
+        // - the Target pair is `[targetIndex][]` -- one entry per
+        //   `log.LogData.Logic.Targets`, i.e. positionally keyed to
+        //   `targets[]`, with `[]` for a target this player never
+        //   exchanged a qualifying hit with. **Verified non-empty in WvW,
+        //   not assumed:** the reference export's first player has 22 of 57
+        //   outgoing and 14 of 57 incoming target slots populated, so
+        //   emitting the empty shape everywhere would be a real data loss,
+        //   not a cosmetic one.
+        //
+        // The Target arrays are emitted whenever `modifiers` is present;
+        // when the caller ran the engine WITHOUT the per-target split (the
+        // native `--format json` path, which has no use for it) every slot
+        // is simply `[]`, which is the shape EI emits for a target with no
+        // rows anyway.
+        if let Some(mods) = modifiers {
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
+            let (outgoing, incoming) = ei_damage_mod_split(
+                mods.overall
+                    .range((p.agent_addr, i32::MIN)..=(p.agent_addr, i32::MAX))
+                    .map(|(&(_, id), s)| (id, s))
+                    .collect(),
+            );
+            obj.insert("damageModifiers".to_string(), json!(outgoing));
+            obj.insert("incomingDamageModifiers".to_string(), json!(incoming));
+
+            let mut out_t: Vec<Value> = Vec::with_capacity(report.all_enemies.len());
+            let mut in_t: Vec<Value> = Vec::with_capacity(report.all_enemies.len());
+            for e in &report.all_enemies {
+                let (o, i) = ei_damage_mod_split(
+                    mods.per_target
+                        .range((p.agent_addr, e.id, i32::MIN)..=(p.agent_addr, e.id, i32::MAX))
+                        .map(|(&(_, _, id), s)| (id, s))
+                        .collect(),
+                );
+                out_t.push(json!(o));
+                in_t.push(json!(i));
+            }
+            obj.insert("damageModifiersTarget".to_string(), json!(out_t));
+            obj.insert("incomingDamageModifiersTarget".to_string(), json!(in_t));
+        }
         v
     }).collect();
     // M10 Task 3: `all_enemies`, not `enemies` -- see the `stats_targets`
@@ -877,6 +1019,44 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             "greenTeamID": team_id_for("green")
         }
     });
+    // `damageModMap` (M16, Task 3): `"d<signed id>"` ->
+    // `{ name, icon, description, nonMultiplier, isCounter, skillBased,
+    // approximate, incoming }` -- all eight fields real EI's `DamageModDesc`
+    // carries (`GW2EIBuilders/JsonModels/JsonLogBuilder.cs:308-322`; the
+    // `"d"` prefix is added at `:326-330`), verified as the exact field set
+    // on all 75 entries of the reference WvW export.
+    //
+    // Unlike `skillMap`/`buffMap` above this key is OMITTED entirely rather
+    // than emitted empty when `--modifiers` was not requested: an empty
+    // `{}` would be a claim that no player triggered any modifier, whereas
+    // the engine simply did not run. It is also what keeps the flagless
+    // ei-json output byte-identical across this milestone.
+    //
+    // Scoped to referenced ids, matching EI, which fills its own
+    // `damageModMap` lazily from inside the per-player emission loop
+    // (`JsonDamageModifierDataBuilder.cs:47-51`) -- a catalogued modifier no
+    // player triggered never appears.
+    if let Some(mods) = modifiers {
+        let damage_mod_map: BTreeMap<String, Value> = mods
+            .meta
+            .iter()
+            .map(|(&id, m)| {
+                (format!("d{id}"), json!({
+                    "name": m.name,
+                    "icon": m.icon,
+                    "description": m.description,
+                    "nonMultiplier": m.non_multiplier,
+                    "isCounter": m.is_counter,
+                    "skillBased": m.skill_based,
+                    "approximate": m.approximate,
+                    "incoming": m.incoming,
+                }))
+            })
+            .collect();
+        out.as_object_mut()
+            .expect("ei-json root is an object")
+            .insert("damageModMap".to_string(), json!(damage_mod_map));
+    }
     // `combatReplayMetaData` (M15, Task 3): the arena image every
     // `combatReplayData.positions` pair is a pixel coordinate ON -- present
     // only when replay was requested AND the log's map is one GW2EI ships
@@ -949,7 +1129,7 @@ mod tests {
             // so this doesn't change `maps_core_ei_fields`'s `targets[]`
             // assertions below -- it's set for realism, not correctness.
             combat_participant_enemies: [9u64].into_iter().collect(), skill_map: Default::default()};
-        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false)
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false, None)
     }
     #[test]
     fn maps_core_ei_fields() {
@@ -1035,7 +1215,7 @@ mod tests {
             combat_participant_enemies: Default::default(),
             skill_map: Default::default(),
         };
-        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false)
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false, None)
     }
 
     #[test]
@@ -1114,6 +1294,8 @@ mod tests {
                 hit_stats: HitStatsOut::default(),
                 defenses: DefensesOut::default(),
                 rotation: None,
+                damage_mods: None,
+                agent_addr: 0,
             }
         }
         let report = Report {
@@ -1134,6 +1316,7 @@ mod tests {
             replay: None,
             missiles: None,
             skill_map: Default::default(),
+            damage_mod_map: None,
         };
         let v = to_ei_json(&report, &EiInputs::default());
         let healing = &v["players"][0]["extHealingStats"]["outgoingHealing"][0];
@@ -1241,6 +1424,8 @@ mod tests {
             hit_stats: HitStatsOut::default(),
             defenses: DefensesOut::default(),
             rotation: None,
+            damage_mods: None,
+            agent_addr: 0,
         }
     }
 
@@ -1261,6 +1446,7 @@ mod tests {
             replay: None,
             missiles: None,
             skill_map: Default::default(),
+            damage_mod_map: None,
         }
     }
 

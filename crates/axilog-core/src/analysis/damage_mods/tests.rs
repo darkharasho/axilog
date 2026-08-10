@@ -798,6 +798,7 @@ fn foe_always_master_selects_the_targets_owner_key() {
         actor_buff_key: 77,
         actor_master_buff_key: 1,
         foe_buff_key: 88,
+        foe_addr: 88,
         foe_master_buff_key: 9,
         dst_buff_key: 88,
         from_minion: true,
@@ -939,4 +940,175 @@ fn evaluation_is_deterministic() {
         evaluate_catalog(&log, &registry, &enc),
         evaluate_catalog(&log, &registry, &enc)
     );
+}
+
+// ------------------------------------------------- M16 Task 3: emission
+
+/// `ParserHelper.DamageTypeToString` (`ParserHelper.cs:97-142`): `All`
+/// short-circuits, everything else concatenates the set bits in
+/// `Power, Strike, Condition, Life Leech` order with ONE trailing
+/// `" Damage"` -- so a combined type is `"Strike, Condition Damage"`, not
+/// `"Strike Damage, Condition Damage"`.
+#[test]
+fn damage_type_display_matches_parserhelper() {
+    let cases = [
+        (DamageType::All, "All Damage"),
+        (DamageType::Power, "Power Damage"),
+        (DamageType::Strike, "Strike Damage"),
+        (DamageType::Condition, "Condition Damage"),
+        (DamageType::LifeLeech, "Life Leech Damage"),
+        (DamageType::StrikeAndCondition, "Strike, Condition Damage"),
+        (DamageType::ConditionAndLifeLeech, "Condition, Life Leech Damage"),
+        (DamageType::StrikeAndLifeLeech, "Strike, Life Leech Damage"),
+        (DamageType::StrikeAndConditionAndLifeLeech, "Strike, Condition, Life Leech Damage"),
+    ];
+    for (t, expected) in cases {
+        assert_eq!(t.to_display(), expected, "{t:?}");
+    }
+}
+
+/// `DamageModifier`'s ctor (`DamageModifier.cs:34-68`) composes the
+/// `damageModMap[].description` tooltip out of the descriptor's own
+/// `InitialTooltip` plus six conditional `"<br>"` suffixes, in a fixed
+/// order. The full table is verified against all 69 emitted ids of the
+/// real reference export by
+/// `axilog-ei/tests/damage_mods_ei_golden.rs`; these cases pin the
+/// branches that test cannot reach in CI (it skips without the local
+/// capture) and the one arm with no output at all.
+#[test]
+fn tooltip_composes_gw2eis_suffixes_in_order() {
+    // `NoPets` + plain multiplier: two suffixes, nothing else.
+    let plain = DamageModifierDef {
+        description: "5% while moving",
+        dmg_src: DamageSource::NoPets,
+        src_type: DamageType::Strike,
+        compare_type: DamageType::Strike,
+        ..def_template()
+    };
+    assert_eq!(
+        plain.tooltip(),
+        "5% while moving<br>No Minions<br>Applied on Strike Damage\
+         <br>Compared against Strike Damage"
+    );
+
+    // `All` and `PetsOnly` have their own labels ...
+    assert!(DamageModifierDef { dmg_src: DamageSource::All, ..plain }
+        .tooltip()
+        .contains("<br>Actor + Minions"));
+    assert!(DamageModifierDef { dmg_src: DamageSource::PetsOnly, ..plain }
+        .tooltip()
+        .contains("<br>Minions only"));
+
+    // ... but `Incoming` falls through GW2EI's `default:` arm and adds
+    // NOTHING -- the one branch that is silent, and the easiest to get
+    // wrong by "helpfully" labelling it.
+    let incoming = DamageModifierDef {
+        dmg_src: DamageSource::Incoming,
+        compare_type: DamageType::All,
+        ..plain
+    };
+    assert_eq!(
+        incoming.tooltip(),
+        "5% while moving<br>Applied on Strike Damage<br>Compared against All Damage"
+    );
+
+    // Counter: `IsCounter` also forces `Multiplier`, so "Counter" appears
+    // and "Non multiplier" must NOT (`DamageModifierDescriptor.cs:21`).
+    let counter = DamageModifierDef { is_counter: true, ..plain };
+    assert!(counter.tooltip().ends_with("<br>Counter"), "{}", counter.tooltip());
+    assert!(!counter.tooltip().contains("Non multiplier"));
+
+    // Approximate comes last.
+    let approx_def = DamageModifierDef { approximate: true, ..plain };
+    assert!(approx_def.tooltip().ends_with("<br>Approximate"));
+}
+
+/// The `damageModMap` flags, as `JsonLogBuilder.BuildDamageModDesc`
+/// (`:308-322`) derives them: `nonMultiplier` is `!Multiplier`, and the
+/// ONLY gain computer in all of GW2EI that is not a multiplier is the
+/// skill-based one, so the two flags move together and nothing else can
+/// set `nonMultiplier`.
+#[test]
+fn non_multiplier_is_only_ever_the_skill_based_computer() {
+    let skill = DamageModifierDef {
+        trigger: Trigger::Skill(1234),
+        gain: GainComputer::BySkill,
+        ..def_template()
+    };
+    assert!(skill.skill_based() && skill.non_multiplier());
+    assert!(skill.tooltip().contains("<br>Non multiplier"));
+
+    for gain in [
+        GainComputer::ByPresence,
+        GainComputer::ByStack,
+        GainComputer::ByAbsence,
+        GainComputer::ByMultiplyingStack,
+        GainComputer::ByStackPlusConstant(10.0),
+        GainComputer::AtLeastNStacks(3),
+    ] {
+        let d = DamageModifierDef { gain, ..def_template() };
+        assert!(!d.non_multiplier(), "{gain:?} must be a multiplier");
+        assert!(!d.skill_based(), "{gain:?} must not be skill-based");
+    }
+}
+
+/// The per-target split (`evaluate_full(.., per_target = true)`): GW2EI
+/// filters by the EXACT destination agent
+/// (`DamageEventByDst[target.EnglobingAgentItem]`, `Actor.cs:128-136`), so
+/// each target sees only its own hits while the whole-fight row still sees
+/// every hit -- and each target's `totalDamage` denominator is likewise
+/// restricted to that target.
+#[test]
+fn per_target_splits_hits_and_denominators_by_foe() {
+    let events = vec![
+        strike(100, 1, 9, 1000),
+        strike(200, 1, 9, 500),
+        strike(300, 1, 8, 400),
+    ];
+    let log = raw(events, PRE_ERA_BUILD);
+    let registry = InstidRegistry::build(&log);
+    let enc = encounter(vec![player(1)], vec![enemy(9), enemy(8)]);
+    let def = def_template();
+
+    let with_split = evaluate_full(&log, &registry, &enc, &[&def], true);
+    let overall = with_split.overall[&(1, 9001)];
+    assert_eq!((overall.hit_count, overall.total_hit_count, overall.total_damage), (3, 3, 1900));
+
+    let t9 = with_split.per_target[&(1, 9, 9001)];
+    assert_eq!((t9.hit_count, t9.total_hit_count, t9.total_damage), (2, 2, 1500));
+    let t8 = with_split.per_target[&(1, 8, 9001)];
+    assert_eq!((t8.hit_count, t8.total_hit_count, t8.total_damage), (1, 1, 400));
+    assert_eq!(with_split.per_target.len(), 2, "no third target may appear");
+
+    // Opting out costs nothing and changes nothing else.
+    let without = evaluate_full(&log, &registry, &enc, &[&def], false);
+    assert!(without.per_target.is_empty(), "per_target must stay empty when not requested");
+    assert_eq!(without.overall, with_split.overall, "the whole-fight rows must not move");
+}
+
+/// `meta` is scoped to the ids actually emitted -- GW2EI fills its own
+/// `damageModMap` lazily from inside the emission loop
+/// (`JsonDamageModifierDataBuilder.cs:47-51`), so a definition that was
+/// active but never triggered must NOT appear.
+#[test]
+fn meta_covers_exactly_the_emitted_ids() {
+    let triggered = def_template();
+    // Same shape, different id, gated to a skill nothing in the log casts.
+    let never = DamageModifierDef {
+        id: 4242,
+        name: "Never Fires",
+        trigger: Trigger::Skill(999_999),
+        gain: GainComputer::BySkill,
+        ..def_template()
+    };
+    let log = raw(vec![strike(100, 1, 9, 1000)], PRE_ERA_BUILD);
+    let registry = InstidRegistry::build(&log);
+    let enc = encounter(vec![player(1)], vec![enemy(9)]);
+
+    let out = evaluate_full(&log, &registry, &enc, &[&triggered, &never], true);
+    assert_eq!(out.meta.keys().copied().collect::<Vec<_>>(), vec![9001]);
+    let m = &out.meta[&9001];
+    assert_eq!(m.name, triggered.name);
+    assert_eq!(m.description, triggered.tooltip());
+    assert!(!m.incoming, "a positive id is outgoing");
 }

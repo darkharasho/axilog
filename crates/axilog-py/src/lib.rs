@@ -50,6 +50,7 @@ fn value_err(e: impl std::fmt::Display) -> PyErr {
 /// `want_skill_damage` mirrors the `skill_damage` keyword arg (M12, Task
 /// 1); `want_missiles` mirrors the `missiles` keyword arg (final-review
 /// fix wave) -- all defaulted to `false` by every existing call site.
+#[allow(clippy::too_many_arguments)]
 fn build_report_from_bytes(
     bytes: &[u8],
     want_replay: bool,
@@ -57,6 +58,7 @@ fn build_report_from_bytes(
     want_timeseries: bool,
     want_missiles: bool,
     want_rotation: bool,
+    want_modifiers: bool,
 ) -> PyResult<axilog_schema::Report> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(value_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -70,9 +72,16 @@ fn build_report_from_bytes(
     });
     let missiles = want_missiles
         .then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
+    // Native path: whole-fight only -- the per-target split has no native
+    // counterpart (see `axilog_ei::EiInputs::modifiers`).
+    let damage_mods = want_modifiers.then(|| {
+        axilog_core::analysis::damage_mods::evaluate_catalog_full(
+            &raw, &axilog_core::analysis::damage::InstidRegistry::build(&raw), &enc, false,
+        )
+    });
     Ok(axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
-        want_skill_damage, want_timeseries, want_rotation,
+        want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
     ))
 }
 
@@ -92,6 +101,17 @@ fn build_report_from_bytes(
 /// `None` here regardless of what the caller asked for). `want_missiles`
 /// is threaded the same way for symmetry with `parse_file`/`parse_bytes`,
 /// even though `to_ei_json` does not currently read `Report::missiles`.
+/// `build_report_and_activity_from_bytes`'s return tuple. Named because it
+/// grew a fourth member in M16 and `clippy::type_complexity` is right that
+/// the inline form had stopped being readable.
+type EiPipelineOutputs = (
+    axilog_schema::Report,
+    Vec<axilog_core::analysis::replay::ActivityIntervals>,
+    Option<axilog_core::analysis::ei_replay::EiReplay>,
+    Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
+);
+
+#[allow(clippy::too_many_arguments)]
 fn build_report_and_activity_from_bytes(
     bytes: &[u8],
     want_replay: bool,
@@ -99,11 +119,8 @@ fn build_report_and_activity_from_bytes(
     want_timeseries: bool,
     want_missiles: bool,
     want_rotation: bool,
-) -> PyResult<(
-    axilog_schema::Report,
-    Vec<axilog_core::analysis::replay::ActivityIntervals>,
-    Option<axilog_core::analysis::ei_replay::EiReplay>,
-)> {
+    want_modifiers: bool,
+) -> PyResult<EiPipelineOutputs> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(value_err)?;
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
@@ -122,11 +139,18 @@ fn build_report_and_activity_from_bytes(
     // top-level `combatReplayMetaData` (see `axilog_ei::to_ei_json`).
     let ei_replay = want_replay
         .then(|| axilog_core::analysis::ei_replay::build_ei_replay_auto(&raw, &enc));
+    // ei-json path: WITH the per-target split, which is the one shape
+    // `damageModifiersTarget`/`incomingDamageModifiersTarget` need.
+    let damage_mods = want_modifiers.then(|| {
+        axilog_core::analysis::damage_mods::evaluate_catalog_full(
+            &raw, &axilog_core::analysis::damage::InstidRegistry::build(&raw), &enc, true,
+        )
+    });
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
-        want_skill_damage, want_timeseries, want_rotation,
+        want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
     );
-    Ok((report, activity, ei_replay))
+    Ok((report, activity, ei_replay, damage_mods))
 }
 
 fn report_to_value(report: &axilog_schema::Report) -> PyResult<Value> {
@@ -158,13 +182,15 @@ fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
 /// `PlayerOut::rotation`'s doc comment). All five default to `False` for
 /// back-compat with every existing positional-only call site.
 #[pyfunction]
-#[pyo3(signature = (path, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (path, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false, modifiers=false))]
 fn parse_file(
     py: Python<'_>, path: &str, replay: bool, skill_damage: bool, timeseries: bool, missiles: bool,
     rotation: bool,
+    modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let report = build_report_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation)?;
+    let report = build_report_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     value_to_py(py, &report_to_value(&report)?)
 }
 
@@ -177,12 +203,14 @@ fn parse_file(
 /// `missiles=True` (final-review fix wave) opts into embedding the native
 /// top-level missile analytics block.
 #[pyfunction]
-#[pyo3(signature = (data, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (data, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false, modifiers=false))]
 fn parse_bytes(
     py: Python<'_>, data: &[u8], replay: bool, skill_damage: bool, timeseries: bool, missiles: bool,
     rotation: bool,
+    modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
-    let report = build_report_from_bytes(data, replay, skill_damage, timeseries, missiles, rotation)?;
+    let report = build_report_from_bytes(data, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     value_to_py(py, &report_to_value(&report)?)
 }
 
@@ -204,17 +232,23 @@ fn parse_bytes(
 /// to `False`, keeping the existing zero-arg call shape's behavior
 /// unchanged.
 #[pyfunction]
-#[pyo3(signature = (path, *, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (path, *, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false, modifiers=false))]
 fn parse_file_ei(
     py: Python<'_>, path: &str, replay: bool, skill_damage: bool, timeseries: bool, missiles: bool,
     rotation: bool,
+    modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let (report, activity, ei_replay) =
-        build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation)?;
+    let (report, activity, ei_replay, damage_mods) =
+        build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     let ei = axilog_ei::to_ei_json(
         &report,
-        &axilog_ei::EiInputs { activity: &activity, replay: ei_replay.as_ref() },
+        &axilog_ei::EiInputs {
+            activity: &activity,
+            replay: ei_replay.as_ref(),
+            modifiers: damage_mods.as_ref(),
+        },
     );
     value_to_py(py, &ei)
 }

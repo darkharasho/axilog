@@ -368,6 +368,49 @@ class SkillRotationOut(TypedDict):
     skill_id: int
     casts: List[CastOut]
 
+# --- damage modifiers (M16) ------------------------------------------------
+
+class DamageModEntryOut(TypedDict):
+    """One `(player, damage modifier)` row -- GW2EI's
+    `JsonDamageModifierItem`, plus the modifier id, flattened (this project
+    does not model phases, so EI's per-phase nesting collapses to one row).
+
+    `id` is SIGNED: negative means an incoming (damage-taken) modifier, and
+    it is the key into `Report["damage_mod_map"]`. `damage_gain` is
+    `sum(gain * damage)` rounded to 3 decimals -- for a `skill_based` or
+    `is_counter` modifier it is instead the raw damage done under the
+    effect, exactly as EI documents its own field."""
+
+    id: int
+    hit_count: int
+    total_hit_count: int
+    damage_gain: float
+    total_damage: int
+
+class DamageModsOut(TypedDict):
+    """A player's damage-modifier block (M16), split by direction the way
+    EI's `damageModifiers`/`incomingDamageModifiers` are. Only modifiers
+    with at least one qualifying hit appear (EI's own emission rule), so an
+    absent id means "never triggered", not "zero"."""
+
+    outgoing: List[DamageModEntryOut]
+    incoming: List[DamageModEntryOut]
+
+class DamageModDescOut(TypedDict):
+    """One `Report["damage_mod_map"]` entry -- GW2EI's `DamageModDesc`,
+    field for field. `description` is EI's full tooltip: the catalogued
+    text plus the derived `<br>Applied on ...`/`<br>Compared against ...`/
+    `<br>Counter`/`<br>Non multiplier`/`<br>Approximate` suffixes."""
+
+    name: str
+    icon: str
+    description: str
+    non_multiplier: bool
+    is_counter: bool
+    skill_based: bool
+    approximate: bool
+    incoming: bool
+
 # --- players / enemies -----------------------------------------------------
 
 class _PlayerOutRequired(TypedDict):
@@ -420,6 +463,7 @@ class PlayerOut(_PlayerOutRequired, total=False):
     per_second: PlayerPerSecondOut
     dps_targets: List[DpsTargetOut]
     rotation: List[SkillRotationOut]
+    damage_mods: DamageModsOut
 
 class _EnemyOutRequired(TypedDict):
     id: int
@@ -533,11 +577,18 @@ class Report(_ReportRequired, total=False):
     """`warnings` is omitted (not `[]`) when there are no analysis warnings.
     `replay` is omitted (not `None`) unless requested via `replay=True`.
     `missiles` (final-review fix wave) is omitted (not `None`) unless
-    requested via `missiles=True` (see `parse_file`/`parse_bytes`)."""
+    requested via `missiles=True` (see `parse_file`/`parse_bytes`).
+    `damage_mod_map` (M16) is omitted unless requested via `modifiers=True`;
+    it is keyed by the SIGNED modifier id as a decimal string (`"174"`,
+    `"-431"`) -- WITHOUT Elite Insights' `"d"` prefix, the same way
+    `skill_map` drops EI's `"s"` -- and is scoped to the ids
+    `players[]["damage_mods"]` actually references, not the whole
+    catalog."""
 
     warnings: List[str]
     replay: ReplayOut
     missiles: MissilesOut
+    damage_mod_map: Dict[str, DamageModDescOut]
 
 # --- module functions -----------------------------------------------------
 
@@ -548,6 +599,7 @@ def parse_file(
     timeseries: bool = False,
     missiles: bool = False,
     rotation: bool = False,
+    modifiers: bool = False,
 ) -> Report:
     """Parse a `.evtc`/`.zevtc` file at `path` into the native `Report` shape.
 
@@ -562,7 +614,10 @@ def parse_file(
     (`Report["missiles"]`), mirroring the CLI's `--missiles` flag.
     `rotation` (M14, Task 1) opts into embedding the native per-player
     rotation (cast-tracking) block (`PlayerOut["rotation"]`), mirroring the
-    CLI's `--rotation` flag. All five default to `False`.
+    CLI's `--rotation` flag. `modifiers` (M16) opts into the per-player
+    damage-modifier block (`PlayerOut["damage_mods"]`) plus the top-level
+    `Report["damage_mod_map"]`, mirroring the CLI's `--modifiers` flag.
+    All six default to `False`.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.
@@ -576,6 +631,7 @@ def parse_bytes(
     timeseries: bool = False,
     missiles: bool = False,
     rotation: bool = False,
+    modifiers: bool = False,
 ) -> Report:
     """Parse an already-read `.evtc`/`.zevtc` buffer into the native `Report` shape.
 
@@ -586,7 +642,8 @@ def parse_bytes(
     per-enemy `dps_targets` summary. `missiles` (final-review fix wave)
     opts into embedding the native top-level missile analytics block.
     `rotation` (M14, Task 1) opts into embedding the native per-player
-    rotation (cast-tracking) block.
+    rotation (cast-tracking) block. `modifiers` (M16) opts into
+    `PlayerOut["damage_mods"]` + `Report["damage_mod_map"]`.
 
     Raises `ValueError` if `data` is not a decodable/parseable arcdps log.
     """
@@ -600,6 +657,7 @@ def parse_file_ei(
     timeseries: bool = False,
     missiles: bool = False,
     rotation: bool = False,
+    modifiers: bool = False,
 ) -> Dict[str, Any]:
     """Parse a `.evtc`/`.zevtc` file at `path` into Elite Insights-compatibility JSON.
 
@@ -615,8 +673,12 @@ def parse_file_ei(
     `combatReplayMetaData`; it roughly triples the payload, hence opt-in.
     `missiles` is accepted for signature parity with `parse_file` but has
     no effect on the output (EI's JSON shape has no comparable field for
-    it). All five default to `False`, keeping `parse_file_ei(path)`
-    back-compatible.
+    it). `modifiers` (M16, keyword-only) adds Elite Insights' own
+    `damageModifiers`/`incomingDamageModifiers`/`damageModifiersTarget`/
+    `incomingDamageModifiersTarget` per-player arrays plus the top-level
+    `damageModMap`; the per-target arrays dominate that payload (measured
+    +441% on the committed fixture), hence opt-in. All six default to
+    `False`, keeping `parse_file_ei(path)` back-compatible.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.

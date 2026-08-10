@@ -108,6 +108,37 @@ enum Cmd {
         /// it's opt-in like `--skill-damage`/`--timeseries`.
         #[arg(long)]
         rotation: bool,
+        /// Embed the per-player damage-modifier stats (M16): for every
+        /// trait/rune/relic/food modifier a player actually triggered, how
+        /// many of the eligible hits it applied to and how much of the
+        /// damage it is responsible for --
+        /// `axilog_core::analysis::damage_mods`.
+        ///
+        /// `--format json` embeds `players[].damage_mods.{outgoing,
+        /// incoming}` plus the top-level `damage_mod_map`;
+        /// `--format ei-json` embeds Elite Insights' own
+        /// `damageModifiers`/`incomingDamageModifiers`/
+        /// `damageModifiersTarget`/`incomingDamageModifiersTarget` plus
+        /// `damageModMap`. Every other format ignores it.
+        ///
+        /// Off by default, and unlike `--rotation`/`--skill-damage`/
+        /// `--timeseries` this flag gates the COMPUTATION, not just the
+        /// serialization: `analyze()` does not run the modifier engine, so
+        /// nothing pays for it unless asked. The engine is a separate pass
+        /// over every damage event crossed with ~200 catalogued
+        /// definitions, plus a per-`(actor, buff)` stack-timeline
+        /// simulation.
+        ///
+        /// Measured on the committed WvW fixture (compact JSON, 42
+        /// players, 80 targets): `--format json` 194,773 -> 280,843 bytes
+        /// (+44.2%); `--format ei-json` 216,173 -> 1,170,570 bytes
+        /// (+441.5%). The gap is EI's per-target arrays, which have no
+        /// native counterpart and are 854,077 of those bytes on their own
+        /// (`damageModifiersTarget` 497,702 + its incoming twin 356,375)
+        /// -- see `axilog_ei::EiInputs::modifiers`. Wall clock on that
+        /// fixture (release build, `--format ei-json`): 0.074s -> 0.155s.
+        #[arg(long)]
+        modifiers: bool,
     },
     /// Rewrite every player's character/account name in a .zevtc to a
     /// deterministic `Anon<N>` placeholder and write the result as a new
@@ -163,7 +194,7 @@ enum View {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage, timeseries, rotation } => {
+        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage, timeseries, rotation, modifiers } => {
             let bytes = std::fs::read(&path)?;
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
@@ -196,6 +227,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // hoisted out here and shared by both rather than computed
             // twice.
             let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+            // M16: the damage-modifier engine runs ONLY on `--modifiers`
+            // (see the flag's doc comment -- it is a separate full event
+            // pass, not a copy of something `analyze()` already computed).
+            // The per-target split is asked for only by `ei-json`, the one
+            // format with a shape for it (`damageModifiersTarget`); it is
+            // the expensive half, so the native path skips it.
+            let damage_mods = modifiers.then(|| {
+                axilog_core::analysis::damage_mods::evaluate_catalog_full(
+                    &raw,
+                    &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+                    &enc,
+                    format == Format::EiJson,
+                )
+            });
             let report = axilog_schema::build_report(
                 &enc,
                 &metrics,
@@ -205,6 +250,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 skill_damage,
                 timeseries,
                 rotation,
+                damage_mods.as_ref(),
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
             // post-2026-05-01 buff-statechange-rework build producing
@@ -229,6 +275,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &axilog_ei::EiInputs {
                                 activity: &activity,
                                 replay: ei_replay_data.as_ref(),
+                                modifiers: damage_mods.as_ref(),
                             },
                         ))?
                     )

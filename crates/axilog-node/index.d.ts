@@ -84,6 +84,16 @@ export declare function parseFileEi(path: string, opts?: ParseOptions | undefine
  * `PlayerOut::rotation` doc comment for why this defaults to opt-in
  * (well past the ~30% size-discipline guideline on the committed fixture
  * when always-on).
+ * `modifiers: true` (M16) opts into the per-player damage-modifier stats
+ * -- `players[].damage_mods.{outgoing, incoming}` plus the top-level
+ * `damage_mod_map` on the native `Report` (`parseFile`/`parseBuffer`), and
+ * EI's own `damageModifiers`/`incomingDamageModifiers`/
+ * `damageModifiersTarget`/`incomingDamageModifiersTarget` plus
+ * `damageModMap` on `parseFileEi`. Unlike every other option here this one
+ * gates a COMPUTATION rather than a copy: `analyze()` never runs the
+ * modifier engine, which is a separate pass over every damage event
+ * crossed with ~200 catalogued definitions (see
+ * `axilog_schema::DamageModsOut`'s doc comment). Off by default.
  */
 export interface ParseOptions {
   replay?: boolean
@@ -91,4 +101,5 @@ export interface ParseOptions {
   timeseries?: boolean
   missiles?: boolean
   rotation?: boolean
+  modifiers?: boolean
 }

@@ -4,6 +4,7 @@ use axilog_core::model::Encounter;
 use axilog_core::analysis::{buffs, Metrics};
 use axilog_core::analysis::replay::Replay;
 use axilog_core::analysis::missiles::Missiles;
+use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
 
 #[derive(Serialize)]
 pub struct Report {
@@ -70,6 +71,26 @@ pub struct Report {
     /// Keyed by skill id as a string (plain `serde_json` object-key
     /// stringification of the `u32` key), e.g. `"5491"`.
     pub skill_map: BTreeMap<u32, SkillMapEntryOut>,
+    /// Definition metadata for every damage-modifier id referenced by any
+    /// `players[].damage_mods` row (M16, Task 3) -- the native counterpart
+    /// of EI's top-level `damageModMap`. Opt-in, present exactly when
+    /// `players[].damage_mods` is; omitted entirely (not `{}`) otherwise.
+    ///
+    /// Keyed by the SIGNED id as a decimal string (plain `serde_json`
+    /// object-key stringification of the `i32` key), e.g. `"174"` /
+    /// `"-431"` -- the same number `DamageModEntryOut::id` carries, WITHOUT
+    /// EI's `"d"` prefix (which the ei-json adapter adds back; `skill_map`
+    /// above drops EI's `"s"` prefix the same way).
+    ///
+    /// **Scoped to referenced ids**, not the whole ~200-definition catalog:
+    /// GW2EI populates its own `damageModMap` lazily from inside the
+    /// per-player emission loop
+    /// (`JsonDamageModifierDataBuilder.cs:47-51`), so a definition no
+    /// player triggered never appears. Measured on the committed fixture:
+    /// 59 referenced ids out of the catalog's 205 definitions, 19,443
+    /// bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub damage_mod_map: Option<BTreeMap<i32, DamageModDescOut>>,
 }
 /// One skill's best-effort entry (M14, Task 2) -- mirrors
 /// `axilog_core::analysis::skill_map::SkillMapEntry` field-for-field.
@@ -671,7 +692,103 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// always populated by `analyze()`); this flag only gates whether
     /// [`build_report`] copies it into the schema.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rotation: Option<Vec<SkillRotationOut>> }
+    pub rotation: Option<Vec<SkillRotationOut>>,
+    /// Per-modifier outgoing/incoming damage-modifier stats (M16, Task 3),
+    /// opt-in -- only present when the caller (CLI `--modifiers` / SDK
+    /// `modifiers: true`) passed `Some(&DamageModifierResults)` to
+    /// [`build_report`]. Omitted entirely from the JSON (not `null`) when
+    /// not requested, matching `rotation`/`skill_damage`'s convention.
+    ///
+    /// See [`DamageModsOut`] for the measured size and the gate decision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub damage_mods: Option<DamageModsOut>,
+    /// The player's representative agent addr. `#[serde(skip)]`: never part
+    /// of the native JSON -- it exists purely so `axilog_ei::to_ei_json`
+    /// can key `EiInputs::modifiers`'s
+    /// `axilog_core::analysis::damage_mods::DamageModifierResults` (which
+    /// is addr-keyed, being a core analysis output) back onto `players[]`
+    /// positionally. Same "side data the EI adapter needs, invisible to the
+    /// native output" role `Report::all_enemies` already plays -- see that
+    /// field's doc comment.
+    #[serde(skip)]
+    pub agent_addr: u64 }
+/// One `(player, damage modifier)` row -- GW2EI's `JsonDamageModifierItem`
+/// (`GW2EIJSON/JsonActorUtilities/JsonPlayerUtilities/
+/// JsonDamageModifierData.cs:12-33`) plus the modifier id, flattened.
+///
+/// EI nests the four numbers one level deeper, as a per-PHASE array
+/// (`{ id, damageModifiers: [ {...} ] }`); this project does not model
+/// phases (see `axilog_ei`'s own `statsTargets` comment), so the native
+/// shape carries the single whole-fight row directly. The ei-json adapter
+/// re-nests it into EI's exact shape.
+#[derive(Serialize)]
+pub struct DamageModEntryOut {
+    /// The SIGNED modifier id -- negative for an incoming modifier
+    /// (`DamageModifier.cs:26`). This is the key into
+    /// [`Report::damage_mod_map`], and the same number EI puts in its own
+    /// `"d<id>"` keys.
+    pub id: i32,
+    /// Hits where the modifier actually applied.
+    pub hit_count: u32,
+    /// Hits that were eligible for it at all.
+    pub total_hit_count: u32,
+    /// `sum(gain * damage)`, rounded to 3 decimals -- GW2EI's
+    /// `Math.Round(damageGain, ParserHelper.DamageModGainDigit)` over a
+    /// `double` (`Statistics/DamageModifierStat.cs:14`).
+    pub damage_gain: f64,
+    /// The `compare_type`-filtered damage aggregate the gain is measured
+    /// against.
+    pub total_damage: u64,
+}
+/// A player's damage-modifier block (M16, Task 3), split by direction the
+/// way EI's `damageModifiers` / `incomingDamageModifiers` are.
+///
+/// **Size, measured on the committed fixture** (`fixtures/wvw-small.anon.
+/// zevtc`, 42 players, compact `serde_json::to_string`, same method
+/// `PlayerOut::rotation`'s doc comment uses): today's baseline with every
+/// opt-in block off is 194,773 bytes -- not the 170,451 that comment cites,
+/// which predates M14's always-on `skill_map`. `--modifiers` grows that to
+/// 280,843 bytes (**+44.2%**), of which 65,979 is the per-player blocks
+/// (37 of 42 players carry rows; 5 triggered nothing) and 19,443 is
+/// [`Report::damage_mod_map`]. That is past the ~30% size-discipline
+/// guideline on its own, so it would be opt-in on size alone.
+///
+/// It is gated behind `--modifiers` for a second, stronger reason the
+/// other blocks do not have: unlike `rotation`/`skill_damage`/`timeseries`
+/// -- whose data
+/// `analyze()` computes unconditionally, the flag merely deciding whether
+/// [`build_report`] copies it -- the damage-modifier engine is a SEPARATE
+/// full pass over every event crossed with ~200 catalog definitions, plus a
+/// per-`(actor, buff)` stack-timeline simulation. Making it always-on would
+/// put that cost on `--format table`, `--format csv` and every SDK caller
+/// that never looks at it. So this flag gates the COMPUTATION, like
+/// `--replay`/`--missiles` do, not just the serialization.
+#[derive(Serialize, Default)]
+pub struct DamageModsOut {
+    /// Sorted by `id` ascending; only modifiers with at least one
+    /// qualifying hit appear (GW2EI's own emission rule).
+    pub outgoing: Vec<DamageModEntryOut>,
+    /// The same, for damage TAKEN. Ids here are negative.
+    pub incoming: Vec<DamageModEntryOut>,
+}
+/// One `damage_mod_map` entry -- GW2EI's `DamageModDesc`
+/// (`GW2EIBuilders/JsonModels/JsonLogBuilder.cs:308-322`), field for field
+/// and with the same eight fields the reference export carries.
+#[derive(Serialize)]
+pub struct DamageModDescOut {
+    pub name: String,
+    pub icon: String,
+    /// GW2EI's `DamageModifier.Tooltip` -- the catalog description plus the
+    /// derived `"<br>Applied on ..."`/`"<br>Compared against ..."`/etc
+    /// suffixes. See
+    /// `axilog_core::analysis::damage_mods::model::DamageModifierDef::tooltip`.
+    pub description: String,
+    pub non_multiplier: bool,
+    pub is_counter: bool,
+    pub skill_based: bool,
+    pub approximate: bool,
+    pub incoming: bool,
+}
 #[derive(Serialize)]
 pub struct EnemyOut { pub id: u64, pub name: String, pub team: String, pub is_player: bool,
     /// The enemy's current squad marker, mirroring `PlayerOut.marker`
@@ -692,6 +809,46 @@ fn skill_entry_out(e: &axilog_core::analysis::skill_damage::SkillEntry) -> Skill
         skill_id: e.skill_id, total: e.total, hits: e.hits,
         min: e.min, max: e.max, crit_hits: e.crit_hits, flank_hits: e.flank_hits,
     }
+}
+
+/// One `(id, stat)` pair as a schema row.
+fn damage_mod_entry_out(id: i32, s: &DamageModifierStat) -> DamageModEntryOut {
+    DamageModEntryOut {
+        id,
+        hit_count: s.hit_count,
+        total_hit_count: s.total_hit_count,
+        damage_gain: s.damage_gain,
+        total_damage: s.total_damage,
+    }
+}
+
+/// Slices one player's rows out of the addr-keyed engine output (M16, Task
+/// 3), splitting them by direction the way EI's `damageModifiers` /
+/// `incomingDamageModifiers` are: the sign of the id IS the direction
+/// (`DamageModifier.cs:26` negates it for incoming, and
+/// `DamageModifierDef::validate` rejects a non-positive base id), so no
+/// second lookup is needed.
+///
+/// The native block is whole-fight only: `DamageModifierResults::per_target`
+/// has no native counterpart and is consumed exclusively by the ei-json
+/// adapter (`axilog_ei::EiInputs::modifiers`), which needs it in EI's
+/// positional `[targetIndex]` shape.
+fn damage_mods_out(results: &DamageModifierResults, addr: u64) -> DamageModsOut {
+    let split = |rows: Vec<(i32, &DamageModifierStat)>| {
+        let (incoming, outgoing): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(id, _)| *id < 0);
+        (
+            outgoing.iter().map(|(id, s)| damage_mod_entry_out(*id, s)).collect::<Vec<_>>(),
+            incoming.iter().map(|(id, s)| damage_mod_entry_out(*id, s)).collect::<Vec<_>>(),
+        )
+    };
+    let (outgoing, incoming) = split(
+        results
+            .overall
+            .range((addr, i32::MIN)..=(addr, i32::MAX))
+            .map(|(&(_, id), s)| (id, s))
+            .collect(),
+    );
+    DamageModsOut { outgoing, incoming }
 }
 
 /// `replay` (M9, Task 2): pass `Some(&Replay)` (from
@@ -736,6 +893,16 @@ fn skill_entry_out(e: &axilog_core::analysis::skill_damage::SkillEntry) -> Skill
 /// added one more `bool`/`Option<&T>` the same way rather than introducing
 /// an options struct, so this one flag is allowed rather than restructuring
 /// the whole call surface for one more parameter.
+///
+/// `damage_mods` (M16, Task 3) follows `replay`/`missiles`' Option-presence
+/// convention rather than `include_rotation`'s bool, because -- like those
+/// two and unlike `rotation`/`skill_damage`/`timeseries` -- the data is NOT
+/// computed by `analyze()`: the caller runs
+/// `axilog_core::analysis::damage_mods::evaluate_catalog_full` itself when
+/// `--modifiers`/SDK `modifiers: true` was requested, and passes the result
+/// here. See [`DamageModsOut`]'s doc comment for why that computation is
+/// gated at all (it is a separate full event pass, not a copy of something
+/// already computed).
 #[allow(clippy::too_many_arguments)]
 pub fn build_report(
     enc: &Encounter,
@@ -746,6 +913,7 @@ pub fn build_report(
     include_skill_damage: bool,
     include_timeseries: bool,
     include_rotation: bool,
+    damage_mods: Option<&DamageModifierResults>,
 ) -> Report {
     let pm: std::collections::BTreeMap<u64, &axilog_core::analysis::PlayerMetrics> =
         metrics.players.iter().map(|p| (p.agent_addr, p)).collect();
@@ -873,6 +1041,8 @@ pub fn build_report(
             } else {
                 None
             },
+            damage_mods: damage_mods.map(|d| damage_mods_out(d, p.agent_addr)),
+            agent_addr: p.agent_addr,
         }
     }).collect();
     Report {
@@ -915,6 +1085,27 @@ pub fn build_report(
                 (id, SkillMapEntryOut { name: e.name.clone(), auto_attack: e.auto_attack, is_swap: e.is_swap, can_crit: e.can_crit })
             })
             .collect(),
+        // M16 Task 3: scoped to the ids the engine actually emitted -- the
+        // engine already narrows `meta` that way (GW2EI populates its own
+        // `damageModMap` lazily from the emission loop). See
+        // `Report::damage_mod_map`'s doc comment.
+        damage_mod_map: damage_mods.map(|d| {
+            d.meta
+                .iter()
+                .map(|(&id, m)| {
+                    (id, DamageModDescOut {
+                        name: m.name.to_string(),
+                        icon: m.icon.to_string(),
+                        description: m.description.clone(),
+                        non_multiplier: m.non_multiplier,
+                        is_counter: m.is_counter,
+                        skill_based: m.skill_based,
+                        approximate: m.approximate,
+                        incoming: m.incoming,
+                    })
+                })
+                .collect()
+        }),
     }
 }
 
@@ -947,7 +1138,7 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(),
             combat_participant_enemies: [9u64].into_iter().collect(), skill_map: Default::default() };
-        let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
+        let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         assert_eq!(report.enemies.len(), 1, "only the participant enemy stays in the filtered list");
         assert_eq!(report.enemies[0].id, 9);
         assert_eq!(report.all_enemies.len(), 2, "all_enemies keeps the full roster, including the loot bag");
@@ -973,7 +1164,7 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
-        let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
+        let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.2");
         assert_eq!(v["axilog_version"], "0.1.0");
@@ -1017,7 +1208,7 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: true, combat_participant_enemies: Default::default(), skill_map: Default::default() };
-        let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
+        let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["players"][0]["healing"]["healing_out_total"], 500);
         assert_eq!(v["players"][0]["healing"]["healing_out_allies"], 300);
@@ -1062,11 +1253,11 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
 
-        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
+        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&omitted).unwrap();
         assert!(v["players"][0].get("skill_damage").is_none(), "skill_damage must be omitted when not requested");
 
-        let included = build_report(&enc, &m, "0.1.0", None, None, true, false, false);
+        let included = build_report(&enc, &m, "0.1.0", None, None, true, false, false, None);
         let v = serde_json::to_value(&included).unwrap();
         let sd = &v["players"][0]["skill_damage"];
         assert_eq!(sd["outgoing"][0]["skill_id"], 100);
@@ -1111,12 +1302,12 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
 
-        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
+        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&omitted).unwrap();
         assert!(v["players"][0].get("per_second").is_none(), "per_second must be omitted when not requested");
         assert!(v["players"][0].get("dps_targets").is_none(), "dps_targets must be omitted when not requested");
 
-        let included = build_report(&enc, &m, "0.1.0", None, None, false, true, false);
+        let included = build_report(&enc, &m, "0.1.0", None, None, false, true, false, None);
         let v = serde_json::to_value(&included).unwrap();
         let ps = &v["players"][0]["per_second"];
         assert_eq!(ps["damage"], serde_json::json!([50, 80]));
@@ -1158,11 +1349,11 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: false, combat_participant_enemies: Default::default(), skill_map: Default::default() };
 
-        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false);
+        let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&omitted).unwrap();
         assert!(v["players"][0].get("rotation").is_none(), "rotation must be omitted when not requested");
 
-        let included = build_report(&enc, &m, "0.1.0", None, None, false, false, true);
+        let included = build_report(&enc, &m, "0.1.0", None, None, false, false, true, None);
         let v = serde_json::to_value(&included).unwrap();
         let r = &v["players"][0]["rotation"][0];
         assert_eq!(r["skill_id"], 500);
@@ -1250,7 +1441,7 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
         let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
-        let report = build_report(&enc, &m, "0.1.0", Some(&replay), None, false, false, false);
+        let report = build_report(&enc, &m, "0.1.0", Some(&replay), None, false, false, false, None);
         assert!(report.replay.is_some());
         let r = report.replay.unwrap();
         assert_eq!(r.poll_ms, DEFAULT_POLL_MS);
@@ -1302,7 +1493,7 @@ mod tests {
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), skill_map: Default::default() };
         let missiles = build_missiles(&raw, &enc);
-        let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles), false, false, false);
+        let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles), false, false, false, None);
         assert!(report.missiles.is_some());
         let mo = report.missiles.unwrap();
         assert_eq!(mo.players.len(), 1);
