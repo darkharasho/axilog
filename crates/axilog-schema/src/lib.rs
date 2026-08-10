@@ -605,6 +605,29 @@ pub struct HealingOut {
 /// `statsAll[0]` scope. Always present (not gated), same as `cc`/
 /// `downs_contribution` -- no per-target/per-skill combinatorial blowup
 /// here, unlike `skill_damage`/`per_second`.
+#[derive(Serialize, Default)]
+pub struct HitStatsOut {
+    pub crit_count: u32,
+    pub crit_damage: u64,
+    pub flank_count: u32,
+    pub glance_count: u32,
+    pub moving_count: u32,
+    pub connected_count: u32,
+    pub connected_damage: u64,
+    pub direct_count: u32,
+    pub direct_damage: u64,
+    pub condition_count: u32,
+    pub condition_damage: u64,
+    pub critable_direct_count: u32,
+    pub against_downed_count: u32,
+    pub against_downed_damage: u64,
+    pub life_leech_count: u32,
+    pub life_leech_damage: u64,
+    pub above90_power_count: u32,
+    pub above90_power_damage: u64,
+    pub above90_condition_count: u32,
+    pub above90_condition_damage: u64,
+}
 /// GW2EI's aftercast/interrupt cast counters (MSMALL item 3), mirroring
 /// `axilog_core::analysis::rotation::AftercastStats` field-for-field --
 /// see that struct's doc comment for the `GameplayStatistics.cs:81-99`
@@ -634,29 +657,6 @@ pub struct AftercastOut {
     pub wasted_ms: i64,
 }
 
-#[derive(Serialize, Default)]
-pub struct HitStatsOut {
-    pub crit_count: u32,
-    pub crit_damage: u64,
-    pub flank_count: u32,
-    pub glance_count: u32,
-    pub moving_count: u32,
-    pub connected_count: u32,
-    pub connected_damage: u64,
-    pub direct_count: u32,
-    pub direct_damage: u64,
-    pub condition_count: u32,
-    pub condition_damage: u64,
-    pub critable_direct_count: u32,
-    pub against_downed_count: u32,
-    pub against_downed_damage: u64,
-    pub life_leech_count: u32,
-    pub life_leech_damage: u64,
-    pub above90_power_count: u32,
-    pub above90_power_damage: u64,
-    pub above90_condition_count: u32,
-    pub above90_condition_damage: u64,
-}
 /// Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
 /// Task 2) -- mirrors `axilog_core::analysis::defenses::DefenseStats`
 /// field-for-field. See that module's doc comment for the exact EI

@@ -708,6 +708,32 @@ pub fn run_segments(
 ///   min-`TotalDuration`-among-non-active, and it is why Regeneration waste
 ///   needs this logic rather than the Queue default.
 ///
+/// # Enumerated effect of switching Regeneration onto this logic
+///
+/// The commit message for this change (58ea2e1) said "75 native cells
+/// change". That figure is right but ambiguous, and a review measured 50
+/// under a different (also right) definition, so the full breakdown is
+/// recorded here as the durable record. Measured on the local post-rework
+/// capture, native `parse` output, before vs after:
+///
+/// | quantity | changed |
+/// |---|---|
+/// | `generation.self_pct` | 25 |
+/// | `generation.group_pct` | 23 |
+/// | `generation.squad_pct` | 27 |
+/// | **all three scopes (the "75")** | **75** |
+/// | **group + squad only (the "50")** | **50** |
+/// | distinct `(player, boon)` cells | 31 |
+/// | `presence_pct` / `avg_stacks` | **0** |
+/// | boon ids affected | **{718} (Regeneration) only** |
+///
+/// The two rows that matter for the "improvements only" gate: NOTHING
+/// outside Regeneration moved, and no uptime/presence cell moved at all --
+/// this logic changes which SOURCE is credited, never how long the target
+/// held the boon. Every one of the moved cells moves toward EI (mean error
+/// 2.729 -> 1.796 self, 3.161 -> 2.053 group, 0.614 -> 0.495 squad; worst
+/// cell 20.97 -> 8.99, 11.20 -> 7.24, 4.81 -> 3.67).
+///
 /// `BuffStackActiveEvent` compliance in NoID mode
 /// (`BuffStackActiveEvent.cs:12-15`: `BuffInstance != 0 && base && (useBuff
 /// InstanceSimulator || BuffID == Regeneration)`) is deliberately NOT

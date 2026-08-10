@@ -468,6 +468,29 @@ fn ei_states_json(states: &[(u64, u32)]) -> Value {
 /// `buffUptimes` carries (zeros included), `groupBuffs`/`squadBuffs` are
 /// filtered to buffs this player is a recorded source for
 /// (`BuffStatistics.cs:66,100`'s `hasGeneration`).
+///
+/// **What "a recorded source for" means, corrected by the MSMALL review.**
+/// `hasGeneration` is `buffDistribution.HasSrc(boon.ID, srcAgentItem)`, and
+/// `HasSrc` is a bare key-presence test on the per-buff
+/// `Dictionary<AgentItem, BuffDistributionItem>`
+/// (`BuffDistribution.cs:78-81`) -- NOT a test that the source generated
+/// any held time. `SimulationItem.AddWaste` registers a source with
+/// `new BuffDistributionItem(0, 0, value, 0, 0, 0)`, i.e. `Value == 0` and
+/// `Waste == value` (`SimulationItem.cs:99-116`). So a WASTE-ONLY source --
+/// one whose every stack was overwritten or stripped before it held any
+/// time -- is a recorded source, and EI emits its row.
+///
+/// This filter therefore keeps a row when EITHER the generation or the
+/// wasted value is non-zero. Filtering on generation alone (what it did
+/// before) silently dropped real EI rows: measured on
+/// `fixtures/wvw-small.anon.zevtc`, 9 `groupBuffs`/`squadBuffs` cells with
+/// `generation == 0` but substantial waste, including an Aegis
+/// `groupBuffs` entry at `wasted = 18.247`.
+///
+/// The two channels this project does NOT model (overstack, extension) can
+/// also register a source in EI. A source visible to EI through ONLY those
+/// is still missed here -- unavoidable while those channels are unmodelled,
+/// and unchanged by this fix.
 fn buff_generation_json(
     boons: &[axilog_schema::BoonOut],
     pick: fn(&axilog_schema::GenerationOut) -> f64,
@@ -477,7 +500,9 @@ fn buff_generation_json(
     Value::Array(
         boons
             .iter()
-            .filter(|b| keep_zero || pick(&b.generation) > 0.0)
+            .filter(|b| {
+                keep_zero || pick(&b.generation) > 0.0 || pick_wasted(&b.generation) > 0.0
+            })
             .map(|b| {
                 json!({
                     "id": b.id,
@@ -1396,21 +1421,24 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
             // `BuffStatistics.cs:116-121`/`:135-141` term for term:
             // duration boons `*100`, intensity boons raw average stacks).
             //
-            // Emitted fields: `generation` ONLY. Real EI's sibling fields
-            // on the same object -- `generationPresence`, `overstack`
-            // (which is really overstack+generation, `BuffStatistics.cs:117`),
-            // `wasted`, `unknownExtended`, `byExtension`, `extended` --
-            // come from the simulator's WASTE/OVERSTACK/EXTENSION channels
+            // Emitted fields: `generation` and `wasted` (MSMALL item 2 added
+            // the latter -- the one axibridge also reads). Real EI's
+            // remaining sibling fields on the same object --
+            // `generationPresence`, `overstack` (which is really
+            // overstack+generation, `BuffStatistics.cs:117`),
+            // `unknownExtended`, `byExtension`, `extended` -- come from the
+            // simulator's OVERSTACK/EXTENSION channels
             // (`GW2EIEvtcParser/EIData/Buffs/BuffSimulators/SimulationItem.cs:81-115`,
-            // `BuffSimulatorNoID/BuffSimulator.cs:67,99,104,117,122`), which
-            // this project's own generation simulator does not model: it
-            // accumulates only the HELD (generation) ms per source. They're
-            // omitted rather than faked, the same "don't fake absent data"
+            // `BuffSimulatorNoID/BuffSimulator.cs:67,117,122`), which this
+            // project's simulator still does not model. They're omitted
+            // rather than faked, the same "don't fake absent data"
             // convention `statsTargets`/`support`/`extHealingStats` above
-            // already follow. (`wasted` is the one axibridge also reads;
-            // absent, its reader's `wasted ?? 0` yields a zero wasted-time
-            // column while the generation column -- the metric that matters
-            // -- is fully populated.)
+            // already follow.
+            //
+            // Because `wasted` is now populated, it also participates in the
+            // group/squad id-set filter -- a waste-only source is a real EI
+            // row. See `buff_generation_json`'s doc comment for the
+            // `HasSrc`/`AddWaste` citation and the measured cell count.
             //
             // Id sets, following EI's own two DIFFERENT rules:
             //

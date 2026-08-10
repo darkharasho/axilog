@@ -268,6 +268,29 @@ export interface ContributionOut {
  * `SkillDamageOut`) -- EI's own `statsAll[0]` is actor-only. Always present
  * (not gated) -- no per-target/per-skill combinatorial blowup here.
  */
+export interface HitStatsOut {
+  crit_count: number
+  crit_damage: number
+  flank_count: number
+  glance_count: number
+  moving_count: number
+  connected_count: number
+  connected_damage: number
+  direct_count: number
+  direct_damage: number
+  condition_count: number
+  condition_damage: number
+  critable_direct_count: number
+  against_downed_count: number
+  against_downed_damage: number
+  life_leech_count: number
+  life_leech_damage: number
+  above90_power_count: number
+  above90_power_damage: number
+  above90_condition_count: number
+  above90_condition_damage: number
+}
+
 /**
  * Aftercast/interrupt cast counters (MSMALL item 3). Always present,
  * same as `hit_stats`.
@@ -290,29 +313,6 @@ export interface AftercastOut {
   wasted_count: number
   /** EI `statsAll[0].timeWasted`, in MILLISECONDS (EI emits seconds). */
   wasted_ms: number
-}
-
-export interface HitStatsOut {
-  crit_count: number
-  crit_damage: number
-  flank_count: number
-  glance_count: number
-  moving_count: number
-  connected_count: number
-  connected_damage: number
-  direct_count: number
-  direct_damage: number
-  condition_count: number
-  condition_damage: number
-  critable_direct_count: number
-  against_downed_count: number
-  against_downed_damage: number
-  life_leech_count: number
-  life_leech_damage: number
-  above90_power_count: number
-  above90_power_damage: number
-  above90_condition_count: number
-  above90_condition_damage: number
 }
 
 /**
