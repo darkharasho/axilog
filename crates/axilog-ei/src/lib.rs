@@ -606,7 +606,7 @@ pub struct EiInputs<'a> {
     /// Positionally joined to `report.players` (GW2EI-shape tracks are built
     /// by iterating `enc.players` then the `is_player` entries of
     /// `enc.enemies`, exactly the orders `report.players`/
-    /// `report.all_enemies` use), and ignored entirely if that length
+    /// `report.ei_targets` use), and ignored entirely if that length
     /// invariant does not hold.
     ///
     /// **Size (measured, `fixtures/wvw-small.anon.zevtc`: 41 players, 32
@@ -637,7 +637,7 @@ pub struct EiInputs<'a> {
     /// them from drifting.
     ///
     /// Joined to `report.players` by `PlayerOut::agent_addr` and to
-    /// `report.all_enemies` by `EnemyOut::id` -- both real keys, not
+    /// `report.ei_targets` by `EnemyOut::id` -- both real keys, not
     /// positions, so a mismatch yields empty arrays rather than
     /// mis-attributed rows.
     ///
@@ -695,7 +695,7 @@ pub struct EiInputs<'a> {
     ///
     /// Side-channel rather than a `Report` field because it is keyed by
     /// enemy, and the native schema carries no per-enemy block at all
-    /// (`Report::all_enemies` is identity-only, and is itself
+    /// (`Report::ei_targets` is identity-only, and is itself
     /// `#[serde(skip)]`).
     ///
     /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, pretty-printed):**
@@ -955,11 +955,11 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
     let healing_detail = healing_detail.filter(|d| d.len() == report.players.len());
     let minions = minions.filter(|m| m.len() == report.players.len());
     // Positional join guard: the tracks must be `report.players` followed by
-    // the enemy-PLAYER subset of `report.all_enemies`, in those orders. A
+    // the enemy-PLAYER subset of `report.ei_targets`, in those orders. A
     // caller that hand-builds a `Report` (every unit test below) can violate
     // it; rather than mis-attribute one player's movement to another, drop
     // the whole replay surface.
-    let enemy_player_count = report.all_enemies.iter().filter(|e| e.is_player).count();
+    let enemy_player_count = report.ei_targets.iter().filter(|e| e.is_player).count();
     let replay = replay.filter(|r| r.tracks.len() == report.players.len() + enemy_player_count);
     let detected = detected_team_ids(report);
     let team_id_for = |color: &str| -> u64 {
@@ -1092,13 +1092,14 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
         // target. Everything else in real EI's per-target stats block would
         // have to be invented, so it's left out rather than faked.
         //
-        // M10 Task 3: reads `report.all_enemies` (the FULL, unfiltered
-        // roster), not `report.enemies` (which is now filtered to combat
-        // participants for the native/HTML consumers) -- real EI's own
-        // `targets[]` keeps every enumerated target regardless of
-        // interaction, and `statsTargets[][]` is positionally keyed to
-        // `targets[]` below, so both must stay in lockstep off the same
-        // unfiltered list to preserve that faithfulness.
+        // M10 Task 3 / MROSTER: reads `report.ei_targets` (the curated
+        // GW2EI WvW `targets[]` roster -- enemy PLAYERS only, see that
+        // field's doc comment for the `WvWLogic.cs` derivation), NOT
+        // `report.enemies` (the native/HTML combat-participant list, which
+        // is a different filter over the same `enc.enemies` and still
+        // carries NPCs). `statsTargets[][]` is positionally keyed to
+        // `targets[]` below, so every per-target array in this function
+        // must be built off THIS one list and no other.
         //
         // MEIGAP Task 1d: the per-target OFFENSIVE SPLIT joins `totalDmg`
         // here, exactly when this player's native `per_target` block is
@@ -1144,7 +1145,7 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
         // miss/evade/block/invuln outcomes, the per-target
         // appliedCrowdControl* split, `againstDownedDamage`) is still not
         // computed per-target here, and stays omitted rather than faked.
-        let stats_targets: Vec<Value> = report.all_enemies.iter().map(|e| {
+        let stats_targets: Vec<Value> = report.ei_targets.iter().map(|e| {
             let dmg = p.damage.per_enemy.iter().find(|pe| pe.enemy_id == e.id)
                 .map(|pe| pe.total).unwrap_or(0);
             let mut row = json!({ "totalDmg": dmg });
@@ -1553,7 +1554,7 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
         // `statsAll`/`extHealingStats` elsewhere in this fn);
         // `targetDamageDist` is `[targetIndex][phase][skillEntry]`,
         // positionally keyed to `targets[]` (built from
-        // `report.all_enemies`, the same unfiltered roster/positional
+        // `report.ei_targets`, the same curated roster/positional
         // convention `statsTargets` above already uses) -- a target this
         // player never damaged gets an empty skill list (`[[]]`), not an
         // absent entry, matching real EI's own always-present-per-target
@@ -1579,7 +1580,7 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
                 json!([dist_rows_ei_json(&sd.taken, po.map(|o| o.taken.as_slice()), None)]),
             );
             let target_dist: Vec<Value> = report
-                .all_enemies
+                .ei_targets
                 .iter()
                 .map(|e| {
                     let skills = sd
@@ -1613,7 +1614,7 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
         // transform is needed here, just the EI phase-array wrapper);
         // `targetDamage1S` is `[targetIndex][phase][second]`, `dpsTargets`
         // is `[targetIndex][phase]{dps, damage}` -- both positionally keyed
-        // to `targets[]`/`report.all_enemies`, same convention
+        // to `targets[]`/`report.ei_targets`, same convention
         // `targetDamageDist` above uses. A target this player never damaged
         // gets an all-zero series (length matching this player's own
         // `per_second.damage`) / a `{dps: 0, damage: 0}` entry, not an
@@ -1643,7 +1644,7 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
             obj.insert("powerDamageTaken1S".to_string(), json!([ps.power_damage_taken]));
             let buckets = ps.damage.len();
             let target_damage_1s: Vec<Value> = report
-                .all_enemies
+                .ei_targets
                 .iter()
                 .map(|e| {
                     let series = ps
@@ -1657,7 +1658,7 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
                 .collect();
             obj.insert("targetDamage1S".to_string(), json!(target_damage_1s));
             let target_power_damage_1s: Vec<Value> = report
-                .all_enemies
+                .ei_targets
                 .iter()
                 .map(|e| {
                     let series = ps
@@ -1672,7 +1673,7 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
             obj.insert("targetPowerDamage1S".to_string(), json!(target_power_damage_1s));
 
             let dps_targets: Vec<Value> = report
-                .all_enemies
+                .ei_targets
                 .iter()
                 .map(|e| match p.dps_targets.iter().find(|d| d.enemy_id == e.id) {
                     Some(d) => json!([ { "dps": d.dps.round() as i64, "damage": d.damage } ]),
@@ -1985,9 +1986,9 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
             obj.insert("damageModifiers".to_string(), json!(outgoing));
             obj.insert("incomingDamageModifiers".to_string(), json!(incoming));
 
-            let mut out_t: Vec<Value> = Vec::with_capacity(report.all_enemies.len());
-            let mut in_t: Vec<Value> = Vec::with_capacity(report.all_enemies.len());
-            for e in &report.all_enemies {
+            let mut out_t: Vec<Value> = Vec::with_capacity(report.ei_targets.len());
+            let mut in_t: Vec<Value> = Vec::with_capacity(report.ei_targets.len());
+            for e in &report.ei_targets {
                 let (o, i) = ei_damage_mod_split(
                     mods.per_target
                         .range((p.agent_addr, e.id, i32::MIN)..=(p.agent_addr, e.id, i32::MAX))
@@ -2002,14 +2003,59 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
         }
         v
     });
-    // M10 Task 3: `all_enemies`, not `enemies` -- see the `stats_targets`
-    // comment above for why (positional lockstep with `statsTargets[][]`,
-    // and EI parity: real EI keeps every enumerated target).
+    // MROSTER -- the `targets[]` roster.
+    //
+    // `report.ei_targets`, not `report.enemies`: the two are different
+    // filters over the same `enc.enemies`, and only the first one is
+    // GW2EI's `LogData.Logic.Targets`. `axilog_schema::Report::ei_targets`'
+    // doc comment carries the full derivation from
+    // `GW2EIEvtcParser/LogLogic/WvW/WvWLogic.cs`; the short version is that
+    // a WvW log's targets are the NON-SQUAD, NON-FRIENDLY PLAYER agents
+    // (`WvWLogic.cs:325-375`) plus one synthetic aggregate
+    // (`WvWLogic.cs:307`), and NPCs/gadgets -- siege, guards, keep lords,
+    // tactivators, loot bags, pets, clones -- are never targets in a WvW
+    // log no matter how much damage they exchanged.
+    //
+    // This used to emit every enumerated enemy instead (624 rows on the
+    // local reference capture, against GW2EI's own 57 for the same log).
+    // That was wrong three ways, all measured:
+    //
+    // 1. **Wrong shape.** It was justified as "EI keeps every enumerated
+    //    target regardless of interaction", which conflated EI's
+    //    *interaction* filter (EI genuinely has none) with EI's *actor
+    //    kind* filter (which is the whole rule in WvW). EI drops 567 of
+    //    those 624 agents, and not because they were idle.
+    // 2. **Wrong numbers downstream.** axibridge's damage-mitigation
+    //    aggregate folds `targets[].totalDamageDist` into a per-skill
+    //    average/minimum table (`packages/bridge-metrics/src/
+    //    computePlayerAggregation.ts:491-509`) with no `enemyPlayer`
+    //    filter of its own -- it trusts the roster. Folded over the old
+    //    624-row roster, 6 of 206 skill averages and 21 of 206 minima
+    //    diverged from the GW2EI reference; folded over the enemy-player
+    //    subset, all 206 were exact. Curating the roster here is what
+    //    makes that exactness unconditional rather than an analysis-time
+    //    restriction the consumer has to know to apply. Eight further
+    //    axibridge sites count `targets.filter(t => !t.isFake).length` as
+    //    "enemies in the fight" and were reading 624.
+    // 3. **Payload.** The nine arrays positionally joined to `targets[]`
+    //    (`statsTargets`, `dpsTargets`, `targetDamage1S`,
+    //    `targetPowerDamage1S`, `targetDamageDist`, `damageModifiersTarget`
+    //    `incomingDamageModifiersTarget`, and the two `target*1S` variants
+    //    this project does not emit) are all
+    //    `players.len() * targets.len()`-shaped, so the roster is a
+    //    multiplier on the whole `--timeseries` document.
+    //
+    // Because the roster and all nine joined arrays are built from this
+    // ONE `report.ei_targets` list, curation moves them in lockstep by
+    // construction -- there is no second list to keep in sync.
+    //
+    // The one row GW2EI has that this project does not is its synthetic
+    // aggregate (57 = 1 + 56): see `isFake` immediately below.
     //
     // M11 Task 3: `isFake` -- real EI sets this `true` for its own
     // synthetic aggregate pseudo-targets (a "sum of every real target"
     // stand-in row it adds to `targets[]` for certain fight types); every
-    // one of THIS project's `all_enemies` is a real, individually-tracked
+    // one of THIS project's `ei_targets` is a real, individually-tracked
     // agent (never a synthesized aggregate), so `isFake: false` is correct
     // for every row here, not a faked/guessed value. This field was
     // previously ABSENT entirely. Verified against axibridge's own source
@@ -2027,14 +2073,34 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
     // `t.isFake` directly rather than through the truthy-check pattern
     // every current call site happens to use.
     //
+    // MROSTER: that "for certain fight types" is, concretely, EVERY WvW
+    // log -- `WvWLogic.cs:307` unconditionally adds one synthetic NPC
+    // agent (`TargetID.WorldVersusWorld`, `"Dummy PvP Agent"` in detailed
+    // mode, `"Enemy Players"` otherwise) which is `targets[0]` and the
+    // only `isFake: true` row. That is the entire 57-vs-56 difference
+    // between GW2EI's roster on the reference capture and this one; every
+    // other row now matches one-for-one in kind. It is deliberately NOT
+    // synthesized here: its `dpsAll`/`totalDamageDist`/`buffs` would be a
+    // re-derived sum of the 56 real rows, i.e. a row of numbers this
+    // project would be inventing rather than measuring, and every
+    // axibridge consumer already excludes it (`!t.isFake`, and the
+    // enemy-player readers additionally require `t.enemyPlayer`, which
+    // EI's dummy has as `false`). Adding it would strictly ADD a row every
+    // consumer discards. Recorded as a known, intentional roster delta
+    // rather than papered over.
+    //
     // M15 Task 3: real EI gives its `targets[]` the SAME `combatReplayData`
     // object it gives `players[]` (verified in the local reference export:
     // 56 of its 57 targets carry a full `{start, end, iconURL, positions,
     // orientations, dead, down, dc}`), so an enemy PLAYER target gets one
     // here too when replay was requested -- `axilog_core::analysis::
-    // ei_replay` tracks them alongside squad players for exactly this. NPC
-    // targets get nothing: this project's replay engine only tracks player
-    // actors (see `build_world_tracks`).
+    // ei_replay` tracks them alongside squad players for exactly this.
+    // (Pre-MROSTER this also had to say "NPC targets get nothing, the
+    // replay engine only tracks player actors"; post-curation every row in
+    // `ei_targets` on a WvW log IS a player actor, so the `e.is_player`
+    // guard below is now a tautology on that path -- it is kept because
+    // the guard is what advances `enemy_track`, and because the
+    // non-WvW/hand-built-`Report` paths can still carry NPC rows.)
     //
     // `iconURL` is the one field that cannot match EI here. EI takes it
     // from the enemy's own `Spec` (its `players[]`-style profession), which
@@ -2065,7 +2131,7 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
     let mut enemy_track = replay.map(|r| r.tracks[report.players.len()..].iter());
     let detected_targets = detected.clone();
     let target_json: Box<dyn FnMut(usize) -> Value + 'a> = Box::new(move |target_idx: usize| {
-        let e = &report.all_enemies[target_idx];
+        let e = &report.ei_targets[target_idx];
         let team_id_for = |color: &str| -> u64 {
             detected_targets.get(color).copied().unwrap_or_else(|| representative_team_id(color))
         };
@@ -2324,7 +2390,7 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
         recorded_by: report.encounter.recorded_by.as_deref(),
         player_count: report.players.len(),
         player_json: LazyRows::new(player_json),
-        target_count: report.all_enemies.len(),
+        target_count: report.ei_targets.len(),
         target_json: LazyRows::new(target_json),
         buff_map,
         skill_map,
@@ -2414,9 +2480,10 @@ mod tests {
             // M10 Task 3: enemy 9 (player) took damage -- a real combat
             // participant; enemy 10 (gadget) never interacted, matching what
             // `analyze()` would actually compute for this exact scenario.
-            // `to_ei_json` reads `report.all_enemies` (unfiltered) though,
-            // so this doesn't change `maps_core_ei_fields`'s `targets[]`
-            // assertions below -- it's set for realism, not correctness.
+            // MROSTER: `to_ei_json` reads `report.ei_targets`, which drops
+            // enemy 10 for being an NPC (not for being idle) -- the two
+            // filters happen to agree on this fixture, but they are
+            // independent; see `maps_core_ei_fields` below.
             combat_participant_enemies: [9u64].into_iter().collect(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default()};
         axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false, None)
     }
@@ -2444,30 +2511,61 @@ mod tests {
         assert_eq!(v["players"][0]["statsAll"][0]["appliedCrowdControlDuration"], 1200);
         // Player 2 dealt no CC/downs — statsAll still present, all zero, not faked.
         assert_eq!(v["players"][1]["statsAll"][0]["appliedCrowdControl"], 0);
-        // statsTargets has one entry per real target (two enemies here), only
-        // carrying the one per-target metric we actually compute (damage).
-        assert_eq!(v["players"][0]["statsTargets"].as_array().unwrap().len(), 2);
+        // MROSTER: statsTargets has one entry per CURATED target -- the one
+        // enemy player here, not the gadget -- carrying the one per-target
+        // metric we actually compute (damage).
+        assert_eq!(v["players"][0]["statsTargets"].as_array().unwrap().len(), 1);
         assert_eq!(v["players"][0]["statsTargets"][0][0]["totalDmg"], 500);
         assert_eq!(v["players"][1]["statsTargets"][0][0]["totalDmg"], 0);
-        assert_eq!(v["players"][1]["statsTargets"][1][0]["totalDmg"], 0);
         assert_eq!(v["players"][0]["defenses"][0]["deadCount"], 0);
         assert_eq!(v["targets"][0]["id"], 9);
         // Verify enemyPlayer flag matches the actual is_player field.
         assert_eq!(v["targets"][0]["enemyPlayer"], true, "player enemy should have enemyPlayer: true");
-        assert_eq!(v["targets"][1]["id"], 10);
-        assert_eq!(v["targets"][1]["enemyPlayer"], false, "NPC enemy should have enemyPlayer: false");
-        // M10 Task 3: EI-parity divergence check -- `report.enemies` (native/
-        // HTML) is filtered down to the one combat participant (enemy 9;
-        // enemy 10 never interacted per `sample_report`'s `Metrics::
-        // combat_participant_enemies`), but `targets[]` above still lists
-        // BOTH, because `to_ei_json` reads `report.all_enemies` (unfiltered)
-        // -- real EI keeps every enumerated target regardless of
-        // interaction, and this project's ei-json output stays faithful to
-        // that even though the native output no longer does.
+        // MROSTER: `targets[]` is GW2EI's WvW roster -- non-squad enemy
+        // PLAYERS (`WvWLogic.cs:325-375`). The gadget (enemy 10) is gone,
+        // and `report.enemies` (native/HTML) is a SEPARATE filter that
+        // happens to drop it too, for the different reason that it never
+        // interacted (`Metrics::combat_participant_enemies`). Both
+        // per-target arrays above must shrink with the roster, which is
+        // guaranteed structurally: they are built from the same list.
         let report = sample_report();
         assert_eq!(report.enemies.len(), 1, "native enemies[] is filtered to the one participant");
-        assert_eq!(report.all_enemies.len(), 2, "all_enemies (EI adapter's source) keeps both");
-        assert_eq!(v["targets"].as_array().unwrap().len(), 2, "ei-json targets[] stays unfiltered");
+        assert_eq!(report.ei_targets.len(), 1, "ei_targets is enemy players only");
+        assert_eq!(v["targets"].as_array().unwrap().len(), 1, "ei-json targets[] is curated to enemy players");
+        assert!(
+            !v["targets"].as_array().unwrap().iter().any(|t| t["id"] == 10),
+            "the NPC/gadget enemy must not appear in the EI targets[] roster"
+        );
+    }
+
+    /// MROSTER: the positional-lockstep contract, stated as a test rather
+    /// than only as a comment. EVERY array `to_ei_json` joins to
+    /// `targets[]` by index must have exactly `targets.len()` slots, or a
+    /// consumer doing `targets[i]` / `player.statsTargets[i]` mis-attributes
+    /// one enemy's numbers to another. This asserts it over the full opt-in
+    /// surface at once, so a future array added without the join is caught.
+    #[test]
+    fn every_target_joined_array_has_one_slot_per_target() {
+        let report = sample_report();
+        let v = to_ei_json(&report, &EiInputs::default());
+        let n = v["targets"].as_array().expect("targets").len();
+        assert_eq!(n, report.ei_targets.len(), "targets[] length is ei_targets' length");
+        for p in v["players"].as_array().expect("players") {
+            for key in [
+                "statsTargets",
+                "dpsTargets",
+                "targetDamage1S",
+                "targetPowerDamage1S",
+                "targetDamageDist",
+                "damageModifiersTarget",
+                "incomingDamageModifiersTarget",
+            ] {
+                // Each of these is opt-in; when present it must be joined.
+                if let Some(arr) = p.get(key).and_then(|x| x.as_array()) {
+                    assert_eq!(arr.len(), n, "{key} must have exactly one slot per targets[] entry");
+                }
+            }
+        }
     }
 
     /// M3 Task 5: `buffMap`, `buffUptimes[]`, and the four new `support[0]`
@@ -2602,7 +2700,7 @@ mod tests {
                 base_player(":B.1", None),
             ],
             enemies: vec![],
-            all_enemies: vec![],
+            ei_targets: vec![],
             timeline: TimelineOut { resolution_ms: 1000, per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![] } },
             warnings: vec![],
             replay: None,
@@ -2639,7 +2737,7 @@ mod tests {
     fn every_target_is_marked_not_fake() {
         let v = to_ei_json(&sample_report(), &EiInputs::default());
         let targets = v["targets"].as_array().expect("targets must be an array");
-        assert_eq!(targets.len(), 2, "sample_report has 2 enemies (see all_enemies above)");
+        assert_eq!(targets.len(), 1, "sample_report has 1 enemy PLAYER (see ei_targets above)");
         for t in targets {
             assert_eq!(t["isFake"], false, "every real (non-aggregate) target must be isFake: false");
         }
@@ -2725,7 +2823,7 @@ mod tests {
     }
 
     fn report_with_players(
-        all_enemies: Vec<axilog_schema::EnemyOut>,
+        ei_targets: Vec<axilog_schema::EnemyOut>,
         players: Vec<axilog_schema::PlayerOut>,
     ) -> axilog_schema::Report {
         use axilog_schema::{EncounterOut, PerSecondOut, Report, TimelineOut};
@@ -2735,7 +2833,7 @@ mod tests {
                 build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None },
             players,
             enemies: vec![],
-            all_enemies,
+            ei_targets,
             timeline: TimelineOut { resolution_ms: 1000, per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![] } },
             warnings: vec![],
             replay: None,
@@ -2788,7 +2886,7 @@ mod tests {
         assert_eq!(p["totalDamageTaken"][0][0]["totalDamage"], 275);
 
         // targetDamageDist: [targetIndex][phase][skillEntry], positionally
-        // keyed to `all_enemies` (enemy 9 first, enemy 10 second) -- enemy
+        // keyed to `ei_targets` (enemy 9 first, enemy 10 second) -- enemy
         // 10 was never damaged, so its skill list is empty, not absent.
         assert_eq!(p["targetDamageDist"].as_array().unwrap().len(), 2, "one entry per real target");
         assert_eq!(p["targetDamageDist"][0][0][0]["id"], 42009);
@@ -3065,7 +3163,8 @@ mod tests {
             down: vec![],
             dead: vec![],
         };
-        // `sample_report()` has 2 players and 1 enemy PLAYER (id 9).
+        // `sample_report()` has 2 players and 1 enemy PLAYER (id 9); the
+        // gadget (id 10) is not in the curated EI roster at all.
         let replay = EiReplay {
             tracks: vec![track("A", true), track("B", true), track("E", false)],
             map_id: Some(899), // Obsidian Sanctum: named by GW2EI, no image
@@ -3086,14 +3185,17 @@ mod tests {
         );
         assert_eq!(crd["iconURL"], "https://i.imgur.com/RiCJalE.png", "Daredevil");
         // The enemy PLAYER target gets the unknown-spec icon (axilog has no
-        // profession for enemies); the NPC target gets no replay block.
-        let enemy = v["targets"].as_array().unwrap().iter().find(|t| t["enemyPlayer"] == true).unwrap();
+        // profession for enemies). MROSTER: there is no NPC target left to
+        // check the "NPCs get no replay block" half against -- the curated
+        // roster is enemy players only, which is exactly GW2EI's own WvW
+        // shape (its 56 enemy-player targets all carry `combatReplayData`).
+        let targets = v["targets"].as_array().unwrap();
+        assert!(targets.iter().all(|t| t["enemyPlayer"] == true), "curated roster is enemy players only");
+        let enemy = targets.iter().find(|t| t["enemyPlayer"] == true).unwrap();
         assert_eq!(
             enemy["combatReplayData"]["iconURL"],
             axilog_core::icons::UNKNOWN_PROFESSION_ICON
         );
-        let npc = v["targets"].as_array().unwrap().iter().find(|t| t["enemyPlayer"] == false).unwrap();
-        assert!(npc.get("combatReplayData").is_none());
     }
 
     /// Corrected audit fix: an enemy-player track with an EMPTY `positions`
@@ -3121,6 +3223,7 @@ mod tests {
             positions: vec![[1.5, 2.5]], orientations: vec![90.0], dc: vec![], down: vec![], dead: vec![],
         };
         // `sample_report()` has 2 players and 1 enemy PLAYER (id 9); the
+        // gadget (id 10) is not in the curated EI roster at all. the
         // enemy's own track has NO polled positions at all (correctly, per
         // the `forcePolling` fix -- not the pre-fix sentinel garbage).
         let replay = EiReplay {

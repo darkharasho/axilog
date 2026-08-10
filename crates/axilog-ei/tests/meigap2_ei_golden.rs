@@ -24,13 +24,17 @@
 //! ## The targets join
 //!
 //! Same M16 pattern `meigap_ei_golden.rs`'s `statsTargets` test
-//! established, and for the same reason: GW2EI's WvW logic curates 57
-//! targets while this project's `targets[]` is the full unfiltered enemy
-//! roster (624 here), and the two name spaces do not intersect. The join
-//! goes through arcdps AGENT IDENTITY -- the instid GW2EI encodes into its
-//! `"<Spec> pl-<instid>"` placeholder name -> the addr that instid belonged
-//! to -> this project's enemy index. Only joined targets are calibratable;
-//! they are asserted, the rest are not compared.
+//! established. Post-MROSTER the two rosters agree in KIND (both are the
+//! enemy players; see `axilog_schema::Report::ei_targets`), but the join
+//! still cannot be positional: GW2EI regroups enemy-player agents sharing
+//! an `InstID` (`AgentManipulationHelper.cs:467-474`) and this project does
+//! not, so it emits 71 rows where GW2EI has 56, and the NAME spaces do not
+//! intersect either (GW2EI anonymises to `"<Spec> pl-<instid>"`, this
+//! project shows the WvW rank title). The join therefore goes through
+//! arcdps AGENT IDENTITY -- the instid GW2EI encodes into that placeholder
+//! name -> the addr that instid belonged to -> this project's `targets[]`
+//! index. Only the unambiguously joinable targets are calibratable; they
+//! are asserted, the rest are not compared.
 
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::decode_raw;
@@ -118,11 +122,26 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
             }
         }
     }
+    // MROSTER: `targets[]` is the CURATED roster (`Report::ei_targets` --
+    // enemy PLAYERS only, per `WvWLogic.cs`), so an index into
+    // `enc.enemies` is no longer an index into `targets[]`. Route the join
+    // through the enemy's representative addr, which the adapter emits
+    // verbatim as `targets[].id`: that keeps this join correct for whatever
+    // the curation rule is, instead of re-encoding the rule here. An enemy
+    // absent from the curated roster simply yields no index, so the golden
+    // comparison skips it rather than joining to the wrong row.
+    let target_index_by_id: BTreeMap<u64, usize> = ours["targets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| t["id"].as_u64().map(|id| (id, i)))
+        .collect();
     let addr_to_enemy_index: BTreeMap<u64, usize> = enc
         .enemies
         .iter()
-        .enumerate()
-        .flat_map(|(i, e)| e.agent_addrs.iter().map(move |&a| (a, i)))
+        .filter_map(|e| target_index_by_id.get(&e.id).map(|&i| (e, i)))
+        .flat_map(|(e, i)| e.agent_addrs.iter().map(move |&a| (a, i)))
         .collect();
     let mut joinable: Vec<(usize, usize)> = Vec::new();
     for (g_i, t) in golden["targets"].as_array().expect("reference targets").iter().enumerate() {
@@ -569,30 +588,55 @@ fn ei_json_target_damage_dist_matches_the_reference_export_when_available() {
 /// (`recomputeMitigationTotals`, `:1517-1560`).
 ///
 /// The per-target test above cannot speak to this, for a structural reason:
-/// **the fold runs over the whole roster, and the two rosters differ.**
-/// GW2EI's WvW logic curates 57 targets; this project's `targets[]` is the
-/// full unfiltered enemy roster (624 here) including the siege, guards,
-/// dolyaks and pets EI drops. Extra targets add rows, and `minCount` counts
-/// ROWS, so a wider roster moves the aggregate even where every individual
-/// row is byte-exact (which, per the test above, they now all are).
+/// **the fold runs over the whole roster, so the roster is an input to the
+/// answer.** `minCount` counts ROWS, and `totalDamage`/`connectedHits` sum
+/// over rows, so a roster that is not EI's moves the aggregate even where
+/// every individual row is byte-exact (which, per the test above, they all
+/// are).
 ///
-/// This test measures the residual on TWO folds, and the pair is the point:
+/// ## MROSTER: this is now the strong half, unconditionally
 ///
-/// - **Full roster** (what axibridge sees today): 250 skill ids vs the
-///   reference's 206, and of the 206 shared ids 6 differ on
+/// Before MROSTER this project's `targets[]` was the full unfiltered enemy
+/// roster (624 agents on this capture) against GW2EI's curated 57, and this
+/// test measured a two-fold pair to isolate the cause:
+///
+/// - **Full roster** (what axibridge actually saw): 250 skill ids vs the
+///   reference's 206, and of the 206 shared ids 6 differed on
 ///   `totalDamage`/`connectedHits`/`avg` and 21 on the min-mean.
-/// - **Restricted to `enemyPlayer` targets**: 206 ids, all shared, and
-///   `totalDamage`/`connectedHits`/`avg` are **EXACT on every one of the
-///   206** -- asserted, not merely measured.
+/// - **Restricted to `enemyPlayer` targets**: 206 ids, all shared, with
+///   `totalDamage`/`connectedHits`/`avg` exact on all 206.
 ///
-/// So 100% of the `avg` residual -- the multiplier the mitigation totals
-/// are built from -- is roster shape and nothing else. That is what makes
-/// the follow-up concrete rather than a guess: curating `targets[]` to the
-/// enemy-player set for the ei-json adapter recovers `avg` exactly today.
-/// The min-mean keeps a residual even restricted (16 of 206) because our
-/// enemy-player roster is itself wider than EI's curated one (60 vs 50
-/// enemy-player targets carry dist rows here), and `minCount` is row-count
-/// sensitive.
+/// That pair said the entire `avg` residual -- the multiplier the
+/// mitigation totals are built from -- was roster shape and nothing else,
+/// and named the fix. MROSTER applied it: `targets[]` is now
+/// `Report::ei_targets`, GW2EI's own WvW rule (enemy PLAYERS only,
+/// `WvWLogic.cs:325-375`). The two folds are therefore now the SAME fold,
+/// and this test asserts that -- the restricted exactness became
+/// unrestricted exactness. axibridge's own fold
+/// (`precomputeGlobalEnemySkillStats`, which applies no `enemyPlayer`
+/// filter of its own and simply trusts the roster) gets the exact numbers
+/// without having to know to restrict.
+///
+/// ## The one residual, and its diagnosis
+///
+/// The min-mean still differs on 16 of 206 ids. That is NOT roster kind --
+/// it is roster GRANULARITY, and the cause is pinned rather than guessed:
+/// GW2EI regroups non-squad player agents that share an `InstID` into ONE
+/// agent before building targets (`AgentManipulationHelper.cs:467-474`),
+/// so its 56 enemy-player targets are 56 *people*. This project does not
+/// (`wvw::apply`'s `dedupe_enemy_players` keys on ACCOUNT, which WvW
+/// anonymisation leaves empty for enemies), so it emits 71 rows over the
+/// same 56 instids -- 13 instids carry 2 agent rows each. `minCount` counts
+/// rows, so each split person contributes two minima where EI contributes
+/// one.
+///
+/// Measured directly: folding this project's own emitted `targets[]` with
+/// the rows of same-`instanceID` targets merged first (`min` of the mins,
+/// sums of the sums) takes the min-mean divergence from **16 to 1**. So the
+/// `InstID` regroup accounts for 15 of the 16, and is the whole of the
+/// remaining follow-up. It is deliberately out of MROSTER's scope because
+/// it is an agent-IDENTITY change in the core, not a roster-CURATION change
+/// in the adapter: it would move the native `enemies[]` surface too.
 #[test]
 fn ei_json_enemy_skill_aggregate_residual_is_measured_and_bounded() {
     let Some(c) = render_and_reference("ei-json enemy-skill consumer aggregate") else { return };
@@ -699,62 +743,65 @@ fn ei_json_enemy_skill_aggregate_residual_is_measured_and_bounded() {
     assert!(a_shared >= 150, "degenerate: only {a_shared} shared skill ids");
     assert_eq!(
         a_ref_only, 0,
-        "the reference aggregate has skill ids ours does not -- our roster is a superset of \
-         EI's, so this direction must be empty"
+        "the reference aggregate has skill ids ours does not -- every enemy PLAYER EI curates is \
+         in our roster too, so this direction must be empty"
     );
 
-    // --- The strong half: with the roster matched, the mitigation
-    // --- multiplier `avg` and both of its inputs are EXACT.
+    // --- MROSTER: the two folds are now the SAME fold. This is the
+    // --- milestone's proof, and it is asserted structurally (the roster IS
+    // --- the enemy-player set) rather than by comparing two numbers that
+    // --- happen to agree.
+    assert_eq!(
+        all_n, players_n,
+        "every emitted target must be an enemyPlayer -- the curated roster IS the restricted fold"
+    );
+    assert_eq!(
+        a_shared, p_shared,
+        "the unrestricted and enemyPlayer-restricted folds must be identical post-curation"
+    );
+
+    // --- The strong half, now UNRESTRICTED: the mitigation multiplier
+    // --- `avg` and both of its inputs are EXACT over the roster axibridge
+    // --- actually folds, with no `enemyPlayer` filter applied by anyone.
+    assert_eq!(a_ours_only, 0, "the full fold must carry no skill id the reference lacks");
     assert_eq!(p_ours_only, 0, "enemyPlayer fold must carry no skill id the reference lacks");
     assert_eq!(p_ref_only, 0, "enemyPlayer fold must carry every reference skill id");
     assert_eq!(p_td, 0, "enemyPlayer fold: totalDamage must be exact on every shared id");
     assert_eq!(p_ch, 0, "enemyPlayer fold: connectedHits must be exact on every shared id");
+    assert_eq!(
+        a_avg, 0,
+        "FULL-roster fold: the mitigation multiplier `avg` must be exact on every shared id -- \
+         this is MROSTER's proof; a nonzero value means the roster regressed"
+    );
     assert_eq!(
         p_avg, 0,
         "enemyPlayer fold: the mitigation multiplier `avg` must be exact on every shared id"
     );
     assert!(p_shared >= 150);
 
-    // --- The measured half: the roster-shape residual, pinned from the
-    // --- numbers in the task report (with margin) so it cannot widen
-    // --- unnoticed while the `targets[]`-curation follow-up is open.
-    assert!(
-        a_ours_only <= AGGREGATE_OURS_ONLY_IDS_BOUND,
-        "{a_ours_only} skill ids appear only in our full-roster aggregate, past the pinned \
-         {AGGREGATE_OURS_ONLY_IDS_BOUND}"
-    );
-    assert!(
-        a_avg <= AGGREGATE_AVG_DIFF_BOUND,
-        "{a_avg} shared ids differ on the full-roster `avg`, past the pinned \
-         {AGGREGATE_AVG_DIFF_BOUND}"
-    );
+    // --- The one measured residual: the `InstID`-regroup gap, pinned (with
+    // --- margin) so it cannot widen unnoticed while that follow-up is
+    // --- open. See this test's doc comment for the 16-to-1 measurement
+    // --- that attributes it.
     assert!(
         a_mm <= AGGREGATE_MIN_MEAN_DIFF_BOUND,
-        "{a_mm} shared ids differ on the full-roster min-mean, past the pinned \
+        "{a_mm} shared ids differ on the min-mean, past the pinned \
          {AGGREGATE_MIN_MEAN_DIFF_BOUND}"
     );
-    assert!(
-        p_mm <= AGGREGATE_PLAYER_MIN_MEAN_DIFF_BOUND,
-        "{p_mm} shared ids differ on the enemyPlayer min-mean, past the pinned \
-         {AGGREGATE_PLAYER_MIN_MEAN_DIFF_BOUND}"
-    );
+    assert_eq!(a_mm, p_mm, "the two folds are the same fold, so their min-mean residual must match");
 }
 
-/// Skill ids present in our FULL-roster enemy aggregate but not the
-/// reference's, because `targets[]` is the whole 624-agent roster where
-/// GW2EI curates 57. Measured 44; pinned at 60.
-const AGGREGATE_OURS_ONLY_IDS_BOUND: usize = 60;
-/// Shared ids whose full-roster `avg = totalDamage / connectedHits`
-/// differs. Measured 6 (0 once the roster is matched); pinned at 12.
-const AGGREGATE_AVG_DIFF_BOUND: usize = 12;
-/// Shared ids whose full-roster `min = minTotal / minCount` differs.
-/// `minCount` counts ROWS, so it is the most roster-sensitive of the three.
-/// Measured 21; pinned at 32.
-const AGGREGATE_MIN_MEAN_DIFF_BOUND: usize = 32;
-/// The same, restricted to `enemyPlayer` targets -- still nonzero because
-/// our enemy-player roster is itself wider than EI's curated one (60 vs 50
-/// carry dist rows). Measured 16; pinned at 24.
-const AGGREGATE_PLAYER_MIN_MEAN_DIFF_BOUND: usize = 24;
+/// Shared ids whose `min = minTotal / minCount` differs from the
+/// reference's. `minCount` counts ROWS, so this is the one part of the
+/// aggregate still sensitive to the `InstID`-regroup gap
+/// (`AgentManipulationHelper.cs:467-474`): 13 of our 71 enemy-player rows
+/// are second agents for an instid EI folds into one target, so 13 people
+/// contribute two minima each. Was 21 on the pre-MROSTER 624-agent roster;
+/// measured 16 now, and 1 if the same-`instanceID` rows are merged before
+/// folding. Pinned at 24 -- deliberately NOT tightened to 16, so that
+/// closing the regroup follow-up (which will drive it to ~1) does not have
+/// to touch this bound.
+const AGGREGATE_MIN_MEAN_DIFF_BOUND: usize = 24;
 
 /// MEIGAP Task 2 review fix 3: `players[].damage1S` -- the family the grid
 /// fix swept through -- gets its own bounded whole-series calibration, so it

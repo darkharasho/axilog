@@ -21,23 +21,70 @@ pub struct Report {
     /// HTML team chips show. See `axilog_core::analysis::Metrics::
     /// combat_participant_enemies`'s doc comment for the exact criteria.
     ///
-    /// **Deliberately narrower than `all_enemies` below** -- see that
-    /// field's doc comment for why the EI adapter needs the full,
-    /// unfiltered list instead of this one.
+    /// **A different surface from `ei_targets` below** -- see that field's
+    /// doc comment for the (much narrower) roster the EI adapter uses.
     pub enemies: Vec<EnemyOut>,
-    /// Every enemy `wvw::apply` resolved, unfiltered by combat
-    /// participation (M10, Task 3). `#[serde(skip)]`: never part of the
-    /// native JSON output -- this exists purely so `axilog_ei::to_ei_json`
-    /// can build its `targets[]`/`statsTargets[]` from the SAME full roster
-    /// real EI's own output does (EI keeps every enumerated target
-    /// regardless of interaction; filtering `targets[]` down to combat
-    /// participants would be a real divergence from EI's own shape, not
-    /// just a cosmetic one, since `statsTargets[playerIndex][targetIndex]`
-    /// is positionally keyed to `targets[]`). `enemies` above is the
-    /// filtered list every other consumer (native JSON, HTML team chips)
-    /// should use.
+    /// The curated GW2EI `targets[]` roster (MROSTER). `#[serde(skip)]`:
+    /// never part of the native JSON output -- this exists purely so
+    /// `axilog_ei::to_ei_json` can build `targets[]` and the nine arrays
+    /// positionally joined to it (`dpsTargets`, `statsTargets`,
+    /// `damageModifiersTarget`, `incomingDamageModifiersTarget`,
+    /// `targetDamage1S`, `targetPowerDamage1S`, `targetDamageDist`, and --
+    /// where emitted -- `targetConditionDamage1S`/`targetBreakbarDamage1S`)
+    /// off ONE list, in lockstep.
+    ///
+    /// ## The rule, from GW2EI's own WvW log logic
+    ///
+    /// `targets[]` is not "every agent in the log". It is whatever the
+    /// active `LogLogic` put in `LogData.Logic.Targets`, and for a WvW log
+    /// that is decided by `GW2EIEvtcParser/LogLogic/WvW/WvWLogic.cs`:
+    ///
+    /// * `EIEvtcParse` (`WvWLogic.cs:325-375`) takes ONLY the agents of
+    ///   type `NonSquadPlayer` -- i.e. real player agents that are not in
+    ///   the recording squad. NPCs and gadgets (siege, guards, keep lords,
+    ///   tactivators, loot bags, pets, clones, ...) are *never* WvW
+    ///   targets, whatever damage they exchanged.
+    /// * Those non-squad players are split by `PlayerActor.IsFriendlyPlayer`
+    ///   (`PlayerActor.cs:9`): same-team ones go to `_nonSquadFriendlies`,
+    ///   the rest become targets. Team membership is resolved from
+    ///   `TeamChange` events against the modal squad team in
+    ///   `AgentManipulationHelper.cs:431-466`
+    ///   (`OverrideIsNotInSquadFriendlyPlayer`).
+    /// * `AgentManipulationHelper.cs:467-474` first REGROUPS non-squad
+    ///   player agents that share an `InstID` into a single agent, so one
+    ///   enemy player is one target even when arcdps registered several
+    ///   agent addrs for it.
+    /// * `WvWLogic.cs:307` additionally adds one synthetic NPC agent
+    ///   (`TargetID.WorldVersusWorld`, named `"Dummy PvP Agent"` in
+    ///   detailed mode / `"Enemy Players"` otherwise) which is always a
+    ///   target; in non-detailed mode every enemy-player damage event is
+    ///   rewritten onto it and it is the ONLY target.
+    ///
+    /// Measured on the local reference export (a real post-rework WvW
+    /// capture): 57 targets = 1 synthetic + 56 enemy players, against 624
+    /// agents in the same log.
+    ///
+    /// ## What this project emits
+    ///
+    /// The enemy-PLAYER half of that rule: `enc.enemies` filtered to
+    /// `is_player`. `enc.enemies` has already had the friend/foe split
+    /// applied by `axilog_core::wvw::apply` (which does the same
+    /// team-relative-to-the-recorder classification EI's
+    /// `OverrideIsNotInSquadFriendlyPlayer` does), so every `is_player`
+    /// entry left in it is exactly EI's "non-squad, non-friendly player".
+    ///
+    /// This project emits NO synthetic aggregate row (see `targets[].isFake`
+    /// in `axilog_ei`), and does not yet perform EI's `InstID` regroup of
+    /// enemy-player agents -- both deltas are recorded in the MROSTER
+    /// report and in `axilog_ei`'s `targets[]` block comment.
+    ///
+    /// Guarded on `enc.kind == "wvw"`, the only encounter kind this project
+    /// produces today (same precedent as `axilog_core::analysis::
+    /// damage_mods`' own `enc.kind == "wvw"` guard): EI's target selection
+    /// is per-`LogLogic`, so a future PvE logic would need its own rule
+    /// rather than inheriting WvW's.
     #[serde(skip)]
-    pub all_enemies: Vec<EnemyOut>,
+    pub ei_targets: Vec<EnemyOut>,
     pub timeline: TimelineOut,
     /// Structured, user-facing analysis warnings (final-review fix wave) --
     /// see `axilog_core::analysis::Metrics::warnings`'s doc comment. Omitted
@@ -879,7 +926,7 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// `axilog_core::analysis::damage_mods::DamageModifierResults` (which
     /// is addr-keyed, being a core analysis output) back onto `players[]`
     /// positionally. Same "side data the EI adapter needs, invisible to the
-    /// native output" role `Report::all_enemies` already plays -- see that
+    /// native output" role `Report::ei_targets` already plays -- see that
     /// field's doc comment.
     #[serde(skip)]
     pub agent_addr: u64,
@@ -1325,9 +1372,11 @@ pub fn build_report(
             markers: enc.markers.iter().map(|m| MarkerAssignmentOut{agent_addr:m.agent_addr,marker:m.marker.clone(),time_ms:m.time_ms}).collect(),
             tick_rate: enc.tick_rate.as_ref().map(|t| TickRateOut{avg:t.avg,min:t.min,per_second:t.per_second.clone()}) },
         players,
-        // M10 Task 3: `enemies` (native/HTML) is filtered to combat
-        // participants; `all_enemies` (EI-adapter-only, `#[serde(skip)]`)
-        // stays the full roster -- see both fields' doc comments above.
+        // M10 Task 3 / MROSTER: `enemies` (native/HTML) is filtered to
+        // combat participants; `ei_targets` (EI-adapter-only,
+        // `#[serde(skip)]`) is the curated GW2EI WvW `targets[]` roster --
+        // enemy PLAYERS only. Two independent filters over the same
+        // `enc.enemies`; see both fields' doc comments above.
         enemies: enc.enemies.iter()
             .filter(|e| metrics.combat_participant_enemies.contains(&e.id))
             .map(|e| EnemyOut{id:e.id,name:e.name.clone(),
@@ -1335,10 +1384,13 @@ pub fn build_report(
                 instid: metrics.instance_ids.get(&e.id).copied(),
                 damage_out: metrics.enemy_damage_out.get(&e.id).copied().unwrap_or(0)})
             .collect(),
-        all_enemies: enc.enemies.iter().map(|e| EnemyOut{id:e.id,name:e.name.clone(),
-            team:e.team.clone(),is_player:e.is_player,marker:e.marker.clone(),
-            instid: metrics.instance_ids.get(&e.id).copied(),
-            damage_out: metrics.enemy_damage_out.get(&e.id).copied().unwrap_or(0)}).collect(),
+        ei_targets: enc.enemies.iter()
+            .filter(|e| enc.kind != "wvw" || e.is_player)
+            .map(|e| EnemyOut{id:e.id,name:e.name.clone(),
+                team:e.team.clone(),is_player:e.is_player,marker:e.marker.clone(),
+                instid: metrics.instance_ids.get(&e.id).copied(),
+                damage_out: metrics.enemy_damage_out.get(&e.id).copied().unwrap_or(0)})
+            .collect(),
         timeline: TimelineOut { resolution_ms: metrics.timeline.resolution_ms,
             per_second: PerSecondOut { squad_damage: metrics.timeline.squad_damage.clone(),
                 cc_applied: metrics.timeline.cc_applied.clone(),
@@ -1386,13 +1438,17 @@ mod tests {
     use axilog_core::model::{Encounter, Player};
     use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
 
-    /// M10 Task 3: `enemies` is filtered to `Metrics::
-    /// combat_participant_enemies`, while `all_enemies` (the `#[serde(skip)]`
-    /// field the EI adapter reads) always carries the full roster --
-    /// verifies both halves of the design choice documented on `Report::
-    /// enemies`/`Report::all_enemies`.
+    /// M10 Task 3 + MROSTER: `enemies` is filtered to `Metrics::
+    /// combat_participant_enemies`, while `ei_targets` (the
+    /// `#[serde(skip)]` field the EI adapter reads) is the curated GW2EI
+    /// WvW `targets[]` roster -- enemy PLAYERS only. The two are
+    /// INDEPENDENT filters over the same `enc.enemies`, and neither is a
+    /// subset of the other in general: an NPC that fought is in `enemies`
+    /// but not `ei_targets`, and an enemy player that never interacted is
+    /// in `ei_targets` but... also in `enemies` (enemy players are always
+    /// kept there). This exercises the first, load-bearing direction.
     #[test]
-    fn enemies_filtered_to_combat_participants_but_all_enemies_stays_full() {
+    fn enemies_keeps_fighting_npcs_while_ei_targets_keeps_only_enemy_players() {
         use axilog_core::model::Enemy;
         let enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:1000,
             build:"".into(), revision:1, recorded_by:None, teams:vec![], players:vec![],
@@ -1401,6 +1457,8 @@ mod tests {
                     is_player: false, marker: None, agent_addrs: vec![9] },
                 Enemy { id: 10, instid: 0, name: "LootBag".into(), team: "blue".into(),
                     is_player: false, marker: None, agent_addrs: vec![10] },
+                Enemy { id: 11, instid: 0, name: "EnemyPlayer".into(), team: "blue".into(),
+                    is_player: true, marker: None, agent_addrs: vec![11] },
             ],
             markers:vec![], tick_rate:None };
         let m = Metrics { players: vec![],
@@ -1408,16 +1466,46 @@ mod tests {
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
             has_healing_extension: Default::default(),
-            combat_participant_enemies: [9u64].into_iter().collect(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
+            combat_participant_enemies: [9u64, 11u64].into_iter().collect(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
-        assert_eq!(report.enemies.len(), 1, "only the participant enemy stays in the filtered list");
+        // Native surface: combat participants, NPC or player alike.
+        assert_eq!(report.enemies.len(), 2, "the fighting NPC and the enemy player both stay in the native list");
         assert_eq!(report.enemies[0].id, 9);
-        assert_eq!(report.all_enemies.len(), 2, "all_enemies keeps the full roster, including the loot bag");
+        assert_eq!(report.enemies[1].id, 11);
+        // EI surface: enemy players only -- the fighting NPC is dropped
+        // too, not just the loot bag (`WvWLogic.cs:325-375`).
+        assert_eq!(report.ei_targets.len(), 1, "ei_targets is enemy players only");
+        assert_eq!(report.ei_targets[0].id, 11);
 
-        // `all_enemies` must not leak into the native JSON (`#[serde(skip)]`).
+        // `ei_targets` must not leak into the native JSON (`#[serde(skip)]`).
         let v = serde_json::to_value(&report).unwrap();
-        assert!(v.get("all_enemies").is_none(), "all_enemies must not appear in the serialized JSON");
-        assert_eq!(v["enemies"].as_array().unwrap().len(), 1);
+        assert!(v.get("ei_targets").is_none(), "ei_targets must not appear in the serialized JSON");
+        assert!(v.get("all_enemies").is_none(), "the pre-MROSTER field name must not reappear either");
+        assert_eq!(v["enemies"].as_array().unwrap().len(), 2);
+    }
+
+    /// MROSTER: the `enc.kind == "wvw"` guard. GW2EI picks `targets[]` per
+    /// `LogLogic`; the enemy-players-only rule is WvW's, so a non-WvW
+    /// encounter (none exist today) keeps the full roster rather than
+    /// silently rendering an empty `targets[]`.
+    #[test]
+    fn ei_targets_curation_is_gated_on_the_wvw_encounter_kind() {
+        use axilog_core::model::Enemy;
+        let enc = Encounter { kind:"raid".into(), map:"".into(), duration_ms:1000,
+            build:"".into(), revision:1, recorded_by:None, teams:vec![], players:vec![],
+            enemies: vec![
+                Enemy { id: 9, instid: 0, name: "Boss".into(), team: "red".into(),
+                    is_player: false, marker: None, agent_addrs: vec![9] },
+            ],
+            markers:vec![], tick_rate:None };
+        let m = Metrics { players: vec![],
+            timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![]},
+            boons: Default::default(), boon_uptime: Default::default(),
+            boon_generation: Default::default(), warnings: Default::default(),
+            has_healing_extension: Default::default(),
+            combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
+        let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
+        assert_eq!(report.ei_targets.len(), 1, "a non-WvW encounter keeps its NPC targets");
     }
 
     #[test]

@@ -191,7 +191,7 @@ pub struct TimeseriesMetrics {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EnemySeries {
     /// The enemy's representative id (`Enemy::id`), same key space
-    /// `TargetSeries::enemy_id` and `Report::all_enemies` use.
+    /// `TargetSeries::enemy_id` and `Report::ei_targets` use.
     pub enemy_id: u64,
     pub damage: Vec<u64>,
     pub power_damage: Vec<u64>,
@@ -536,9 +536,13 @@ pub fn build_with_registry(
 /// must not pay for it.
 ///
 /// `enemies`/`enemy_addr_to_rep` are the FULL roster
-/// (`Encounter::enemies`), matching `Report::all_enemies` -- the same set
-/// the adapter's `targets[]` array is built from, so every emitted target
-/// has a series and the two stay positionally aligned.
+/// (`Encounter::enemies`), a SUPERSET of `Report::ei_targets` (the curated
+/// enemy-player set the adapter's `targets[]` array is built from), so
+/// every emitted target is guaranteed to have a series. The full roster is
+/// also load-bearing here beyond that: an enemy player's MINION is its own
+/// `enc.enemies` entry, and its outgoing damage must fold onto its master's
+/// series, so the fold cannot be narrowed to the emitted targets even
+/// though the emission can.
 ///
 /// Returned entries are sorted by `enemy_id` ascending (a `BTreeMap`
 /// collect), and only enemies that actually dealt damage appear; the

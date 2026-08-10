@@ -116,7 +116,7 @@ mod tests {
                 downs_contribution_per_skill: Default::default(),
             }],
             enemies: vec![],
-            all_enemies: vec![],
+            ei_targets: vec![],
             timeline: TimelineOut {
                 resolution_ms: 1000,
                 per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![] },

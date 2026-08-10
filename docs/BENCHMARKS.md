@@ -997,3 +997,48 @@ and still got faster and 10x lighter thanks to MSTREAM.
 The v0.2.0 section's honest note about EI winning the matched-surface memory column is now
 resolved: MSTREAM's streaming serializer (byte-identical, 96/96 combos) flipped 1.5×-worse
 into 7.3×-better. The remaining axilog peak is analysis state, not serialization.
+
+## After MROSTER — curating the `targets[]` roster
+
+`ei-json`'s `targets[]` used to be every enemy agent the log enumerated —
+624 on the real capture, against the 57 GW2EI's own WvW logic exposes for
+the same log. MROSTER curated it to GW2EI's rule (enemy PLAYERS only,
+`WvWLogic.cs:325-375`; see `axilog_schema::Report::ei_targets`), leaving 71.
+
+This is the rare change that is a correctness fix AND a large free
+performance win, because nine per-player arrays are positionally joined to
+`targets[]` and are therefore all `players × targets`-shaped. Cutting the
+roster 8.8× cuts every one of them by the same factor. Same machine and
+harness as the v0.3.0 rerun above; medians of 3 after a warmup.
+
+### Payload — real 5:48 log (583k events, 48 players)
+
+| surface | before | after | delta |
+|---|---|---|---|
+| `ei-json` flagless | 2,843,408 B | **821,078 B** | **−71.1%** |
+| `ei-json --timeseries` | 339,293,994 B | **46,986,849 B** | **−86.2%** |
+| `ei-json`, matched axibridge surface | 365,635,697 B | **63,484,328 B** | **−82.6%** |
+
+### Wall + peak RSS — matched surface
+
+| log | before | after |
+|---|---|---|
+| Real 5:48 zerg (583k events, 48 players) | 2.60 s · 117 MiB | **1.70 s (1.5×) · 92 MiB** |
+| 49 s skirmish (120k events, 42 players) | 0.24 s · 24.5 MiB | 0.25 s · 24.2 MiB |
+
+`--timeseries` alone on the real log goes 1.33 s → **0.56 s (2.4×)**; it is
+the mode the roster dominates, because `targetDamage1S` +
+`targetPowerDamage1S` are `players × targets × seconds`.
+
+The small log barely moves, and that is the expected shape rather than a
+disappointment: it is a 42-player skirmish whose enemy roster is mostly
+players already, so there is little NPC bulk to drop (15.2 MB → 10.2 MB,
+−33%, with the wall time inside run-to-run noise). The real log's 624-agent
+roster — the siege, guards, dolyaks, tactivators and pets of a full borderland
+— is where the multiplier lived.
+
+Native (`--format json`) output is **byte-identical** before and after on
+every flag combination, on both the committed fixture and the real log
+(37,172,472 B): `Report::enemies` and `Report::ei_targets` are independent
+filters over the same list, and only the second one moved. So is `--format
+html`.

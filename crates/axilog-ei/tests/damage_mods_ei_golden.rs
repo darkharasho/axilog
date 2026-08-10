@@ -222,15 +222,17 @@ fn ei_json_damage_modifiers_match_the_reference_export_text_when_available() {
     // -- the target join, and why it cannot be positional --
     //
     // `damageModifiersTarget` is `[targetIndex]`-keyed on both sides, but
-    // the two `targets[]` rosters are NOT the same list: GW2EI's WvW logic
-    // exposes 57 targets on this capture (the enemy PLAYERS, named
-    // `"<Spec> pl-<instid>"`, plus one `Dummy PvP Agent`), while this
-    // project's `targets[]` is deliberately the FULL unfiltered enemy
-    // roster -- 624 entries here, every gadget, siege, dolyak and guard the
-    // log enumerated (`axilog_schema::Report::all_enemies`'s doc comment
-    // explains why it stays unfiltered, and `axilog_ei`'s own
-    // `stats_targets` comment records the positional-lockstep contract that
-    // depends on it). Their name spaces do not even intersect.
+    // the two `targets[]` rosters are still not index-compatible. GW2EI
+    // exposes 57 targets on this capture: the enemy PLAYERS, named
+    // `"<Spec> pl-<instid>"`, plus one synthetic `Dummy PvP Agent`
+    // (`WvWLogic.cs:307`). MROSTER curated this project's `targets[]` to
+    // the same KIND of actor -- enemy players only, per
+    // `axilog_schema::Report::ei_targets` -- which closed the 624-vs-57
+    // gulf this comment used to describe. Two differences remain, both
+    // documented on that field: no synthetic aggregate row, and no
+    // `InstID` regroup of enemy-player agents
+    // (`AgentManipulationHelper.cs:467-474`), so 71 rows here against
+    // GW2EI's 56. Their name spaces do not intersect either.
     //
     // So the index means something different on each side, and a positional
     // comparison would be nonsense. Nor do the NAMES join: this capture's
@@ -249,7 +251,9 @@ fn ei_json_damage_modifiers_match_the_reference_export_text_when_available() {
     // This is a pre-existing `targets[]` divergence, not one M16 introduced
     // -- but it IS the reason the per-target arrays, unlike the whole-fight
     // ones, are not index-compatible with a real EI client. Recorded in the
-    // README's parity row.
+    // README's parity row. MROSTER narrowed it from "different kinds of
+    // actor" to "the same actors at a different granularity"; the join
+    // below is unchanged, because agent identity was always the right key.
     let mut instid_to_addrs: BTreeMap<u16, BTreeSet<u64>> = BTreeMap::new();
     for ev in &raw.events {
         for (instid, addr) in [(ev.src_instid, ev.src_agent), (ev.dst_instid, ev.dst_agent)] {
@@ -258,11 +262,26 @@ fn ei_json_damage_modifiers_match_the_reference_export_text_when_available() {
             }
         }
     }
+    // MROSTER: `targets[]` is the CURATED roster (`Report::ei_targets` --
+    // enemy PLAYERS only, per `WvWLogic.cs`), so an index into
+    // `enc.enemies` is no longer an index into `targets[]`. Route the join
+    // through the enemy's representative addr, which the adapter emits
+    // verbatim as `targets[].id`: that keeps this join correct for whatever
+    // the curation rule is, instead of re-encoding the rule here. An enemy
+    // absent from the curated roster simply yields no index, so the golden
+    // comparison skips it rather than joining to the wrong row.
+    let target_index_by_id: BTreeMap<u64, usize> = ours["targets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| t["id"].as_u64().map(|id| (id, i)))
+        .collect();
     let addr_to_enemy_index: BTreeMap<u64, usize> = enc
         .enemies
         .iter()
-        .enumerate()
-        .flat_map(|(i, e)| e.agent_addrs.iter().map(move |&a| (a, i)))
+        .filter_map(|e| target_index_by_id.get(&e.id).map(|&i| (e, i)))
+        .flat_map(|(e, i)| e.agent_addrs.iter().map(move |&a| (a, i)))
         .collect();
     let n_o_targets = ours["targets"].as_array().expect("emitted targets").len();
     let mut joinable: Vec<(usize, usize, u16)> = Vec::new();

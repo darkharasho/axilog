@@ -331,7 +331,7 @@ pub fn apply_with_registry(
                 // the DOWNED TARGET, for `statsTargets[i][0].
                 // downContribution`. Keyed by the target's enemy
                 // representative id (relog fold), so it lines up with
-                // `Report::all_enemies`/`PlayerOut::damage.per_enemy`; a
+                // `Report::ei_targets`/`PlayerOut::damage.per_enemy`; a
                 // target whose addr never resolves keeps its raw addr, the
                 // same convention every other per-enemy map here uses.
                 let target_rep =
