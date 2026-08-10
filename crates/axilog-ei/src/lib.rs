@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use serde_json::{json, Value};
 use axilog_core::analysis::buffs::BOON_IDS;
+use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
 use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::analysis::replay::{ActivityIntervals, Interval};
 use axilog_core::icons::prof_icon_url;
@@ -163,51 +164,168 @@ fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
     })
 }
 
-/// `activity` (M11 Task 3): per-player down/dead intervals + first/last-
-/// aware bounds from `axilog_core::analysis::replay::build_activity_intervals`
-/// -- ALWAYS computed by every caller (CLI/Node/Python), unlike `--replay`'s
-/// position track, since intervals are cheap (see that function's module
-/// doc). Positionally joined to `report.players` (both built by iterating
-/// `enc.players` in the same order -- see `build_activity_intervals`'s doc
-/// comment); pass an empty slice if unavailable (every field this powers is
-/// then a harmless zero/empty default, not a panic).
+/// `damageModifiers[].damageModifiers[].damageGain` (M16, Task 3).
 ///
-/// `replay` (M15 Task 3): the GW2EI-shape fixed-rate combat replay from
-/// `axilog_core::analysis::ei_replay::build_ei_replay_auto`, or `None`. This
-/// is the OPT-IN gate for `combatReplayData.{positions, orientations, dc,
-/// iconURL}` and the top-level `combatReplayMetaData`: every caller
-/// (CLI/Node/Python) computes it exactly when `--replay`/SDK `replay: true`
-/// was requested -- i.e. the same request that populates
-/// `axilog_schema::Report::replay` -- so the presence of this argument is
-/// the "was replay requested" signal, mirroring how the `skill_damage`/
-/// `timeseries`/`rotation` blocks key off `PlayerOut`'s own `Option`
-/// presence rather than a separate flag.
+/// **Deliberately NOT [`ei_float`].** That helper narrows through `f32`
+/// because the replay coordinates it was written for are C# `float`s
+/// (M15's lesson). `DamageGain` is a C# **`double`** on both sides of the
+/// pipeline -- `DamageModifierStat.DamageGain`
+/// (`GW2EIEvtcParser/EIData/Statistics/DamageModifierStat.cs:7`) and
+/// `JsonDamageModifierItem.DamageGain`
+/// (`GW2EIJSON/.../JsonDamageModifierData.cs:28`) are both `double`, and it
+/// is `Math.Round(x, 3)`-ed at construction (`:14`,
+/// `ParserHelper.DamageModGainDigit = 3`). Narrowing it to `f32` would
+/// corrupt exactly the values that matter: `279362` is past `f32`'s
+/// 24-bit integer range, and `-9690.778` has no `f32` representation whose
+/// shortest decimal is `-9690.778`.
 ///
-/// It arrives as a side-channel argument rather than a `Report` field for
-/// the same reason `activity` does: it is EI-shape data (map PIXELS on
-/// GW2EI's own 300ms grid, GW2EI's sentinel-bracketed `dc`), which the
-/// native schema deliberately does not carry -- `Report::replay` is this
-/// project's own narrower world-unit shape, computed by a different engine
-/// (`axilog_core::analysis::replay`), and widening it would change the
-/// native `--replay` JSON.
+/// So the value is emitted as the `f64` it already is, with one adjustment:
+/// a whole number is emitted as an INTEGER, because that is what .NET's
+/// serializer writes (the reference export has `"damageGain": 10592`, never
+/// `10592.0`) while `serde_json` would write `10592.0`. Everything else
+/// goes out as `f64`, whose shortest round-tripping decimal is the same
+/// text .NET produces for a `Math.Round(_, 3)`-ed double -- verified
+/// against all 13,905 `damageGain` values in the reference export (5,781
+/// integral, 8,124 with 1-3 decimals, none with more).
+fn ei_damage_gain(v: f64) -> Value {
+    if v.is_finite() && v.fract() == 0.0 && v.abs() < 9.0e15 {
+        return Value::from(v as i64);
+    }
+    Value::from(v)
+}
+
+/// One `{ hitCount, totalHitCount, damageGain, totalDamage }` item, wrapped
+/// in EI's per-PHASE array (`JsonDamageModifierData.DamageModifiers`,
+/// "Length == # of phases"). This project does not model phases, so it is
+/// always a single element -- the same "one array standing in for phase 0
+/// == the whole fight" convention `statsAll`/`totalDamageDist` already use.
+fn ei_damage_mod_rows(rows: &[(i32, &DamageModifierStat)]) -> Vec<Value> {
+    rows.iter()
+        .map(|(id, s)| {
+            json!({
+                "id": id,
+                "damageModifiers": [ {
+                    "hitCount": s.hit_count,
+                    "totalHitCount": s.total_hit_count,
+                    "damageGain": ei_damage_gain(s.damage_gain),
+                    "totalDamage": s.total_damage,
+                } ],
+            })
+        })
+        .collect()
+}
+
+/// Splits one actor's `(id, stat)` rows into EI's outgoing/incoming pair.
+/// The sign of the id IS the direction (`DamageModifier.cs:26`), so no
+/// definition lookup is needed.
+fn ei_damage_mod_split(rows: Vec<(i32, &DamageModifierStat)>) -> (Vec<Value>, Vec<Value>) {
+    let (incoming, outgoing): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(id, _)| *id < 0);
+    (ei_damage_mod_rows(&outgoing), ei_damage_mod_rows(&incoming))
+}
+
+/// The side-channel inputs [`to_ei_json`] needs on top of the native
+/// [`Report`] (M16 Task 1).
 ///
-/// Positionally joined to `report.players` (GW2EI-shape tracks are built by
-/// iterating `enc.players` then the `is_player` entries of `enc.enemies`,
-/// exactly the orders `report.players`/`report.all_enemies` use), and
-/// ignored entirely if that length invariant does not hold.
+/// Everything here is EI-SHAPE data that the native schema deliberately does
+/// not carry (see each field), computed by the caller and handed in
+/// alongside the report. It is an options struct rather than a positional
+/// argument list because this surface only grows: M11 added `activity`, M15
+/// added `replay`, and further EI-only inputs are expected. Adding a field
+/// is then a source-compatible change for in-workspace callers that build it
+/// with `..Default::default()`, and a one-line change for the rest.
 ///
-/// **Size (measured, `fixtures/wvw-small.anon.zevtc`: 41 players, 32
-/// enemy-player targets, 49s):** `axilog parse --format ei-json` grows
-/// 544,372 -> 1,548,945 bytes pretty-printed (+184%), 216,173 -> 524,056
-/// bytes compact (+142%), for 6,894 player + 4,662 enemy position samples
-/// (and as many orientations). It scales with `players x fight_seconds /
-/// 0.3`, so a 6-minute 50-player fight is an order of magnitude bigger --
-/// which is why it stays opt-in.
-pub fn to_ei_json(
-    report: &Report,
-    activity: &[ActivityIntervals],
-    replay: Option<&EiReplay>,
-) -> Value {
+/// [`Default`] is the "nothing available" case (`activity: &[]`,
+/// `replay: None`), which every field's own default behaviour treats as a
+/// harmless zero/empty, never a panic — so
+/// `to_ei_json(&report, &EiInputs::default())` is always valid.
+///
+/// It is `Copy` and holds only borrows, so passing it costs nothing and it
+/// never takes ownership of the caller's buffers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EiInputs<'a> {
+    /// `activity` (M11 Task 3): per-player down/dead intervals + first/last-
+    /// aware bounds from
+    /// `axilog_core::analysis::replay::build_activity_intervals`
+    /// — ALWAYS computed by every caller (CLI/Node/Python), unlike
+    /// `--replay`'s position track, since intervals are cheap (see that
+    /// function's module doc). Positionally joined to `report.players` (both
+    /// built by iterating `enc.players` in the same order — see
+    /// `build_activity_intervals`'s doc comment); leave it empty if
+    /// unavailable (every field this powers is then a harmless zero/empty
+    /// default, not a panic).
+    pub activity: &'a [ActivityIntervals],
+    /// `replay` (M15 Task 3): the GW2EI-shape fixed-rate combat replay from
+    /// `axilog_core::analysis::ei_replay::build_ei_replay_auto`, or `None`.
+    /// This is the OPT-IN gate for `combatReplayData.{positions,
+    /// orientations, dc, iconURL}` and the top-level
+    /// `combatReplayMetaData`: every caller (CLI/Node/Python) computes it
+    /// exactly when `--replay`/SDK `replay: true` was requested — i.e. the
+    /// same request that populates `axilog_schema::Report::replay` — so the
+    /// presence of this input is the "was replay requested" signal,
+    /// mirroring how the `skill_damage`/`timeseries`/`rotation` blocks key
+    /// off `PlayerOut`'s own `Option` presence rather than a separate flag.
+    ///
+    /// It arrives as a side-channel input rather than a `Report` field for
+    /// the same reason `activity` does: it is EI-shape data (map PIXELS on
+    /// GW2EI's own 300ms grid, GW2EI's sentinel-bracketed `dc`), which the
+    /// native schema deliberately does not carry — `Report::replay` is this
+    /// project's own narrower world-unit shape, computed by a different
+    /// engine (`axilog_core::analysis::replay`), and widening it would
+    /// change the native `--replay` JSON.
+    ///
+    /// Positionally joined to `report.players` (GW2EI-shape tracks are built
+    /// by iterating `enc.players` then the `is_player` entries of
+    /// `enc.enemies`, exactly the orders `report.players`/
+    /// `report.all_enemies` use), and ignored entirely if that length
+    /// invariant does not hold.
+    ///
+    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`: 41 players, 32
+    /// enemy-player targets, 49s):** `axilog parse --format ei-json` grows
+    /// 544,372 -> 1,548,945 bytes pretty-printed (+184%), 216,173 -> 524,056
+    /// bytes compact (+142%), for 6,894 player + 4,662 enemy position
+    /// samples (and as many orientations). It scales with `players x
+    /// fight_seconds / 0.3`, so a 6-minute 50-player fight is an order of
+    /// magnitude bigger — which is why it stays opt-in.
+    pub replay: Option<&'a EiReplay>,
+    /// `modifiers` (M16 Task 3): the damage-modifier engine's output from
+    /// `axilog_core::analysis::damage_mods::evaluate_catalog_full`, or
+    /// `None`. This is the OPT-IN gate for the four per-player arrays
+    /// (`damageModifiers`, `incomingDamageModifiers`,
+    /// `damageModifiersTarget`, `incomingDamageModifiersTarget`) and the
+    /// top-level `damageModMap`; every caller computes it exactly when
+    /// `--modifiers`/SDK `modifiers: true` was requested, i.e. the same
+    /// request that populates `axilog_schema::PlayerOut::damage_mods`.
+    ///
+    /// It arrives here as the RAW engine output rather than being read back
+    /// off `PlayerOut::damage_mods` because the native block is deliberately
+    /// whole-fight only: `DamageModifierResults::per_target` has no native
+    /// counterpart (measured on the committed fixture it is 854,077 bytes
+    /// against the whole-fight arrays' 76,611 -- an 11x multiplier, and
+    /// the same ratio the reference export shows: 1.34 MB vs 108 KB), and
+    /// EI needs it in a positional `[targetIndex]` shape keyed to
+    /// `targets[]`. Rendering both surfaces from the one core result keeps
+    /// them from drifting.
+    ///
+    /// Joined to `report.players` by `PlayerOut::agent_addr` and to
+    /// `report.all_enemies` by `EnemyOut::id` -- both real keys, not
+    /// positions, so a mismatch yields empty arrays rather than
+    /// mis-attributed rows.
+    ///
+    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, compact):**
+    /// `--format ei-json` grows 216,173 -> 1,170,570 bytes (+441.5%) --
+    /// `damageModifiers` 32,121, `incomingDamageModifiers` 44,490,
+    /// `damageModifiersTarget` 497,702, `incomingDamageModifiersTarget`
+    /// 356,375, `damageModMap` 19,325.
+    pub modifiers: Option<&'a DamageModifierResults>,
+}
+
+/// Render a [`Report`] plus its EI-only side inputs as Elite-Insights-
+/// compatible JSON.
+///
+/// See [`EiInputs`] for what each input gates; `EiInputs::default()` renders
+/// everything that is derivable from the `Report` alone.
+pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
+    let EiInputs { activity, replay, modifiers } = *inputs;
     // Positional join guard: the tracks must be `report.players` followed by
     // the enemy-PLAYER subset of `report.all_enemies`, in those orders. A
     // caller that hand-builds a `Report` (every unit test below) can violate
@@ -694,6 +812,58 @@ pub fn to_ei_json(
                 .collect();
             obj.insert("rotation".to_string(), json!(rotation_json));
         }
+        // `damageModifiers` / `incomingDamageModifiers` /
+        // `damageModifiersTarget` / `incomingDamageModifiersTarget` (M16,
+        // Task 3): all four, together, exactly when `EiInputs::modifiers`
+        // is present -- same "presence, not a flag" convention as
+        // `rotation`/`totalDamageDist` above.
+        //
+        // Real EI shape (`JsonDamageModifierDataBuilder.cs:38-160`,
+        // cross-checked field-for-field against the reference WvW export):
+        //
+        // - the whole-fight pair is a flat `[{ id, damageModifiers: [ ... ] }]`,
+        //   the inner array being per-phase (one element here, see
+        //   `ei_damage_mod_rows`);
+        // - the Target pair is `[targetIndex][]` -- one entry per
+        //   `log.LogData.Logic.Targets`, i.e. positionally keyed to
+        //   `targets[]`, with `[]` for a target this player never
+        //   exchanged a qualifying hit with. **Verified non-empty in WvW,
+        //   not assumed:** the reference export's first player has 22 of 57
+        //   outgoing and 14 of 57 incoming target slots populated, so
+        //   emitting the empty shape everywhere would be a real data loss,
+        //   not a cosmetic one.
+        //
+        // The Target arrays are emitted whenever `modifiers` is present;
+        // when the caller ran the engine WITHOUT the per-target split (the
+        // native `--format json` path, which has no use for it) every slot
+        // is simply `[]`, which is the shape EI emits for a target with no
+        // rows anyway.
+        if let Some(mods) = modifiers {
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
+            let (outgoing, incoming) = ei_damage_mod_split(
+                mods.overall
+                    .range((p.agent_addr, i32::MIN)..=(p.agent_addr, i32::MAX))
+                    .map(|(&(_, id), s)| (id, s))
+                    .collect(),
+            );
+            obj.insert("damageModifiers".to_string(), json!(outgoing));
+            obj.insert("incomingDamageModifiers".to_string(), json!(incoming));
+
+            let mut out_t: Vec<Value> = Vec::with_capacity(report.all_enemies.len());
+            let mut in_t: Vec<Value> = Vec::with_capacity(report.all_enemies.len());
+            for e in &report.all_enemies {
+                let (o, i) = ei_damage_mod_split(
+                    mods.per_target
+                        .range((p.agent_addr, e.id, i32::MIN)..=(p.agent_addr, e.id, i32::MAX))
+                        .map(|(&(_, _, id), s)| (id, s))
+                        .collect(),
+                );
+                out_t.push(json!(o));
+                in_t.push(json!(i));
+            }
+            obj.insert("damageModifiersTarget".to_string(), json!(out_t));
+            obj.insert("incomingDamageModifiersTarget".to_string(), json!(in_t));
+        }
         v
     }).collect();
     // M10 Task 3: `all_enemies`, not `enemies` -- see the `stats_targets`
@@ -849,6 +1019,44 @@ pub fn to_ei_json(
             "greenTeamID": team_id_for("green")
         }
     });
+    // `damageModMap` (M16, Task 3): `"d<signed id>"` ->
+    // `{ name, icon, description, nonMultiplier, isCounter, skillBased,
+    // approximate, incoming }` -- all eight fields real EI's `DamageModDesc`
+    // carries (`GW2EIBuilders/JsonModels/JsonLogBuilder.cs:308-322`; the
+    // `"d"` prefix is added at `:326-330`), verified as the exact field set
+    // on all 75 entries of the reference WvW export.
+    //
+    // Unlike `skillMap`/`buffMap` above this key is OMITTED entirely rather
+    // than emitted empty when `--modifiers` was not requested: an empty
+    // `{}` would be a claim that no player triggered any modifier, whereas
+    // the engine simply did not run. It is also what keeps the flagless
+    // ei-json output byte-identical across this milestone.
+    //
+    // Scoped to referenced ids, matching EI, which fills its own
+    // `damageModMap` lazily from inside the per-player emission loop
+    // (`JsonDamageModifierDataBuilder.cs:47-51`) -- a catalogued modifier no
+    // player triggered never appears.
+    if let Some(mods) = modifiers {
+        let damage_mod_map: BTreeMap<String, Value> = mods
+            .meta
+            .iter()
+            .map(|(&id, m)| {
+                (format!("d{id}"), json!({
+                    "name": m.name,
+                    "icon": m.icon,
+                    "description": m.description,
+                    "nonMultiplier": m.non_multiplier,
+                    "isCounter": m.is_counter,
+                    "skillBased": m.skill_based,
+                    "approximate": m.approximate,
+                    "incoming": m.incoming,
+                }))
+            })
+            .collect();
+        out.as_object_mut()
+            .expect("ei-json root is an object")
+            .insert("damageModMap".to_string(), json!(damage_mod_map));
+    }
     // `combatReplayMetaData` (M15, Task 3): the arena image every
     // `combatReplayData.positions` pair is a pixel coordinate ON -- present
     // only when replay was requested AND the log's map is one GW2EI ships
@@ -921,11 +1129,11 @@ mod tests {
             // so this doesn't change `maps_core_ei_fields`'s `targets[]`
             // assertions below -- it's set for realism, not correctness.
             combat_participant_enemies: [9u64].into_iter().collect(), skill_map: Default::default()};
-        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false)
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false, None)
     }
     #[test]
     fn maps_core_ei_fields() {
-        let v = to_ei_json(&sample_report(), &[], None);
+        let v = to_ei_json(&sample_report(), &EiInputs::default());
         assert_eq!(v["durationMS"], 1000);
         assert_eq!(v["recordedBy"], ":A.1");
         assert_eq!(v["players"][0]["account"], ":A.1");
@@ -1007,12 +1215,12 @@ mod tests {
             combat_participant_enemies: Default::default(),
             skill_map: Default::default(),
         };
-        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false)
+        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false, None)
     }
 
     #[test]
     fn buff_map_covers_the_12_tracked_boons_with_computed_fields_only() {
-        let v = to_ei_json(&sample_report_with_boons(), &[], None);
+        let v = to_ei_json(&sample_report_with_boons(), &EiInputs::default());
         let buff_map = v["buffMap"].as_object().expect("buffMap must be an object");
         assert_eq!(buff_map.len(), 12, "exactly the 12 tracked boons");
         // Known value: Might (740) is Intensity-type -> stacking: true.
@@ -1025,7 +1233,7 @@ mod tests {
 
     #[test]
     fn buff_uptimes_map_intensity_and_duration_boons_to_ei_field_meanings() {
-        let v = to_ei_json(&sample_report_with_boons(), &[], None);
+        let v = to_ei_json(&sample_report_with_boons(), &EiInputs::default());
         let entries = v["players"][0]["buffUptimes"].as_array().expect("buffUptimes must be an array");
         assert_eq!(entries.len(), 12, "one entry per tracked boon");
         let might = entries.iter().find(|e| e["id"] == 740).expect("Might entry present");
@@ -1045,7 +1253,7 @@ mod tests {
 
     #[test]
     fn support_block_carries_the_four_new_computed_fields() {
-        let v = to_ei_json(&sample_report_with_boons(), &[], None);
+        let v = to_ei_json(&sample_report_with_boons(), &EiInputs::default());
         let support = &v["players"][0]["support"][0];
         assert_eq!(support["condiCleanse"], 5);
         assert_eq!(support["condiCleanseSelf"], 2);
@@ -1086,6 +1294,8 @@ mod tests {
                 hit_stats: HitStatsOut::default(),
                 defenses: DefensesOut::default(),
                 rotation: None,
+                damage_mods: None,
+                agent_addr: 0,
             }
         }
         let report = Report {
@@ -1106,8 +1316,9 @@ mod tests {
             replay: None,
             missiles: None,
             skill_map: Default::default(),
+            damage_mod_map: None,
         };
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let healing = &v["players"][0]["extHealingStats"]["outgoingHealing"][0];
         assert_eq!(healing["healing"], 5000);
         assert_eq!(healing["downedHealing"], 500);
@@ -1134,7 +1345,7 @@ mod tests {
     /// ei_golden.rs`) asserts the same against a real multi-target log.
     #[test]
     fn every_target_is_marked_not_fake() {
-        let v = to_ei_json(&sample_report(), &[], None);
+        let v = to_ei_json(&sample_report(), &EiInputs::default());
         let targets = v["targets"].as_array().expect("targets must be an array");
         assert_eq!(targets.len(), 2, "sample_report has 2 enemies (see all_enemies above)");
         for t in targets {
@@ -1147,7 +1358,7 @@ mod tests {
     /// caller passes no `activity` data at all (`&[]`).
     #[test]
     fn active_times_and_combat_replay_data_default_to_zero_when_no_activity_supplied() {
-        let v = to_ei_json(&sample_report(), &[], None);
+        let v = to_ei_json(&sample_report(), &EiInputs::default());
         assert_eq!(v["players"][0]["activeTimes"], json!([0]));
         assert_eq!(v["players"][0]["combatReplayData"]["start"], 0);
         assert_eq!(v["players"][0]["combatReplayData"]["end"], 0);
@@ -1175,7 +1386,7 @@ mod tests {
                 down_intervals: vec![], dead_intervals: vec![],
             },
         ];
-        let v = to_ei_json(&sample_report(), &activity, None);
+        let v = to_ei_json(&sample_report(), &EiInputs { activity: &activity, ..Default::default() });
         assert_eq!(v["players"][0]["combatReplayData"]["start"], 100);
         assert_eq!(v["players"][0]["combatReplayData"]["end"], 10_100);
         assert_eq!(v["players"][0]["combatReplayData"]["down"], json!([[2_000, 3_000]]));
@@ -1213,6 +1424,8 @@ mod tests {
             hit_stats: HitStatsOut::default(),
             defenses: DefensesOut::default(),
             rotation: None,
+            damage_mods: None,
+            agent_addr: 0,
         }
     }
 
@@ -1233,6 +1446,7 @@ mod tests {
             replay: None,
             missiles: None,
             skill_map: Default::default(),
+            damage_mod_map: None,
         }
     }
 
@@ -1260,7 +1474,7 @@ mod tests {
         let player = skill_and_timeseries_player(Some(sd), None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let p = &v["players"][0];
 
         // totalDamageDist: [phase][skillEntry], only the computed fields.
@@ -1298,7 +1512,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let p = &v["players"][0];
         assert!(p.get("totalDamageDist").is_none(), "totalDamageDist must be omitted, not emitted empty");
         assert!(p.get("totalDamageTaken").is_none());
@@ -1325,7 +1539,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, Some(ps), dps_targets);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let p = &v["players"][0];
 
         // damage1S/damageTaken1S: [phase][second], cumulative, final ==
@@ -1361,7 +1575,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let p = &v["players"][0];
         assert!(p.get("damage1S").is_none(), "damage1S must be omitted, not emitted empty");
         assert!(p.get("damageTaken1S").is_none());
@@ -1388,7 +1602,7 @@ mod tests {
         }]);
         let report = report_with_players(vec![], vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let rotation = &v["players"][0]["rotation"];
         assert_eq!(rotation.as_array().unwrap().len(), 1, "one entry per cast skill id, no phase wrapper");
         assert_eq!(rotation[0]["id"], 5008);
@@ -1412,7 +1626,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]); // rotation: None inside the builder
         let report = report_with_players(vec![], vec![player]);
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         assert!(v["players"][0].get("rotation").is_none(), "rotation must be omitted, not emitted empty");
     }
 
@@ -1439,7 +1653,7 @@ mod tests {
             can_crit: true,
         });
 
-        let v = to_ei_json(&report, &[], None);
+        let v = to_ei_json(&report, &EiInputs::default());
         let skill_map = v["skillMap"].as_object().expect("skillMap must be an object");
         assert_eq!(skill_map.len(), 2);
         assert_eq!(v["skillMap"]["s5492"]["name"], "Fire Attunement");
@@ -1460,7 +1674,7 @@ mod tests {
     /// matching `buffMap`'s own unconditional presence above.
     #[test]
     fn skill_map_ei_json_present_and_empty_when_report_skill_map_empty() {
-        let v = to_ei_json(&sample_report(), &[], None);
+        let v = to_ei_json(&sample_report(), &EiInputs::default());
         assert!(v.get("skillMap").is_some(), "skillMap key must always be present");
         assert_eq!(v["skillMap"].as_object().unwrap().len(), 0, "sample_report's Metrics::skill_map is Default::default() (empty)");
     }
@@ -1511,7 +1725,7 @@ mod tests {
     /// requirement, keyed off the `replay` argument's `Option` presence.
     #[test]
     fn combat_replay_surface_omitted_when_replay_absent() {
-        let v = to_ei_json(&sample_report(), &[], None);
+        let v = to_ei_json(&sample_report(), &EiInputs::default());
         assert!(v.get("combatReplayMetaData").is_none());
         let crd = &v["players"][0]["combatReplayData"];
         for k in ["positions", "orientations", "dc", "iconURL"] {
@@ -1551,7 +1765,7 @@ mod tests {
             map_id: Some(899), // Obsidian Sanctum: named by GW2EI, no image
             meta: None,
         };
-        let v = to_ei_json(&report, &[], Some(&replay));
+        let v = to_ei_json(&report, &EiInputs { replay: Some(&replay), ..Default::default() });
         assert!(
             v.get("combatReplayMetaData").is_none(),
             "no arena image => no metadata, even with replay on"
@@ -1616,7 +1830,7 @@ mod tests {
             map_id: Some(38),
             meta: None,
         };
-        let v = to_ei_json(&report, &[], Some(&replay));
+        let v = to_ei_json(&report, &EiInputs { replay: Some(&replay), ..Default::default() });
         let enemy = v["targets"].as_array().unwrap().iter().find(|t| t["enemyPlayer"] == true).unwrap();
         let crd = enemy.get("combatReplayData").expect("combatReplayData must always be present when replay is on");
         assert_eq!(crd["positions"], json!([]), "empty, not omitted");
@@ -1649,7 +1863,7 @@ mod tests {
             map_id: Some(38),
             meta: None,
         };
-        let v = to_ei_json(&sample_report(), &[], Some(&replay));
+        let v = to_ei_json(&sample_report(), &EiInputs { replay: Some(&replay), ..Default::default() });
         assert!(v["players"][0]["combatReplayData"].get("positions").is_none());
     }
 }

@@ -318,15 +318,21 @@ impl HitStats {
 
 /// One connected (hit) event's classification -- see this module's doc
 /// comment for the full per-field derivation.
-struct Classified {
-    dmg: u64,
-    is_direct_hit: bool,
-    is_crit: bool,
-    is_glance: bool,
-    is_life_leech_hit: bool,
-    is_against_downed: bool,
-    is_against_moving: bool,
-    is_above_ninety: bool,
+///
+/// `pub(crate)` (M16 Task 1) so `analysis::damage_mods` can reuse the same
+/// era-gated "is this row a hit, and what kind" decision instead of
+/// re-deriving it. Nothing about the classification itself changed for
+/// that; the damage-modifier engine is a second READER of an existing,
+/// already-calibrated predicate.
+pub(crate) struct Classified {
+    pub(crate) dmg: u64,
+    pub(crate) is_direct_hit: bool,
+    pub(crate) is_crit: bool,
+    pub(crate) is_glance: bool,
+    pub(crate) is_life_leech_hit: bool,
+    pub(crate) is_against_downed: bool,
+    pub(crate) is_against_moving: bool,
+    pub(crate) is_above_ninety: bool,
 }
 
 /// Classify one already-filtered (non-statechange/activation/buffremove,
@@ -334,7 +340,7 @@ struct Classified {
 /// evaded/absorbed/blind/invert/dropped-unknown) AND every non-damage
 /// marker row (interrupt/killing-blow/downed/breakbar/activation/CC) -- see
 /// module doc's "HasHit" section for the exact per-era/per-buff enumeration.
-fn classify(e: &RawEvent, post_era: bool) -> Option<Classified> {
+pub(crate) fn classify(e: &RawEvent, post_era: bool) -> Option<Classified> {
     let dmg = if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
     let is_against_moving = (e.is_moving & 2) != 0;
     let is_above_ninety = e.is_ninety != 0;
@@ -564,7 +570,7 @@ mod tests {
             result: 0,
             is_activation: 0,
             is_buffremove: 0,
-            is_ninety: 0,
+            is_ninety: 0, is_fifty: 0,
             is_moving: 0,
             is_statechange: 0,
             is_flanking: 0,

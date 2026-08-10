@@ -224,6 +224,75 @@ test('parseFile: missiles opt-in -- absent by default, present + shaped when req
   assert.equal(explicitlyOff.missiles, undefined)
 })
 
+test('parseFile: modifiers opt-in (M16) -- damage_mods + damage_mod_map absent by default, present + shaped when requested', () => {
+  const without = sdk.parseFile(FIXTURE)
+  assert.equal(without.damage_mod_map, undefined, 'damage_mod_map must be absent by default')
+  assert.equal(without.players[0].damage_mods, undefined, 'players[].damage_mods must be absent by default')
+
+  const withIt = sdk.parseFile(FIXTURE, { modifiers: true })
+  assert.ok(withIt.damage_mod_map, 'expected a damage_mod_map when { modifiers: true }')
+  const mapIds = Object.keys(withIt.damage_mod_map)
+  assert.ok(mapIds.length > 0, 'expected at least one referenced modifier id')
+
+  const withRows = withIt.players.filter((p) => p.damage_mods.outgoing.length + p.damage_mods.incoming.length > 0)
+  assert.ok(withRows.length > 0, 'expected at least one player with modifier rows')
+  for (const p of withIt.players) {
+    assert.ok(Array.isArray(p.damage_mods.outgoing))
+    assert.ok(Array.isArray(p.damage_mods.incoming))
+    for (const [rows, incoming] of [[p.damage_mods.outgoing, false], [p.damage_mods.incoming, true]]) {
+      for (const r of rows) {
+        // The SIGN of the id is the direction, and every referenced id
+        // must be described by damage_mod_map (native keys carry no "d").
+        assert.equal(r.id < 0, incoming, `d${r.id} is on the wrong side`)
+        assert.ok(String(r.id) in withIt.damage_mod_map, `d${r.id} missing from damage_mod_map`)
+        assert.equal(typeof r.hit_count, 'number')
+        assert.equal(typeof r.total_hit_count, 'number')
+        assert.equal(typeof r.damage_gain, 'number')
+        assert.equal(typeof r.total_damage, 'number')
+        assert.ok(r.hit_count >= 1 && r.hit_count <= r.total_hit_count)
+      }
+    }
+  }
+  const desc = withIt.damage_mod_map[mapIds[0]]
+  for (const k of ['name', 'icon', 'description']) assert.equal(typeof desc[k], 'string')
+  for (const k of ['non_multiplier', 'is_counter', 'skill_based', 'approximate', 'incoming']) {
+    assert.equal(typeof desc[k], 'boolean')
+  }
+
+  // opts.modifiers: false must behave the same as omitting opts entirely.
+  const explicitlyOff = sdk.parseFile(FIXTURE, { modifiers: false })
+  assert.equal(explicitlyOff.damage_mod_map, undefined)
+})
+
+test('parseFileEi: { modifiers: true } adds EI damageModifiers + damageModMap (M16)', () => {
+  const without = sdk.parseFileEi(FIXTURE)
+  assert.equal(without.damageModMap, undefined, 'damageModMap must be absent by default')
+  assert.equal(without.players[0].damageModifiers, undefined)
+
+  const ei = sdk.parseFileEi(FIXTURE, { modifiers: true })
+  assert.ok(ei.damageModMap, 'expected damageModMap when { modifiers: true }')
+  for (const k of Object.keys(ei.damageModMap)) {
+    assert.ok(k.startsWith('d'), `damageModMap keys carry EI's "d" prefix, got ${k}`)
+  }
+  const nTargets = ei.targets.length
+  const p = ei.players.find((x) => x.damageModifiers.length > 0)
+  assert.ok(p, 'expected at least one player with damageModifiers')
+  // EI nests the four numbers one level deeper, as a per-phase array.
+  const item = p.damageModifiers[0].damageModifiers[0]
+  assert.equal(typeof p.damageModifiers[0].id, 'number')
+  for (const k of ['hitCount', 'totalHitCount', 'damageGain', 'totalDamage']) {
+    assert.equal(typeof item[k], 'number', `${k} must be a number`)
+  }
+  // The Target arrays stay positionally locked to targets[].
+  for (const k of ['damageModifiersTarget', 'incomingDamageModifiersTarget']) {
+    assert.equal(p[k].length, nTargets, `${k} must have one slot per targets[] entry`)
+  }
+  assert.ok(
+    p.damageModifiersTarget.some((slot) => slot.length > 0),
+    'expected at least one populated per-target slot',
+  )
+})
+
 test('parseFileEi: accepts the same ParseOptions as parseFile -- skillDamage/timeseries surface totalDamageDist/damage1S; default omits both', () => {
   const withoutOpts = sdk.parseFileEi(FIXTURE)
   const p0Without = withoutOpts.players[0]

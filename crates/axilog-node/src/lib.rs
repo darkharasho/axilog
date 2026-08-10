@@ -62,6 +62,16 @@ fn napi_err(reason: impl std::fmt::Display) -> Error {
 /// `PlayerOut::rotation` doc comment for why this defaults to opt-in
 /// (well past the ~30% size-discipline guideline on the committed fixture
 /// when always-on).
+/// `modifiers: true` (M16) opts into the per-player damage-modifier stats
+/// -- `players[].damage_mods.{outgoing, incoming}` plus the top-level
+/// `damage_mod_map` on the native `Report` (`parseFile`/`parseBuffer`), and
+/// EI's own `damageModifiers`/`incomingDamageModifiers`/
+/// `damageModifiersTarget`/`incomingDamageModifiersTarget` plus
+/// `damageModMap` on `parseFileEi`. Unlike every other option here this one
+/// gates a COMPUTATION rather than a copy: `analyze()` never runs the
+/// modifier engine, which is a separate pass over every damage event
+/// crossed with ~200 catalogued definitions (see
+/// `axilog_schema::DamageModsOut`'s doc comment). Off by default.
 #[napi(object)]
 #[derive(Default, Clone, Copy)]
 pub struct ParseOptions {
@@ -70,6 +80,7 @@ pub struct ParseOptions {
     pub timeseries: Option<bool>,
     pub missiles: Option<bool>,
     pub rotation: Option<bool>,
+    pub modifiers: Option<bool>,
 }
 
 /// Shared decode -> resolve -> analyze -> build_report pipeline (identical
@@ -85,6 +96,7 @@ fn build_report_from_bytes(
     want_timeseries: bool,
     want_missiles: bool,
     want_rotation: bool,
+    want_modifiers: bool,
 ) -> Result<axilog_schema::Report> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -98,9 +110,16 @@ fn build_report_from_bytes(
     });
     let missiles = want_missiles
         .then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
+    // Native path: whole-fight only -- the per-target split has no native
+    // counterpart (see `axilog_ei::EiInputs::modifiers`).
+    let damage_mods = want_modifiers.then(|| {
+        axilog_core::analysis::damage_mods::evaluate_catalog_full(
+            &raw, &axilog_core::analysis::damage::InstidRegistry::build(&raw), &enc, false,
+        )
+    });
     Ok(axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
-        want_skill_damage, want_timeseries, want_rotation,
+        want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
     ))
 }
 
@@ -128,10 +147,12 @@ fn build_report_and_activity_from_bytes(
     want_timeseries: bool,
     want_missiles: bool,
     want_rotation: bool,
+    want_modifiers: bool,
 ) -> Result<(
     axilog_schema::Report,
     Vec<axilog_core::analysis::replay::ActivityIntervals>,
     Option<axilog_core::analysis::ei_replay::EiReplay>,
+    Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
 )> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -153,11 +174,18 @@ fn build_report_and_activity_from_bytes(
     // measured size delta).
     let ei_replay = want_replay
         .then(|| axilog_core::analysis::ei_replay::build_ei_replay_auto(&raw, &enc));
+    // ei-json path: WITH the per-target split, which is the one shape
+    // `damageModifiersTarget`/`incomingDamageModifiersTarget` need.
+    let damage_mods = want_modifiers.then(|| {
+        axilog_core::analysis::damage_mods::evaluate_catalog_full(
+            &raw, &axilog_core::analysis::damage::InstidRegistry::build(&raw), &enc, true,
+        )
+    });
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
-        want_skill_damage, want_timeseries, want_rotation,
+        want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
     );
-    Ok((report, activity, ei_replay))
+    Ok((report, activity, ei_replay, damage_mods))
 }
 
 fn report_to_value(report: &axilog_schema::Report) -> Result<Value> {
@@ -188,8 +216,10 @@ pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
     let want_timeseries = opts.and_then(|o| o.timeseries).unwrap_or(false);
     let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
     let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
+    let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let report = build_report_from_bytes(
         buf.as_ref(), want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
+        want_modifiers,
     )?;
     report_to_value(&report)
 }
@@ -219,11 +249,20 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_timeseries = opts.and_then(|o| o.timeseries).unwrap_or(false);
     let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
     let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
+    let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let (report, activity, ei_replay) = build_report_and_activity_from_bytes(
+    let (report, activity, ei_replay, damage_mods) = build_report_and_activity_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
+        want_modifiers,
     )?;
-    Ok(axilog_ei::to_ei_json(&report, &activity, ei_replay.as_ref()))
+    Ok(axilog_ei::to_ei_json(
+        &report,
+        &axilog_ei::EiInputs {
+            activity: &activity,
+            replay: ei_replay.as_ref(),
+            modifiers: damage_mods.as_ref(),
+        },
+    ))
 }
 
 /// Rewrites every player's character/account name in the `.zevtc` at

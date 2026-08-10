@@ -298,6 +298,56 @@ class MissilesOptInTests(unittest.TestCase):
         self.assertNotIn("missiles", explicitly_off)
 
 
+class ModifiersOptInTests(unittest.TestCase):
+    """M16: the damage-modifier block is opt-in via `modifiers=True`.
+    Unlike every other opt-in block that flag gates a COMPUTATION rather
+    than a copy -- `analyze()` never runs the modifier engine."""
+
+    def test_modifiers_absent_by_default_present_and_shaped_when_requested(self):
+        """M16: `modifiers=True` adds `players[].damage_mods` plus the
+        top-level `damage_mod_map`. Mirrors `crates/axilog-node/__test__/
+        sdk.test.mjs`'s equivalent test."""
+        without = axilog.parse_file(FIXTURE)
+        self.assertNotIn("damage_mod_map", without)
+        self.assertNotIn("damage_mods", without["players"][0])
+
+        with_it = axilog.parse_file(FIXTURE, modifiers=True)
+        self.assertIn("damage_mod_map", with_it)
+        mod_map = with_it["damage_mod_map"]
+        self.assertGreater(len(mod_map), 0)
+
+        with_rows = 0
+        for p in with_it["players"]:
+            block = p["damage_mods"]
+            self.assertIsInstance(block["outgoing"], list)
+            self.assertIsInstance(block["incoming"], list)
+            if block["outgoing"] or block["incoming"]:
+                with_rows += 1
+            for rows, incoming in ((block["outgoing"], False), (block["incoming"], True)):
+                for r in rows:
+                    # The SIGN of the id is the direction, and every id must
+                    # be described by damage_mod_map (native keys carry no
+                    # "d" prefix -- that is an ei-json-only convention).
+                    self.assertEqual(r["id"] < 0, incoming, f"d{r['id']} is on the wrong side")
+                    self.assertIn(str(r["id"]), mod_map)
+                    self.assertIsInstance(r["hit_count"], int)
+                    self.assertIsInstance(r["total_hit_count"], int)
+                    self.assertIsInstance(r["damage_gain"], float)
+                    self.assertIsInstance(r["total_damage"], int)
+                    self.assertGreaterEqual(r["hit_count"], 1)
+                    self.assertLessEqual(r["hit_count"], r["total_hit_count"])
+        self.assertGreater(with_rows, 0, "expected at least one player with modifier rows")
+
+        desc = next(iter(mod_map.values()))
+        for k in ("name", "icon", "description"):
+            self.assertIsInstance(desc[k], str)
+        for k in ("non_multiplier", "is_counter", "skill_based", "approximate", "incoming"):
+            self.assertIsInstance(desc[k], bool)
+
+        explicitly_off = axilog.parse_file(FIXTURE, modifiers=False)
+        self.assertNotIn("damage_mod_map", explicitly_off)
+
+
 class ParseFileEiOptInTests(unittest.TestCase):
     """final-review fix wave: `parse_file_ei` accepts the same
     replay/skill_damage/timeseries/missiles keyword args `parse_file` does
@@ -361,6 +411,36 @@ class ParseFileEiOptInTests(unittest.TestCase):
             len(p0_with["damage1S"][0]),
             0,
             "expected a non-empty per-second series inside damage1S's phase wrapper",
+        )
+
+
+    def test_modifiers_add_ei_damage_modifier_arrays_and_map(self):
+        """M16: `modifiers=True` adds EI's own
+        `damageModifiers`/`incomingDamageModifiers`/`damageModifiersTarget`/
+        `incomingDamageModifiersTarget` plus the top-level `damageModMap`
+        (keyed `"d<signed id>"`). Mirrors the node suite's equivalent."""
+        without = axilog.parse_file_ei(FIXTURE)
+        self.assertNotIn("damageModMap", without)
+        self.assertNotIn("damageModifiers", without["players"][0])
+
+        ei = axilog.parse_file_ei(FIXTURE, modifiers=True)
+        self.assertIn("damageModMap", ei)
+        for k in ei["damageModMap"]:
+            self.assertTrue(k.startswith("d"), f"damageModMap keys carry EI's 'd' prefix, got {k}")
+
+        n_targets = len(ei["targets"])
+        with_rows = [p for p in ei["players"] if p["damageModifiers"]]
+        self.assertTrue(with_rows, "expected at least one player with damageModifiers")
+        p = with_rows[0]
+        # EI nests the four numbers one level deeper, as a per-phase array.
+        item = p["damageModifiers"][0]["damageModifiers"][0]
+        for k in ("hitCount", "totalHitCount", "damageGain", "totalDamage"):
+            self.assertIn(k, item)
+        for k in ("damageModifiersTarget", "incomingDamageModifiersTarget"):
+            self.assertEqual(len(p[k]), n_targets, f"{k} must have one slot per targets[] entry")
+        self.assertTrue(
+            any(slot for slot in p["damageModifiersTarget"]),
+            "expected at least one populated per-target slot",
         )
 
 

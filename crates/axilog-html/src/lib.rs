@@ -109,6 +109,8 @@ mod tests {
                 hit_stats: HitStatsOut::default(),
                 defenses: DefensesOut::default(),
                 rotation: None,
+                damage_mods: None,
+                agent_addr: 0,
             }],
             enemies: vec![],
             all_enemies: vec![],
@@ -120,6 +122,7 @@ mod tests {
             replay: None,
             missiles: None,
             skill_map: Default::default(),
+            damage_mod_map: None,
         }
     }
 

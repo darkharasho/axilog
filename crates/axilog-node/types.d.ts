@@ -343,6 +343,83 @@ export interface PlayerOut {
    * Task 2). Always present, same as `hit_stats`. See `DefensesOut`.
    */
   defenses: DefensesOut
+  /**
+   * Per-skill cast list (M14, Task 1), opt-in like `skill_damage` --
+   * present only when requested (`{ rotation: true }`, see
+   * `ParseOptions.rotation` in `index.d.ts`). Omitted entirely (not
+   * `null`) when not requested.
+   */
+  rotation?: SkillRotationOut[]
+  /**
+   * Per-modifier outgoing/incoming damage-modifier stats (M16), opt-in --
+   * present only when requested (`{ modifiers: true }`, see
+   * `ParseOptions.modifiers` in `index.d.ts`). Omitted entirely (not
+   * `null`) when not requested. The ids index `Report.damage_mod_map`.
+   */
+  damage_mods?: DamageModsOut
+}
+
+/** One skill's cast list (M14, Task 1). */
+export interface SkillRotationOut {
+  skill_id: number
+  casts: CastOut[]
+}
+
+/** One animated cast (M14, Task 1). */
+export interface CastOut {
+  cast_time_ms: number
+  duration_ms: number
+  /** Negative when the cast was interrupted/cancelled early. */
+  time_gained_ms: number
+  quickness: boolean
+}
+
+/**
+ * A player's damage-modifier block (M16), split by direction exactly as
+ * Elite Insights' own `damageModifiers`/`incomingDamageModifiers` are.
+ * Only modifiers with at least one qualifying hit appear (EI's own
+ * emission rule).
+ */
+export interface DamageModsOut {
+  outgoing: DamageModEntryOut[]
+  /** Ids here are NEGATIVE -- the sign is the direction. */
+  incoming: DamageModEntryOut[]
+}
+
+/** One `(player, damage modifier)` row (M16). */
+export interface DamageModEntryOut {
+  /** Signed modifier id; negative means incoming. Key into `Report.damage_mod_map`. */
+  id: number
+  /** Hits the modifier actually applied to. */
+  hit_count: number
+  /** Hits that were eligible for it at all. */
+  total_hit_count: number
+  /** `sum(gain * damage)`, rounded to 3 decimals. */
+  damage_gain: number
+  /** The damage aggregate `damage_gain` is measured against. */
+  total_damage: number
+}
+
+/** One `Report.damage_mod_map` entry (M16) -- EI's `DamageModDesc`. */
+export interface DamageModDescOut {
+  name: string
+  icon: string
+  /** EI's full tooltip: the base description plus the derived `<br>...` suffixes. */
+  description: string
+  non_multiplier: boolean
+  is_counter: boolean
+  skill_based: boolean
+  approximate: boolean
+  incoming: boolean
+}
+
+/** One `Report.skill_map` entry (M14, Task 2), best-effort. */
+export interface SkillMapEntryOut {
+  name: string
+  /** Omitted entirely -- never derivable without the external GW2 API. */
+  auto_attack?: boolean
+  is_swap: boolean
+  can_crit: boolean
 }
 
 export interface EnemyOut {
@@ -484,4 +561,17 @@ export interface Report {
    * added final-review fix wave). Omitted entirely (not `null`) otherwise.
    */
   missiles?: MissilesOut
+  /**
+   * Best-effort skill name table (M14, Task 2), keyed by skill id as a
+   * string. Always present (never opt-in), possibly empty.
+   */
+  skill_map: Record<string, SkillMapEntryOut>
+  /**
+   * Definition metadata for every damage-modifier id referenced by any
+   * `players[].damage_mods` row (M16), keyed by the SIGNED id as a decimal
+   * string (`"174"`, `"-431"`) -- WITHOUT Elite Insights' `"d"` prefix.
+   * Present exactly when `players[].damage_mods` is, i.e. only under
+   * `{ modifiers: true }`; scoped to referenced ids, not the whole catalog.
+   */
+  damage_mod_map?: Record<string, DamageModDescOut>
 }

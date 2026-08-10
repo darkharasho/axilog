@@ -37,6 +37,16 @@ pub mod sc {
     pub const HEALTH_UPDATE: u8 = 8;
     pub const MAX_HEALTH: u8 = 12;
     pub const POINT_OF_VIEW: u8 = 13;
+    /// `CBTS_GWBUILD` -- the GW2 game build this log was recorded on, in
+    /// `src_agent`. Decoded starting M16 Task 1 (damage modifiers gate their
+    /// availability on a half-open GW2-build window; see
+    /// `analysis::damage_mods::gw2_build`). Ordinal verified against GW2EI's
+    /// `StateChange` enum (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs`:
+    /// `PointOfView = 13, Language = 14, GWBuild = 15`) and its payload
+    /// against `ParsedData/CombatEvents/MetaDataEvents/Version/
+    /// GW2BuildEvent.cs:12-15` (`return evtcItem.SrcAgent`). GW2EI treats a
+    /// zero build as absent (`EvtcParser.cs:881`).
+    pub const GW2_BUILD: u8 = 15;
     pub const TEAM_CHANGE: u8 = 22;
     pub const MAP_ID: u8 = 25;
     /// Content-local-id -> stable-GUID association (Task 2b). Verified
@@ -781,7 +791,16 @@ pub struct RawEvent {
     /// deviates from a naive reading of "above90" as being about the
     /// target).
     pub is_ninety: u8,
-    /// Offset 55, between `is_fifty` (54, NOT decoded) and `is_statechange`
+    /// Offset 54, between `is_ninety` (53) and `is_moving` (55). Decoded
+    /// starting M16 Task 2: three catalogued damage modifiers gate on it
+    /// (`Mod_RelicOfTheEagle`, `Mod_CloseToDeath`, `Mod_BoltToTheHeart`).
+    /// Per the live arcdps EVTC reference (`CBTS_COMBAT` block):
+    /// "`is_fifty: target is below 50% health`" -- unlike `is_ninety` this
+    /// one IS about the TARGET, which is why GW2EI names the two asymmetrically
+    /// (`SkillEvent.cs:36-37`, `IsOverNinety = evtcItem.IsNinety > 0` vs
+    /// `AgainstUnderFifty = evtcItem.IsFifty > 0`).
+    pub is_fifty: u8,
+    /// Offset 55, between `is_fifty` (54) and `is_statechange`
     /// (56). Decoded starting M13 Task 1 (`analysis::hit_stats`'s
     /// `moving_count` needs it). Per the live arcdps EVTC reference
     /// (`CBTS_COMBAT` block): "`is_moving: bit0 set if src is moving, bit1
@@ -879,6 +898,7 @@ pub fn decode_events(buf: &[u8], count: usize) -> Result<Vec<RawEvent>, EvtcErro
             is_activation: e[51],
             is_buffremove: e[52],
             is_ninety: e[53],
+            is_fifty: e[54],
             is_moving: e[55],
             is_statechange: e[56],
             is_flanking: e[57],

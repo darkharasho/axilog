@@ -87,6 +87,20 @@ pub mod rotation;
 /// citation trail.
 pub mod skill_map;
 
+/// Damage modifiers -- GW2EI's "+X% while ..." framework (M16): definition
+/// model, evaluation engine and a 205-entry definition catalog.
+/// Deliberately NOT wired into [`analyze`], like `replay`/`ei_replay`/
+/// `missiles`: it is a separate full pass over every damage event crossed
+/// with the whole catalogue, so the caller runs
+/// `damage_mods::evaluate_catalog_full` itself only on CLI `--modifiers` /
+/// SDK `modifiers: true`, and feeds the result to the native schema
+/// (`players[].damage_mods` + `damage_mod_map`) and the ei-json adapter
+/// (`damageModifiers`/`incomingDamageModifiers`/`*Target` +
+/// `damageModMap`). See its module doc for the exact GW2EI semantics of
+/// the four output fields (`hitCount`/`totalHitCount`/`damageGain`/
+/// `totalDamage`) and the documented gap list.
+pub mod damage_mods;
+
 /// GW2EI's `SkillEvent.ConditionDamageBased` skill-id catalog (MCONDCAT
 /// Task 1) -- the `BuffClassification.Condition` id set that decides the
 /// condition-vs-power bucketing in `hit_stats` (outgoing) and `defenses`
@@ -507,7 +521,7 @@ mod tests {
         RawEvent { time: 0, src_agent: src, dst_agent: dst, value: dmg, buff_dmg: 0,
             overstack: 0, skillid: 1, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 1, buff: 0, result: 0,
-            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
 
     fn raw_from(events: Vec<RawEvent>) -> RawLog {
@@ -710,7 +724,7 @@ mod tests {
                 time: 0, src_agent: 1, dst_agent: 2, value: 5000, buff_dmg: 0,
                 overstack: 0, skillid: buffs::MIGHT, src_instid: 0, dst_instid: 0,
                 src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 1, result: 0,
-                is_activation: 0, is_buffremove: 0, is_ninety: 0, is_moving: 0, is_statechange: sc::BUFF_APPLY,
+                is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: sc::BUFF_APPLY,
                 is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
             }],
             guid_map: vec![],
