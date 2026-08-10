@@ -19,6 +19,12 @@ too, against the MPERF tip:
 [After MEIGAP Task 2](#after-meigap-task-2--the-power-series-split),
 [After MEIGAP Task 3](#after-meigap-task-3--the-healingminionguild-remainder).
 
+Memory, not time, is the subject of one section: **MSTREAM** made the
+ei-json CLI path streaming and cut its peak RSS by 20× — see
+[After MSTREAM](#after-mstream--streaming-ei-json-serialization) and the
+[MSTREAM update](#mstream-update-2026-08-10--the-axilog-rows-only) to the
+Elite Insights comparison.
+
 ## Harness
 
 - Location: `crates/axilog-cli/benches/pipeline.rs`, wired via
@@ -604,16 +610,70 @@ release build, matched surface: `--format ei-json --replay --skill-damage --time
 | axilog, matched ei-json surface | **0.28 s** (8× faster) | 105 MiB |
 | axilog, default native JSON | **0.06 s** (38× faster) | **20 MiB** (18× less) |
 
+### MSTREAM update (2026-08-10) — the axilog rows only
+
+The tables above are the 2026-08-09 v0.2.0 capture and are LEFT AS
+MEASURED. MSTREAM re-measured the **axilog** side only, on the same machine
+and the same two logs, with the same matched-flag surface. **The Elite
+Insights side was NOT re-run** — the numbers below are therefore an
+axilog-vs-axilog delta, and the full head-to-head comparison is re-run
+separately once MSTREAM merges.
+
+Two things changed since the 2026-08-09 capture and both are visible here:
+MSTREAM itself (streaming ei-json serialization), and MEIGAP/MEIGAP2, which
+roughly doubled the ei-json document (183 MB → 366 MB on the large log) and
+had therefore already pushed the pre-MSTREAM peak from 1,281 MiB up to
+2,389 MiB. "Base" below is `0a8cf25` (the MEIGAP2 merge, MSTREAM's parent),
+NOT the v0.2.0 tag the tables above used.
+
+Method: 3 runs each, median wall / peak RSS via `/usr/bin/time -f '%M %e'`.
+Output byte-identical between base and tip in every row (96/96 `cmp` checks
+across the full flag matrix — see MSTREAM's report).
+
+Large log (7.6 MB zevtc, 583,194 events):
+
+| pipeline | wall base → tip | peak RSS base → tip |
+|---|---|---|
+| axilog, matched ei-json surface | 3.24 s → **2.07 s** (−36%) | 2,389 MiB → **117.0 MiB** (−95.1%, 20.4× less) |
+| axilog, matched + gzip output | 3.71 s → **2.57 s** (−31%) | 2,389 MiB → **117.0 MiB** (−95.1%) |
+| axilog, default native JSON | 0.31 s → 0.32 s (unchanged) | 84.0 MiB → 84.0 MiB (untouched by MSTREAM) |
+
+Small log (1.5 MB zevtc, 120,435 events):
+
+| pipeline | wall base → tip | peak RSS base → tip |
+|---|---|---|
+| axilog, matched ei-json surface | 0.33 s → **0.23 s** (−30%) | 158.7 MiB → **24.5 MiB** (−84.6%, 6.5× less) |
+| axilog, default native JSON | — | 20.2 MiB (untouched) |
+
+Against the EI numbers in the tables above (stale on the EI side, but EI's
+own code did not change): axilog's matched ei-json peak on the large log is
+now **117 MiB vs EI's 857 MiB**, i.e. axilog uses ~7.3× LESS memory where it
+previously used 1.5× more. Peak RSS was the one metric on which EI beat
+axilog; it no longer does. The wall-clock lead widened at the same time,
+because the streaming path never allocates the document tree.
+
+The remaining 117 MiB is what the goal called for — analysis results plus a
+1 MiB write buffer — and it is now essentially FLAT in output size: the
+same binary emits a 2.8 MB flagless document at 83.9 MiB peak and a 366 MB
+all-flags document at 117.0 MiB peak, a 33 MiB spread across a 130× output
+size range. (Pre-MSTREAM the same pair was 119 MiB → 2,389 MiB.) What is
+left scales with the ANALYSIS, not the serialization: `--timeseries`'s
+per-(player, enemy) series are the bulk of it.
+
 ### Honest notes
 
 - **EI's fixed startup dominates small logs**: ~2 s of the EI number is dotnet start + JIT,
   paid PER SPAWN — and axibridge spawns the CLI once per uploaded log, so every upload pays it.
   axilog's fixed cost is ~0.
-- **axilog's matched-surface peak RSS is HIGHER than EI's on the large log** (1,281 vs
+- ~~**axilog's matched-surface peak RSS is HIGHER than EI's on the large log** (1,281 vs
   857 MiB): the ei-json path builds the entire 183 MB document as an in-memory
   `serde_json::Value` tree before writing, while EI streams to `.json.gz`. The always-on
   native path (82 MiB) doesn't have this problem. Future item: stream the ei-json
-  serialization. (The wall-clock lead survives regardless.)
+  serialization. (The wall-clock lead survives regardless.)~~ **FIXED by MSTREAM
+  (2026-08-10)** — the "future item" was done: `axilog_ei::write_ei_json` streams the
+  document row by row and the CLI writes it through a `BufWriter`, taking the large-log
+  matched-surface peak to **117 MiB**, below EI's 857 MiB. See the
+  [MSTREAM update](#mstream-update-2026-08-10--the-axilog-rows-only) above.
 - **Output sizes diverge for content reasons**: EI's `.json.gz` is 3.77 MB (45.9 MB
   decompressed); axilog's matched ei-json is 183 MB plain but **2.07 MB gzipped** — smaller
   than EI's, because axilog's bulk is highly-repetitive per-target arrays over its full
@@ -837,3 +897,74 @@ two-field `dpsAll` object plus an `instanceID` per target dominates. The
 gated growth is the distribution outcome columns (fixture: many small rows,
 hence +6.5%) plus `healthPercents`/`boonsStates` (real log: dwarfed by the
 timeline arrays already there, hence +0.5%).
+
+## After MSTREAM — streaming ei-json serialization
+
+Measured 2026-08-10 against `0a8cf25` (the MEIGAP2 merge). Same machine and
+harness as the baseline (Ryzen 9 7900X3D, Linux, `cargo bench -p axilog-cli
+--bench pipeline`, release), on a QUIET machine, base and tip run back to
+back in one session from two prebuilt bench binaries.
+
+### The four standard stages — unchanged, by construction
+
+MSTREAM touches only `axilog-ei`'s serialization and the CLI's write path.
+None of the four benchmarked stages calls either: `full_pipeline` stops at
+`axilog_schema::build_report`. The run below is therefore a NULL-RESULT
+check (did anything drift?), not a measurement of the change:
+
+| Stage | base `0a8cf25` | tip | Δ |
+|---|---|---|---|
+| `decode_raw` | 9.2399 ms `[9.1983, 9.2855]` | 9.0395 ms `[9.0008, 9.0837]` | −2.2% (noise) |
+| `model::resolve` | 681.06 µs `[678.09, 684.11]` | 670.62 µs `[669.04, 672.59]` | −1.5% (noise) |
+| `analysis::analyze` | 20.288 ms `[20.234, 20.343]` | 20.229 ms `[20.178, 20.283]` | −0.3% |
+| `full_pipeline` | 30.611 ms `[30.502, 30.731]` | 30.569 ms `[30.473, 30.671]` | −0.1% |
+
+Every stage is inside noise and every delta is in the *favourable*
+direction, i.e. nothing regressed. (These absolute numbers are lower than
+the MPERF Task 1 baseline table at the top of this file for
+`analysis::analyze` — 20 ms vs 39 ms — because that table was captured on a
+much busier machine; base and tip here were captured minutes apart under
+identical conditions, which is what makes the Δ column meaningful and the
+cross-section absolute comparison not.)
+
+### Where the change actually shows: CLI peak RSS and wall clock
+
+`/usr/bin/time -f '%M %e'`, best of 3, `--format ei-json -o <file>`:
+
+| Log / flags | base peak RSS | tip peak RSS | Δ | base wall | tip wall |
+|---|---|---|---|---|---|
+| real log, all flags | 2,446,596 KB (2,389.3 MiB) | **119,896 KB (117.1 MiB)** | **−95.1% (20.4×)** | 3.30 s | **2.20 s** (−33%) |
+| real log, `--timeseries` | 2,220,164 KB (2,168.1 MiB) | 109,508 KB (106.9 MiB) | −95.1% (20.3×) | 2.26 s | 1.27 s (−44%) |
+| real log, flagless | 122,044 KB (119.2 MiB) | 85,940 KB (83.9 MiB) | −29.6% | 0.35 s | 0.32 s |
+| committed fixture, all flags | 162,904 KB (159.1 MiB) | 25,072 KB (24.5 MiB) | −84.6% (6.5×) | 0.32 s | 0.23 s (−28%) |
+
+The wall-clock win is a side effect, not a separate optimization: the old
+path allocated ~366 MB of `serde_json::Value` nodes, then walked them into a
+~366 MB `String`, then wrote that. The new path allocates one player row at
+a time and writes through a 1 MiB `BufWriter`.
+
+The native `--format json` path was deliberately NOT changed (84.0 MiB base
+→ 84.0 MiB tip on the real log, 0.31 s → 0.32 s): it was never the problem.
+
+### The SDK path, measured rather than assumed
+
+`to_ei_json` must hand back a materialized `serde_json::Value` — napi and
+pythonize both walk a tree — so there is nothing to stream away for the
+SDKs. Three implementations were candidates; two were measured against the
+third (`crates/axilog-ei/examples/mstream_sdk_options.rs`, real log,
+`--skill-damage --timeseries --rotation` surface, best of 2):
+
+| `to_ei_json` implementation | peak RSS | build time |
+|---|---|---|
+| base `0a8cf25`: standalone `json!` tree-builder | 1,631 MB | 1.02 s |
+| **shipped**: `serde_json::to_value(&ei_doc(..))` | **857 MB** | **0.74 s** |
+| rejected: `write_ei_json` into a `String`, then `from_str` | 1,478 MB | 1.70 s |
+
+The shipped option is not a compromise — it beats the code it replaced on
+both axes while removing the second definition of the format. The reason
+the old tree-builder was the WORST of the three is a `json!` detail:
+`json!({ "players": players })` expands the non-literal `players` through
+`serde_json::to_value(&players)`, which DEEP-COPIES the whole
+`Vec<Value>` while the original is still alive — so the old builder briefly
+held two copies of the document. The parse-back option loses for the
+obvious reason (it pays a full serialize AND a full parse).

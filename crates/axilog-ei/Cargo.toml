@@ -8,4 +8,5 @@ license.workspace = true
 [dependencies]
 axilog-core = { path = "../axilog-core" }
 axilog-schema = { path = "../axilog-schema" }
+serde.workspace = true
 serde_json.workspace = true

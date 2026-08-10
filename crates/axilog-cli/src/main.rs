@@ -348,34 +348,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for w in &report.warnings {
                 eprintln!("warning: {w}");
             }
-            // Every format renders to a single `String` (with its own
+            // `ei-json` is the one format that does NOT render to a `String`
+            // first (MSTREAM). It is by far the largest output this CLI
+            // produces -- on a 583k-event real log with every flag on, the
+            // pre-MSTREAM path peaked at ~1.28 GB RSS holding the whole
+            // `serde_json::Value` tree AND its pretty-printed `String` at the
+            // same time. `axilog_ei::write_ei_json` streams the document row
+            // by row into a `BufWriter`, so nothing bigger than one player
+            // row is ever resident. Output is byte-identical to what the old
+            // `to_string_pretty(&to_ei_json(..))` produced, trailing newline
+            // included (see that function's doc comment, and axilog-ei's
+            // `streaming_matches_value_tree_byte_for_byte` test).
+            if format == Format::EiJson {
+                let ei_inputs = axilog_ei::EiInputs {
+                    activity: &activity,
+                    replay: ei_replay_data.as_ref(),
+                    modifiers: damage_mods.as_ref(),
+                    boon_states: boon_states.as_ref(),
+                    enemy_series: enemy_series.as_ref(),
+                    enemy_dist: enemy_dist.as_ref(),
+                    target_conditions: target_conditions.as_ref(),
+                    healing_detail: healing_detail.as_ref(),
+                    healing_series: timeseries,
+                    healing_dist: skill_damage,
+                    minions: minion_rollups.as_ref(),
+                    dist_outcomes: dist_outcomes.as_ref(),
+                    health_percents: health_percents.as_ref(),
+                };
+                // One `dyn Write` so the two destinations share the emit
+                // code; the `BufWriter` (not the trait object) is what makes
+                // the per-token writes cheap.
+                let sink: Box<dyn std::io::Write> = match &output {
+                    Some(path) => Box::new(std::fs::File::create(path)?),
+                    None => Box::new(std::io::stdout().lock()),
+                };
+                use std::io::Write as _;
+                let mut w = std::io::BufWriter::with_capacity(1 << 20, sink);
+                axilog_ei::write_ei_json(&report, &ei_inputs, &mut w)?;
+                w.write_all(b"\n")?;
+                // Explicit flush: a `BufWriter`'s `Drop` swallows write
+                // errors (a full disk would otherwise truncate silently).
+                w.flush()?;
+                drop(w);
+                if let Some(path) = &output {
+                    eprintln!("wrote {}", path.display());
+                }
+                return Ok(());
+            }
+            // Every other format renders to a single `String` (with its own
             // trailing newline where appropriate) so `-o/--output` (M7,
             // Task 1) can apply uniformly regardless of `--format`.
             let rendered = match format {
                 Format::Json => format!("{}\n", serde_json::to_string_pretty(&report)?),
-                Format::EiJson => {
-                    format!(
-                        "{}\n",
-                        serde_json::to_string_pretty(&axilog_ei::to_ei_json(
-                            &report,
-                            &axilog_ei::EiInputs {
-                                activity: &activity,
-                                replay: ei_replay_data.as_ref(),
-                                modifiers: damage_mods.as_ref(),
-                                boon_states: boon_states.as_ref(),
-                                enemy_series: enemy_series.as_ref(),
-                                enemy_dist: enemy_dist.as_ref(),
-                                target_conditions: target_conditions.as_ref(),
-                                healing_detail: healing_detail.as_ref(),
-                                healing_series: timeseries,
-                                healing_dist: skill_damage,
-                                minions: minion_rollups.as_ref(),
-                                dist_outcomes: dist_outcomes.as_ref(),
-                                health_percents: health_percents.as_ref(),
-                            },
-                        ))?
-                    )
-                }
+                Format::EiJson => unreachable!("handled by the streaming path above"),
                 Format::Table => axilog_cli_table(&report, view, &metrics, &activity),
                 Format::Csv => axilog_cli_csv(&report),
                 Format::Html => axilog_html::render(&report),
