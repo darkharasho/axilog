@@ -757,12 +757,117 @@ pub struct EiInputs<'a> {
     pub health_percents: Option<&'a BTreeMap<u64, Vec<(u64, f64)>>>,
 }
 
+/// A lazily-serialized JSON array (MSTREAM).
+///
+/// `len` elements, each produced on demand by `f(index)` and dropped as soon
+/// as the serializer has consumed it. This is the whole point of the
+/// streaming path: `players`/`targets` are ~99% of the ei-json document, and
+/// materializing them as a `Vec<Value>` (which is what `.collect()` did
+/// before MSTREAM) is what made peak RSS scale with the WHOLE document
+/// rather than with one row of it.
+///
+/// The element builder is `FnMut` (the `targets` one walks a replay-track
+/// iterator across calls) so it lives behind a `RefCell`: `Serialize::
+/// serialize` only gets `&self`. Serializing the same `LazySeq` twice would
+/// therefore resume a partly-consumed builder — every [`EiDoc`] is built
+/// fresh per call and serialized exactly once, which is what both entry
+/// points below do.
+struct LazySeq<'f, 'a> {
+    len: usize,
+    f: &'f std::cell::RefCell<Box<dyn FnMut(usize) -> Value + 'a>>,
+}
+
+impl serde::Serialize for LazySeq<'_, '_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut f = self.f.borrow_mut();
+        let mut seq = s.serialize_seq(Some(self.len))?;
+        for i in 0..self.len {
+            // `f(i)` is built, handed to the serializer, and dropped before
+            // the next iteration allocates anything.
+            seq.serialize_element(&f(i))?;
+        }
+        seq.end()
+    }
+}
+
+/// The whole ei-json document, as a *plan* rather than a materialized tree
+/// (MSTREAM).
+///
+/// Every small section (`buffMap`, `skillMap`, `damageModMap`,
+/// `combatReplayMetaData`, `wvWMapData`) is an ordinary eagerly-built
+/// `Value` — together they are kilobytes. The two big ones (`players`,
+/// `targets`) are closures invoked one row at a time by [`LazySeq`].
+///
+/// [`Self::serialize`] emits the root keys in the exact order a
+/// `BTreeMap<String, _>` would — i.e. byte-wise ascending, which is the
+/// alphabetized-key convention every consumer of this format relies on and
+/// what the pre-MSTREAM `json!`-into-`serde_json::Map` root produced for
+/// free. That order is not merely convention here: it is load-bearing for
+/// byte-identity, and it is regression-tested by
+/// `streaming_matches_value_tree_byte_for_byte`, which diffs the streamed
+/// text against `to_ei_json`'s tree (the tree re-sorts through `BTreeMap`,
+/// so any hand-ordering mistake below shows up as a diff).
+struct EiDoc<'a> {
+    fight_name: String,
+    duration_ms: u64,
+    recorded_by: Option<&'a str>,
+    player_count: usize,
+    player_json: std::cell::RefCell<Box<dyn FnMut(usize) -> Value + 'a>>,
+    target_count: usize,
+    target_json: std::cell::RefCell<Box<dyn FnMut(usize) -> Value + 'a>>,
+    buff_map: BTreeMap<String, Value>,
+    skill_map: BTreeMap<String, Value>,
+    damage_mod_map: Option<BTreeMap<String, Value>>,
+    combat_replay_meta: Option<Value>,
+    wvw_map_data: Value,
+}
+
+impl serde::Serialize for EiDoc<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(None)?;
+        // ---- byte-wise ascending key order; do not reshuffle ----
+        m.serialize_entry("buffMap", &self.buff_map)?;
+        if let Some(meta) = &self.combat_replay_meta {
+            m.serialize_entry("combatReplayMetaData", meta)?;
+        }
+        if let Some(dm) = &self.damage_mod_map {
+            m.serialize_entry("damageModMap", dm)?;
+        }
+        m.serialize_entry("durationMS", &self.duration_ms)?;
+        m.serialize_entry("eliteInsightsVersion", &Value::Null)?;
+        m.serialize_entry("fightName", &self.fight_name)?;
+        m.serialize_entry(
+            "players",
+            &LazySeq { len: self.player_count, f: &self.player_json },
+        )?;
+        m.serialize_entry("recordedBy", &self.recorded_by)?;
+        m.serialize_entry("skillMap", &self.skill_map)?;
+        m.serialize_entry("success", &true)?;
+        m.serialize_entry(
+            "targets",
+            &LazySeq { len: self.target_count, f: &self.target_json },
+        )?;
+        m.serialize_entry("wvWMapData", &self.wvw_map_data)?;
+        m.end()
+    }
+}
+
 /// Render a [`Report`] plus its EI-only side inputs as Elite-Insights-
-/// compatible JSON.
+/// compatible JSON, as a *streaming* document (MSTREAM).
+///
+/// This is the single source of truth for the ei-json surface. Both public
+/// entry points go through it:
+///
+/// * [`write_ei_json`] serializes it straight to an `io::Write` — nothing
+///   bigger than one player row is ever resident.
+/// * [`to_ei_json`] serializes it into a `serde_json::Value` for the SDKs,
+///   which need a tree regardless (napi/pythonize walk one).
 ///
 /// See [`EiInputs`] for what each input gates; `EiInputs::default()` renders
 /// everything that is derivable from the `Report` alone.
-pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
+fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
     let EiInputs {
         activity,
         replay,
@@ -802,7 +907,17 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
     // divide-by-zero on a degenerate zero-duration log).
     let duration_secs = (report.encounter.duration_ms as f64 / 1000.0).max(1.0);
 
-    let players: Vec<Value> = report.players.iter().enumerate().map(|(player_idx, p)| {
+    // MSTREAM: one player row, built on demand. Previously the body of a
+    // `report.players.iter().enumerate().map(..).collect::<Vec<Value>>()`;
+    // the body itself is unchanged, only its binding form. `detected` is
+    // cloned in (a <=3-entry `BTreeMap<&str, u64>`) so the outer
+    // `team_id_for` and the `targets` builder can each keep their own.
+    let detected_players = detected.clone();
+    let player_json: Box<dyn FnMut(usize) -> Value + 'a> = Box::new(move |player_idx: usize| {
+        let p = &report.players[player_idx];
+        let team_id_for = |color: &str| -> u64 {
+            detected_players.get(color).copied().unwrap_or_else(|| representative_team_id(color))
+        };
         let act = activity.get(player_idx);
         // Real EI shape (verified against a real dps.report export,
         // axibridge's `test-fixtures/boon/20260117-181030.json`,
@@ -1789,7 +1904,7 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             obj.insert("incomingDamageModifiersTarget".to_string(), json!(in_t));
         }
         v
-    }).collect();
+    });
     // M10 Task 3: `all_enemies`, not `enemies` -- see the `stats_targets`
     // comment above for why (positional lockstep with `statsTargets[][]`,
     // and EI parity: real EI keeps every enumerated target).
@@ -1844,8 +1959,19 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
         .and_then(|m| m.values().next().map(|s| s.damage.len()))
         .or_else(|| report.players.iter().find_map(|p| p.per_second.as_ref()).map(|ps| ps.damage.len()))
         .unwrap_or(0);
+    // MSTREAM: one target row, built on demand — same treatment as
+    // `player_json` above, body unchanged. This builder is genuinely
+    // stateful: `enemy_track` is walked forward by the enemy-PLAYER rows
+    // only, so the rows MUST be produced in ascending index order exactly
+    // once. `LazySeq` does precisely that (`for i in 0..len`), which is the
+    // same order the old `.map(..).collect()` produced.
     let mut enemy_track = replay.map(|r| r.tracks[report.players.len()..].iter());
-    let targets: Vec<Value> = report.all_enemies.iter().map(|e| {
+    let detected_targets = detected.clone();
+    let target_json: Box<dyn FnMut(usize) -> Value + 'a> = Box::new(move |target_idx: usize| {
+        let e = &report.all_enemies[target_idx];
+        let team_id_for = |color: &str| -> u64 {
+            detected_targets.get(color).copied().unwrap_or_else(|| representative_team_id(color))
+        };
         let mut t = json!({
             "id": e.id, "name": e.name, "enemyPlayer": e.is_player,
             // `dpsAll` (MEIGAP2 row 5): the enemy's OUTGOING damage total,
@@ -1971,7 +2097,7 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             obj.insert("buffs".to_string(), json!(buffs));
         }
         t
-    }).collect();
+    });
     // `buffMap` (M3 Task 5): a subset covering only the 12 tracked boons,
     // keyed `"b<id>"` per real EI's convention (verified against
     // axibridge's `test-fixtures/boon/20260117-181030.json`,
@@ -2030,21 +2156,10 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             "canCrit": e.can_crit,
         }))
     }).collect();
-    let mut out = json!({
-        "fightName": format!("Detailed WvW - {}", report.encounter.map),
-        "durationMS": report.encounter.duration_ms,
-        "recordedBy": report.encounter.recorded_by,
-        "success": true,
-        "eliteInsightsVersion": null,
-        "players": players,
-        "targets": targets,
-        "buffMap": buff_map,
-        "skillMap": skill_map,
-        "wvWMapData": {
-            "redTeamID": team_id_for("red"),
-            "blueTeamID": team_id_for("blue"),
-            "greenTeamID": team_id_for("green")
-        }
+    let wvw_map_data = json!({
+        "redTeamID": team_id_for("red"),
+        "blueTeamID": team_id_for("blue"),
+        "greenTeamID": team_id_for("green")
     });
     // `damageModMap` (M16, Task 3): `"d<signed id>"` ->
     // `{ name, icon, description, nonMultiplier, isCounter, skillBased,
@@ -2063,9 +2178,8 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
     // `damageModMap` lazily from inside the per-player emission loop
     // (`JsonDamageModifierDataBuilder.cs:47-51`) -- a catalogued modifier no
     // player triggered never appears.
-    if let Some(mods) = modifiers {
-        let damage_mod_map: BTreeMap<String, Value> = mods
-            .meta
+    let damage_mod_map: Option<BTreeMap<String, Value>> = modifiers.map(|mods| {
+        mods.meta
             .iter()
             .map(|(&id, m)| {
                 (format!("d{id}"), json!({
@@ -2079,11 +2193,8 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                     "incoming": m.incoming,
                 }))
             })
-            .collect();
-        out.as_object_mut()
-            .expect("ei-json root is an object")
-            .insert("damageModMap".to_string(), json!(damage_mod_map));
-    }
+            .collect()
+    });
     // `combatReplayMetaData` (M15, Task 3): the arena image every
     // `combatReplayData.positions` pair is a pixel coordinate ON -- present
     // only when replay was requested AND the log's map is one GW2EI ships
@@ -2098,22 +2209,76 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
     // Every float here goes through `ei_float` -- `inchToPixel` is the
     // canonical trap (`0.009` as a C# `float`; widened to `f64` its
     // shortest round-trip becomes `0.008999999612569809`).
-    if let Some(meta) = replay.and_then(|r| r.meta.as_ref()) {
-        out.as_object_mut().expect("ei-json root is an object").insert(
-            "combatReplayMetaData".to_string(),
-            json!({
-                "inchToPixel": ei_float(f64::from(meta.inch_to_pixel)),
-                "pollingRate": meta.polling_rate,
-                "sizes": meta.sizes,
-                "maps": meta.maps.iter().map(|m| json!({
-                    "url": m.url,
-                    "interval": m.interval,
-                    "position": [ei_float(m.position[0]), ei_float(m.position[1])],
-                })).collect::<Vec<_>>(),
-            }),
-        );
+    let combat_replay_meta = replay.and_then(|r| r.meta.as_ref()).map(|meta| {
+        json!({
+            "inchToPixel": ei_float(f64::from(meta.inch_to_pixel)),
+            "pollingRate": meta.polling_rate,
+            "sizes": meta.sizes,
+            "maps": meta.maps.iter().map(|m| json!({
+                "url": m.url,
+                "interval": m.interval,
+                "position": [ei_float(m.position[0]), ei_float(m.position[1])],
+            })).collect::<Vec<_>>(),
+        })
+    });
+    EiDoc {
+        fight_name: format!("Detailed WvW - {}", report.encounter.map),
+        duration_ms: report.encounter.duration_ms,
+        recorded_by: report.encounter.recorded_by.as_deref(),
+        player_count: report.players.len(),
+        player_json: std::cell::RefCell::new(player_json),
+        target_count: report.all_enemies.len(),
+        target_json: std::cell::RefCell::new(target_json),
+        buff_map,
+        skill_map,
+        damage_mod_map,
+        combat_replay_meta,
+        wvw_map_data,
     }
-    out
+}
+
+/// Stream the ei-json document straight into `w` (MSTREAM).
+///
+/// This is the memory-critical path — the CLI's `--format ei-json` uses it,
+/// with or without `-o`. Peak resident memory is the analysis results plus
+/// one player row plus `w`'s own buffer, instead of the whole document tree
+/// AND its pretty-printed `String` (the pre-MSTREAM CLI held both at once).
+///
+/// Output is byte-identical to `serde_json::to_string_pretty(&to_ei_json(..))`
+/// — same `PrettyFormatter`, same key order, same numbers (every float still
+/// goes through `ei_float`/`ei_double`/`ei_damage_gain`/`ei_breakbar` and is
+/// carried as a `Value` into the serializer). No trailing newline is written;
+/// the CLI appends its own, exactly as it did when it `format!`-ed one on.
+pub fn write_ei_json<W: std::io::Write>(
+    report: &Report,
+    inputs: &EiInputs<'_>,
+    w: W,
+) -> serde_json::Result<()> {
+    let doc = ei_doc(report, inputs);
+    let mut ser = serde_json::Serializer::with_formatter(
+        w,
+        serde_json::ser::PrettyFormatter::new(),
+    );
+    serde::Serialize::serialize(&doc, &mut ser)
+}
+
+/// Render a [`Report`] plus its EI-only side inputs as an Elite-Insights-
+/// compatible `serde_json::Value`.
+///
+/// The SDK-facing entry point: `axilog-node` hands the tree to napi and
+/// `axilog-py` hands it to pythonize, both of which need a materialized
+/// `Value` anyway, so there is nothing to stream away for them. It shares
+/// [`ei_doc`] with [`write_ei_json`] — one definition of the format, no
+/// second tree-builder to drift.
+///
+/// Prefer [`write_ei_json`] whenever the destination is a file, a socket, or
+/// stdout: this function's peak memory is the whole document.
+///
+/// See [`EiInputs`] for what each input gates; `EiInputs::default()` renders
+/// everything that is derivable from the `Report` alone.
+pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
+    let doc = ei_doc(report, inputs);
+    serde_json::to_value(&doc).expect("ei-json document is infallibly serializable")
 }
 
 #[cfg(test)]
