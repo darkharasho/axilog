@@ -90,7 +90,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "axilog-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axilog-core",
  "axilog-ei",
@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "axilog-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "flate2",
  "serde_json",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "axilog-ei"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axilog-core",
  "axilog-schema",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "axilog-html"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axilog-core",
  "axilog-schema",
@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "axilog-node"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axilog-core",
  "axilog-ei",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "axilog-py"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axilog-core",
  "axilog-ei",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "axilog-schema"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axilog-core",
  "serde",
