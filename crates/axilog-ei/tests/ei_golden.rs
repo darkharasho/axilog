@@ -523,9 +523,14 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
             // `distinct_boons_stripped * logDuration`, not a duration sum.
             // axilog emits the TRUE sum instead, so the golden's raw value
             // is joined by RECONSTRUCTING EI's formula from this project's
-            // own per-boon strip detail. That pins the removal set per
-            // player AND per boon (a strictly stronger check than comparing
-            // sums), without enshrining the bug in axilog's output.
+            // own per-boon strip detail. Note what that does and does not
+            // pin: `max(current + r, L)` from `current = 0` swallows the
+            // FIRST removal's duration per boon whenever it is below the
+            // log length, so the join pins the distinct-boon SET, the
+            // per-boon removal COUNT (via `boonStrips`, asserted exactly
+            // above) and every removal AFTER the first -- not the first
+            // one's duration. Still materially stronger than comparing two
+            // sums, and it does not enshrine the bug in axilog's output.
             {
                 let mut per_boon: std::collections::BTreeMap<u32, Vec<u64>> =
                     std::collections::BTreeMap::new();

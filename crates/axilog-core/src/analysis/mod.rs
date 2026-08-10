@@ -455,7 +455,7 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // (see `defenses`'s module doc). No `enemies` set needed: unlike
     // `hit_stats`, this is scoped to ANY source hitting a squad player, same
     // as `damage::accumulate_damage_taken`.
-    let defenses_by_rep = defenses::build(raw, &squad, &addr_to_rep);
+    let defenses_by_rep = defenses::build_with_registry(raw, &registry, &squad, &addr_to_rep);
     for p in &mut players {
         if let Some(d) = defenses_by_rep.get(&p.agent_addr) {
             p.defenses = *d;

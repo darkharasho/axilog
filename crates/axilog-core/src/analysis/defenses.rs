@@ -359,9 +359,15 @@ pub struct DefenseStats {
     /// `CombatData.GetBuffRemoveAllDataByDst(AgentItem)` -- removals whose
     /// VICTIM is this actor) and skips a removal when
     /// `brae.CreditedBy.IsUnknown` or `brae.CreditedBy.Is(actor.AgentItem)`.
-    /// Both skips are reproduced below; `CreditedBy` is
-    /// `By.GetFinalMaster()` (`BuffEvent.cs:13`), so a player's own
-    /// minion's strip on himself is a self-removal here too.
+    ///
+    /// **Both skips test `CreditedBy`, not the raw remover.** `CreditedBy`
+    /// is `By.GetFinalMaster()` (`BuffEvent.cs:13`), so the MINION fold
+    /// happens first and both tests then apply to the resolved owner: a
+    /// player's own minion's strip on himself is a self-removal, and a
+    /// removal is "unknown" only when the OWNER cannot be resolved. Both
+    /// are reproduced in [`incoming_boon_strips`], through the same
+    /// single-hop `InstidRegistry` master fold every other pet-crediting
+    /// pass in this crate uses.
     pub boon_strips_taken: u32,
     /// The sum of `BuffRemoveAllEvent.RemovedDuration` (raw
     /// `evtcItem.Value`, ms) over exactly the removals
@@ -719,13 +725,32 @@ pub fn incoming_boon_strips(
     squad: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
 ) -> BTreeMap<u64, Vec<(u32, u64)>> {
+    incoming_boon_strips_with_registry(
+        raw,
+        &crate::analysis::damage::InstidRegistry::build(raw),
+        squad,
+        addr_to_rep,
+    )
+}
+
+/// [`incoming_boon_strips`] against a caller-supplied, already-built
+/// [`InstidRegistry`] (MPERF Task 2 convention) -- the registry is what
+/// resolves `CreditedBy`'s minion fold. The `raw`-only wrapper above stays
+/// for standalone/test callers.
+pub fn incoming_boon_strips_with_registry(
+    raw: &RawLog,
+    registry: &crate::analysis::damage::InstidRegistry,
+    squad: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) -> BTreeMap<u64, Vec<(u32, u64)>> {
     let post_era = raw.header.is_post_buff_rework();
     let boon_ids: BTreeSet<u32> =
         crate::analysis::buffs::BOON_IDS.iter().map(|&(id, _, _)| id).collect();
     // `CreditedBy.IsUnknown` (`DefensePerTargetStatistics.cs:60`): GW2EI's
     // `AgentItem.Unknown` is the placeholder it hands out for an addr that
     // never appeared in the log's agent table, so membership in that table
-    // is exactly the test.
+    // is exactly the test -- applied to the MASTER-FOLDED remover, since
+    // `CreditedBy` is `By.GetFinalMaster()`.
     let known_agents: BTreeSet<u64> = raw.agents.iter().map(|a| a.addr).collect();
     let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
 
@@ -752,10 +777,21 @@ pub fn incoming_boon_strips(
         if !squad.contains(&victim) {
             continue;
         }
-        if !known_agents.contains(&remover) {
+        // `CreditedBy = By.GetFinalMaster()` (`BuffEvent.cs:13`): fold the
+        // remover onto its owner BEFORE either skip test, through the same
+        // single-hop `*_master_instid` -> registry resolution
+        // `damage::pet_credit_events`/`cc::pet_credit_cc_events`/
+        // `downs::credited_squad_source` all use. Roles are inverted on a
+        // removal row, so it is the `dst_*` triple that describes the
+        // remover -- the same read `contribution::credit_window`'s strips
+        // branch already makes. A removal with no master link resolves to
+        // the remover itself, which is what `GetFinalMaster` returns for a
+        // masterless agent.
+        let credited = registry.resolve_at(e.dst_master_instid, e.time).unwrap_or(remover);
+        if !known_agents.contains(&credited) {
             continue; // `CreditedBy.IsUnknown`
         }
-        if rep(remover) == rep(victim) {
+        if rep(credited) == rep(victim) {
             continue; // `excludeSelf` (`CreditedBy.Is(actor.AgentItem)`)
         }
         out.entry(rep(victim)).or_default().push((e.skillid, e.value.max(0) as u64));
@@ -764,6 +800,19 @@ pub fn incoming_boon_strips(
 }
 
 pub fn build(raw: &RawLog, squad: &BTreeSet<u64>, addr_to_rep: &BTreeMap<u64, u64>) -> BTreeMap<u64, DefenseStats> {
+    build_with_registry(raw, &crate::analysis::damage::InstidRegistry::build(raw), squad, addr_to_rep)
+}
+
+/// [`build`] against a caller-supplied, already-built [`InstidRegistry`]
+/// (MPERF Task 2 convention) -- needed since MEIGAP Task 1c, whose incoming
+/// boon strips resolve `CreditedBy`'s minion fold through it. The
+/// `raw`-only wrapper above stays for standalone/test callers.
+pub fn build_with_registry(
+    raw: &RawLog,
+    registry: &crate::analysis::damage::InstidRegistry,
+    squad: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) -> BTreeMap<u64, DefenseStats> {
     let post_era = raw.header.is_post_buff_rework();
     let mut by_addr = accumulate(&raw.events, squad, post_era);
     accumulate_breakbar_and_received_cc(&raw.events, squad, post_era, &mut by_addr);
@@ -777,7 +826,7 @@ pub fn build(raw: &RawLog, squad: &BTreeSet<u64>, addr_to_rep: &BTreeMap<u64, u6
     // Incoming boon strips fold themselves (their shared primitive is
     // already keyed by representative addr, since the self-exclusion needs
     // the relog fold to decide "self" correctly in the first place).
-    for (rep, strips) in incoming_boon_strips(raw, squad, addr_to_rep) {
+    for (rep, strips) in incoming_boon_strips_with_registry(raw, registry, squad, addr_to_rep) {
         let stats = by_rep.entry(rep).or_default();
         stats.boon_strips_taken += strips.len() as u32;
         stats.boon_strips_taken_duration_ms += strips.iter().map(|&(_, ms)| ms).sum::<u64>();
@@ -1027,6 +1076,60 @@ mod tests {
         let by_rep = build(&raw, &squad, &BTreeMap::new());
         assert_eq!(by_rep[&1].boon_strips_taken, 1);
         assert_eq!(by_rep[&1].boon_strips_taken_duration_ms, 2400);
+    }
+
+    /// `CreditedBy = By.GetFinalMaster()`: a squad player's own MINION
+    /// stripping a boon off him is a SELF-removal and must not count, even
+    /// though the raw remover addr differs from the victim's
+    /// (`DefensePerTargetStatistics.cs:61`'s `excludeSelf` test is on
+    /// `CreditedBy`, not on `By`).
+    #[test]
+    fn incoming_boon_strips_exclude_a_players_own_minion_via_the_master_fold() {
+        // The minion (addr 50, instid 5) is registered as owned by player 1
+        // (instid 1) through an ordinary earlier event.
+        let mut intro = base(50, 9);
+        intro.src_instid = 5;
+        intro.src_master_instid = 1;
+        let mut owner_intro = base(1, 9);
+        owner_intro.src_instid = 1;
+
+        let mut minion_strip = base(1, 50); // victim = 1, remover = the minion
+        minion_strip.skillid = crate::analysis::buffs::MIGHT;
+        minion_strip.is_buffremove = crate::evtc::buff_remove::ALL;
+        minion_strip.value = 3000;
+        minion_strip.dst_instid = 5;
+        minion_strip.dst_master_instid = 1; // -> resolves to player 1 == the victim
+
+        let mut raw = raw_from(vec![owner_intro, intro, minion_strip]);
+        raw.agents = vec![agent(1), agent(50), agent(9)];
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let by_rep = build(&raw, &squad, &BTreeMap::new());
+        assert_eq!(
+            by_rep.get(&1).map(|d| d.boon_strips_taken).unwrap_or(0),
+            0,
+            "a player's own minion's strip is a self-removal under CreditedBy"
+        );
+    }
+
+    /// The mirror: an ENEMY's minion still counts, and is credited by the
+    /// victim (the strip is an incoming stat, so the owner's identity only
+    /// matters for the two skip tests).
+    #[test]
+    fn incoming_boon_strips_count_an_enemy_minion_after_the_master_fold() {
+        let mut owner_intro = base(9, 1);
+        owner_intro.src_instid = 9;
+        let mut strip = base(1, 50);
+        strip.skillid = crate::analysis::buffs::MIGHT;
+        strip.is_buffremove = crate::evtc::buff_remove::ALL;
+        strip.value = 3000;
+        strip.dst_instid = 5;
+        strip.dst_master_instid = 9; // -> enemy 9, not the victim
+        let mut raw = raw_from(vec![owner_intro, strip]);
+        raw.agents = vec![agent(1), agent(9), agent(50)];
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let by_rep = build(&raw, &squad, &BTreeMap::new());
+        assert_eq!(by_rep[&1].boon_strips_taken, 1);
+        assert_eq!(by_rep[&1].boon_strips_taken_duration_ms, 3000);
     }
 
     /// A removal credited to an agent the log never enumerated is dropped

@@ -39,16 +39,20 @@
 //!
 //! **Scope, per field, mirroring each rollup exactly.** GW2EI's
 //! `GetDamageEvents` folds minion damage in (`SingleActor.cs:734-739`), but
-//! all of `OffensiveStatistics`' hit-quality fields sit INSIDE a
-//! `dl.From.Is(actor.AgentItem)` guard (`:68`) that re-narrows them to the
-//! actor -- which is why this project's `hit_stats` (M13 Task 1) is
-//! actor-only and calibrates exactly. `HasKilled`/`HasDowned` are the
-//! exception: their branch sits OUTSIDE that guard, so a pet's or minion's
-//! finishing blow counts for its owner. `downs::credited_squad_source`
-//! carries that fold (and the measurement that forced it) and is reused
-//! verbatim here, so each column sums to its own rollup:
-//! `connected_hits`/`against_downed_count` to `hit_stats`, `downed`/
-//! `killed` to `downs_dealt`/`kills_dealt`.
+//! most of `OffensiveStatistics`' fields sit INSIDE a
+//! `dl.From.Is(actor.AgentItem)` guard (`OffensiveStatistics.cs:67`) that
+//! re-narrows them to the actor -- which is why this project's `hit_stats`
+//! (M13 Task 1) is actor-only and calibrates exactly.
+//!
+//! **THREE fields are outside that guard** and are therefore
+//! minion-inclusive: `HasInterrupted` (`:186-189`), `HasKilled` (`:190-193`)
+//! and `HasDowned` (`:194-197`) -- a pet's or minion's interrupting,
+//! finishing or downing blow counts for its owner.
+//! `downs::credited_squad_source` carries that single-hop master fold (and
+//! the measurement that forced it) and is reused verbatim for all three, so
+//! each column sums to its own rollup: `connected_hits`/
+//! `against_downed_count` to `hit_stats`, `downed`/`killed` to
+//! `downs_dealt`/`kills_dealt`.
 //!
 //! **`downContribution` is deliberately NOT here.** EI's per-target
 //! `downContribution` (`OffensiveStatistics.cs:85-108`) is damage dealt to
@@ -136,19 +140,18 @@ pub fn build(
         // malformed row rather than a real marker; post-era every row uses
         // the unified `DamageResult` enum and the ungated read is simply
         // correct.
-        if e.result == result::DOWNED || e.result == result::KILLING_BLOW {
-            // Minion-inclusive, matching `downs::apply_with_registry`'s own
-            // credited-source fold byte for byte (see its
-            // `credited_squad_source` doc comment for the
-            // `OffensiveStatistics.cs:190-197` citation) -- which is what
-            // makes this column sum to `downs_dealt`/`kills_dealt`.
+        if matches!(e.result, result::DOWNED | result::KILLING_BLOW | result::INTERRUPT) {
+            // The three minion-INCLUSIVE fields (this module's scope note):
+            // credited through `downs::apply_with_registry`'s own
+            // credited-source fold, byte for byte -- which is what makes
+            // `downed`/`killed` sum to `downs_dealt`/`kills_dealt`.
             let Some(owner) = downs_credited_source(e, registry, squad) else { continue };
             let src = addr_to_rep.get(&owner).copied().unwrap_or(owner);
             let s = out.entry((src, dst)).or_default();
-            if e.result == result::DOWNED {
-                s.downed += 1;
-            } else {
-                s.killed += 1;
+            match e.result {
+                result::DOWNED => s.downed += 1,
+                result::KILLING_BLOW => s.killed += 1,
+                _ => s.interrupts += 1,
             }
             continue;
         }
@@ -159,10 +162,6 @@ pub fn build(
             continue;
         }
         let src = addr_to_rep.get(&e.src_agent).copied().unwrap_or(e.src_agent);
-        if e.result == result::INTERRUPT {
-            out.entry((src, dst)).or_default().interrupts += 1;
-            continue;
-        }
 
         let Some(c) = classify(e, post_era) else { continue };
         let s = out.entry((src, dst)).or_default();
@@ -249,6 +248,55 @@ mod tests {
         let out = run(vec![e]);
         assert_eq!(out[&(1, 9)].against_downed_count, 1);
         assert_eq!(out[&(1, 9)].connected_hits, 1);
+    }
+
+    /// `HasInterrupted` sits outside GW2EI's `From.Is(actor)` guard
+    /// alongside `HasKilled`/`HasDowned`
+    /// (`OffensiveStatistics.cs:186-197`), so a MINION's interrupt counts
+    /// for its owner -- exactly like its finishing blow.
+    #[test]
+    fn minion_sourced_markers_credit_the_owner() {
+        // Register minion instid 5 -> owner (squad player 1, instid 1).
+        // A BLOCKED row, so the registration itself contributes nothing to
+        // any counter (`classify` returns `None` for it).
+        let mut owner_intro = base(1, 9);
+        owner_intro.src_instid = 1;
+        owner_intro.result = result::BLOCK;
+        let minion = |result_: u8| {
+            let mut e = base(50, 9); // src is the MINION, not a squad addr
+            e.src_instid = 5;
+            e.src_master_instid = 1;
+            e.result = result_;
+            e
+        };
+        let out = run(vec![
+            owner_intro,
+            minion(result::INTERRUPT),
+            minion(result::DOWNED),
+            minion(result::KILLING_BLOW),
+        ]);
+        assert_eq!(
+            out[&(1, 9)],
+            PerTargetOffense { interrupts: 1, downed: 1, killed: 1, ..Default::default() },
+            "all three of GW2EI's unguarded markers fold onto the owner"
+        );
+    }
+
+    /// A minion's ordinary HIT does NOT credit the owner here -- hit
+    /// quality sits INSIDE GW2EI's `From.Is(actor)` guard, which is what
+    /// keeps this column summing to actor-only `hit_stats`.
+    #[test]
+    fn minion_sourced_hits_do_not_credit_the_owner() {
+        let mut owner_intro = base(1, 9);
+        owner_intro.src_instid = 1;
+        owner_intro.result = result::BLOCK;
+        let mut hit = base(50, 9);
+        hit.src_instid = 5;
+        hit.src_master_instid = 1;
+        hit.result = result::NORMAL;
+        hit.value = 100;
+        let out = run(vec![owner_intro, hit]);
+        assert!(out.is_empty());
     }
 
     /// A pair with no qualifying event never appears (the map is sparse --

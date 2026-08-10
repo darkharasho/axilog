@@ -175,16 +175,35 @@ fn ei_json_boon_generation_arrays_match_the_reference_export_when_available() {
         for key in ["selfBuffs", "groupBuffs", "squadBuffs"] {
             let o_rows = buff_rows(&o[key]);
             let g_rows = buff_rows(&g[key]);
-            assert!(!o_rows.is_empty(), "{account}.{key}: emitted array must not be empty");
-            for (&id, o_row) in &o_rows {
-                // The reference omits an id entirely where this player was
-                // never a source for it (GW2EI's `hasGeneration` filter);
-                // that is the documented `generation: 0` case, so treat an
-                // absent reference row as 0 rather than skipping it -- an
-                // emitted nonzero against an absent reference row IS a
-                // failure worth catching.
-                let g_val = g_rows.get(&id).map(|r| r["generation"].as_f64().unwrap_or(0.0)).unwrap_or(0.0);
-                let o_val = o_row["generation"].as_f64().expect("emitted generation is a number");
+            assert!(
+                key != "selfBuffs" || o_rows.len() == 12,
+                "{account}.selfBuffs must carry all 12 tracked boons (EI's selfBuffs id set is \
+                 its buffUptimes id set), got {}",
+                o_rows.len()
+            );
+            // The UNION of both id sets, so the comparison is symmetric:
+            // EITHER side may legitimately omit an id (this adapter filters
+            // `groupBuffs`/`squadBuffs` on `generation > 0`, EI filters them
+            // on `hasGeneration`), and an absent row means 0 on both sides.
+            // Iterating our own rows alone would let a reference row we
+            // wrongly dropped pass silently -- exactly the regression the
+            // MEIGAP fix round's size decision could have introduced.
+            let ids: std::collections::BTreeSet<i64> =
+                o_rows.keys().chain(g_rows.keys()).copied().collect();
+            for id in ids {
+                // Restrict to the 12 boons this project tracks at all --
+                // EI's arrays span 43 buffs on this capture, and an id
+                // outside `BOON_IDS` is a documented SCOPE gap, not a
+                // calibration failure.
+                if !axilog_core::analysis::buffs::BOON_IDS.iter().any(|&(b, _, _)| b as i64 == id) {
+                    continue;
+                }
+                let g_val =
+                    g_rows.get(&id).map(|r| r["generation"].as_f64().unwrap_or(0.0)).unwrap_or(0.0);
+                let o_val = o_rows
+                    .get(&id)
+                    .map(|r| r["generation"].as_f64().expect("emitted generation is a number"))
+                    .unwrap_or(0.0);
                 checked += 1;
                 let delta = (o_val - g_val).abs();
                 let allowlisted = GENERATION_TOLERANCE_ALLOWLISTED_BOONS.contains(&id);
@@ -237,9 +256,18 @@ fn ei_json_boon_generation_arrays_match_the_reference_export_when_available() {
 /// boon_strips_taken_duration_ms`. Instead this test reconstructs EI's
 /// formula from THIS project's own per-boon strip detail
 /// (`defenses::incoming_boon_strips`) and asserts the reconstruction is
-/// byte-exact against the export. That is a strictly STRONGER check than
-/// comparing a sum would be: it pins the removal set per player AND per
-/// boon, while leaving axilog's own output the correct number.
+/// byte-exact against the export. That pins MOST of the removal set, but
+/// not all of it, and it is worth being precise about which part:
+/// `max(current + r, L)` from `current = 0` means the FIRST removal of each
+/// boon contributes `max(r1, L)`, so its own `RemovedDuration` is swallowed
+/// entirely whenever `r1 < L`. What the reconstruction pins exactly is
+/// (i) the SET of distinct boons stripped off each player, (ii) the COUNT
+/// of removals per boon (via `boonStrips`, asserted separately and
+/// exactly), and (iii) the `RemovedDuration` of every removal AFTER the
+/// first for each boon. A first removal's duration is unconstrained by this
+/// check when it falls below the log length. Still a materially stronger
+/// join than comparing two duration sums -- and the strongest one available
+/// without reproducing the bug.
 #[test]
 fn ei_json_incoming_cc_and_strips_match_the_reference_export_when_available() {
     let Some(c) = render_and_reference("ei-json incoming CC + strips") else { return };
@@ -580,6 +608,7 @@ fn ei_json_buff_states_match_the_reference_export_when_available() {
     let mut with_sources = 0usize;
     let mut duration_exact = 0usize;
     let mut duration_total = 0usize;
+    let mut duration_mismatched_instants = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
     for (account, o) in &ours_by_account {
@@ -656,7 +685,13 @@ fn ei_json_buff_states_match_the_reference_export_when_available() {
                 continue;
             }
             compared += 1;
-            let bound = if is_intensity_boon(id) { INTENSITY_STATE_STACK_BOUND } else { 1 };
+            // A duration boon's graph is 0/1 on both sides, so a per-instant
+            // bound of 1 would be vacuous. Those are held to a RATIO and an
+            // instant COUNT instead (see the two asserts at the end); the
+            // per-instant bound below is meaningful only for the two
+            // intensity boons.
+            let intensity = is_intensity_boon(id);
+            let bound = if intensity { INTENSITY_STATE_STACK_BOUND } else { i64::MAX };
             let (mut sum_ours, mut sum_theirs, mut n) = (0i64, 0i64, 0i64);
             let mut all_equal = true;
             let mut t = 0i64;
@@ -671,6 +706,9 @@ fn ei_json_buff_states_match_the_reference_export_when_available() {
                 if delta != 0 {
                     mismatched += 1;
                     all_equal = false;
+                    if !intensity {
+                        duration_mismatched_instants += 1;
+                    }
                 }
                 if delta > bound {
                     failures.push(format!(
@@ -680,7 +718,7 @@ fn ei_json_buff_states_match_the_reference_export_when_available() {
                 }
                 t += 1000;
             }
-            if !is_intensity_boon(id) {
+            if !intensity {
                 duration_total += 1;
                 if all_equal {
                     duration_exact += 1;
@@ -712,6 +750,28 @@ fn ei_json_buff_states_match_the_reference_export_when_available() {
         failures.len(),
         failures.iter().take(20).cloned().collect::<Vec<_>>().join("\n")
     );
+    // DURATION boons: a 0/1 graph on both sides, so "within tolerance" is
+    // meaningless and the real bar is how often the two differ AT ALL.
+    // Measured on the reference export: 397 of 398 timelines are
+    // sample-for-sample identical, and the single dissenter differs at
+    // exactly ONE of its sampled instants. Both are asserted, so the claim
+    // in the report is a gate and not just a printout.
+    assert!(
+        duration_total >= 300,
+        "expected >=300 duration-boon timelines to compare, got {duration_total}"
+    );
+    assert!(
+        duration_exact * 100 >= duration_total * 99,
+        "only {duration_exact}/{duration_total} duration-boon timelines are sample-for-sample \
+         exact vs the reference (measured 397/398); a duration graph is 0/1 on both sides, so \
+         anything below ~99% is a real divergence, not simulation precision"
+    );
+    assert!(
+        duration_mismatched_instants <= 8,
+        "{duration_mismatched_instants} duration-boon instants differ from the reference \
+         (measured 1); pinned at 8 for margin"
+    );
+
     let frac = mismatched as f64 / samples.max(1) as f64;
     assert!(
         frac <= STATE_SAMPLE_MISMATCH_FRACTION,
@@ -723,8 +783,9 @@ fn ei_json_buff_states_match_the_reference_export_when_available() {
         "ei_json_buff_states: {samples} instants across {compared} timelines / {joined} \
          accounts; {mismatched} differ ({:.2}%), worst instant {worst_instant} stack(s), worst \
          sampled-mean delta {worst_mean:.3}; {duration_exact}/{duration_total} duration-boon \
-         timelines sample-for-sample EXACT; statesPerSource sums within {worst_source_sum} \
-         stack(s) on {with_sources} populated entries",
+         timelines sample-for-sample EXACT ({duration_mismatched_instants} differing \
+         instants); statesPerSource sums within {worst_source_sum} stack(s) on \
+         {with_sources} populated entries",
         frac * 100.0
     );
 }

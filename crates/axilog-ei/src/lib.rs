@@ -281,13 +281,21 @@ fn ei_states_json(states: &[(u64, u32)]) -> Value {
 /// (`selfBuffs`/`groupBuffs`/`squadBuffs`), `pick` selecting which scope of
 /// [`axilog_schema::GenerationOut`] to read -- see the call sites' doc
 /// comment for the GW2EI citation trail.
+///
+/// `keep_zero` is EI's own id-set rule, which differs between the arrays --
+/// see the call site for the citation: `selfBuffs` keeps every id
+/// `buffUptimes` carries (zeros included), `groupBuffs`/`squadBuffs` are
+/// filtered to buffs this player is a recorded source for
+/// (`BuffStatistics.cs:66,100`'s `hasGeneration`).
 fn buff_generation_json(
     boons: &[axilog_schema::BoonOut],
     pick: fn(&axilog_schema::GenerationOut) -> f64,
+    keep_zero: bool,
 ) -> Value {
     Value::Array(
         boons
             .iter()
+            .filter(|b| keep_zero || pick(&b.generation) > 0.0)
             .map(|b| {
                 json!({
                     "id": b.id,
@@ -733,8 +741,10 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 // `DefenseStats::boon_strips_taken_duration_ms`'s doc
                 // comment for the measured proof on the reference export,
                 // and `crates/axilog-ei/tests/meigap_ei_golden.rs` for the
-                // calibration that pins the removal SET exactly by
-                // reconstructing EI's formula from our own strip detail.
+                // calibration, which reconstructs EI's formula from our own
+                // per-boon strip detail (pinning the distinct-boon set, the
+                // per-boon removal count and every removal after the first;
+                // EI's `Max` swallows the first one's duration).
                 // `TimeDigit` is 3, matching the export's own precision.
                 "receivedCrowdControl": p.defenses.received_cc_count,
                 "receivedCrowdControlDuration": p.defenses.received_cc_duration_ms,
@@ -858,21 +868,36 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
             // column while the generation column -- the metric that matters
             // -- is fully populated.)
             //
-            // Id set: one entry per tracked boon, in `BOON_IDS` order, the
-            // SAME set as `buffUptimes` above. That is exactly what real EI
-            // does for `selfBuffs` (verified on the reference export: its
-            // `selfBuffs` id list is character-for-character its
-            // `buffUptimes` id list, 43 of 43 on every player). For
-            // `groupBuffs`/`squadBuffs` real EI additionally filters to
-            // buffs this player appears as a source for at all
-            // (`BuffStatistics.cs:66,100`'s `hasGeneration`), so this array
-            // is a superset that carries explicit `generation: 0` rows
-            // where EI would omit the id entirely -- a zero this player
-            // genuinely did generate, not an invented number, and
-            // indistinguishable to every id-keyed consumer.
-            "selfBuffs": buff_generation_json(&p.boons, |g| g.self_pct),
-            "groupBuffs": buff_generation_json(&p.boons, |g| g.group_pct),
-            "squadBuffs": buff_generation_json(&p.boons, |g| g.squad_pct)
+            // Id sets, following EI's own two DIFFERENT rules:
+            //
+            // - `selfBuffs` carries every id `buffUptimes` carries, zeros
+            //   included. Verified on the reference export: its `selfBuffs`
+            //   id list is character-for-character its `buffUptimes` id
+            //   list, 43 of 43 on every player, and its first entry there
+            //   really does read `"generation": 0`. This emits all 12
+            //   tracked boons for the same reason -- `buffUptimes` above
+            //   emits all 12. (EI's 43 ids against this project's 12 is the
+            //   tracked-boon SCOPE difference the README already records --
+            //   these arrays are a 12-of-43 SUBSET, not a parity claim --
+            //   not a difference in this rule.)
+            // - `groupBuffs`/`squadBuffs` are filtered to buffs this player
+            //   is a recorded SOURCE for: `BuffStatistics.cs:66,100`'s
+            //   `hasGeneration`, i.e. `buffDistribution.HasSrc(boon.ID,
+            //   srcAgentItem)` on at least one target in scope. A source
+            //   with nonzero generated-ms on some target is exactly such a
+            //   source, so `> 0` reproduces that filter. It is marginally
+            //   NARROWER than `HasSrc`, which is also true for a source
+            //   that contributed only overstack/waste/extension and no held
+            //   time -- an all-zero row on the one field this adapter
+            //   emits, so dropping it loses nothing.
+            //
+            // Emitting all 12 in all THREE arrays was measured first and
+            // rejected: the zero rows carry no information and cost 39.4%
+            // of these arrays' bytes (see the MEIGAP Task 1 report's
+            // always-on size decision).
+            "selfBuffs": buff_generation_json(&p.boons, |g| g.self_pct, true),
+            "groupBuffs": buff_generation_json(&p.boons, |g| g.group_pct, false),
+            "squadBuffs": buff_generation_json(&p.boons, |g| g.squad_pct, false)
         });
         // `activeTimes`/`combatReplayData` (M11 Task 3): unlike every other
         // block on this player, these are ALWAYS present -- not gated on

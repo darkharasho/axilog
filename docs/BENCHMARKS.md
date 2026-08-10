@@ -501,25 +501,50 @@ crowd control, folded into the existing breakbar scan; incoming boon
 strips, one more scan over `BUFFREMOVE_ALL`-shaped rows). The two OPT-IN
 families it adds — the serialized `per_target` block behind
 `--skill-damage`, and `buffs::states` behind `--timeseries` — are outside
-`analyze()` entirely and so outside these numbers.
+`analyze()` entirely and so outside these numbers. The third always-on
+addition, the `selfBuffs`/`groupBuffs`/`squadBuffs` ei-json arrays, costs
+nothing here: it is a re-serialization of numbers `analyze()` already
+computed, and shows up as payload size (+21.3% compact on the flagless
+ei-json), not CPU.
 
-Same machine and harness as the baseline above. Measured 2026-08-10 against
+Same machine and harness as the baseline above, measured 2026-08-10 against
 `730212a` (the MEIGAP base).
+
+**Method matters here, and a first pass got it wrong.** An initial
+single-run-per-side measurement reported `full_pipeline` at +2.6%; a
+reviewer re-measuring independently got +4.3% with non-overlapping
+confidence intervals. Run-to-run drift on this machine is comparable to the
+effect being measured (the real-log `full_pipeline` spans 165.9-169.1 ms
+across three consecutive runs of the *same* binary), so a single
+before/after pair cannot resolve it. The numbers below are the MEDIAN of
+**three alternating base/tip pairs**, run back to back from two prebuilt
+bench binaries so no rebuild or checkout sits between the two sides of a
+pair. All six per-stage samples are listed so the spread is visible.
 
 | Stage | Before (`730212a`) | After | Δ |
 |---|---|---|---|
-| fixture `decode_raw` | 9.177 ms | 9.138 ms | −0.4% (noise) |
-| fixture `model::resolve` | 651.98 µs | 667.51 µs | +2.4% (noise) |
-| fixture `analysis::analyze` | 18.733 ms | 19.677 ms | +5.0% (+0.94 ms) |
-| fixture `full_pipeline` | 29.096 ms | 29.854 ms | **+2.6%** (+0.76 ms) |
-| real-log `decode_raw` | 77.460 ms | 76.585 ms | −1.1% (noise) |
-| real-log `model::resolve` | 3.741 ms | 3.813 ms | +1.9% (noise) |
-| real-log `analysis::analyze` | 85.253 ms | 89.046 ms | +4.4% (+3.79 ms) |
-| real-log `full_pipeline` | 167.54 ms | 171.08 ms | **+2.1%** (+3.54 ms) |
+| fixture `decode_raw` | 9.183 ms | 9.076 ms | −1.2% (noise) |
+| fixture `model::resolve` | 651.4 µs | 654.9 µs | +0.5% (noise) |
+| fixture `analysis::analyze` | 18.615 ms | 19.395 ms | +4.2% (+0.78 ms) |
+| fixture `full_pipeline` | 28.898 ms | 29.965 ms | **+3.7%** (+1.07 ms) |
+| real-log `decode_raw` | 76.682 ms | 77.081 ms | +0.5% (noise) |
+| real-log `model::resolve` | 3.830 ms | 3.819 ms | −0.3% (noise) |
+| real-log `analysis::analyze` | 86.611 ms | 89.767 ms | +3.6% (+3.16 ms) |
+| real-log `full_pipeline` | 168.620 ms | 171.220 ms | **+1.5%** (+2.60 ms) |
+
+Raw samples (base / tip, three pairs, ms unless noted):
+
+| Stage | base | tip |
+|---|---|---|
+| fixture `analysis::analyze` | 18.547 / 18.615 / 18.618 | 19.698 / 19.362 / 19.395 |
+| fixture `full_pipeline` | 29.148 / 28.681 / 28.898 | 30.115 / 29.844 / 29.965 |
+| real-log `analysis::analyze` | 85.913 / 88.092 / 86.611 | 88.996 / 90.191 / 89.767 |
+| real-log `full_pipeline` | 165.92 / 168.62 / 169.12 | 169.38 / 171.24 / 171.22 |
 
 The gate is `full_pipeline` (the plan's "no >5% pipeline regression"), and
-both arms land at roughly half of it. The cost is concentrated in
-`analyze`, as expected for three extra event-stream traversals.
+both arms clear it — the fixture arm by the smaller margin at +3.7%. The
+cost is concentrated in `analyze`, as expected for the extra event-stream
+traversals, and `build_report` dilutes it on the real log.
 
 Worth recording one measurement that went the wrong way first. Merging the
 incoming-CC classification into the pre-existing breakbar scan is a clear
