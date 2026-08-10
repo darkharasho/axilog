@@ -1367,23 +1367,47 @@ pub fn to_ei_json(report: &Report, inputs: &EiInputs<'_>) -> Value {
                 // hardcodes the flag to `true`, so the read surface is
                 // unchanged.
                 if healing_dist {
-                ho.insert(
-                    "outgoingHealingAllies".to_string(),
-                    Value::Array(
-                        d.ally_healing
-                            .iter()
-                            .map(|c| json!([ { "healing": c.healing, "downedHealing": c.downed_healing } ]))
-                            .collect(),
-                    ),
-                );
-                bo.insert(
-                    "outgoingBarrierAllies".to_string(),
-                    Value::Array(
-                        d.ally_barrier.iter().map(|&b| json!([ { "barrier": b } ])).collect(),
-                    ),
-                );
-                }
-                if healing_dist {
+                    ho.insert(
+                        "outgoingHealingAllies".to_string(),
+                        Value::Array(
+                            d.ally_healing
+                                .iter()
+                                .map(|c| {
+                                    json!([ { "healing": c.healing, "downedHealing": c.downed_healing } ])
+                                })
+                                .collect(),
+                        ),
+                    );
+                    bo.insert(
+                        "outgoingBarrierAllies".to_string(),
+                        Value::Array(
+                            d.ally_barrier.iter().map(|&b| json!([ { "barrier": b } ])).collect(),
+                        ),
+                    );
+                    // Two shape divergences from GW2EI, both deliberate and
+                    // both invisible to an id-keyed consumer:
+                    //
+                    // 1. **Row ORDER.** GW2EI emits dist rows in
+                    //    `GroupBy(x => x.SkillID)` order, i.e. first-event
+                    //    order; these are sorted by skill id ascending (the
+                    //    `BTreeMap` the pass accumulates into). Every reader
+                    //    of this array in axibridge keys by `entry.id`
+                    //    (`computePlayerAggregation.ts:1075-1097`), and so
+                    //    does the calibration, so nothing observes the
+                    //    difference -- but a byte-diff against a real export
+                    //    would.
+                    // 2. **Indirect ids are not added to `buffMap`.**
+                    //    `BuildHealingDist` routes an `IndirectHealing` row's
+                    //    id into `buffMap` rather than `skillMap`, so EI's
+                    //    consumers can name it. This adapter's `buffMap` is
+                    //    the 12 tracked boons (plus Task 2d's conditions),
+                    //    and a healing-over-time id is neither -- so an
+                    //    indirect row here carries a correct
+                    //    `indirectHealing: true` and an id that resolves in
+                    //    neither map. axibridge's `resolveSkillMeta` falls
+                    //    back to `"Skill <id>"`, which is the same fallback
+                    //    the always-on `skillMap` already documents for ids
+                    //    whose name this project cannot resolve.
                     ho.insert(
                         "totalHealingDist".to_string(),
                         json!([ heal_dist_json(&d.healing_dist, "totalHealing", true) ]),

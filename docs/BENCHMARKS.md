@@ -757,3 +757,14 @@ over the rendered document. MEIGAP Task 2's report quoted 289,017 B for the
 flagless base; that came from a different compaction method and is not
 comparable to this table. Base and tip here were measured with one method
 in one session.
+
+### Review-wave note (no re-measurement)
+
+The whole-branch review wave that followed changed only docs, tests, the
+committed golden and dead code, plus two guards: `anonymize_raw_evtc` now
+rejects a non-revision-1 file up front, and `healing_detail`'s extension
+check was hoisted so it is asked once per pass instead of three times (an
+`.any()` that short-circuits on the present path and, on the absent path,
+now runs once before the early return instead of twice). The four rendered
+`ei-json` documents (flagless, `--skill-damage`, `--timeseries`, both) are
+**sha256-identical** across the wave, so the numbers above stand unchanged.

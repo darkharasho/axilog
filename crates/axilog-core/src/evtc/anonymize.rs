@@ -48,6 +48,19 @@ pub fn anon_account(n: usize) -> String {
 /// all bytes outside the 64-byte name buffers of PLAYER agents are left
 /// byte-identical. Returns the number of PLAYER agents rewritten.
 pub fn anonymize_raw_evtc(data: &mut [u8]) -> Result<usize, EvtcError> {
+    // Revision guard (MEIGAP Task 3 review). Every offset below --
+    // `AGENT_SIZE`, `NAME_BUF_OFFSET`, and in particular
+    // `anonymize_guild_events`' `EVENT_SIZE_REV1` stride -- is a
+    // revision-1 layout constant. On a revision-0 file the agent walk would
+    // rewrite the wrong bytes and, worse for privacy, the guild pass would
+    // step at the wrong stride and silently scrub nothing. `decode_raw`
+    // already refuses anything but revision 1
+    // (`evtc::container::decode_raw`), so this is the same contract, stated
+    // where the writer can honour it: REJECT rather than half-process.
+    let header = crate::evtc::decode_header(data)?;
+    if header.revision != 1 {
+        return Err(EvtcError::UnsupportedRevision(header.revision));
+    }
     let read_u32 = |d: &[u8], off: usize| -> Result<u32, EvtcError> {
         d.get(off..off + 4)
             .map(|s| u32::from_le_bytes(s.try_into().unwrap()))

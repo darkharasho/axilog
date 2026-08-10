@@ -225,8 +225,7 @@ pub(crate) fn resolve_markers_and_guilds(
         // but `wvw::apply` already runs several whole-event passes and a
         // separate one measured +12% on `model::resolve` for a single
         // `u8` compare per event -- see `docs/BENCHMARKS.md`.
-        if e.is_statechange == super::guilds::GUILD_STATECHANGE {
-            guilds.entry(e.src_agent).or_insert_with(|| super::guilds::decode_guild_guid(e));
+        if super::guilds::collect_guild_event(e, guilds) {
             continue;
         }
         if e.is_statechange != sc::MARKER {

@@ -459,7 +459,19 @@ Calibrated against a real dps.report EI export for one WvW log (Green Alpine Bor
 The `ei-json` output only emits fields backed by a real computed metric. Where real EI has a field
 we don't compute (e.g. per-target down-contribution/CC splits, most of `statsAll`'s damage-modifier
 detail, skill icons/DB names), it's simply omitted — never faked — and the omission is documented
-inline in `crates/axilog-ei/src/lib.rs`. As of M14 (rotation/skillMap), the remaining
+inline in `crates/axilog-ei/src/lib.rs`.
+
+**Honest parity accounting (MEIGAP).** Against the axibridge cutover audit's own gap-row list,
+**13 of its 23 cited-scope rows are closed, 1 is half-closed** (`selfBuffs`/`groupBuffs`/`squadBuffs`:
+`generation` lands, `wasted` does not), **7 are open** and 2 need no action. Still open, with the
+machinery to close them mostly already in the tree: the player-side `totalDamageDist` outcome columns
+(`connectedHits`/`glance`/`indirectDamage`/`downContribution` — the same classifier `minions[]` now
+uses), `healthPercents`, `instanceID`, `boonsStates`/`boonsAppliedCount`, `targets[].dpsAll[0].damage`,
+`dpsAll[0].breakbarDamage`, and `statsAll[0].saved` (which waits on the animated-cast pipeline).
+One closed row carries a live caveat: `targets[].totalDamageDist` is field-exact, but the
+damage-mitigation aggregate it exists for still differs on the full enemy roster — restricted to the
+`enemyPlayer` fold it is exact, so the fix is target-list curation. `targets[].profession` is
+unclosable because real EI does not emit it either. As of M14 (rotation/skillMap), the remaining
 axibridge-flagged Tier-1 analysis gaps are closed: the per-skill/per-second/dpsTargets family (M12),
 the hit-quality/defenses fine-grained outcome counts (M13), and rotation/skillMap (M14) that used to
 be entirely absent from `ei-json` are now all emitted — as are replay positions in EI's own

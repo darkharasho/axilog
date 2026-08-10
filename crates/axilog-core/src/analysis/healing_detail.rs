@@ -99,6 +99,24 @@
 //! See the adapter and `docs/BENCHMARKS.md` for the measured sizes behind
 //! the two non-obvious choices.
 //!
+//! ## Two shape divergences from GW2EI, both id-keyed-invisible
+//!
+//! 1. **Dist row ORDER.** GW2EI emits `totalHealingDist` in
+//!    `GroupBy(x => x.SkillID)` order (first-event order); this pass emits
+//!    ascending skill id, because it accumulates into a `BTreeMap`. Every
+//!    axibridge reader keys by `entry.id`
+//!    (`computePlayerAggregation.ts:1075-1097`), as does the calibration,
+//!    so nothing observes it -- but a byte-diff against a real export
+//!    would.
+//! 2. **Indirect healing ids resolve in no map.** GW2EI's
+//!    `BuildHealingDist` routes an `IndirectHealing` row's id into
+//!    `buffMap` rather than `skillMap`. This adapter's `buffMap` carries
+//!    the 12 tracked boons (plus Task 2d's conditions) and a
+//!    healing-over-time id is neither, so such a row ships a correct
+//!    `indirectHealing: true` alongside an id the consumer will render as
+//!    `"Skill <id>"` -- the same fallback the always-on `skillMap` already
+//!    documents for unresolvable ids.
+//!
 //! ## Everything here is extension-gated already
 //!
 //! [`build`] returns `None` on a log with no healing extension, which is
@@ -206,6 +224,19 @@ pub fn build_with_registry(
     registry: &InstidRegistry,
     enc: &Encounter,
 ) -> Option<HealingDetail> {
+    // The extension gate, decided ONCE for this pass (review fix). It has
+    // to live here rather than only in `build`, because `None` must mean
+    // "no extension" and not "an extension that produced no rows" -- but it
+    // used to be asked twice more below (once directly, once inside
+    // `healing::attributed_events`). `healing_extension_present` is an
+    // `.any()` over registration rows, so on the PRESENT path it
+    // short-circuits within the first few events and the remaining check
+    // inside `attributed_events` is free; on the ABSENT path (which is most
+    // logs) it is a full scan, and this is now the only one that runs
+    // before the early return.
+    if !crate::evtc::ext_healing::healing_extension_present(raw) {
+        return None;
+    }
     // Same two folds `analysis::mod::analyze` builds for every other pass.
     let squad: BTreeSet<u64> =
         enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
@@ -216,9 +247,6 @@ pub fn build_with_registry(
         .collect();
 
     let events = healing::attributed_events(raw, registry, &squad, &addr_to_rep);
-    if events.is_empty() && !crate::evtc::ext_healing::healing_extension_present(raw) {
-        return None;
-    }
 
     let index_of: BTreeMap<u64, usize> =
         enc.players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();

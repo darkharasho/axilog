@@ -55,7 +55,7 @@
 //! only for squad players, i.e. exactly the set whose account names the
 //! payload already carries. No new PII class.
 
-use crate::evtc::{sc, RawEvent, RawLog};
+use crate::evtc::{sc, RawEvent};
 use std::collections::BTreeMap;
 
 /// `CBTS_GUILD`. Index 29 in arcdps' `enum cbtstatechange` (counted from
@@ -94,18 +94,24 @@ pub fn decode_guild_guid(e: &RawEvent) -> String {
     )
 }
 
-/// `agent addr -> guild GUID` for every agent with at least one
-/// `CBTS_GUILD` row, keeping the FIRST row per agent (GW2EI's
-/// `FirstOrDefault`).
-pub fn resolve(raw: &RawLog) -> BTreeMap<u64, String> {
-    let mut out: BTreeMap<u64, String> = BTreeMap::new();
-    for e in &raw.events {
-        if e.is_statechange != GUILD_STATECHANGE {
-            continue;
-        }
-        out.entry(e.src_agent).or_insert_with(|| decode_guild_guid(e));
+/// Record `e` into `out` if it is a `CBTS_GUILD` row, keeping the FIRST
+/// row per agent (GW2EI's `FirstOrDefault`). Returns whether the row was a
+/// guild row, so a caller sharing its event loop can `continue`.
+///
+/// This is the ONLY guild-collection implementation in the crate. It is a
+/// per-event helper rather than a whole-stream pass because the live caller
+/// is `wvw::markers::resolve_markers_and_guilds`, which folds guild rows
+/// into the marker scan it already runs: a standalone
+/// `raw.events.iter()` pass measured +12% on fixture `model::resolve` and
+/// +18% on the real log for a single `u8` compare per event (see
+/// `docs/BENCHMARKS.md`). Keeping one implementation, called from that
+/// loop, is what stops the decode and its tests from drifting apart.
+pub fn collect_guild_event(e: &RawEvent, out: &mut BTreeMap<u64, String>) -> bool {
+    if e.is_statechange != GUILD_STATECHANGE {
+        return false;
     }
-    out
+    out.entry(e.src_agent).or_insert_with(|| decode_guild_guid(e));
+    true
 }
 
 /// Keeps `sc`'s named constants honest: this module's own constant must
@@ -115,7 +121,7 @@ const _: () = assert!(GUILD_STATECHANGE != sc::NONE);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::evtc::{RawEvent, RawHeader, RawLog};
+    use crate::evtc::RawEvent;
 
     fn ev(src: u64, dst: u64, value: i32, buff_dmg: i32) -> RawEvent {
         RawEvent {
@@ -163,30 +169,23 @@ mod tests {
     /// GW2EI takes `FirstOrDefault()`, so a later re-report never wins.
     #[test]
     fn first_event_per_agent_wins() {
-        let raw = RawLog {
-            header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
-            agents: vec![],
-            skills: vec![],
-            events: vec![ev(7, 1, 0, 0), ev(7, 2, 0, 0)],
-            guid_map: vec![],
-        };
-        let g = resolve(&raw);
+        let mut g = BTreeMap::new();
+        for e in [ev(7, 1, 0, 0), ev(7, 2, 0, 0)] {
+            assert!(collect_guild_event(&e, &mut g));
+        }
         assert_eq!(g.len(), 1);
         assert_eq!(g[&7], decode_guild_guid(&ev(7, 1, 0, 0)));
     }
 
-    /// Non-guild statechanges contribute nothing.
+    /// Non-guild statechanges contribute nothing, and the helper reports
+    /// that it did not consume them (so the shared marker loop falls
+    /// through to its own handling).
     #[test]
     fn ignores_other_statechanges() {
         let mut other = ev(7, 1, 0, 0);
         other.is_statechange = crate::evtc::sc::TEAM_CHANGE;
-        let raw = RawLog {
-            header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
-            agents: vec![],
-            skills: vec![],
-            events: vec![other],
-            guid_map: vec![],
-        };
-        assert!(resolve(&raw).is_empty());
+        let mut g = BTreeMap::new();
+        assert!(!collect_guild_event(&other, &mut g));
+        assert!(g.is_empty());
     }
 }

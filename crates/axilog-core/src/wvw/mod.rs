@@ -338,8 +338,9 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     // CBTS_GUILD (sc=29): MEIGAP Task 3c. Also after dedupe, for the same
     // reason -- a relogged account's guild row may sit on any of its addrs,
     // so the lookup walks `agent_addrs` and takes the first hit in ADDR
-    // order (deterministic; `guilds::resolve` already applied GW2EI's
-    // per-agent `FirstOrDefault` in event order).
+    // order (deterministic; `guilds::collect_guild_event`, called from the
+    // marker scan below, already applied GW2EI's per-agent
+    // `FirstOrDefault` in event order).
     let mut guild_by_addr: BTreeMap<u64, String> = BTreeMap::new();
     let marker_res = markers::resolve_markers_and_guilds(raw, &mut guild_by_addr);
     for p in &mut enc.players {

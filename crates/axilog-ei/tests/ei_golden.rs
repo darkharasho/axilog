@@ -1567,9 +1567,158 @@ fn ei_json_meigap3_healing_detail_minions_and_guild_are_gated_and_consistent() {
 
     assert!(minion_groups >= 10, "expected a non-degenerate minion set, got {minion_groups}");
     assert!(minion_rows >= 50, "expected a non-degenerate minion dist, got {minion_rows}");
+
+    // -- the real-EI minion join --
+    //
+    // `fixtures/wvw-small.ei.json`'s `minionDamageTaken` block was extracted
+    // verbatim from the same source export the file's `_source` names,
+    // bucketed by axibridge's own `normalizeMinionName`. This is REAL EI
+    // output for the pre-rework era, i.e. exactly the coverage the local
+    // post-rework calibration (`meigap3_ei_golden.rs`) cannot give CI.
+    let mut ours_by_name: HashMap<String, (i64, i64)> = HashMap::new(); // rows, damage
+    for p in players {
+        for m in p.get("minions").and_then(|v| v.as_array()).into_iter().flatten() {
+            let raw = m["name"].as_str().unwrap_or("Unknown");
+            let stripped = raw.strip_prefix("Juvenile ").unwrap_or(raw);
+            let name = if stripped.to_uppercase().contains("UNKNOWN") {
+                "Unknown".to_string()
+            } else {
+                stripped.to_string()
+            };
+            let rows = m["totalDamageTakenDist"][0].as_array().expect("dist");
+            let e = ours_by_name.entry(name).or_insert((0, 0));
+            e.0 += rows.len() as i64;
+            e.1 += rows.iter().map(|r| r["totalDamage"].as_i64().unwrap_or(0)).sum::<i64>();
+        }
+    }
+    let reference = &golden["minionDamageTaken"];
+    let ref_by_name = reference["byName"].as_object().expect("byName");
+
+    // **Every EI minion name that took damage must match EXACTLY**, on both
+    // the row count and the damage total. This is the assertion that would
+    // catch a real regression in the classifier, the ownership fold or the
+    // event-creation gate.
+    let mut nonzero_names = 0usize;
+    for (name, r) in ref_by_name {
+        let ref_damage = r["totalDamage"].as_i64().unwrap_or(0);
+        if ref_damage == 0 {
+            continue;
+        }
+        // The ONE documented exclusion (MEIGAP Task 3b): GW2EI's own
+        // `UNKNOWN <id>` placeholder group is an englobed agent, which
+        // `model::agent_kind` classifies as a PLAYER (`is_elite !=
+        // 0xffffffff`) and which is therefore never anyone's minion here.
+        // It is not skipped silently -- its damage appears explicitly in
+        // the squad-wide identity asserted just below, so removing it from
+        // the reference would break that instead.
+        if name == "Unknown" {
+            continue;
+        }
+        nonzero_names += 1;
+        let (rows, damage) = ours_by_name.get(name).copied().unwrap_or_else(|| {
+            panic!("minion group {name} took {ref_damage} damage in real EI output and is absent here")
+        });
+        assert_eq!(
+            damage, ref_damage,
+            "minion {name}: damage-taken total must match real EI exactly"
+        );
+        assert_eq!(
+            rows, r["rows"].as_i64().unwrap_or(0),
+            "minion {name}: damage-taken dist row count must match real EI exactly"
+        );
+    }
+    assert!(nonzero_names >= 8, "expected a non-degenerate join, got {nonzero_names} names");
+
+    // Row COUNT over the whole squad is exact; the damage TOTAL is not, and
+    // the entire difference is the two carve-outs MEIGAP Task 3b documents,
+    // reproduced here as an exact identity rather than a tolerance:
+    //
+    //   ours = EI - (EI's "Unknown" englobed-agent group)
+    //             + (groups EI does not treat as minions at all)
+    //
+    // `Unknown` is the englobed agent `model::agent_kind` classifies as a
+    // PLAYER; `Continuum Rift` and the unnamed `ch<species>-<id>` agents are
+    // masters-resolved agents GW2EI's own NPC classification excludes.
+    let ours_rows: i64 = ours_by_name.values().map(|v| v.0).sum();
+    let ours_damage: i64 = ours_by_name.values().map(|v| v.1).sum();
+    assert_eq!(
+        ours_rows, reference["rows"].as_i64().expect("rows"),
+        "squad-wide minion dist row count must match real EI exactly"
+    );
+    let ei_only_unknown = ref_by_name
+        .get("Unknown")
+        .and_then(|v| v["totalDamage"].as_i64())
+        .expect("the reference carries an englobed-agent Unknown group");
+    let ours_only: i64 = ours_by_name
+        .iter()
+        .filter(|(n, _)| !ref_by_name.contains_key(*n))
+        .map(|(_, v)| v.1)
+        .sum();
+    assert_eq!(
+        ours_damage,
+        reference["totalDamage"].as_i64().expect("totalDamage") - ei_only_unknown + ours_only,
+        "the squad-wide minion damage delta must be EXACTLY the two documented carve-outs"
+    );
+
+    // -- the real-EI healing-dist joins --
+    //
+    // BOUNDED, deliberately: M10's `healing_golden.rs` records a
+    // root-caused peer-sanitization residual on this project's healing
+    // TOTALS for the PRE-rework era (the post-rework calibration in
+    // `meigap3_ei_golden.rs` is exact). The row COUNT and the ally-matrix
+    // sum are exact even here, so those two are asserted exactly and only
+    // the total is bounded.
+    let ref_rows = golden["squadHealingDistRows"].as_i64().expect("squadHealingDistRows");
+    let ref_allies = golden["squadOutgoingHealingAlliesTotal"].as_i64().expect("squadOutgoingHealingAlliesTotal");
+    let ref_total = golden["squadHealingTotal"].as_i64().expect("squadHealingTotal");
+    let mut our_rows = 0i64;
+    let mut our_total = 0i64;
+    let mut our_allies = 0i64;
+    for p in players {
+        let h = &p["extHealingStats"];
+        let d = h["totalHealingDist"][0].as_array().expect("totalHealingDist");
+        our_rows += d.len() as i64;
+        our_total += d.iter().map(|r| r["totalHealing"].as_i64().unwrap_or(0)).sum::<i64>();
+        for a in h["outgoingHealingAllies"].as_array().expect("allies") {
+            our_allies += a[0]["healing"].as_i64().unwrap_or(0);
+        }
+    }
+    assert_eq!(
+        our_allies, ref_allies,
+        "the whole outgoingHealingAllies matrix must sum to real EI's exactly"
+    );
+    assert!(
+        (our_rows - ref_rows).abs() <= HEALING_DIST_ROW_BOUND,
+        "totalHealingDist row count {our_rows} vs real EI's {ref_rows} exceeds the pinned bound"
+    );
+    let rel = (our_total - ref_total) as f64 / ref_total as f64;
+    assert!(
+        rel.abs() <= HEALING_DIST_TOTAL_TOLERANCE,
+        "totalHealingDist squad total {our_total} vs real EI's {ref_total} is {:.4} relative, past the M10 residual bound",
+        rel
+    );
+    println!(
+        "ei_json_meigap3 real-EI join: {nonzero_names} damaged minion names exact, {ours_rows} dist rows exact, \
+         healing allies {our_allies} exact, healing dist rows {our_rows} vs {ref_rows}, total rel {rel:+.5}"
+    );
     println!(
         "ei_json_meigap3: {} players, self-healing {self_healing_sum}, downed {downed_dist_sum}, \
          {minion_groups} minion groups / {minion_rows} rows",
         players.len()
     );
 }
+
+/// `totalHealingDist` squad row count vs real EI's, on the PRE-rework
+/// committed fixture. Measured 212 vs 211 -- one extra skill id, from the
+/// same M10 peer-sanitization residual as the total below (a skill whose
+/// only surviving events differ between the two `SanitizeForSrc` runs).
+const HEALING_DIST_ROW_BOUND: i64 = 2;
+
+/// Relative bound on the squad-wide `totalHealingDist` total vs real EI's,
+/// on the PRE-rework committed fixture. Measured +0.68% (1,015,275 vs
+/// 1,008,414) -- this is M10's documented, root-caused repeating-skill
+/// peer-report residual (`analysis::healing`'s module doc), inherited whole
+/// and not made worse here. The post-rework calibration
+/// (`meigap3_ei_golden.rs`) is EXACT, which is why this is the only place a
+/// tolerance appears on the healing detail at all.
+const HEALING_DIST_TOTAL_TOLERANCE: f64 = 0.01;
