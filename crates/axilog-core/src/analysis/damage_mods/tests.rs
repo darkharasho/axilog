@@ -424,6 +424,49 @@ fn incoming_modifier_measures_damage_taken_under_the_negated_id() {
     assert!(approx(stat.damage_gain, super::round_to_3(800.0 * 10.0 / 110.0)));
 }
 
+/// The incoming pool is source-agnostic (MATTRIB Task 2). GW2EI builds
+/// incoming modifiers from `GetDamageTakenEvents` with no source filter, so
+/// damage a squad member takes from ANOTHER SQUAD MEMBER -- or from
+/// THEMSELVES -- is in the denominator. This was M16's quarantined
+/// "incoming denominator deficit": one account's 7 self-inflicted Bleeding
+/// ticks (239 damage) were dropped because `classify_hit` required
+/// `!src_in_squad`. See `tests/damage_mods_golden.rs`'s tracked-cause-2
+/// note.
+#[test]
+fn incoming_pool_includes_self_and_squad_sourced_damage() {
+    let def = DamageModifierDef { dmg_src: DamageSource::Incoming, ..def_template() };
+    let events = vec![
+        // From a foe: always counted.
+        strike(100, 9, 1, 800),
+        // Self-inflicted Bleeding on player 1 (src == dst == 1).
+        condi_tick(200, 1, 1, 35),
+        // From another squad member.
+        strike(300, 2, 1, 60),
+    ];
+    let log = raw(events, POST_ERA_BUILD);
+    let registry = InstidRegistry::build(&log);
+    let enc = encounter(vec![player(1), player(2)], vec![enemy(9)]);
+    let out = evaluate(&log, &registry, &enc, &[&def]);
+
+    let stat = out[&(1, -9001)];
+    assert_eq!(stat.total_hit_count, 3, "all three rows are damage player 1 TOOK");
+    assert_eq!(stat.total_damage, 895);
+    // Player 2 took nothing, so it has no incoming row at all.
+    assert!(!out.contains_key(&(2, -9001)));
+}
+
+/// ... and the outgoing side is NOT symmetric: a squad-on-squad (or self)
+/// hit is not an outgoing modifier hit, because its destination is not a
+/// foe. Only the incoming branch is source-agnostic.
+#[test]
+fn outgoing_pool_still_requires_a_foe_destination() {
+    let def = def_template(); // outgoing, `DamageSource::NoPets`
+    let events = vec![strike(100, 1, 9, 800), strike(200, 1, 2, 500), condi_tick(300, 1, 1, 35)];
+    let out = run(events, POST_ERA_BUILD, &def);
+    assert_eq!(out[&(1, 9001)].total_hit_count, 1, "only the hit on foe 9 counts");
+    assert_eq!(out[&(1, 9001)].total_damage, 800);
+}
+
 /// `SkillDamageModifier.cs:32-57`: skill-gated, gain hardcoded to 1, so
 /// `damageGain` is RAW damage.
 #[test]

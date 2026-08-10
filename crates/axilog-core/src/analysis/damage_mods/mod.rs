@@ -828,7 +828,18 @@ fn classify_hit<'a>(ev: &'a RawEvent, scope: &Scope<'_>) -> Option<Hit<'a>> {
             // unless the definition asked for `ActorAlwaysMaster`, which is
             // what the master key alongside it is for.
             (rep, states.actor_key(src_agent), rep, states.actor_key(dst_agent), true, false)
-        } else if dst_in_squad && !src_in_squad {
+        } else if dst_in_squad {
+            // Incoming. Deliberately NOT `&& !src_in_squad`: GW2EI's
+            // incoming modifiers run over the actor's whole damage-TAKEN
+            // pool (`GetDamageTakenEvents`, no source filter), so a hit a
+            // squad member takes from another squad member -- or from
+            // THEMSELVES -- counts in the denominator. Requiring a
+            // non-squad source was MATTRIB Task 2's finding for M16's
+            // quarantined incoming deficit: the affected account's missing
+            // rows are exactly 7 self-inflicted Bleeding (`736`) ticks
+            // totalling 239 damage, which every other pass in this crate
+            // (`defenses::condition_damage_taken` matches EI's 77/5699
+            // exactly) already counted and only this one dropped.
             let rep = addr_to_rep[&dst_agent];
             (rep, rep, rep, states.actor_key(src_agent), false, true)
         } else {

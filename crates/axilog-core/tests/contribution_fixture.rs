@@ -23,12 +23,16 @@ use axilog_core::analysis::analyze;
 use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
 
+mod common;
+
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
-const LOCAL_SMALL_FIXTURE_PATH: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-small.zevtc");
-const LOCAL_POSTREWORK_FIXTURE_PATH: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-postrework.zevtc");
+fn local_small_fixture_path() -> String {
+    common::local_fixture("wvw-small.zevtc")
+}
+fn local_postrework_fixture_path() -> String {
+    common::local_fixture("wvw-postrework.zevtc")
+}
 
 fn read_local_or_skip(path: &str, test_name: &str) -> Option<Vec<u8>> {
     match std::fs::read(path) {
@@ -110,14 +114,14 @@ fn committed_fixture_contribution_is_plausible() {
 
 #[test]
 fn local_small_fixture_contribution_is_plausible_when_present() {
-    if let Some(bytes) = read_local_or_skip(LOCAL_SMALL_FIXTURE_PATH, "local wvw-small") {
+    if let Some(bytes) = read_local_or_skip(&local_small_fixture_path(), "local wvw-small") {
         check_contribution_sanity(&bytes, "local wvw-small.zevtc (pre-era)");
     }
 }
 
 #[test]
 fn local_postrework_fixture_contribution_is_plausible_when_present() {
-    if let Some(bytes) = read_local_or_skip(LOCAL_POSTREWORK_FIXTURE_PATH, "local wvw-postrework") {
+    if let Some(bytes) = read_local_or_skip(&local_postrework_fixture_path(), "local wvw-postrework") {
         check_contribution_sanity(&bytes, "local wvw-postrework.zevtc (post-era)");
     }
 }

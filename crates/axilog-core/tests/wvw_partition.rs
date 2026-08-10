@@ -14,9 +14,13 @@ use axilog_core::analysis::analyze;
 use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
 
+mod common;
+
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
-const LOCAL_FIXTURE_PATH: &str = "../../fixtures/local/wvw-small.zevtc";
+fn local_fixture_path() -> String {
+    common::local_fixture("wvw-small.zevtc")
+}
 
 const GOLDEN_DURATION_MS: f64 = 49285.0;
 const GOLDEN_FRIENDLY_PLAYERS: i64 = 41;
@@ -67,10 +71,10 @@ fn wvw_partition_matches_golden_fixture() {
 
 #[test]
 fn wvw_partition_matches_golden_fixture_local_raw_when_present() {
-    let bytes = match std::fs::read(LOCAL_FIXTURE_PATH) {
+    let bytes = match std::fs::read(local_fixture_path()) {
         Ok(b) => b,
         Err(_) => {
-            println!("skip: {LOCAL_FIXTURE_PATH} absent (local-only extra check)");
+            println!("skip: {} absent (local-only extra check)", local_fixture_path());
             return;
         }
     };

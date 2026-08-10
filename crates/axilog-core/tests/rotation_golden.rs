@@ -41,15 +41,20 @@ use axilog_core::evtc::{anon_account, decode_raw};
 use axilog_core::model::resolve;
 use std::collections::HashMap;
 
+mod common;
+
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
-const LOCAL_FIXTURE_PATH: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-small.zevtc");
+fn local_fixture_path() -> String {
+    common::local_fixture("wvw-small.zevtc")
+}
 const GOLDEN_JSON_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.ei.json");
-const LOCAL_POSTREWORK_ZEVTC: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-postrework.zevtc");
-const LOCAL_POSTREWORK_EI_JSON: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/local/wvw-postrework.ei.json");
+fn local_postrework_zevtc() -> String {
+    common::local_fixture("wvw-postrework.zevtc")
+}
+fn local_postrework_ei_json() -> String {
+    common::local_fixture("wvw-postrework.ei.json")
+}
 
 /// Measured max residual on the committed fixture is 0 (every field matches
 /// exactly); this small headroom is kept for the documented GW2EI
@@ -66,10 +71,10 @@ fn read_anon_fixture() -> Vec<u8> {
 }
 
 fn read_local_fixture_or_skip(test_name: &str) -> Option<Vec<u8>> {
-    match std::fs::read(LOCAL_FIXTURE_PATH) {
+    match std::fs::read(local_fixture_path()) {
         Ok(b) => Some(b),
         Err(_) => {
-            println!("skip: {LOCAL_FIXTURE_PATH} absent ({test_name} local-only extra check)");
+            println!("skip: {} absent ({test_name} local-only extra check)", local_fixture_path());
             None
         }
     }
@@ -294,8 +299,8 @@ fn rotation_matches_ei_golden_local_raw_when_present() {
 /// `.ei.json` sidecar is present.
 #[test]
 fn rotation_present_and_sane_on_local_postrework_when_available() {
-    let Some(bytes) = std::fs::read(LOCAL_POSTREWORK_ZEVTC).ok() else {
-        println!("skip: {LOCAL_POSTREWORK_ZEVTC} absent (local-only postrework sanity check)");
+    let Some(bytes) = std::fs::read(local_postrework_zevtc()).ok() else {
+        println!("skip: {} absent (local-only postrework sanity check)", local_postrework_zevtc());
         return;
     };
     let raw = decode_raw(&bytes).expect("decode postrework fixture");
@@ -330,16 +335,16 @@ fn rotation_present_and_sane_on_local_postrework_when_available() {
 /// has no local fixture, so this never runs there.
 #[test]
 fn rotation_calibrated_against_local_postrework_ei_json_when_available() {
-    let Some(bytes) = std::fs::read(LOCAL_POSTREWORK_ZEVTC).ok() else {
-        println!("skip: {LOCAL_POSTREWORK_ZEVTC} absent (post-era rotation real calibration)");
+    let Some(bytes) = std::fs::read(local_postrework_zevtc()).ok() else {
+        println!("skip: {} absent (post-era rotation real calibration)", local_postrework_zevtc());
         return;
     };
-    let Some(golden_s) = std::fs::read_to_string(LOCAL_POSTREWORK_EI_JSON).ok() else {
-        println!("skip: {LOCAL_POSTREWORK_EI_JSON} absent (post-era rotation real calibration)");
+    let Some(golden_s) = std::fs::read_to_string(local_postrework_ei_json()).ok() else {
+        println!("skip: {} absent (post-era rotation real calibration)", local_postrework_ei_json());
         return;
     };
     let golden: serde_json::Value =
-        serde_json::from_str(&golden_s).unwrap_or_else(|e| panic!("parse {LOCAL_POSTREWORK_EI_JSON}: {e}"));
+        serde_json::from_str(&golden_s).unwrap_or_else(|e| panic!("parse {}: {e}", local_postrework_ei_json()));
 
     let raw = decode_raw(&bytes).expect("decode postrework fixture");
     assert!(raw.header.is_post_buff_rework(), "this fixture must be a post-rework build for this check to be meaningful");
@@ -440,9 +445,11 @@ fn rotation_calibrated_against_local_postrework_ei_json_when_available() {
 
     if joined == 0 {
         println!(
-            "skip: 0 accounts joined between {LOCAL_POSTREWORK_ZEVTC} and {LOCAL_POSTREWORK_EI_JSON} \
+            "skip: 0 accounts joined between {} and {} \
              (post-era rotation real calibration) -- account-string mismatch, or the export has no \
-             `rotation` block for any joined player"
+             `rotation` block for any joined player",
+            local_postrework_zevtc(),
+            local_postrework_ei_json()
         );
         return;
     }

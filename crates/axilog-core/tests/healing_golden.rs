@@ -80,16 +80,14 @@ use common::rel_close;
 
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
-const LOCAL_FIXTURE_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/local/wvw-small.zevtc"
-);
+fn local_fixture_path() -> String {
+    common::local_fixture("wvw-small.zevtc")
+}
 const GOLDEN_JSON_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.ei.json");
 
-const LOCAL_POSTREWORK_ZEVTC: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/local/wvw-postrework.zevtc"
-);
+fn local_postrework_zevtc() -> String {
+    common::local_fixture("wvw-postrework.zevtc")
+}
 
 /// Squad-wide tolerance for `healing_out_total`/`healing_out_allies` --
 /// the plan's stated 1% bar, MET (0.68%/0.71% actual on this fixture) and
@@ -128,10 +126,10 @@ fn within_tolerance(ours: i64, golden: i64, abs_floor: f64, rel_tolerance: f64) 
 }
 
 fn read_local_fixture_or_skip(test_name: &str) -> Option<Vec<u8>> {
-    match std::fs::read(LOCAL_FIXTURE_PATH) {
+    match std::fs::read(local_fixture_path()) {
         Ok(b) => Some(b),
         Err(_) => {
-            println!("skip: {LOCAL_FIXTURE_PATH} absent ({test_name} local-only extra check)");
+            println!("skip: {} absent ({test_name} local-only extra check)", local_fixture_path());
             None
         }
     }
@@ -366,8 +364,8 @@ fn healing_matches_ei_golden_local_raw_when_present() {
 /// healing).
 #[test]
 fn healing_extension_present_and_sane_on_local_postrework_when_available() {
-    let Some(bytes) = std::fs::read(LOCAL_POSTREWORK_ZEVTC).ok() else {
-        println!("skip: {LOCAL_POSTREWORK_ZEVTC} absent (local-only postrework sanity check)");
+    let Some(bytes) = std::fs::read(local_postrework_zevtc()).ok() else {
+        println!("skip: {} absent (local-only postrework sanity check)", local_postrework_zevtc());
         return;
     };
     let raw = decode_raw(&bytes).expect("decode postrework fixture");

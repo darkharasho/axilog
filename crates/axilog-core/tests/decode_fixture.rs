@@ -1,11 +1,12 @@
 use axilog_core::evtc::decode_raw;
 
+mod common;
+
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
-const LOCAL_FIXTURE_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/local/wvw-small.zevtc"
-);
+fn local_fixture_path() -> String {
+    common::local_fixture("wvw-small.zevtc")
+}
 
 fn check_decodes(bytes: &[u8]) {
     let raw = decode_raw(bytes).unwrap();
@@ -30,10 +31,10 @@ fn decodes_committed_wvw_fixture() {
 /// (gitignored, PII, dev-only), decode it too.
 #[test]
 fn decodes_local_raw_wvw_fixture_when_present() {
-    let bytes = match std::fs::read(LOCAL_FIXTURE_PATH) {
+    let bytes = match std::fs::read(local_fixture_path()) {
         Ok(b) => b,
         Err(_) => {
-            println!("skip: {LOCAL_FIXTURE_PATH} absent (local-only extra check)");
+            println!("skip: {} absent (local-only extra check)", local_fixture_path());
             return;
         }
     };

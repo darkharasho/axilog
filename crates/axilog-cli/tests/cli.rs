@@ -2,10 +2,18 @@ use std::process::Command;
 
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
-const LOCAL_FIXTURE_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../fixtures/local/wvw-small.zevtc"
-);
+/// `fixtures/local/` path, honouring `AXILOG_LOCAL_FIXTURES` -- same
+/// resolution `axilog-core`'s `tests/common::local_fixture` does (that
+/// module lives under `axilog-core/tests/`, which this crate cannot pull
+/// in), and the same duplication `axilog-ei`'s
+/// `tests/damage_mods_ei_golden.rs` already carries for the same reason.
+/// Without it a `git worktree` -- whose `fixtures/local/` is empty, the
+/// captures being gitignored -- silently skips this check.
+fn local_fixture_path() -> String {
+    let dir = std::env::var("AXILOG_LOCAL_FIXTURES")
+        .unwrap_or_else(|_| format!("{}/../../fixtures/local", env!("CARGO_MANIFEST_DIR")));
+    format!("{dir}/wvw-small.zevtc")
+}
 
 fn check_parses_fixture_to_json(fixture_path: &str) {
     let out = Command::new(env!("CARGO_BIN_EXE_axilog"))
@@ -33,11 +41,11 @@ fn parses_fixture_to_json() {
 /// (gitignored, PII, dev-only), parse it too.
 #[test]
 fn parses_local_raw_fixture_to_json_when_present() {
-    if std::fs::metadata(LOCAL_FIXTURE_PATH).is_err() {
-        println!("skip: {LOCAL_FIXTURE_PATH} absent (local-only extra check)");
+    if std::fs::metadata(local_fixture_path()).is_err() {
+        println!("skip: {} absent (local-only extra check)", local_fixture_path());
         return;
     }
-    check_parses_fixture_to_json(LOCAL_FIXTURE_PATH);
+    check_parses_fixture_to_json(&local_fixture_path());
 }
 
 fn check_table_and_csv_have_headers(fixture_path: &str) {
@@ -58,11 +66,11 @@ fn table_and_csv_have_headers() {
 
 #[test]
 fn table_and_csv_have_headers_local_raw_when_present() {
-    if std::fs::metadata(LOCAL_FIXTURE_PATH).is_err() {
-        println!("skip: {LOCAL_FIXTURE_PATH} absent (local-only extra check)");
+    if std::fs::metadata(local_fixture_path()).is_err() {
+        println!("skip: {} absent (local-only extra check)", local_fixture_path());
         return;
     }
-    check_table_and_csv_have_headers(LOCAL_FIXTURE_PATH);
+    check_table_and_csv_have_headers(&local_fixture_path());
 }
 
 /// M3, Task 5: `--view support` — header token plus a known row value from
