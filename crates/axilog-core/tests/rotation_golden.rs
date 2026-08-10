@@ -482,3 +482,91 @@ fn rotation_calibrated_against_local_postrework_ei_json_when_available() {
          {max_quickness_delta:.6}"
     );
 }
+
+/// MSMALL item 3: `statsAll[0].{saved,timeSaved,wasted,timeWasted}` --
+/// GW2EI's `GameplayStatistics` aftercast/interrupt counters -- against the
+/// local post-rework capture's own EI export, EXACTLY.
+///
+/// These are the four numbers `analysis::rotation::aftercast_stats` derives
+/// (see its and `AftercastStats`' doc comments for the
+/// `GameplayStatistics.cs:81-99` transcription). They are asserted EXACT,
+/// not within a tolerance, because they measured exact for all 44 players
+/// once two rules were applied:
+///
+/// 1. the `GetCastEvents(log, start, end)` window filter (`x.Time >= start`),
+///    which excludes this module's backdated pre-log casts -- without it
+///    `saved` was `ei + 1` for 11 of 44 players;
+/// 2. ties-to-EVEN rounding for `scaledExpectedDuration` (`round_ties_even`,
+///    matching .NET `Math.Round`'s documented default) -- without it
+///    `timeSaved` was 1ms high for 2 of 44.
+///
+/// An exact assert is what makes this test able to catch a regression in
+/// either rule; a tolerance would have hidden both of the defects it was
+/// written to pin down.
+#[test]
+fn aftercast_stats_match_local_postrework_ei_json() {
+    let Some(bytes) = std::fs::read(local_postrework_zevtc()).ok() else {
+        println!("skip: {} absent (aftercast calibration)", local_postrework_zevtc());
+        return;
+    };
+    let Some(golden_s) = std::fs::read_to_string(local_postrework_ei_json()).ok() else {
+        println!("skip: {} absent (aftercast calibration)", local_postrework_ei_json());
+        return;
+    };
+    let golden: serde_json::Value = serde_json::from_str(&golden_s).expect("parse EI json");
+
+    let raw = decode_raw(&bytes).expect("decode postrework fixture");
+    let enc = resolve(&raw);
+    let metrics = analyze(&enc, &raw);
+
+    let mut golden_by_account: HashMap<String, &serde_json::Value> = HashMap::new();
+    for p in golden["players"].as_array().expect("players array") {
+        if let Some(a) = p["account"].as_str() {
+            golden_by_account.insert(a.trim_start_matches(':').to_string(), &p["statsAll"][0]);
+        }
+    }
+
+    /// EI emits the two durations as seconds with 3 decimals
+    /// (`Math.Round(ms / 1000.0, TimeDigit)`); compare on that scale.
+    fn secs3(ms: i64) -> f64 {
+        (ms as f64 / 1000.0 * 1000.0).round() / 1000.0
+    }
+
+    let mut joined = 0usize;
+    let mut mismatches: Vec<String> = Vec::new();
+    for p in &enc.players {
+        let Some(g) = golden_by_account.get(p.account.trim_start_matches(':')) else { continue };
+        let Some(m) = metrics.players.iter().find(|m| m.agent_addr == p.agent_addr) else { continue };
+        // `statsAll[0]` only carries these on real recorded players; a
+        // golden entry missing them entirely is not a mismatch to report.
+        let (Some(g_saved), Some(g_wasted)) = (g["saved"].as_i64(), g["wasted"].as_i64()) else {
+            continue;
+        };
+        joined += 1;
+        let a = axilog_core::analysis::rotation::aftercast_stats(&m.rotation);
+        let g_time_saved = g["timeSaved"].as_f64().expect("timeSaved");
+        let g_time_wasted = g["timeWasted"].as_f64().expect("timeWasted");
+        for (field, ours, theirs) in [
+            ("saved", a.saved_count as f64, g_saved as f64),
+            ("wasted", a.wasted_count as f64, g_wasted as f64),
+            ("timeSaved", secs3(a.saved_ms), g_time_saved),
+            ("timeWasted", secs3(a.wasted_ms), g_time_wasted),
+        ] {
+            if (ours - theirs).abs() > 1e-9 {
+                mismatches.push(format!("  {} {field}: ours={ours} ei={theirs}", p.account));
+            }
+        }
+    }
+
+    assert!(joined >= 30, "expected >=30 accounts to join for the aftercast check, got {joined}");
+    assert!(
+        mismatches.is_empty(),
+        "{} aftercast field(s) diverge from EI across {joined} players:\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
+    println!(
+        "aftercast_stats_match_local_postrework_ei_json: {joined} players, all 4 fields \
+         (saved/timeSaved/wasted/timeWasted) EXACT"
+    );
+}

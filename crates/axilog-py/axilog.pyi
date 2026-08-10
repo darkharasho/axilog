@@ -301,6 +301,25 @@ class HealingOut(TypedDict):
 
 # --- hit-quality stats (M13, Task 1) ---------------------------------------
 
+class AftercastOut(TypedDict):
+    """Aftercast/interrupt cast counters (MSMALL item 3). Always present,
+    like `hit_stats`.
+
+    Mirrors GW2EI's `JsonGameplayStatsAll` aftercast family, which lands in
+    its `statsAll[0]` as `saved`/`timeSaved`/`wasted`/`timeWasted`:
+    `saved_count` is casts that skipped their aftercast, `wasted_count` is
+    casts interrupted before firing. Durations are MILLISECONDS here (EI
+    emits seconds); `wasted_ms` is already the positive "time lost" figure.
+
+    NOTE the name collision: `wasted_count`/`wasted_ms` are CAST-INTERRUPT
+    counters, unrelated to boon-generation waste. Both names are EI's.
+    """
+
+    saved_count: int
+    saved_ms: int
+    wasted_count: int
+    wasted_ms: int
+
 class HitStatsOut(TypedDict):
     """Outgoing hit-quality stats -- mirrors EI's `statsAll[0]`.
     `against_downed_*`/`above90_*` are plain per-event wire flags (NOT
@@ -479,6 +498,7 @@ class _PlayerOutRequired(TypedDict):
     boons: List[BoonOut]
     support: SupportOut
     hit_stats: HitStatsOut
+    aftercast: AftercastOut
     defenses: DefensesOut
 
 class PlayerOut(_PlayerOutRequired, total=False):

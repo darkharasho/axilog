@@ -140,17 +140,30 @@
 //!     }
 //!     quickness = round(quickness, 3 decimals)
 //!     ```
-//!     **Rounding note**: GW2EI's `Math.Round` (both the bare
-//!     `Math.Round(double)` used for `scaledExpectedDuration` and the
-//!     3-decimals `Math.Round(Acceleration, 3)`) default to
-//!     `MidpointRounding.ToEven` ("banker's rounding"); this module uses
-//!     `f64::round` (ties away from zero) instead, since Rust's stdlib has
-//!     no built-in ties-to-even rounding without a manual implementation.
-//!     This is a real, acknowledged divergence, but negligible in
-//!     practice: it only differs from GW2EI on an EXACT `x.5` midpoint,
-//!     which a ratio of two independently-measured millisecond durations
-//!     essentially never lands on exactly (0 measured occurrences across
-//!     this project's golden fixture).
+//!     **Rounding note** (corrected by MSMALL item 3): GW2EI's
+//!     `Math.Round` (both the bare `Math.Round(double)` used for
+//!     `scaledExpectedDuration` and the 3-decimals
+//!     `Math.Round(Acceleration, 3)`) default to `MidpointRounding.ToEven`
+//!     ("banker's rounding").
+//!
+//!     M14 used `f64::round` (ties AWAY from zero) for both, on the grounds
+//!     that Rust's stdlib has no built-in ties-to-even and that midpoints
+//!     "essentially never" occur -- 0 measured occurrences on the committed
+//!     golden fixture. That last part was true but was measured on the
+//!     smaller fixture only. On the 10,878-cast local post-rework capture
+//!     midpoints DO occur, and the divergence was observable downstream:
+//!     `statsAll[0].timeSaved` came out 1ms high for 2 of 44 players.
+//!
+//!     `scaledExpectedDuration` therefore now uses a real ties-to-even
+//!     [`round_ties_even`], which takes the per-cast `timeGained` delta
+//!     against EI to EXACTLY 0 across all 10,878 casts (it was previously
+//!     only within `rotation_golden`'s 1ms tolerance) and `timeSaved` to
+//!     exact for all 44 players.
+//!
+//!     `quickness`'s 3-decimal [`round3`] is deliberately left on
+//!     `f64::round`: it is measured at a 0.000000 max delta across the same
+//!     10,878 casts, so no midpoint is reached there and changing it would
+//!     be an unmeasured edit to an already-exact surface.
 //!
 //! # Deliberately OUT OF SCOPE: GW2EI's `InstantCastEvent` machinery
 //!
@@ -252,6 +265,140 @@ pub struct Cast {
     /// scaled/unscaled duration pair was available to estimate from.
     /// Mirrors GW2EI's `Acceleration`/JSON `quickness`.
     pub quickness: f64,
+    /// How this cast's animation ended (MSMALL item 3). Mirrors GW2EI's
+    /// `CastEvent.Status` (`AnimationStatus`), which is what
+    /// `GameplayStatistics` counts `saved`/`wasted` off -- see
+    /// [`AnimationStatus`] and [`aftercast_stats`].
+    ///
+    /// Deliberately NOT surfaced on `axilog_schema::CastOut`: the only
+    /// consumer is the whole-player aggregate below, and adding a field to
+    /// the emitted per-cast rows would change the `rotation` output for no
+    /// consumer's benefit.
+    pub status: AnimationStatus,
+}
+
+/// GW2EI's `CastEvent.AnimationStatus`
+/// (`GW2EIEvtcParser/ParsedData/CombatEvents/CastEvents/CastEvent.cs:8`),
+/// restricted to the four values [`set_acceleration`] can produce.
+///
+/// GW2EI's fifth value, `Instant`, is only ever set on `InstantCastEvent`
+/// (a synthesized, zero-duration cast this project does not model), so it
+/// is deliberately absent rather than dead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnimationStatus {
+    /// `SetAcceleration` never ran, or ran but matched no `case` -- a
+    /// start-only ("dangling") cast, a RESURRECT, or an end row whose
+    /// `is_activation` is outside {3,4,5,6}. GW2EI's default.
+    #[default]
+    Unknown,
+    /// End `is_activation` was `Minimum(3)`/`NoData(6)`: the skill FIRED and
+    /// its aftercast was skipped. This is the one `saved` counts.
+    Reduced,
+    /// End `is_activation` was `Cancel(4)`: the cast was aborted before
+    /// firing. This is the one `wasted` counts.
+    Interrupted,
+    /// End `is_activation` was `Reset(5)`: the animation ran to completion.
+    Full,
+}
+
+/// GW2EI's `GameplayStatistics` aftercast counters, for one player's whole
+/// rotation (MSMALL item 3).
+///
+/// Transcribed from `GW2EIEvtcParser/EIData/Statistics/
+/// GameplayStatistics.cs:81-99`, whose entire body for these four numbers
+/// is one switch over each cast's `Status`:
+///
+/// ```text
+/// case AnimationStatus.Interrupted:
+///     SkillAnimationInterruptedCount++;
+///     SkillAnimationInterruptedDuration += cl.SavedDuration;
+///     break;
+/// case AnimationStatus.Reduced:
+///     SkillAnimationAfterCastInterruptedCount++;
+///     SkillAnimationAfterCastInterruptedDuration += cl.SavedDuration;
+///     break;
+/// ```
+///
+/// followed by the two normalizations on lines 98-99 -- note the LEADING
+/// MINUS on the interrupted one, which is what turns our already-negative
+/// `time_gained_ms` for an interrupted cast back into a positive
+/// "time wasted" figure:
+///
+/// ```text
+/// SkillAnimationAfterCastInterruptedDuration =
+///      Math.Round(SkillAnimationAfterCastInterruptedDuration / 1000.0, TimeDigit);
+/// SkillAnimationInterruptedDuration =
+///     -Math.Round(SkillAnimationInterruptedDuration / 1000.0, TimeDigit);
+/// ```
+///
+/// `cl.SavedDuration` is exactly this module's [`Cast::time_gained_ms`]
+/// (see its doc comment), so no new event scan is needed -- these four
+/// numbers fall straight out of the cast list `build` already produces.
+/// Durations stay in MILLISECONDS here; the `/1000.0` + 3-decimal rounding
+/// is a serialization concern, applied by the ei-json adapter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AftercastStats {
+    /// `SkillAnimationAfterCastInterruptedCount` -> JSON `saved`: the number
+    /// of casts that skipped their aftercast.
+    pub saved_count: u32,
+    /// `SkillAnimationAfterCastInterruptedDuration` (pre-`/1000`) -> JSON
+    /// `timeSaved`. Always >= 0 (`time_gained_ms` is `.max(0)`-clamped on
+    /// the `Reduced` path).
+    pub saved_ms: i64,
+    /// `SkillAnimationInterruptedCount` -> JSON `wasted`: the number of
+    /// casts interrupted before firing.
+    pub wasted_count: u32,
+    /// `SkillAnimationInterruptedDuration` (pre-`/1000`, and pre-NEGATION):
+    /// `-1` times the sum of the (negative) `time_gained_ms` of interrupted
+    /// casts, i.e. already the positive "time lost" figure -> JSON
+    /// `timeWasted`.
+    pub wasted_ms: i64,
+}
+
+/// Reduces one player's [`RotationMetrics`] to its [`AftercastStats`] -- see
+/// that struct's doc comment for the GW2EI transcription.
+///
+/// # The `cast_time_ms >= 0` window filter
+///
+/// `GameplayStatistics` does not iterate the raw cast list: it iterates
+/// `actor.GetCastEvents(log, start, end)`, which is
+/// `CastEvents.Where(x => x.Time >= start && x.Time <= end)`
+/// (`GW2EIEvtcParser/EIData/Actors/Actor.cs:407`), and for the whole-fight
+/// phase `start` is `log.LogData.LogStart` -- this project's `t0` zero
+/// point.
+///
+/// That excludes the BACKDATED pre-log casts this module deliberately keeps
+/// (an end row with no pending start gets `Time = end.Time -
+/// ActualDuration`, which can land before `t0`; see [`Cast::cast_time_ms`]).
+/// Measured on `fixtures/local/wvw-postrework.zevtc` against that log's EI
+/// export: without this filter `saved` was `ei + 1` for 11 of 44 players
+/// (never +2, never -1) and `timeSaved` was correspondingly 1-4ms high for 6
+/// of them; with it, all four counters below are EXACT for all 44.
+///
+/// The upper bound (`x.Time <= end`) is satisfied by construction -- every
+/// cast start time here comes from an event inside the log -- so only the
+/// lower bound needs applying.
+pub fn aftercast_stats(rotation: &RotationMetrics) -> AftercastStats {
+    let mut out = AftercastStats::default();
+    for skill in rotation {
+        for c in skill.casts.iter().filter(|c| c.cast_time_ms >= 0) {
+            match c.status {
+                AnimationStatus::Reduced => {
+                    out.saved_count += 1;
+                    out.saved_ms += c.time_gained_ms;
+                }
+                AnimationStatus::Interrupted => {
+                    out.wasted_count += 1;
+                    // `time_gained_ms` is `-actual_duration` here; GW2EI's
+                    // line 99 negates the accumulated sum, so accumulate the
+                    // already-negated value.
+                    out.wasted_ms -= c.time_gained_ms;
+                }
+                AnimationStatus::Unknown | AnimationStatus::Full => {}
+            }
+        }
+    }
+    out
 }
 
 /// All recorded casts of one skill id, for one player.
@@ -295,6 +442,7 @@ struct CastAcc {
     actual_duration: i64,
     time_gained: i64,
     quickness: f64,
+    status: AnimationStatus,
     /// True only for a start-only ("dangling") cast -- GW2EI's
     /// `AnimationStatus.Unknown`, i.e. `SetAcceleration` was never called
     /// for it. Only these are eligible for the later adjacent-pair `CutAt`
@@ -310,17 +458,41 @@ fn expected_duration_from(value: i64, buff_dmg: i64) -> i64 {
     }
 }
 
-/// Rounds to the nearest integer, ties away from zero (`f64::round`'s
-/// native behavior) -- see the module doc's rounding note for the
-/// documented, negligible divergence from GW2EI's own ties-to-even
-/// `Math.Round`.
-fn round_ties_away(x: f64) -> i64 {
-    x.round() as i64
+/// Rounds to the nearest integer, ties to EVEN -- .NET's
+/// `Math.Round(double)` (the single-argument overload GW2EI's
+/// `SetAcceleration` uses for `(int)Math.Round(ExpectedDuration /
+/// nonScaledToScaledRatio)`), whose documented default is
+/// `MidpointRounding.ToEven`.
+///
+/// **MSMALL item 3 corrected this.** It was `f64::round` (ties AWAY from
+/// zero) with a module-doc note calling the divergence negligible, on the
+/// grounds that Rust's stdlib has no built-in ties-to-even. It is not
+/// negligible and it is not hard to implement: measured on
+/// `fixtures/local/wvw-postrework.zevtc`, ties-away put `timeSaved` 1ms
+/// high for 2 of 44 players (18.701 vs EI's 18.700, 19.944 vs 19.943) --
+/// i.e. exactly one cast per affected player landed on a `.5` boundary and
+/// rounded the other way. With ties-to-even all 44 are exact.
+fn round_ties_even(x: f64) -> i64 {
+    let r = x.round(); // ties away from zero
+    // Only a true .5 midpoint can differ between the two modes; there,
+    // ties-to-even keeps the even neighbour.
+    if (x - x.trunc()).abs() == 0.5 && (r as i64) % 2 != 0 {
+        (r - x.signum()) as i64
+    } else {
+        r as i64
+    }
 }
 
-/// Rounds to 3 decimal places, ties away from zero (same caveat as
-/// `round_ties_away`) -- mirrors GW2EI's `Math.Round(Acceleration,
-/// ParserHelper.AccelerationDigit)` (`AccelerationDigit = 3`).
+/// Rounds to 3 decimal places, ties away from zero -- mirrors GW2EI's
+/// `Math.Round(Acceleration, ParserHelper.AccelerationDigit)`
+/// (`AccelerationDigit = 3`), which is `MidpointRounding.ToEven`.
+///
+/// Left on ties-away deliberately: unlike the integer
+/// `scaledExpectedDuration` rounding (see [`round_ties_even`] and the
+/// module doc's rounding note), the emitted `quickness` is measured at a
+/// 0.000000 max delta against EI across 10,878 casts, so no `.0005`
+/// midpoint is reached and switching it would be an unmeasured edit to an
+/// already-exact surface.
 fn round3(x: f64) -> f64 {
     (x * 1000.0).round() / 1000.0
 }
@@ -335,7 +507,7 @@ fn set_acceleration(
     actual_duration: i64,
     scaled_ref: i64,
     end_activation: u8,
-) -> (f64, i64) {
+) -> (f64, i64, AnimationStatus) {
     let mut ratio = 1.0_f64;
     let mut quickness = 0.0_f64;
     if scaled_ref > 0 {
@@ -348,19 +520,29 @@ fn set_acceleration(
         quickness = quickness.clamp(-1.0, 1.0);
     }
     let mut time_gained = 0_i64;
+    // GW2EI leaves `Status` at its `AnimationStatus.Unknown` default unless
+    // this switch assigns it -- including for RESURRECT, where the whole
+    // `if (SkillID != SkillIDs.Resurrect)` block is skipped, and for an end
+    // `is_activation` outside {3,4,5,6}, where no `case` matches.
+    let mut status = AnimationStatus::Unknown;
     if skill_id != RESURRECT_SKILL_ID {
         match end_activation {
-            4 => time_gained = -actual_duration,   // Cancel -> Interrupted
-            5 => {}                                 // Reset -> Full, stays 0
+            4 => {
+                // Cancel -> Interrupted
+                time_gained = -actual_duration;
+                status = AnimationStatus::Interrupted;
+            }
+            5 => status = AnimationStatus::Full, // Reset -> Full, time_gained stays 0
             3 | 6 => {
                 // Minimum | NoData -> Reduced
-                let scaled_expected = round_ties_away(expected_duration as f64 / ratio);
+                let scaled_expected = round_ties_even(expected_duration as f64 / ratio);
                 time_gained = (scaled_expected - actual_duration).max(0);
+                status = AnimationStatus::Reduced;
             }
             _ => {}
         }
     }
-    (round3(quickness), time_gained)
+    (round3(quickness), time_gained, status)
 }
 
 /// A pending START with no END yet (mid-loop new-START flush, or leftover
@@ -392,6 +574,10 @@ fn finalize_missing_end(skill_id: u32, start: &Item, log_end_rel: i64) -> CastAc
         actual_duration: actual,
         time_gained: 0,
         quickness,
+        // `SetAcceleration` is never called for a start-only cast, so
+        // GW2EI's `Status` keeps its `Unknown` default -- the same
+        // condition `unknown` below already records.
+        status: AnimationStatus::Unknown,
         unknown: true,
     }
 }
@@ -410,13 +596,15 @@ fn finalize_missing_start(skill_id: u32, end: &Item) -> CastAcc {
         scaled_ref = 0;
     }
     let time = end.time - actual;
-    let (quickness, time_gained) = set_acceleration(skill_id, expected, actual, scaled_ref, end.activation);
+    let (quickness, time_gained, status) =
+        set_acceleration(skill_id, expected, actual, scaled_ref, end.activation);
     CastAcc {
         skill_id,
         time,
         actual_duration: actual,
         time_gained,
         quickness,
+        status,
         unknown: false,
     }
 }
@@ -436,13 +624,15 @@ fn finalize_both(skill_id: u32, start: &Item, end: &Item) -> CastAcc {
         expected = actual;
         scaled_ref = 0;
     }
-    let (quickness, time_gained) = set_acceleration(skill_id, expected, actual, scaled_ref, end.activation);
+    let (quickness, time_gained, status) =
+        set_acceleration(skill_id, expected, actual, scaled_ref, end.activation);
     CastAcc {
         skill_id,
         time: start.time,
         actual_duration: actual,
         time_gained,
         quickness,
+        status,
         unknown: false,
     }
 }
@@ -546,6 +736,7 @@ pub fn build(raw: &RawLog, addr_to_rep: &BTreeMap<u64, u64>) -> BTreeMap<u64, Ro
                 duration_ms: c.actual_duration,
                 time_gained_ms: c.time_gained,
                 quickness: c.quickness,
+                status: c.status,
             });
         }
         let rotation: RotationMetrics = by_id

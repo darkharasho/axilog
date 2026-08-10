@@ -1014,7 +1014,36 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
             "connectedPowerAbove90HPCount": p.hit_stats.above90_power_count,
             "connectedPowerAbove90HPDamage": p.hit_stats.above90_power_damage,
             "connectedConditionAbove90HPCount": p.hit_stats.above90_condition_count,
-            "connectedConditionAbove90HPDamage": p.hit_stats.above90_condition_damage
+            "connectedConditionAbove90HPDamage": p.hit_stats.above90_condition_damage,
+            // MSMALL item 3: the `JsonGameplayStatsAll` aftercast/interrupt
+            // family, from `p.aftercast` (`AftercastOut`, mirroring
+            // `axilog_core::analysis::rotation::AftercastStats` -- see that
+            // struct's doc comment for the full
+            // `GameplayStatistics.cs:81-99` transcription and the
+            // `GetCastEvents` window filter that makes it exact).
+            //
+            // Field names and units from `JsonStatisticsBuilder.
+            // BuildJsonGameplayStatsAll` (`GW2EIBuilders/JsonModels/
+            // JsonActorUtilities/JsonStatisticsBuilder.cs:149-152`):
+            //   Wasted     = gameStats.SkillAnimationInterruptedCount
+            //   TimeWasted = gameStats.SkillAnimationInterruptedDuration
+            //   Saved      = gameStats.SkillAnimationAfterCastInterruptedCount
+            //   TimeSaved  = gameStats.SkillAnimationAfterCastInterruptedDuration
+            // The two counts are plain ints; the two durations are SECONDS
+            // (`Math.Round(ms / 1000.0, ParserHelper.TimeDigit)`, TimeDigit
+            // = 3) -- `ei_time_secs`' exact convention.
+            //
+            // `wasted`/`timeWasted` here are CAST-INTERRUPT counters and
+            // have nothing to do with the boon-generation `wasted` in
+            // selfBuffs/groupBuffs/squadBuffs. Both names are real EI's.
+            //
+            // Calibrated on `fixtures/local/wvw-postrework.zevtc` against
+            // that log's own EI export: all FOUR fields exact for all 44
+            // players.
+            "saved": p.aftercast.saved_count,
+            "timeSaved": ei_time_secs(p.aftercast.saved_ms.max(0) as u64),
+            "wasted": p.aftercast.wasted_count,
+            "timeWasted": ei_time_secs(p.aftercast.wasted_ms.max(0) as u64)
         } ]);
         // Real EI's `statsTargets[targetIndex][phaseIndex]` carries a large
         // per-target breakdown (including its own per-target
@@ -2513,6 +2542,7 @@ mod tests {
                 per_second: None,
                 dps_targets: vec![],
                 hit_stats: HitStatsOut::default(),
+                aftercast: Default::default(),
                 defenses: DefensesOut::default(),
                 rotation: None,
                 damage_mods: None,
@@ -2645,6 +2675,7 @@ mod tests {
             healing: None,
             skill_damage, per_second, dps_targets,
             hit_stats: HitStatsOut::default(),
+            aftercast: Default::default(),
             defenses: DefensesOut::default(),
             rotation: None,
             damage_mods: None,

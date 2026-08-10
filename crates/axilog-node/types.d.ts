@@ -255,6 +255,30 @@ export interface ContributionOut {
  * `SkillDamageOut`) -- EI's own `statsAll[0]` is actor-only. Always present
  * (not gated) -- no per-target/per-skill combinatorial blowup here.
  */
+/**
+ * Aftercast/interrupt cast counters (MSMALL item 3). Always present,
+ * same as `hit_stats`.
+ *
+ * Mirrors GW2EI's `JsonGameplayStatsAll` aftercast family, which lands in
+ * its `statsAll[0]` as `saved`/`timeSaved`/`wasted`/`timeWasted`:
+ * `saved_count` is casts that skipped their aftercast, `wasted_count` is
+ * casts interrupted before firing. Durations are MILLISECONDS here (EI
+ * emits seconds); `wasted_ms` is already the positive "time lost" figure.
+ *
+ * NOTE the name collision: `wasted_count`/`wasted_ms` are CAST-INTERRUPT
+ * counters, unrelated to boon-generation waste. Both names are EI's.
+ */
+export interface AftercastOut {
+  /** EI `statsAll[0].saved`: casts that skipped their aftercast. */
+  saved_count: number
+  /** EI `statsAll[0].timeSaved`, in MILLISECONDS (EI emits seconds). */
+  saved_ms: number
+  /** EI `statsAll[0].wasted`: casts interrupted before firing. */
+  wasted_count: number
+  /** EI `statsAll[0].timeWasted`, in MILLISECONDS (EI emits seconds). */
+  wasted_ms: number
+}
+
 export interface HitStatsOut {
   crit_count: number
   crit_damage: number
@@ -407,6 +431,11 @@ export interface PlayerOut {
    * `skill_damage`/`per_second`/`dps_targets`. See `HitStatsOut`.
    */
   hit_stats: HitStatsOut
+  /**
+   * Aftercast/interrupt cast counters (MSMALL item 3). Always present,
+   * same as `hit_stats`. See `AftercastOut`.
+   */
+  aftercast: AftercastOut
   /**
    * Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
    * Task 2). Always present, same as `hit_stats`. See `DefensesOut`.

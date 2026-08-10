@@ -555,6 +555,35 @@ pub struct HealingOut {
 /// `statsAll[0]` scope. Always present (not gated), same as `cc`/
 /// `downs_contribution` -- no per-target/per-skill combinatorial blowup
 /// here, unlike `skill_damage`/`per_second`.
+/// GW2EI's aftercast/interrupt cast counters (MSMALL item 3), mirroring
+/// `axilog_core::analysis::rotation::AftercastStats` field-for-field --
+/// see that struct's doc comment for the `GameplayStatistics.cs:81-99`
+/// transcription.
+///
+/// These land in EI's `statsAll[0]` as `saved`/`timeSaved`/`wasted`/
+/// `timeWasted`. Always present (not gated), same convention as
+/// `hit_stats`/`defenses`: the rotation pass that produces them is
+/// unconditional in `analyze()`, so there is no cost to gate.
+///
+/// NOTE the name collision: `statsAll[0].wasted` (a CAST-INTERRUPT count)
+/// is a completely different quantity from the boon-generation `wasted`
+/// in `selfBuffs`/`groupBuffs`/`squadBuffs`. Both names are EI's.
+///
+/// Durations are milliseconds here; EI emits them as seconds with 3
+/// decimals, which the ei-json adapter applies.
+#[derive(Serialize, Default)]
+pub struct AftercastOut {
+    /// EI `statsAll[0].saved`: casts that skipped their aftercast.
+    pub saved_count: u32,
+    /// EI `statsAll[0].timeSaved`, in MILLISECONDS (EI emits seconds).
+    pub saved_ms: i64,
+    /// EI `statsAll[0].wasted`: casts interrupted before firing.
+    pub wasted_count: u32,
+    /// EI `statsAll[0].timeWasted`, in MILLISECONDS (EI emits seconds).
+    /// Already the positive "time lost" figure.
+    pub wasted_ms: i64,
+}
+
 #[derive(Serialize, Default)]
 pub struct HitStatsOut {
     pub crit_count: u32,
@@ -752,6 +781,9 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     /// Outgoing hit-quality stats (M13, Task 1). See `HitStatsOut`'s doc
     /// comment.
     pub hit_stats: HitStatsOut,
+    /// Aftercast/interrupt cast counters (MSMALL item 3). Always present,
+    /// same convention as `hit_stats`. See `AftercastOut`'s doc comment.
+    pub aftercast: AftercastOut,
     /// Incoming defenses: hit-outcome counts + damage-taken breakdown (M13,
     /// Task 2). Always present, same convention as `hit_stats`. See
     /// `DefensesOut`'s doc comment.
@@ -1184,6 +1216,13 @@ pub fn build_report(
                 above90_power_count: h.above90_power_count, above90_power_damage: h.above90_power_damage,
                 above90_condition_count: h.above90_condition_count, above90_condition_damage: h.above90_condition_damage,
             }}).unwrap_or_default(),
+            aftercast: m.map(|m| {
+                let a = axilog_core::analysis::rotation::aftercast_stats(&m.rotation);
+                AftercastOut {
+                    saved_count: a.saved_count, saved_ms: a.saved_ms,
+                    wasted_count: a.wasted_count, wasted_ms: a.wasted_ms,
+                }
+            }).unwrap_or_default(),
             defenses: m.map(|m| { let d = m.defenses; DefensesOut {
                 blocked_count: d.blocked_count, evaded_count: d.evaded_count, dodge_count: d.dodge_count,
                 missed_count: d.missed_count, interrupted_count: d.interrupted_count, invulned_count: d.invulned_count,
@@ -1527,7 +1566,8 @@ mod tests {
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 rotation: vec![SkillRotation { skill_id: 500, casts: vec![
-                    Cast { cast_time_ms: 100, duration_ms: 700, time_gained_ms: 300, quickness: 0.0 },
+                    Cast { cast_time_ms: 100, duration_ms: 700, time_gained_ms: 300, quickness: 0.0,
+                        status: axilog_core::analysis::rotation::AnimationStatus::Reduced },
                 ]}],
                 ..Default::default()},
         ],

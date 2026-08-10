@@ -409,7 +409,8 @@ mod tests {
     }
 
     fn cast(cast_time_ms: i64) -> Cast {
-        Cast { cast_time_ms, duration_ms: 100, time_gained_ms: 0, quickness: 0.0 }
+        Cast { cast_time_ms, duration_ms: 100, time_gained_ms: 0, quickness: 0.0,
+            status: crate::analysis::rotation::AnimationStatus::Full }
     }
 
     fn raw_with_skills(skills: Vec<RawSkill>) -> RawLog {
