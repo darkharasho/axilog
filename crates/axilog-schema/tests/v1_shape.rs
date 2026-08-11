@@ -1,21 +1,51 @@
 //! Structural invariants of the 1.0 container.
 use axilog_schema::v1::envelope::BlockName;
 
+/// Builds the 1.0 document with EVERY compute gate ON (skill-damage,
+/// timeseries, rotation, replay, missiles, damage-mods), the way
+/// `axilog-cli`'s `Cmd::Parse` does when every optional flag is passed --
+/// see `crates/axilog-cli/src/main.rs`'s `replay_data`/`missiles_data`/
+/// `damage_mods` construction, which this mirrors. This is what the
+/// key-set golden (`the_full_key_set_matches_the_committed_golden` below)
+/// is generated against, so that golden protects all 13 blocks, not just
+/// the 9 that happen to be on by default -- see Task 9 fix round 1,
+/// Finding 2.
 fn build() -> serde_json::Value {
     let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc"))
         .expect("read committed fixture");
     let raw = axilog_core::evtc::decode_raw(&bytes).expect("decode fixture");
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
-    let legacy =
-        axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, false, false, None);
+    let replay_data = axilog_core::analysis::replay::build_replay(
+        &raw,
+        &enc,
+        axilog_core::analysis::replay::DEFAULT_POLL_MS,
+    );
+    let missiles_data = axilog_core::analysis::missiles::build_missiles(&raw, &enc);
+    let damage_mods = axilog_core::analysis::damage_mods::evaluate_catalog_full(
+        &raw,
+        &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+        &enc,
+        false,
+    );
+    let legacy = axilog_schema::build_report(
+        &enc,
+        &metrics,
+        "0.0.0-test",
+        Some(&replay_data),
+        Some(&missiles_data),
+        true,
+        true,
+        true,
+        Some(&damage_mods),
+    );
     let v1 = axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
         &legacy,
         "0.0.0-test",
         Some("wvw-small.anon.zevtc"),
-        None,
+        Some(&damage_mods),
     );
     serde_json::to_value(&v1).expect("serializable")
 }
@@ -104,6 +134,22 @@ fn no_block_inlines_a_human_readable_name() {
 /// dotted paths. Removing or renaming a key fails; adding one is a reviewed
 /// diff. This is the compatibility rule made executable -- the six-key test
 /// above only guards the top level.
+///
+/// `build()` above turns on every compute gate this test binary can drive
+/// (skill-damage, timeseries, rotation, replay, missiles, damage-mods), so
+/// this golden protects all 13 optional/gated blocks, not just the 9 that
+/// happen to be on by default -- see Task 9 fix round 1, Finding 2.
+///
+/// One key is STILL unguarded here: `encounter.tick_rate`. It is populated
+/// from `CBTS_TICK` events already present in the raw log (see
+/// `crate::EncounterOut::tick_rate`'s doc comment -- omitted when the log
+/// has fewer than two `CBTS_TICK` events), not from a `build_report`/
+/// `build_report_v1` flag this test controls, and the committed
+/// `wvw-small.anon.zevtc` fixture has none (`axilog-core`'s own
+/// `tick_rate_absent_from_fixture` test asserts exactly this). Covering it
+/// would need a second fixture recorded with tick events, or a hand-built
+/// `RawLog` in this test -- left as a known gap rather than silently
+/// implied by the key's absence.
 #[test]
 fn the_full_key_set_matches_the_committed_golden() {
     fn walk(v: &serde_json::Value, prefix: &str, out: &mut Vec<String>) {
