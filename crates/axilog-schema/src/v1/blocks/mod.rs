@@ -3,6 +3,7 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+pub mod activity;
 pub mod damage;
 pub mod defense;
 pub mod support;
