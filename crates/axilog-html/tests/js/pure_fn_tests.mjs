@@ -13,12 +13,18 @@
 // path declaring "type": "module" for a sibling .js file.
 
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const reportJsPath = path.join(here, "..", "..", "assets", "report.js");
-const AxilogReport = (await import(reportJsPath)).default;
+// `pathToFileURL` is required, not decorative. A dynamic `import()` takes a
+// URL, and on POSIX an absolute path happens to work because it is also a
+// valid URL path. On Windows it is not: `path.join` yields
+// `D:\a\axilog\...\report.js`, and Node reads the leading `D:` as a URL
+// SCHEME, failing with ERR_UNSUPPORTED_ESM_URL_SCHEME. That is why this
+// test passed on linux/macOS and failed on the windows-msvc CI leg.
+const AxilogReport = (await import(pathToFileURL(reportJsPath).href)).default;
 
 let ran = 0;
 function test(name, fn) {
