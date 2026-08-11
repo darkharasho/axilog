@@ -55,6 +55,16 @@ pub struct SkillRow {
     pub hits: u32,
     pub min: u64,
     pub max: u64,
+    /// Hit COUNT (not a damage sum) of hits that crit, mirroring
+    /// `crate::SkillEntryOut::crit_hits` -- see that field's doc comment
+    /// for the derivation. Fix round 2, Finding: this was dropped entirely
+    /// in the first pass of this block, with no stated reason -- a real
+    /// equivalence gap, not a design choice.
+    pub crit_hits: u32,
+    /// Hit COUNT of hits landed while flanking, mirroring
+    /// `crate::SkillEntryOut::flank_hits`. Same fix-round-2 correction as
+    /// `crit_hits` above.
+    pub flank_hits: u32,
 }
 
 pub fn build_damage(
@@ -92,7 +102,14 @@ pub fn build_damage(
                 cats.reference_skill(e.skill_id);
                 by_skill.insert(
                     e.skill_id,
-                    SkillRow { total: e.total, hits: e.hits, min: e.min, max: e.max },
+                    SkillRow {
+                        total: e.total,
+                        hits: e.hits,
+                        min: e.min,
+                        max: e.max,
+                        crit_hits: e.crit_hits,
+                        flank_hits: e.flank_hits,
+                    },
                 );
             }
         }

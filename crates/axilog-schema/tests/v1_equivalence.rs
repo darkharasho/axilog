@@ -491,13 +491,15 @@ fn every_legacy_per_enemy_damage_row_survives_the_reshape() {
 /// `skill_damage.outgoing`) likewise had zero equivalence coverage. On the
 /// committed fixture this is 405 rows across the roster.
 ///
-/// NOTE on coverage: the legacy `SkillEntryOut` also carries `crit_hits`/
-/// `flank_hits` (hit COUNTS, not damage sums -- see its doc comment in
-/// `crates/axilog-schema/src/lib.rs`). The 1.0 `SkillRow` type does not
-/// have those fields at all -- `build_damage` never copies them. That is a
-/// genuine field-for-field gap this test cannot assert on (there is no 1.0
-/// field to compare against), reported separately rather than silently
-/// widened around; see the fix-round-1 report appendix.
+/// Fix round 2: the first pass of this test compared only 4 of
+/// `SkillEntryOut`'s 6 non-key fields (`total`/`hits`/`min`/`max`),
+/// missing `crit_hits`/`flank_hits` entirely -- and PASSED anyway, because
+/// a test that only checks the fields a struct happens to carry cannot
+/// catch a field the struct is missing. That was the actual data-loss bug
+/// (`SkillRow` never carried `crit_hits`/`flank_hits` in the first place,
+/// see the fix-round-1 report appendix); the production fix added both
+/// fields to `SkillRow` and this test now asserts on all six, so the same
+/// class of gap cannot silently reopen.
 #[test]
 fn every_legacy_skill_damage_row_survives_the_reshape() {
     let (legacy, v1) = build();
@@ -526,6 +528,14 @@ fn every_legacy_skill_damage_row_survives_the_reshape() {
             assert_eq!(got.hits, legacy_skill.hits, "{account} by_skill[{}].hits", legacy_skill.skill_id);
             assert_eq!(got.min, legacy_skill.min, "{account} by_skill[{}].min", legacy_skill.skill_id);
             assert_eq!(got.max, legacy_skill.max, "{account} by_skill[{}].max", legacy_skill.skill_id);
+            assert_eq!(
+                got.crit_hits, legacy_skill.crit_hits,
+                "{account} by_skill[{}].crit_hits", legacy_skill.skill_id
+            );
+            assert_eq!(
+                got.flank_hits, legacy_skill.flank_hits,
+                "{account} by_skill[{}].flank_hits", legacy_skill.skill_id
+            );
             checked += 1;
         }
     }
