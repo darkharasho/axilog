@@ -42,14 +42,20 @@ These were settled in brainstorming and constrain every spec in the program.
    EI mapping only where EI has a shape for them. The EI goldens are also the
    program's oracle — they are how native numbers are proven correct — so
    retiring them would cost evidence, not just a format.
-3. **Native is our own design, not a transliteration of EI.** Where EI's shape
+3. **EI parity is a floor, not a ceiling.** If GW2EI computes something, so
+   should axilog — a capability EI has and axilog lacks is a gap to close,
+   not a scope decision. Where axilog is more correct than EI it stays more
+   correct, but it never offers less. This is why unreachable-today roles and
+   fields that mirror an EI capability are kept and made semantically correct
+   now, rather than deleted as speculative.
+4. **Native is our own design, not a transliteration of EI.** Where EI's shape
    is an artifact of its history, native picks the better shape. Where axilog
    is deliberately more correct than EI (down contribution per arcdps
    methodology, the true life-leech count EI's own bug zeroes), native says so
    in its own vocabulary.
-4. **Id-first rules for everything new.** Stable ids, no positional joins, no
+5. **Id-first rules for everything new.** Stable ids, no positional joins, no
    arrays-of-one, catalogs referenced by id rather than inlined.
-5. **`ei-json` becomes a pure function of the native report** —
+6. **`ei-json` becomes a pure function of the native report** —
    `to_ei_json(&Report) -> Value`, no side inputs. Enforced mechanically:
    delete the `EiInputs` struct and the compiler finds every violation.
    Escape hatch: a block that is a *pure reprojection* of data native already
@@ -58,7 +64,7 @@ These were settled in brainstorming and constrain every spec in the program.
    richer `ReplayOut`, and EI's resampled shape exists because GW2EI's replay
    engine wants it.
    (Landed by spec #2, not this one.)
-6. **Flags demote from payload gates to compute gates.** `--timeseries` comes
+7. **Flags demote from payload gates to compute gates.** `--timeseries` comes
    to mean "spend the CPU", not "make the file legible". Anything cheap is
    default-on.
 
@@ -72,7 +78,7 @@ reshaping everything twice.
    catalogs, block layout, series encoding. Changes no numbers.
 2. **Absorb the side channel** — the eight EI-only passes get id-first native
    shapes in the block slots this spec reserves; ends with `EiInputs` deleted
-   and decision 5 enforced.
+   and decision 6 enforced.
 3. **Wart fixes** — replay track join keys, the `down`/`dead` gaps in
    `ei_replay`, and anything else the reshape surfaces.
 4. **Consumers and docs** — HTML report, Node/Python SDKs, axibridge migration
@@ -221,10 +227,20 @@ The `isFake` accounting stays as documented in `docs/EI-PARITY.md`: axilog
 does not synthesize GW2EI's `Dummy PvP Agent` aggregate, so every emitted
 entity is a real tracked agent.
 
-`friendly_player` is a new role for data axilog currently drops. Emitting the
-roster row is in scope for this spec; computing statistics for those entities
-is not (they will simply have no rows in the stat blocks until a later spec
-decides they should).
+`friendly_player` is a role for data axilog currently drops upstream:
+`Player::in_squad` is hardcoded `true` in `model::resolve`, so no non-squad
+friendly is ever produced and the role is unreachable **today**.
+
+It is kept rather than deleted because GW2EI computes this split
+(`_nonSquadFriendlies`), and by decision 3 a capability EI has is a gap to
+close. Populating it is REQUIRED follow-up work, not optional — tracked for a
+later spec, since it is new analysis in `axilog-core` rather than a container
+change.
+
+What this spec does do is make every aggregate semantically correct in
+advance: `squad` aggregates filter on `Role::Squad` rather than summing the
+whole roster, so filling the upstream gap is pure addition instead of a
+silent meaning change across every block.
 
 ### Id assignment and determinism
 
