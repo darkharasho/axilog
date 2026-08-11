@@ -1149,11 +1149,22 @@ pub struct SkillEntry {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct BuffEntry {
     pub name: String,
-    /// `"boon"` or `"condition"`. arcdps does not distinguish them
-    /// structurally; this field carries the distinction so one catalog can
-    /// serve both.
+    /// `"boon"`, `"condition"`, or `"effect"` -- GW2's own taxonomy.
+    /// arcdps does not distinguish them structurally, so this field carries
+    /// the distinction and one catalog serves all three.
+    ///
+    /// Membership in `condition_catalog::CONDITION_BUFFS` decides
+    /// `"condition"`, NOT whether the condition deals damage: eight of the
+    /// fourteen (Blind, Crippled, Chilled, Immobile, Weakness, Fear, Slow,
+    /// Taunt) are non-damaging and are still conditions. Auras and forms
+    /// (Frost Aura, Death Shroud) are `"effect"`; calling them boons would
+    /// simply be false.
     pub kind: &'static str,
-    /// `"intensity"` or `"duration"`.
+    /// `"intensity"` or `"duration"`. Sourced from
+    /// `condition_catalog::CONDITION_BUFFS` for conditions -- the
+    /// damage-modifier catalog's `buff_stack` table is a 91-entry SUBSET
+    /// scoped to that catalog's needs and holds only one condition, so
+    /// reading stacking from it silently mislabels five common conditions.
     pub stacking: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_stacks: Option<u32>,
@@ -1233,15 +1244,28 @@ impl CatalogBuilder {
                 .damage_mods
                 .into_iter()
                 .filter_map(|id| {
-                    m.descriptor(id).map(|d| {
-                        (
+                    // A referenced id ALWAYS resolves, mirroring the skills
+                    // path above. GW2EI builds `damageModMap` from inside the
+                    // same loop that writes the rows, so a dangling reference
+                    // is unrepresentable there; match that guarantee rather
+                    // than silently dropping the row.
+                    Some(match m.descriptor(id) {
+                        Some(d) => (
                             id,
                             DamageModEntry {
                                 name: d.name.clone(),
                                 kind: d.kind.clone(),
                                 approximate: d.approximate,
                             },
-                        )
+                        ),
+                        None => (
+                            id,
+                            DamageModEntry {
+                                name: format!("Damage modifier {id}"),
+                                kind: "unknown".into(),
+                                approximate: false,
+                            },
+                        ),
                     })
                 })
                 .collect(),
