@@ -1,6 +1,5 @@
 use axilog_core::analysis::buffs;
 use axilog_core::analysis::condition_catalog;
-use axilog_core::analysis::damage_mods::catalog::buff_stack;
 use axilog_core::analysis::damage_mods::DamageModifierResults;
 use axilog_core::analysis::Metrics;
 use serde::Serialize;
@@ -32,9 +31,13 @@ pub struct SkillEntry {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct BuffEntry {
     pub name: String,
-    /// `"boon"` or `"condition"`. arcdps does not distinguish them
-    /// structurally; this field carries the distinction so one catalog can
-    /// serve both.
+    /// `"condition"` (any of the 14 tracked conditions, damaging or not --
+    /// e.g. Chilled/Taunt are conditions with no damage component),
+    /// `"boon"` (any of the 12 tracked boons), or `"effect"` (everything
+    /// else this catalog tracks stacking for -- auras, forms, and other
+    /// non-boon non-condition buffs, e.g. Frost Aura/Death Shroud). arcdps
+    /// does not distinguish these structurally; this field carries GW2's
+    /// real three-way taxonomy so one catalog can serve all of them.
     pub kind: &'static str,
     /// `"intensity"` or `"duration"`.
     pub stacking: &'static str,
@@ -97,23 +100,32 @@ impl CatalogBuilder {
             .buffs
             .into_iter()
             .map(|id| {
-                // `stack_type_for` is the real accessor (buffs::mod.rs);
-                // `is_intensity()` is `BuffStackType`'s own method. Unknown
-                // ids default to duration, matching GW2EI's own
-                // `Buff.cs:120` default.
-                let is_intensity =
-                    buffs::stack_type_for(id).is_some_and(|t| t.is_intensity());
+                // `stacking` resolves `(is_intensity, max_stacks)` in the
+                // order Finding 1 (review round 1) specifies: the condition
+                // table first (the only source with correct capacities for
+                // all 14 conditions), then the boon/damage-mod stack-type
+                // table, else duration/no-capacity.
+                let (is_intensity, max_stacks) = buffs::stacking(id);
+                // GW2's real three-way taxonomy (Finding 2, review round
+                // 1): condition membership is checked directly against
+                // `CONDITION_BUFFS`, NOT `is_condition_damage_based` --
+                // that predicate answers "does this deal condition damage",
+                // which would silently exclude the 8 non-damaging
+                // conditions (Blind, Crippled, Chilled, Immobile, Weakness,
+                // Fear, Slow, Taunt) from `kind: "condition"`.
+                let is_condition = condition_catalog::CONDITION_BUFFS
+                    .iter()
+                    .any(|&(cid, _, _, _)| cid == id);
+                let is_boon = buffs::BOON_IDS.iter().any(|&(bid, _, _)| bid == id);
+                let kind =
+                    if is_condition { "condition" } else if is_boon { "boon" } else { "effect" };
                 (
                     id,
                     BuffEntry {
                         name: buffs::name(id).unwrap_or_default().to_string(),
-                        kind: if condition_catalog::is_condition_damage_based(id) {
-                            "condition"
-                        } else {
-                            "boon"
-                        },
+                        kind,
                         stacking: if is_intensity { "intensity" } else { "duration" },
-                        max_stacks: buff_stack::stack_info(id).map(|b| b.capacity),
+                        max_stacks,
                     },
                 )
             })
@@ -124,12 +136,14 @@ impl CatalogBuilder {
             Some(m) => self
                 .damage_mods
                 .into_iter()
-                .filter_map(|id| {
-                    m.meta.get(&id).map(|meta| {
+                .map(|id| match m.meta.get(&id) {
+                    Some(meta) => {
                         // No single existing field is a "kind" string; this
                         // orders the same three flags `tooltip()`
                         // (damage_mods/model.rs) already reports in, picking
-                        // the first that applies.
+                        // the first that applies. (Left as-is per Task 4
+                        // review round 1 -- logged as a Minor for Task 8 to
+                        // revisit.)
                         let kind = if meta.is_counter {
                             "counter"
                         } else if meta.skill_based {
@@ -148,7 +162,20 @@ impl CatalogBuilder {
                                 approximate: meta.approximate,
                             },
                         )
-                    })
+                    }
+                    // A referenced id ALWAYS resolves (Finding 3, review
+                    // round 1) -- GW2EI's own `damageModMap` is built from
+                    // inside the same emission loop that writes the rows,
+                    // so a dangling reference is unrepresentable there.
+                    // Mirrors the skills path's `"Skill {id}"` placeholder.
+                    None => (
+                        id,
+                        DamageModEntry {
+                            name: format!("Damage modifier {id}"),
+                            kind: "unknown".to_string(),
+                            approximate: false,
+                        },
+                    ),
                 })
                 .collect(),
         };
@@ -242,5 +269,49 @@ mod tests {
 
         let prot = c.buffs.get(&717).expect("Protection resolves");
         assert_eq!(prot.stacking, "duration");
+    }
+
+    #[test]
+    fn conditions_are_kind_condition_regardless_of_whether_they_damage() {
+        // Regression lock for review round 1's Finding 1 (wrong source
+        // table for stacking/max_stacks) and Finding 2 (kind must be GW2's
+        // real three-way taxonomy, not a damage-based binary).
+        let mut b = CatalogBuilder::default();
+        b.reference_buff(722); // Chilled -- non-damaging condition
+        b.reference_buff(736); // Bleeding -- damaging condition
+        let c = b.finish(&Metrics::default(), None);
+
+        let chilled = c.buffs.get(&722).expect("Chilled resolves");
+        assert_eq!(chilled.kind, "condition");
+        assert_eq!(chilled.stacking, "duration");
+
+        let bleeding = c.buffs.get(&736).expect("Bleeding resolves");
+        assert_eq!(bleeding.kind, "condition");
+        assert_eq!(bleeding.stacking, "intensity");
+        assert_eq!(bleeding.max_stacks, Some(1500));
+    }
+
+    #[test]
+    fn a_non_boon_non_condition_buff_is_kind_effect() {
+        let mut b = CatalogBuilder::default();
+        b.reference_buff(5579); // Frost Aura
+        let c = b.finish(&Metrics::default(), None);
+        assert_eq!(c.buffs.get(&5579).expect("Frost Aura resolves").kind, "effect");
+    }
+
+    #[test]
+    fn a_referenced_damage_mod_with_no_definition_still_resolves_to_an_entry() {
+        // Mirrors `a_referenced_id_with_no_definition_still_resolves_to_an_entry`
+        // above (skills) -- Finding 3, review round 1. `DamageModifierResults`
+        // with empty `meta` reproduces "referenced id, no metadata".
+        use axilog_core::analysis::damage_mods::DamageModifierResults;
+
+        let mut b = CatalogBuilder::default();
+        b.reference_damage_mod(424242);
+        let c = b.finish(&Metrics::default(), Some(&DamageModifierResults::default()));
+        let e = c.damage_mods.get(&424242).expect("referenced id must resolve");
+        assert_eq!(e.name, "Damage modifier 424242");
+        assert_eq!(e.kind, "unknown");
+        assert!(!e.approximate);
     }
 }

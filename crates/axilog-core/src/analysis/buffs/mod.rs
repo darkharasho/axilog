@@ -209,6 +209,67 @@ pub fn name(id: u32) -> Option<&'static str> {
         })
 }
 
+/// `(is_intensity, max_stacks)` for a buff id, consulted in this order
+/// (native-format-1.0 catalog fix, NFCAT Task 4 review round 1, Finding 1):
+///
+/// 1. [`crate::analysis::condition_catalog::CONDITION_BUFFS`] -- the
+///    authoritative table for all 14 conditions, damaging or not. It alone
+///    carries the correct capacity (e.g. 1500 for Bleeding/Burning/
+///    Confusion/Poison/Torment); [`damage_mods::catalog::buff_stack`]'s
+///    table is NOT a general buff catalog (its own module doc says so) and
+///    only happens to carry one of the 14 (Vulnerability), so consulting it
+///    first silently produced `stacking: "duration"`/no `max_stacks` for
+///    the other 13.
+/// 2. [`stack_type_for`] (boons, auras, forms, and anything else the
+///    damage-modifier catalog's stack table knows about).
+/// 3. Otherwise `(false, None)` -- duration, no known capacity. Matches
+///    GW2EI's own `Buff.cs:120` default.
+///
+/// [`damage_mods::catalog::buff_stack`]: crate::analysis::damage_mods::catalog::buff_stack
+pub fn stacking(id: u32) -> (bool, Option<u32>) {
+    if let Some(&(_, _, is_intensity, capacity)) =
+        crate::analysis::condition_catalog::CONDITION_BUFFS.iter().find(|&&(i, _, _, _)| i == id)
+    {
+        return (is_intensity, Some(capacity));
+    }
+    let info = crate::analysis::damage_mods::catalog::buff_stack::stack_info(id);
+    let is_intensity = info.map(|b| b.stack_type.is_intensity()).unwrap_or(false);
+    (is_intensity, info.map(|b| b.capacity))
+}
+
+#[cfg(test)]
+mod stacking_tests {
+    use super::*;
+    use crate::analysis::condition_catalog;
+
+    #[test]
+    fn a_damaging_condition_resolves_through_the_condition_table() {
+        assert_eq!(stacking(condition_catalog::BLEEDING), (true, Some(1500)));
+    }
+
+    #[test]
+    fn a_non_damaging_condition_still_resolves_through_the_condition_table() {
+        // Chilled is a non-damaging condition -- Finding 1's regression
+        // lock. Before the fix this fell through to the damage-mod stack
+        // table (which does not carry Chilled) and silently defaulted to
+        // duration/no-capacity, which happens to be the right answer here
+        // by coincidence but for the wrong reason; the real assertion this
+        // guards is Bleeding above.
+        assert_eq!(stacking(condition_catalog::CHILLED), (false, Some(5)));
+    }
+
+    #[test]
+    fn a_boon_resolves_through_the_stack_type_path() {
+        assert_eq!(stacking(MIGHT), (true, Some(25)));
+        assert_eq!(stacking(PROTECTION), (false, Some(5)));
+    }
+
+    #[test]
+    fn an_unknown_id_defaults_to_duration_with_no_capacity() {
+        assert_eq!(stacking(u32::MAX), (false, None));
+    }
+}
+
 #[cfg(test)]
 mod name_tests {
     use super::*;
