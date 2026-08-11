@@ -11,6 +11,14 @@ use axilog_schema::v1::envelope::BlockName;
 /// the 9 that happen to be on by default -- see Task 9 fix round 1,
 /// Finding 2.
 fn build() -> serde_json::Value {
+    build_with_encounter().0
+}
+
+/// Same as `build()`, but also hands back the resolved `Encounter` model so
+/// callers can pull ground-truth names (`Player::account`, `Player::
+/// character`, `Enemy::name`) straight from the model instead of guessing
+/// at their shape in the serialized output.
+fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) {
     let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc"))
         .expect("read committed fixture");
     let raw = axilog_core::evtc::decode_raw(&bytes).expect("decode fixture");
@@ -47,7 +55,7 @@ fn build() -> serde_json::Value {
         Some("wvw-small.anon.zevtc"),
         Some(&damage_mods),
     );
-    serde_json::to_value(&v1).expect("serializable")
+    (serde_json::to_value(&v1).expect("serializable"), enc)
 }
 
 #[test]
@@ -195,14 +203,24 @@ fn the_full_key_set_matches_the_committed_golden() {
     );
 }
 
-/// After scrubbing/anonymization, no real account or character string
-/// appears ANYWHERE in the serialized 1.0 document.
+/// After scrubbing/anonymization, no *account-shaped* string (`:Name.NNNN`)
+/// appears ANYWHERE in the serialized 1.0 document except as an `:Anon`
+/// placeholder.
 ///
-/// The 1.0 container makes this assertable for the first time: account and
-/// character names live in `entities[]` and nowhere else, so a leak-scan is
-/// a single pass over the serialized text rather than a hunt through nested
-/// structures. The M15 fix waves found that hunt had already missed a
-/// `_note` field once.
+/// This is deliberately narrower than "no identity leaks": the scanner
+/// below only recognizes the account shape, so it cannot see a leaked
+/// CHARACTER name (anonymized characters are plain `Anon<N>`, with no colon
+/// and no numeric suffix, and real character/NPC names have no reliable
+/// shape at all -- exactly the kind of thing a `_note` field could carry
+/// invisibly). For that, see
+/// `no_name_from_the_encounter_appears_outside_entities` below, which
+/// checks the actual design claim (names live ONLY in `entities[]`)
+/// exactly, against the ground-truth name set, rather than by shape
+/// guessing. This test still earns its keep alongside that one: it also
+/// catches a name that is PRESENT but WRONG (e.g. a real account slipped in
+/// where an `:Anon` placeholder should be), which the entities-exclusion
+/// test would not flag since the wrong account would still be inside
+/// `entities[]`.
 ///
 /// The committed fixture (`fixtures/wvw-small.anon.zevtc`) is already
 /// anonymized: every account is of the form `:Anon<N>.<4 digits>`. So the
@@ -287,3 +305,72 @@ fn regex_lite_account_matches(text: &str) -> Vec<String> {
     }
     out
 }
+
+/// The exact form of the format's "names live in exactly one place" claim:
+/// every account, character, and enemy/NPC name from the resolved
+/// `Encounter` may appear ONLY inside the top-level `entities[]` array, and
+/// nowhere else in the serialized 1.0 document.
+///
+/// Unlike `no_unscrubbed_identity_survives_in_the_v1_document` above, this
+/// needs no shape heuristic: the ground-truth name set comes straight from
+/// the model (`Player::account`, `Player::character`, `Enemy::name`), so it
+/// also catches a leaked CHARACTER or NPC name, which the account-shape
+/// scanner cannot see at all (anonymized characters are plain `Anon<N>`,
+/// with no colon and no digit suffix, and real character/NPC names have no
+/// reliable shape to scan for).
+#[test]
+fn no_name_from_the_encounter_appears_outside_entities() {
+    let (v, enc) = build_with_encounter();
+
+    // Ground-truth name set, straight from the model.
+    //
+    // Skip empty/whitespace-only names (some enemies/NPCs legitimately have
+    // none). Skip names shorter than `MIN_NAME_LEN`: a one- or two-character
+    // name is common enough as an ordinary JSON substring (hex digits, ids,
+    // short enum tags like "Up"/"NA") that scanning for it would produce
+    // false-positive "leaks" that are really just coincidental text, making
+    // the test unreliable rather than precise. Every name in this fixture's
+    // roster is well above that floor (accounts are `AnonN.NNNN`-shaped and
+    // characters/enemies carry real multi-character names), so the floor
+    // costs no real coverage here.
+    const MIN_NAME_LEN: usize = 3;
+    let mut names: Vec<String> = Vec::new();
+    for p in &enc.players {
+        for n in [&p.account, &p.character] {
+            let n = n.trim();
+            if n.len() >= MIN_NAME_LEN {
+                names.push(n.to_string());
+            }
+        }
+    }
+    for e in &enc.enemies {
+        let n = e.name.trim();
+        if n.len() >= MIN_NAME_LEN {
+            names.push(n.to_string());
+        }
+    }
+    names.sort();
+    names.dedup();
+    eprintln!("ground-truth name set size: {}", names.len());
+    assert!(
+        names.len() >= 40,
+        "expected dozens of names from a 42-player fixture, found only {} -- the ground-truth \
+         collection may be broken",
+        names.len()
+    );
+
+    // Remove the one place names are permitted, then scan what remains.
+    let mut obj = v.as_object().expect("top-level object").clone();
+    obj.remove("entities").expect("v1 document has an entities key");
+    let rest = serde_json::Value::Object(obj);
+    let text = serde_json::to_string(&rest).expect("stringify document minus entities");
+
+    let leaked: Vec<&String> = names.iter().filter(|n| text.contains(n.as_str())).collect();
+    assert!(
+        leaked.is_empty(),
+        "{} name(s) from the encounter leaked outside entities[]: {:?}",
+        leaked.len(),
+        leaked
+    );
+}
+
