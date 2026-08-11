@@ -55,9 +55,10 @@ pub struct Enemy { pub id: u64, pub instid: u16, pub name: String,
     /// -- hence `Option`, where `Player`'s equivalents are plain `String`s
     /// that are merely EMPTY when unresolved. An enemy player whose
     /// `prof`/`is_elite` pair `profession_name` cannot name still gets
-    /// `Some("")` / `Some(<numeric spec id>)`, exactly as a squad player
-    /// would, so "not a player" stays distinguishable from "a player whose
-    /// spec we failed to resolve".
+    /// `Some("")` for that field, exactly as a squad player would, so "not a
+    /// player" stays distinguishable from "a player whose spec we failed to
+    /// resolve". An unnamed elite spec is `Some("")` and NEVER the spec id
+    /// rendered as a string -- see `profession_name`'s closing comment.
     ///
     /// These come from the agent table's `prof`/`is_elite` columns, which
     /// arcdps populates for enemy players just as it does for squad members;

@@ -55,6 +55,29 @@ fn ei_json_matches_the_golden_isfake_down_dead_and_active_times() {
         assert_eq!(t["isFake"], false, "target {t:?} must be isFake: false");
     }
 
+    // -- profession: a class NAME, never an elite-spec id --
+    // `targets[].profession` is this crate's deliberate superset over EI
+    // (GW2EI's `JsonNPC` has no profession member), and it is what
+    // downstream class-breakdown UIs group enemies by. An elite-spec id
+    // this project does not name must surface as the base profession
+    // ("Revenant"), never as the id ("79") -- the fixture has 5 such enemy
+    // rows (1x Thief id 77, 4x Revenant id 79). Asserts the shape rather
+    // than the ids so it survives those specs eventually being named.
+    for t in targets {
+        let prof = t["profession"].as_str().unwrap_or_default();
+        assert!(
+            !prof.is_empty(),
+            "target {:?} must carry a profession",
+            t["name"]
+        );
+        assert!(
+            !prof.chars().all(|c| c.is_ascii_digit()),
+            "target {:?} reports elite-spec id {prof:?} as its profession NAME; \
+             an unnamed spec must fall back to the base profession",
+            t["name"]
+        );
+    }
+
     // -- down/dead/activeTimes: join by raw agent-table index -> Anon<N>
     // account -> golden row (same join `professions_match_ei_golden`/
     // `replay_calibrated_against_ei_combat_replay_data` already use). --
