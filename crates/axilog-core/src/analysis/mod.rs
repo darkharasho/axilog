@@ -222,6 +222,29 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
 #[derive(Debug, Clone, Default)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
+/// Severity of a [`Warning`]. Mirrors `v1::envelope::Severity`'s three-way
+/// split -- kept as an independent enum here so `axilog-core` does not
+/// depend on `axilog-schema`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarningSeverity { Info, Warn, Error }
+/// A structured, user-facing analysis warning (native format 1.0, Task 9).
+/// Replaces the old `Vec<String>` so a consumer can act on `code`
+/// programmatically instead of pattern-matching prose. `code` is a closed,
+/// documented set: every `warnings.push` site in this crate names a
+/// distinct code, and there is deliberately no catch-all -- see this
+/// module's `analyze` for the two current producers
+/// (`post_rework_zero_buff_events`, `healing_extension_absent`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Warning {
+    /// Closed, documented set. Adding a code is additive; changing one's
+    /// meaning is a breaking change to the 1.0 format.
+    pub code: &'static str,
+    pub severity: WarningSeverity,
+    pub message: String,
+    /// The agent this warning is about, when it is about one. Mapped to an
+    /// entity id at 1.0 serialization time.
+    pub agent_addr: Option<u64>,
+}
 #[derive(Debug, Clone, Default)]
 pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// Per-(agent representative, boon id) stack-count timelines (M3, Task
@@ -263,7 +286,7 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// top-level `warnings: [...]` array (omitted when empty); the CLI
     /// table view prints it to stderr; `ei-json` has no comparable field so
     /// it's simply not carried over.
-    pub warnings: Vec<String>,
+    pub warnings: Vec<Warning>,
     /// Whether the arcdps healing extension (M10 Task 1) was present in
     /// this log at all (a valid signature+revision registration row was
     /// found -- see `evtc::ext_healing::healing_extension_present`).
@@ -687,13 +710,23 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // same predicate.
     let mut warnings = Vec::new();
     if raw.header.is_post_buff_rework() && boon_inputs.events.is_empty() {
-        warnings.push(format!(
-            "no buff events found in this post-2026-05-01 log (build {}); boon/support metrics will read zero",
-            raw.header.build
-        ));
+        warnings.push(Warning {
+            code: "post_rework_zero_buff_events",
+            severity: WarningSeverity::Warn,
+            message: format!(
+                "no buff events found in this post-2026-05-01 log (build {}); boon/support metrics will read zero",
+                raw.header.build
+            ),
+            agent_addr: None,
+        });
     }
     if !has_healing_extension {
-        warnings.push("healing extension not present in this log".to_string());
+        warnings.push(Warning {
+            code: "healing_extension_absent",
+            severity: WarningSeverity::Info,
+            message: "healing extension not present in this log".to_string(),
+            agent_addr: None,
+        });
     }
     // M14 Task 2: best-effort skillMap, scoped to whatever `skill_damage`/
     // `rotation` (both already populated on `players` above) actually
@@ -906,9 +939,10 @@ mod tests {
         };
         let metrics = analyze(&empty_enc(), &raw);
         assert!(!metrics.warnings.is_empty(), "post-rework build with zero buff events must warn");
-        assert!(metrics.warnings[0].contains("20260601"), "warning should name the offending build");
+        assert_eq!(metrics.warnings[0].code, "post_rework_zero_buff_events");
+        assert!(metrics.warnings[0].message.contains("20260601"), "warning should name the offending build");
         assert!(
-            metrics.warnings[0].contains("no buff events found"),
+            metrics.warnings[0].message.contains("no buff events found"),
             "warning should use the M4 Task 3 downgraded message, got {:?}",
             metrics.warnings[0]
         );
@@ -917,7 +951,8 @@ mod tests {
         // appended AFTER the buff warning (order: existing warnings first,
         // healing note last -- `warnings[0]` above stays the buff message).
         assert_eq!(metrics.warnings.len(), 2, "expected both the buff and healing warnings: {:?}", metrics.warnings);
-        assert!(metrics.warnings[1].contains("healing extension not present"));
+        assert_eq!(metrics.warnings[1].code, "healing_extension_absent");
+        assert!(metrics.warnings[1].message.contains("healing extension not present"));
     }
 
     /// M4 Task 3: a post-2026-05-01 build that DOES carry extracted buff
@@ -946,9 +981,10 @@ mod tests {
         // registration row, so it now warns about that (the buff-events
         // warning itself correctly stays absent, which is what this test
         // guards).
+        assert_eq!(metrics.warnings.len(), 1);
+        assert_eq!(metrics.warnings[0].code, "healing_extension_absent");
         assert_eq!(
-            metrics.warnings,
-            vec!["healing extension not present in this log".to_string()],
+            metrics.warnings[0].message, "healing extension not present in this log",
             "post-rework build with a real extracted buff event must not warn about buffs, \
              but must still warn about the absent healing extension, got {:?}",
             metrics.warnings
@@ -966,6 +1002,8 @@ mod tests {
             agents: vec![], skills: vec![], events: vec![], guid_map: vec![],
         };
         let metrics = analyze(&empty_enc(), &raw);
-        assert_eq!(metrics.warnings, vec!["healing extension not present in this log".to_string()]);
+        assert_eq!(metrics.warnings.len(), 1);
+        assert_eq!(metrics.warnings[0].code, "healing_extension_absent");
+        assert_eq!(metrics.warnings[0].message, "healing extension not present in this log");
     }
 }

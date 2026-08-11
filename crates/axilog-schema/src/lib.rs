@@ -347,7 +347,7 @@ pub fn build_replay_out(replay: &Replay) -> ReplayOut {
         tracks,
     }
 }
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u64,
     pub build: String, pub revision: u8, pub recorded_by: Option<String>,
     pub teams: Vec<TeamOut>,
@@ -363,13 +363,13 @@ pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u6
     /// convention.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tick_rate: Option<TickRateOut> }
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct MarkerAssignmentOut { pub agent_addr: u64, pub marker: String, pub time_ms: u64 }
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct TickRateOut { pub avg: f64, pub min: f64, pub per_second: Vec<f64> }
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct CommanderTagOut { pub variant: String, pub guid: String }
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct TeamOut {
     pub color: String,
     pub team_id: u32,
@@ -1427,7 +1427,7 @@ pub fn build_report(
             per_second: PerSecondOut { squad_damage: metrics.timeline.squad_damage.clone(),
                 cc_applied: metrics.timeline.cc_applied.clone(),
                 downs: metrics.timeline.downs.clone() } },
-        warnings: metrics.warnings.clone(),
+        warnings: metrics.warnings.iter().map(|w| w.message.clone()).collect(),
         replay: replay.map(build_replay_out),
         missiles: missiles.map(|m| build_missiles_out(m, enc)),
         // M14 Task 2: straight copy of `Metrics::skill_map` -- already
