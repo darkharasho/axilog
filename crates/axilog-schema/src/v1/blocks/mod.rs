@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 pub mod damage;
 pub mod defense;
+pub mod support;
 
 /// The uniform entity-keyed map every block uses.
 ///
