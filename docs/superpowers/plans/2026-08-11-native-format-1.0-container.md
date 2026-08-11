@@ -156,13 +156,17 @@ mod tests {
 
     #[test]
     fn serializes_to_the_documented_json_shape() {
-        let s = SeriesOut::encode_u64(1000, &[0, 0, 0, 5]);
+        // Ten zeros then a value: raw is 23 bytes, RLE is 14, so RLE wins
+        // and we can pin the documented pair shape. (A shorter run like
+        // [0,0,0,5] is 9 bytes raw vs 13 as RLE -- raw correctly wins there,
+        // which is the encoder working, not a bug.)
+        let s = SeriesOut::encode_u64(1000, &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]);
         let v = serde_json::to_value(&s).expect("serializable");
         assert_eq!(v["interval_ms"], 1000);
-        assert_eq!(v["len"], 4);
+        assert_eq!(v["len"], 11);
         assert_eq!(v["enc"], "rle");
         // RLE pairs are [value, run_length].
-        assert_eq!(v["data"], serde_json::json!([[0, 3], [5, 1]]));
+        assert_eq!(v["data"], serde_json::json!([[0, 10], [5, 1]]));
     }
 
     #[test]
@@ -285,12 +289,10 @@ impl SeriesOut {
         match self.enc {
             "rle" => {
                 for pair in &self.data {
-                    let value = from_json(&pair[0]);
                     let run = pair[1].as_u64().unwrap_or_default();
                     for _ in 0..run {
                         out.push(from_json(&pair[0]));
                     }
-                    let _ = value;
                 }
             }
             _ => {
