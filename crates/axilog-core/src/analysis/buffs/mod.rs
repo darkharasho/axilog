@@ -186,6 +186,50 @@ pub const BOON_IDS: [(u32, &str, bool); 12] = [
     (ALACRITY, "Alacrity", false),
 ];
 
+/// Display name for a buff id, from whichever of the two tracked name
+/// tables (the 12 [`BOON_IDS`] or the 14
+/// [`crate::analysis::condition_catalog::CONDITION_BUFFS`]) carries it.
+///
+/// Added for the native-format-1.0 buff catalog (NFCAT Task 4), which needs
+/// a name for an arbitrary referenced buff id without owning a second copy
+/// of either table -- this project has no crate-wide buff catalog (see
+/// `damage_mods::catalog::buff_stack`'s module doc), so composing the two
+/// existing name-carrying tables is the calibration-safe option: neither
+/// table's data is duplicated, only looked up.
+pub fn name(id: u32) -> Option<&'static str> {
+    BOON_IDS
+        .iter()
+        .find(|&&(i, _, _)| i == id)
+        .map(|&(_, n, _)| n)
+        .or_else(|| {
+            crate::analysis::condition_catalog::CONDITION_BUFFS
+                .iter()
+                .find(|&&(i, _, _, _)| i == id)
+                .map(|&(_, n, _, _)| n)
+        })
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_a_boon_name() {
+        assert_eq!(name(MIGHT), Some("Might"));
+        assert_eq!(name(PROTECTION), Some("Protection"));
+    }
+
+    #[test]
+    fn resolves_a_condition_name() {
+        assert_eq!(name(crate::analysis::condition_catalog::BLEEDING), Some("Bleeding"));
+    }
+
+    #[test]
+    fn unknown_id_resolves_to_none() {
+        assert_eq!(name(u32::MAX), None);
+    }
+}
+
 /// The shared, pass-independent inputs both boon simulations need (MPERF
 /// Task 3).
 ///
