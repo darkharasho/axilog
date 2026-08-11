@@ -330,12 +330,15 @@ git commit -m "feat(schema): add the 1.0 series envelope (raw/rle)"
 - Consumes: nothing.
 - Produces: `AxilogMeta { schema: &'static str, version: String, generated_from: Option<String> }`;
   `CoverageState` enum with `Present | NotComputed | Empty | Unsupported`;
-  `Coverage(BTreeMap<&'static str, CoverageState>)` with
-  `Coverage::new() -> Coverage` (every known block `NotComputed`) and
-  `Coverage::set(&mut self, block: &'static str, state: CoverageState)`;
+  `BlockName` enum (one variant per block, snake_case) with
+  `BlockName::ALL` and `BlockName::as_str()`;
+  `Coverage` with `Coverage::new() -> Coverage` (every `BlockName::ALL`
+  entry `NotComputed`) and
+  `Coverage::set(&mut self, block: BlockName, state: CoverageState)`;
   `WarningOut { code: String, severity: Severity, message: String, entity_id: Option<u32> }`;
   `Severity` enum with `Info | Warn | Error`.
-  `pub const BLOCK_NAMES: [&str; 15]` — the reserved block-name list.
+  `BlockName::ALL` is the reserved block-name list — the single source of
+  truth. There is no parallel `&'static str` array to drift from it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -351,8 +354,9 @@ mod tests {
         let c = Coverage::new();
         let v = serde_json::to_value(&c).expect("serializable");
         let obj = v.as_object().expect("coverage is an object");
-        assert_eq!(obj.len(), BLOCK_NAMES.len(), "coverage must name every block");
-        for name in BLOCK_NAMES {
+        assert_eq!(obj.len(), BlockName::ALL.len(), "coverage must name every block");
+        for block in BlockName::ALL {
+            let name = block.as_str();
             assert_eq!(obj[name], "not_computed", "block {name} must default to not_computed");
         }
     }
@@ -360,9 +364,9 @@ mod tests {
     #[test]
     fn coverage_states_serialize_as_documented_snake_case() {
         let mut c = Coverage::new();
-        c.set("damage", CoverageState::Present);
-        c.set("series", CoverageState::Empty);
-        c.set("replay", CoverageState::Unsupported);
+        c.set(BlockName::Damage, CoverageState::Present);
+        c.set(BlockName::Series, CoverageState::Empty);
+        c.set(BlockName::Replay, CoverageState::Unsupported);
         let v = serde_json::to_value(&c).expect("serializable");
         assert_eq!(v["damage"], "present");
         assert_eq!(v["series"], "empty");
@@ -421,23 +425,70 @@ use std::collections::BTreeMap;
 /// Every block name the 1.0 schema defines. Fixed by spec #1 so spec #2
 /// fills reserved slots rather than renegotiating the container; adding a
 /// name is additive under the 1.x rules, renaming one is a major bump.
-pub const BLOCK_NAMES: [&str; 15] = [
-    "cc",
-    "conditions",
-    "contribution",
-    "damage",
-    "damage_mods",
-    "defenses",
-    "healing",
-    "hit_stats",
-    "minions",
-    "missiles",
-    "replay",
-    "rotation",
-    "series",
-    "support",
-    "boons",
-];
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockName {
+    Boons,
+    Cc,
+    Conditions,
+    Contribution,
+    Damage,
+    DamageMods,
+    Defenses,
+    Healing,
+    HitStats,
+    Minions,
+    Missiles,
+    Replay,
+    Rotation,
+    Series,
+    Support,
+}
+
+impl BlockName {
+    /// The reserved block-name list -- the SINGLE source of truth. There is
+    /// deliberately no parallel `&'static str` array: one would be free to
+    /// drift from this, and a stringly-typed `Coverage::set` would let a
+    /// typo insert an unknown key that only a debug assertion would catch
+    /// (and this workspace does not enable debug assertions in release).
+    pub const ALL: [BlockName; 15] = [
+        BlockName::Boons,
+        BlockName::Cc,
+        BlockName::Conditions,
+        BlockName::Contribution,
+        BlockName::Damage,
+        BlockName::DamageMods,
+        BlockName::Defenses,
+        BlockName::Healing,
+        BlockName::HitStats,
+        BlockName::Minions,
+        BlockName::Missiles,
+        BlockName::Replay,
+        BlockName::Rotation,
+        BlockName::Series,
+        BlockName::Support,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BlockName::Boons => "boons",
+            BlockName::Cc => "cc",
+            BlockName::Conditions => "conditions",
+            BlockName::Contribution => "contribution",
+            BlockName::Damage => "damage",
+            BlockName::DamageMods => "damage_mods",
+            BlockName::Defenses => "defenses",
+            BlockName::Healing => "healing",
+            BlockName::HitStats => "hit_stats",
+            BlockName::Minions => "minions",
+            BlockName::Missiles => "missiles",
+            BlockName::Replay => "replay",
+            BlockName::Rotation => "rotation",
+            BlockName::Series => "series",
+            BlockName::Support => "support",
+        }
+    }
+}
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct AxilogMeta {
@@ -475,12 +526,13 @@ pub struct Coverage(BTreeMap<&'static str, CoverageState>);
 
 impl Coverage {
     pub fn new() -> Self {
-        Coverage(BLOCK_NAMES.iter().map(|n| (*n, CoverageState::NotComputed)).collect())
+        Coverage(BlockName::ALL.iter().map(|b| (b.as_str(), CoverageState::NotComputed)).collect())
     }
 
-    pub fn set(&mut self, block: &'static str, state: CoverageState) {
-        debug_assert!(BLOCK_NAMES.contains(&block), "unknown block name {block}");
-        self.0.insert(block, state);
+    /// Takes a `BlockName`, not a string: a mistyped block is then a
+    /// COMPILE error rather than a silent extra key.
+    pub fn set(&mut self, block: BlockName, state: CoverageState) {
+        self.0.insert(block.as_str(), state);
     }
 
     pub fn get(&self, block: &str) -> Option<CoverageState> {
@@ -2548,7 +2600,7 @@ Create `crates/axilog-schema/tests/v1_shape.rs`:
 
 ```rust
 //! Structural invariants of the 1.0 container.
-use axilog_schema::v1::envelope::BLOCK_NAMES;
+use axilog_schema::v1::envelope::BlockName;
 
 fn build() -> serde_json::Value {
     let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc"))
@@ -2599,9 +2651,10 @@ fn the_schema_version_is_one_point_oh_and_distinct_from_the_binary_version() {
 fn coverage_names_every_block_and_agrees_with_what_blocks_carries() {
     let v = build();
     let coverage = v["coverage"].as_object().expect("coverage object");
-    assert_eq!(coverage.len(), BLOCK_NAMES.len());
+    assert_eq!(coverage.len(), BlockName::ALL.len());
     let blocks = v["blocks"].as_object().expect("blocks object");
-    for name in BLOCK_NAMES {
+    for block in BlockName::ALL {
+        let name = block.as_str();
         let state = coverage[name].as_str().expect("state string");
         let present = blocks.contains_key(name);
         match state {
@@ -2661,7 +2714,7 @@ Append to `crates/axilog-schema/src/v1/mod.rs`:
 use crate::v1::blocks::{activity, damage, defense, support};
 use crate::v1::catalogs::{CatalogBuilder, Catalogs};
 use crate::v1::entities::{build_entities, EntityOut};
-use crate::v1::envelope::{AxilogMeta, Coverage, CoverageState, Severity, WarningOut};
+use crate::v1::envelope::{AxilogMeta, BlockName, Coverage, CoverageState, Severity, WarningOut};
 use axilog_core::analysis::Metrics;
 use axilog_core::model::Encounter;
 use serde::Serialize;
@@ -2725,46 +2778,46 @@ pub fn build_report_v1(
 
     // Always-on blocks.
     let damage = damage::build_damage(legacy, &index, &mut cats);
-    coverage.set("damage", CoverageState::Present);
+    coverage.set(BlockName::Damage, CoverageState::Present);
     let defenses = defense::build_defenses(legacy, &index);
-    coverage.set("defenses", CoverageState::Present);
+    coverage.set(BlockName::Defenses, CoverageState::Present);
     let hit_stats = defense::build_hit_stats(legacy, &index);
-    coverage.set("hit_stats", CoverageState::Present);
+    coverage.set(BlockName::HitStats, CoverageState::Present);
     let cc = defense::build_cc(legacy, &index);
-    coverage.set("cc", CoverageState::Present);
+    coverage.set(BlockName::Cc, CoverageState::Present);
     let boons = support::build_boons(legacy, &index, &mut cats);
-    coverage.set("boons", CoverageState::Present);
+    coverage.set(BlockName::Boons, CoverageState::Present);
     let support_block = support::build_support(legacy, &index);
-    coverage.set("support", CoverageState::Present);
+    coverage.set(BlockName::Support, CoverageState::Present);
     let contribution = support::build_contribution(legacy, &index);
-    coverage.set("contribution", CoverageState::Present);
+    coverage.set(BlockName::Contribution, CoverageState::Present);
     let healing = support::build_healing(legacy, &index);
-    coverage.set("healing", CoverageState::Present);
+    coverage.set(BlockName::Healing, CoverageState::Present);
     let series = activity::build_series(legacy, &index);
-    coverage.set("series", CoverageState::Present);
+    coverage.set(BlockName::Series, CoverageState::Present);
 
     // Gated blocks: presence of the legacy `Option` IS the gate signal, the
     // same rule the legacy shape already uses.
     let rotation = legacy.players.iter().any(|p| p.rotation.is_some()).then(|| {
-        coverage.set("rotation", CoverageState::Present);
+        coverage.set(BlockName::Rotation, CoverageState::Present);
         activity::build_rotation(legacy, &index, &mut cats)
     });
     let damage_mods = legacy.damage_mod_map.is_some().then(|| {
-        coverage.set("damage_mods", CoverageState::Present);
+        coverage.set(BlockName::DamageMods, CoverageState::Present);
         activity::build_damage_mods(legacy, &index, &mut cats)
     });
     let missiles = legacy.missiles.is_some().then(|| {
-        coverage.set("missiles", CoverageState::Present);
+        coverage.set(BlockName::Missiles, CoverageState::Present);
         activity::build_missiles(legacy, &index)
     });
     let replay = legacy.replay.is_some().then(|| {
-        coverage.set("replay", CoverageState::Present);
+        coverage.set(BlockName::Replay, CoverageState::Present);
         activity::build_replay(legacy, &index)
     });
 
     // Reserved for spec #2. Named here so the vocabulary is fixed.
-    coverage.set("conditions", CoverageState::NotComputed);
-    coverage.set("minions", CoverageState::NotComputed);
+    coverage.set(BlockName::Conditions, CoverageState::NotComputed);
+    coverage.set(BlockName::Minions, CoverageState::NotComputed);
 
     // `Metrics::warnings` carries a code at the source as of this task --
     // see Step 1. A catch-all code would defeat the whole point of making
