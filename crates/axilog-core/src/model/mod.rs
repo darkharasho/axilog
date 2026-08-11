@@ -195,7 +195,19 @@ pub fn profession_name(prof: u32, is_elite: u32) -> (String, String) {
         }
         .to_string()
     };
-    let spec = if spec.is_empty() && is_elite != 0 { is_elite.to_string() } else { spec };
+    // An elite-spec id the table above does not name stays EMPTY rather than
+    // degrading to the id rendered as a string. `elite_spec` is a display
+    // name everywhere it is consumed -- the EI adapter's `profession` field
+    // is `elite_spec` when non-empty else `profession`, and axibridge's
+    // class-breakdown panels do the same -- so a numeric fallback puts "79"
+    // where a class name belongs, which is worse than the true, less
+    // specific "Revenant". `base` above keeps its numeric fallback because
+    // an unknown base profession has nothing truer to fall back TO.
+    //
+    // Naming a new spec is a deliberate, evidence-backed act (see the
+    // by-elimination and instid-join provenance on 73-76/80/81), never a
+    // guess; ids 77 and 79 are live in the committed fixture and still
+    // unnamed for exactly that reason.
     (base, spec)
 }
 
@@ -261,6 +273,29 @@ mod tests {
             src_master_instid:0, dst_master_instid:0, iff:0, buff:0, result:0,
             is_activation:0, is_buffremove:0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: sc::POINT_OF_VIEW, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
+    #[test]
+    fn unmapped_elite_spec_falls_back_to_the_base_profession() {
+        // An elite-spec id this project's table does not name yet (77 and 79
+        // both appear on real agents in `fixtures/wvw-small.anon.zevtc` --
+        // a Thief spec and a Revenant spec respectively, neither nameable by
+        // elimination because the committed EI reference carries no
+        // `targets[]` to join against).
+        //
+        // The spec name must degrade to EMPTY, not to the id rendered as a
+        // string. Every consumer treats `elite_spec` as a display name and
+        // falls back to `profession` when it is blank, so an unnamed spec
+        // should read as "Revenant" -- which is true -- rather than "79",
+        // which is a number masquerading as a class name. axibridge renders
+        // exactly this string in its class-breakdown panels.
+        let (base, spec) = super::profession_name(9, 79);
+        assert_eq!(base, "Revenant");
+        assert_eq!(spec, "", "an unnamed elite spec must not render as its id");
+
+        // Named specs are untouched.
+        let (base, spec) = super::profession_name(9, 52);
+        assert_eq!((base.as_str(), spec.as_str()), ("Revenant", "Herald"));
+    }
+
     #[test]
     fn splits_players_from_npcs() {
         // The friend/foe partition (Task 16A) needs WvW team ids and a
