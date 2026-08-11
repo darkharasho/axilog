@@ -219,10 +219,10 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     /// by skill makes the second one per-skill visible, which is exactly
     /// why it is stated here as well as there.
     pub downs_contribution_per_skill: BTreeMap<u32, u64> }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
     pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// Per-(agent representative, boon id) stack-count timelines (M3, Task
     /// 1) -- see `buffs::simulate_boons`. Computed after all other passes,
