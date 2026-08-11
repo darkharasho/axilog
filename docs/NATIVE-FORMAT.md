@@ -145,12 +145,16 @@ document, since that predicate is not otherwise exposed per-entity outside
 
 ## `catalogs` — names appear exactly once
 
-Real excerpt:
+Real excerpt. `buffs` is from the default `/tmp/v1.json` run — `catalogs.skills`
+is `{}` there, because nothing referenced a skill id without `--skill-damage`
+or `--rotation`; the `skills` entry below is from the `--skill-damage` run
+(`/tmp/v1-full.json`) instead, so this is a composite of two real documents,
+not one single one:
 
 ```json
 {
   "skills": {
-    "736": { "name": "Bleeding", "is_swap": false, "can_crit": false }
+    "736": { "name": "Bleeding", "is_swap": false, "can_crit": true }
   },
   "buffs": {
     "717": { "name": "Protection", "kind": "boon", "stacking": "duration", "max_stacks": 5 },
