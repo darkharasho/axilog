@@ -6,6 +6,8 @@ use axilog_core::analysis::replay::Replay;
 use axilog_core::analysis::missiles::Missiles;
 use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
 
+pub mod v1;
+
 #[derive(Serialize)]
 pub struct Report {
     pub schema_version: &'static str,
