@@ -313,26 +313,37 @@ fn regex_lite_account_matches(text: &str) -> Vec<String> {
 ///
 /// Unlike `no_unscrubbed_identity_survives_in_the_v1_document` above, this
 /// needs no shape heuristic: the ground-truth name set comes straight from
-/// the model (`Player::account`, `Player::character`, `Enemy::name`), so it
-/// also catches a leaked CHARACTER or NPC name, which the account-shape
-/// scanner cannot see at all (anonymized characters are plain `Anon<N>`,
-/// with no colon and no digit suffix, and real character/NPC names have no
-/// reliable shape to scan for).
+/// the model (`Player::account`, `Player::character`, enemy-PLAYER
+/// `Enemy::name`), so it also catches a leaked CHARACTER name, which the
+/// account-shape scanner cannot see at all (anonymized characters are plain
+/// `Anon<N>`, with no colon and no digit suffix, and real character names
+/// have no reliable shape to scan for).
 #[test]
 fn no_name_from_the_encounter_appears_outside_entities() {
     let (v, enc) = build_with_encounter();
 
-    // Ground-truth name set, straight from the model.
+    // Ground-truth name set, straight from the model -- PERSONAL identity
+    // only.
     //
-    // Skip empty/whitespace-only names (some enemies/NPCs legitimately have
+    // Skip empty/whitespace-only names (some enemies legitimately have
     // none). Skip names shorter than `MIN_NAME_LEN`: a one- or two-character
     // name is common enough as an ordinary JSON substring (hex digits, ids,
     // short enum tags like "Up"/"NA") that scanning for it would produce
     // false-positive "leaks" that are really just coincidental text, making
     // the test unreliable rather than precise. Every name in this fixture's
     // roster is well above that floor (accounts are `AnonN.NNNN`-shaped and
-    // characters/enemies carry real multi-character names), so the floor
-    // costs no real coverage here.
+    // characters/enemy players carry real multi-character names), so the
+    // floor costs no real coverage here.
+    //
+    // `Enemy::name` is included ONLY when `Enemy::is_player` is true. A
+    // non-player `Enemy::name` (NPC/gadget/summon, e.g. a Ranger's "Frost
+    // Spirit" or a Warrior's "Banner of Tactics") is not personal data --
+    // it's a generic, profession-wide label that legitimately also appears
+    // as the display name of the skill that summons it, in
+    // `catalogs.skills[<id>].name`. Including those in the ground-truth set
+    // produced false "leaks" in an earlier version of this test (fix round
+    // 1): the collision was the ground truth being too broad, not a real
+    // identity leak, and not a scanner bug either.
     const MIN_NAME_LEN: usize = 3;
     let mut names: Vec<String> = Vec::new();
     for p in &enc.players {
@@ -344,6 +355,9 @@ fn no_name_from_the_encounter_appears_outside_entities() {
         }
     }
     for e in &enc.enemies {
+        if !e.is_player {
+            continue;
+        }
         let n = e.name.trim();
         if n.len() >= MIN_NAME_LEN {
             names.push(n.to_string());

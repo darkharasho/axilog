@@ -28,8 +28,12 @@ pub struct EncounterOut {
     pub duration_ms: u64,
     pub build: String,
     pub revision: u8,
+    /// The recording player, as an entity id. The legacy shape carried the
+    /// recorder's raw account string here, which put personal identity in a
+    /// second place outside `entities[]` and meant every scrub had to know
+    /// about both. Absent when the recorder does not resolve to an entity.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub recorded_by: Option<String>,
+    pub recorded_by: Option<u32>,
     pub teams: Vec<crate::TeamOut>,
     pub markers: Vec<MarkerAssignmentOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -198,6 +202,22 @@ pub fn build_report_v1(
         })
         .collect();
 
+    // The legacy `Encounter::recorded_by` carries the recorder's raw
+    // account string (see `wvw::apply` in axilog-core), not an agent addr,
+    // so it can't be joined through `index.by_agent_addr` directly. Resolve
+    // it the same way -- find the roster player with that account, then
+    // join on their addr -- rather than duplicating the account string
+    // itself into the 1.0 shape. A recorder whose account doesn't match any
+    // roster player (or doesn't resolve to a tracked entity) is dropped
+    // rather than falling back to the string: a missing join is
+    // recoverable, a duplicated identity is not.
+    let recorded_by = legacy.encounter.recorded_by.as_deref().and_then(|account| {
+        enc.players
+            .iter()
+            .find(|p| p.account == account)
+            .and_then(|p| index.by_agent_addr(p.agent_addr))
+    });
+
     ReportV1 {
         axilog: AxilogMeta {
             schema: "1.0",
@@ -210,7 +230,7 @@ pub fn build_report_v1(
             duration_ms: legacy.encounter.duration_ms,
             build: legacy.encounter.build.clone(),
             revision: legacy.encounter.revision,
-            recorded_by: legacy.encounter.recorded_by.clone(),
+            recorded_by,
             teams: legacy.encounter.teams.clone(),
             markers,
             tick_rate: legacy.encounter.tick_rate.clone(),
