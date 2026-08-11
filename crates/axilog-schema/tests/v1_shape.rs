@@ -99,3 +99,52 @@ fn no_block_inlines_a_human_readable_name() {
     let text = serde_json::to_string(&v["blocks"]).expect("stringify blocks");
     assert!(!text.contains("\"name\""), "names live in catalogs and entities only");
 }
+
+/// The COMPLETE 1.0 key set on the committed fixture, as a sorted list of
+/// dotted paths. Removing or renaming a key fails; adding one is a reviewed
+/// diff. This is the compatibility rule made executable -- the six-key test
+/// above only guards the top level.
+#[test]
+fn the_full_key_set_matches_the_committed_golden() {
+    fn walk(v: &serde_json::Value, prefix: &str, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                for (k, val) in m {
+                    // Entity/skill/buff ids are DATA, not schema -- collapse
+                    // them so the golden tracks shape, not fixture content.
+                    let key = if k.chars().all(|c| c.is_ascii_digit() || c == '-') { "<id>" } else { k };
+                    let path = if prefix.is_empty() { key.to_string() } else { format!("{prefix}.{key}") };
+                    if !out.contains(&path) {
+                        out.push(path.clone());
+                    }
+                    walk(val, &path, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                if let Some(first) = items.first() {
+                    walk(first, &format!("{prefix}[]"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let v = build();
+    let mut keys = Vec::new();
+    walk(&v, "", &mut keys);
+    keys.sort();
+
+    let golden_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/v1-keyset.golden.txt");
+    let actual = keys.join("\n") + "\n";
+    if std::env::var("UPDATE_GOLDEN").is_ok() {
+        std::fs::write(golden_path, &actual).expect("write golden");
+        return;
+    }
+    let expected = std::fs::read_to_string(golden_path).unwrap_or_default();
+    assert_eq!(
+        actual, expected,
+        "the 1.0 key set changed. Adding keys is additive and fine -- re-run with \
+         UPDATE_GOLDEN=1 and review the diff. REMOVING or RENAMING a key is a \
+         breaking change requiring a major bump."
+    );
+}
