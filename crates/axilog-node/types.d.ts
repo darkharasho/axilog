@@ -540,6 +540,19 @@ export interface EnemyOut {
   is_player: boolean
   /** Mirrors `PlayerOut.marker`. Omitted when absent. */
   marker?: string
+  /**
+   * The enemy PLAYER's base profession / elite specialization, mirroring
+   * `PlayerOut.profession`/`elite_spec`.
+   *
+   * Omitted for NPCs and gadgets, which have no profession at all — so
+   * presence works as an "is this a real player" signal without also
+   * reading `is_player`. Use these to group the enemy roster by CLASS: the
+   * `name` field is the player's WvW RANK TITLE ("Mithril Scout"), not
+   * their profession.
+   */
+  profession?: string
+  /** See {@link EnemyOut.profession}. */
+  elite_spec?: string
 }
 
 export interface PerSecondOut {
