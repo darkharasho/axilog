@@ -43,15 +43,23 @@ fn value_err(e: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
-/// Shared decode -> resolve -> analyze -> build_report pipeline (identical
-/// to `axilog-cli`'s `Cmd::Parse` handler and the Node SDK's
-/// `build_report_from_bytes`) over an already-read byte buffer.
-/// `want_replay` mirrors the `replay` keyword arg (M9, Task 2);
+/// Shared decode -> resolve -> analyze -> build_report -> build_report_v1
+/// pipeline (identical up through `build_report` to `axilog-cli`'s
+/// `Cmd::Parse` handler and the Node SDK's `build_report_v1_from_bytes`)
+/// over an already-read byte buffer, returning the native 1.0 container
+/// (Task 12: `parse_file`/`parse_bytes` emit the 1.0 document, mirroring
+/// the CLI's `--format json`; `parse_file_ei` is untouched and keeps
+/// consuming the legacy `Report` via `build_report_and_activity_from_bytes`
+/// below). `want_replay` mirrors the `replay` keyword arg (M9, Task 2);
 /// `want_skill_damage` mirrors the `skill_damage` keyword arg (M12, Task
 /// 1); `want_missiles` mirrors the `missiles` keyword arg (final-review
 /// fix wave) -- all defaulted to `false` by every existing call site.
+/// `generated_from` is the origin file NAME (never a full path -- paths
+/// are environment-specific and routinely contain a user name, which the
+/// PII policy scrubs); `parse_bytes` has no file name to offer and passes
+/// `None`.
 #[allow(clippy::too_many_arguments)]
-fn build_report_from_bytes(
+fn build_report_v1_from_bytes(
     bytes: &[u8],
     want_replay: bool,
     want_skill_damage: bool,
@@ -59,7 +67,8 @@ fn build_report_from_bytes(
     want_missiles: bool,
     want_rotation: bool,
     want_modifiers: bool,
-) -> PyResult<axilog_schema::Report> {
+    generated_from: Option<&str>,
+) -> PyResult<axilog_schema::v1::ReportV1> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(value_err)?;
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
@@ -79,9 +88,17 @@ fn build_report_from_bytes(
             &raw, &axilog_core::analysis::damage::InstidRegistry::build(&raw), &enc, false,
         )
     });
-    Ok(axilog_schema::build_report(
+    let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
+    );
+    Ok(axilog_schema::v1::build_report_v1(
+        &enc,
+        &metrics,
+        &report,
+        env!("CARGO_PKG_VERSION"),
+        generated_from,
+        damage_mods.as_ref(),
     ))
 }
 
@@ -232,7 +249,7 @@ fn build_report_and_activity_from_bytes(
     ))
 }
 
-fn report_to_value(report: &axilog_schema::Report) -> PyResult<Value> {
+fn report_v1_to_value(report: &axilog_schema::v1::ReportV1) -> PyResult<Value> {
     serde_json::to_value(report).map_err(value_err)
 }
 
@@ -240,9 +257,11 @@ fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
     Ok(pythonize(py, value).map_err(value_err)?.unbind())
 }
 
-/// Parses a `.evtc`/`.zevtc` file at `path` and returns the native
-/// `Report` as a plain Python dict (see module docs for the field-name
-/// behavior). `replay=True` (M9, Task 2) opts into embedding the native
+/// Parses a `.evtc`/`.zevtc` file at `path` and returns the native 1.0
+/// container (Task 12: `axilog_schema::v1::ReportV1`) as a plain Python
+/// dict (see module docs for the field-name behavior). `path`'s file name
+/// (never the full path) is threaded into the document's `generated_from`.
+/// `replay=True` (M9, Task 2) opts into embedding the native
 /// combat-replay block; `skill_damage=True` (M12, Task 1) opts into
 /// embedding the native per-skill damage distribution block (measured
 /// +249% JSON size on the committed fixture when always-on, see
@@ -269,13 +288,18 @@ fn parse_file(
     modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let report = build_report_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
-    value_to_py(py, &report_to_value(&report)?)
+    let generated_from = std::path::Path::new(path).file_name().and_then(|s| s.to_str());
+    let report = build_report_v1_from_bytes(
+        &bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers, generated_from,
+    )?;
+    value_to_py(py, &report_v1_to_value(&report)?)
 }
 
 /// Parses an already-read `.evtc`/`.zevtc` buffer (`bytes`/`bytearray`)
-/// and returns the native `Report` as a plain Python dict. `replay=True`
-/// (M9, Task 2) opts into embedding the native combat-replay block;
+/// and returns the native 1.0 container (Task 12:
+/// `axilog_schema::v1::ReportV1`) as a plain Python dict. A buffer has no
+/// file name to offer, so `generated_from` is always absent here.
+/// `replay=True` (M9, Task 2) opts into embedding the native combat-replay block;
 /// `skill_damage=True` (M12, Task 1) opts into embedding the native
 /// per-skill damage distribution block; `timeseries=True` (M12, Task 2)
 /// opts into embedding the native per-player per-second series block;
@@ -289,8 +313,10 @@ fn parse_bytes(
     rotation: bool,
     modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
-    let report = build_report_from_bytes(data, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
-    value_to_py(py, &report_to_value(&report)?)
+    let report = build_report_v1_from_bytes(
+        data, replay, skill_damage, timeseries, missiles, rotation, modifiers, None,
+    )?;
+    value_to_py(py, &report_v1_to_value(&report)?)
 }
 
 /// Parses a `.evtc`/`.zevtc` file at `path` and returns the Elite

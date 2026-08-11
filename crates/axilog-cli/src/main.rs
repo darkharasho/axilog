@@ -399,7 +399,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // trailing newline where appropriate) so `-o/--output` (M7,
             // Task 1) can apply uniformly regardless of `--format`.
             let rendered = match format {
-                Format::Json => format!("{}\n", serde_json::to_string_pretty(&report)?),
+                Format::Json => {
+                    let v1 = axilog_schema::v1::build_report_v1(
+                        &enc,
+                        &metrics,
+                        &report,
+                        env!("CARGO_PKG_VERSION"),
+                        path.file_name().and_then(|s| s.to_str()),
+                        damage_mods.as_ref(),
+                    );
+                    format!("{}\n", serde_json::to_string_pretty(&v1)?)
+                }
                 Format::EiJson => unreachable!("handled by the streaming path above"),
                 Format::Table => axilog_cli_table(&report, view, &metrics, &activity),
                 Format::Csv => axilog_cli_csv(&report),

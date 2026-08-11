@@ -15,6 +15,9 @@
 //! below, which makes the embedded JSON safe to place literally inside a
 //! `<script>` element.
 
+// Pinned to the legacy `Report` shape pending spec #4 (the HTML renderer's
+// own migration to the 1.0 container) -- Task 12 deliberately leaves this
+// crate untouched.
 use axilog_schema::Report;
 
 const SKELETON: &str = include_str!("../assets/skeleton.html");
