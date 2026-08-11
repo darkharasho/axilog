@@ -785,9 +785,12 @@ mod tests {
         let enc = Encounter {
             enemies: vec![
                 Enemy { id: 9, instid: 0, name: "Enemy Player".into(), team: "blue".into(),
-                    is_player: true, marker: None, agent_addrs: vec![9] },
+                    is_player: true, marker: None,
+                    profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
+                    agent_addrs: vec![9] },
                 Enemy { id: 10, instid: 0, name: "Sentry".into(), team: "blue".into(),
-                    is_player: false, marker: None, agent_addrs: vec![10] },
+                    is_player: false, marker: None, profession: None, elite_spec: None,
+                    agent_addrs: vec![10] },
             ],
             ..empty_enc()
         };
@@ -806,7 +809,9 @@ mod tests {
         let enc = Encounter {
             enemies: vec![Enemy {
                 id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true,
-                marker: Some("red-commander".into()), agent_addrs: vec![9],
+                marker: Some("red-commander".into()),
+                profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
+                agent_addrs: vec![9],
             }],
             ..empty_enc()
         };

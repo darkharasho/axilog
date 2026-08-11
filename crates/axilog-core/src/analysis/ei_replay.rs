@@ -2332,7 +2332,9 @@ mod tests {
             vec![],
             vec![Enemy {
                 id: 9, instid: 0, name: "Foe".into(), team: "blue".into(),
-                is_player: true, marker: None, agent_addrs: vec![9],
+                is_player: true, marker: None,
+                profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
+                agent_addrs: vec![9],
             }],
             1200,
         );
@@ -2405,9 +2407,12 @@ mod tests {
             vec![],
             vec![
                 Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(),
-                    is_player: true, marker: None, agent_addrs: vec![9] },
+                    is_player: true, marker: None,
+                    profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
+                    agent_addrs: vec![9] },
                 Enemy { id: 10, instid: 0, name: "Sentry".into(), team: "blue".into(),
-                    is_player: false, marker: None, agent_addrs: vec![10] },
+                    is_player: false, marker: None, profession: None, elite_spec: None,
+                    agent_addrs: vec![10] },
             ],
             900,
         );
@@ -2492,7 +2497,9 @@ mod tests {
             vec![],
             vec![Enemy {
                 id: 9, instid: 0, name: "Foe".into(), team: "blue".into(),
-                is_player: true, marker: None, agent_addrs: vec![9],
+                is_player: true, marker: None,
+                profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
+                agent_addrs: vec![9],
             }],
             900,
         );

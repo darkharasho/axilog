@@ -705,7 +705,8 @@ mod tests {
             }).collect(),
             enemies: enemy_player_addrs.iter().map(|&a| Enemy {
                 id: a, instid: 0, name: format!("E{a}"), team: "blue".into(), is_player: true,
-                marker: None, agent_addrs: vec![a],
+                marker: None, profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
+                agent_addrs: vec![a],
             }).collect(),
             markers: vec![], tick_rate: None,
         }

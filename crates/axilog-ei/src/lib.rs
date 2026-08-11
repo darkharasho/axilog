@@ -2102,16 +2102,26 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
     // the guard is what advances `enemy_track`, and because the
     // non-WvW/hand-built-`Report` paths can still carry NPC rows.)
     //
-    // `iconURL` is the one field that cannot match EI here. EI takes it
-    // from the enemy's own `Spec` (its `players[]`-style profession), which
-    // axilog does not resolve for enemies at all -- `model::Enemy` has no
-    // profession/elite-spec field, only a display name -- so every enemy
-    // player gets `icons::UNKNOWN_PROFESSION_ICON`, EI's OWN fallback for
-    // an unrecognized spec (`ParserHelper.GetProfIcon`), rather than a
-    // guess parsed out of the name string. Documented as a parity gap in
-    // the README rather than faked. (EI's exported `targets[]` has no
-    // `profession` field either, so the reference cannot be joined on spec
-    // the way `players[]` can.)
+    // `iconURL` USED to be the one field that could not match EI here: EI
+    // takes it from the enemy's own `Spec` (its `players[]`-style
+    // profession), and `model::Enemy` had no profession/elite-spec field at
+    // all, only a display name -- so every enemy player got
+    // `icons::UNKNOWN_PROFESSION_ICON`, EI's own unrecognized-spec fallback
+    // (`ParserHelper.GetProfIcon`), rather than a guess parsed out of the
+    // name string.
+    //
+    // MENEMYPROF closed that. The agents behind these rows were resolved as
+    // full `Player`s by `model::resolve` (arcdps fills their `prof`/
+    // `is_elite` agent-table columns exactly as it does for squad members);
+    // `wvw::apply` was simply discarding both on the hop that reclassifies
+    // them into `enemies`. It now carries them, so `iconURL` resolves
+    // through the same `icons::prof_icon_url` chain the player side uses.
+    //
+    // The reference export still cannot be joined on spec to CONFIRM this
+    // per-row -- EI's `JsonNPC` has no `profession` member, so its
+    // `targets[]` carries `profession: null` on all 57 rows. This crate
+    // emits that key anyway as a deliberate superset; see the `profession`
+    // comment on the target object below for why.
     // Bucket count for an enemy that never dealt damage (MEIGAP Task 2b):
     // read off any enemy that did, since every series in the map is built
     // to the one length `axilog_core::analysis::timeseries::ei_grid`
@@ -2137,6 +2147,29 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
         };
         let mut t = json!({
             "id": e.id, "name": e.name, "enemyPlayer": e.is_player,
+            // `profession` (MENEMYPROF) -- a DELIBERATE SUPERSET of EI's
+            // shape, and the only field on this object that real EI does
+            // not also emit. GW2EI's `JsonNPC` has no profession member at
+            // all, so the reference export's `targets[]` carries
+            // `profession: null` on all 57 rows and cannot be joined on
+            // spec the way `players[]` can.
+            //
+            // Emitted anyway because the alternative is worse: a consumer
+            // grouping the enemy roster by class has nothing else to key
+            // on, and falls back to the `name` string -- which in WvW is
+            // the player's RANK TITLE ("Mithril Scout", "Diamond Legend"),
+            // so the resulting chart buckets rank tiers and reads like the
+            // roster is full of NPCs. Adding a key EI omits is safe in the
+            // direction that matters (every EI consumer ignores unknown
+            // keys); silently mis-charting is not.
+            //
+            // `null` for an NPC/gadget target, matching EI's own value
+            // there, so nothing that already tolerates the reference
+            // export's all-null column regresses.
+            "profession": e.elite_spec.as_deref()
+                .filter(|s| !s.is_empty())
+                .or(e.profession.as_deref())
+                .filter(|s| !s.is_empty()),
             // `dpsAll` (MEIGAP2 row 5): the enemy's OUTGOING damage total,
             // GW2EI's `JsonActor.DpsAll[0]` over `GetDamageStats(log,
             // phase)` -- minion-inclusive and `iff`-filtered; see
@@ -2198,7 +2231,17 @@ fn ei_doc<'a>(report: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
                     json!({
                         "start": track.start,
                         "end": track.end,
-                        "iconURL": axilog_core::icons::UNKNOWN_PROFESSION_ICON,
+                        // MENEMYPROF: now that `model::Enemy` carries the
+                        // profession/elite spec, this resolves through the
+                        // same `prof_icon_url` chain the player side uses
+                        // rather than falling back to EI's own
+                        // unrecognized-spec icon. An NPC/gadget target
+                        // still gets the fallback, which is correct -- it
+                        // has no spec to resolve.
+                        "iconURL": prof_icon_url(
+                            e.profession.as_deref().unwrap_or(""),
+                            e.elite_spec.as_deref().unwrap_or(""),
+                        ),
                         "positions": ei_positions_json(&track.positions),
                         "orientations": ei_orientations_json(&track.orientations),
                         "dead": ei_intervals_json(&track.dead),
@@ -2461,9 +2504,12 @@ mod tests {
             character:"B".into(),profession:"Guardian".into(),elite_spec:"".into(),
             team:"red".into(),subgroup:2,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![2]}],
             enemies:vec![Enemy{id:9,instid:9,name:"Foe".into(),team:"blue".into(),
-            is_player:true,marker:None,agent_addrs:vec![9]},
+            is_player:true,marker:None,
+            profession:Some("Necromancer".into()),elite_spec:Some("Reaper".into()),
+            agent_addrs:vec![9]},
             Enemy{id:10,instid:10,name:"Gadget".into(),team:"blue".into(),
-            is_player:false,marker:None,agent_addrs:vec![10]}],
+            is_player:false,marker:None,profession:None,elite_spec:None,
+            agent_addrs:vec![10]}],
             markers:vec![],tick_rate:None};
         use axilog_core::analysis::contribution::ContributionMetrics;
         let m = Metrics{players:vec![
@@ -2861,8 +2907,8 @@ mod tests {
             per_target: vec![PerTargetSkillsOut { enemy_id: 9, skills: vec![entry()] }],
         };
         let enemies = vec![
-            EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, instid: None, damage_out: 0 },
-            EnemyOut { id: 10, name: "Untouched".into(), team: "blue".into(), is_player: false, marker: None, instid: None, damage_out: 0 },
+            EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()), instid: None, damage_out: 0 },
+            EnemyOut { id: 10, name: "Untouched".into(), team: "blue".into(), is_player: false, marker: None, profession: None, elite_spec: None, instid: None, damage_out: 0 },
         ];
         let player = skill_and_timeseries_player(Some(sd), None, vec![]);
         let report = report_with_players(enemies, vec![player]);
@@ -2901,7 +2947,7 @@ mod tests {
     #[test]
     fn total_damage_dist_omitted_when_skill_damage_absent() {
         use axilog_schema::EnemyOut;
-        let enemies = vec![EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, instid: None, damage_out: 0 }];
+        let enemies = vec![EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()), instid: None, damage_out: 0 }];
         let player = skill_and_timeseries_player(None, None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
@@ -2931,8 +2977,8 @@ mod tests {
         };
         let dps_targets = vec![DpsTargetOut { enemy_id: 9, damage: 80, dps: 40.0 }];
         let enemies = vec![
-            EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, instid: None, damage_out: 0 },
-            EnemyOut { id: 10, name: "Untouched".into(), team: "blue".into(), is_player: false, marker: None, instid: None, damage_out: 0 },
+            EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()), instid: None, damage_out: 0 },
+            EnemyOut { id: 10, name: "Untouched".into(), team: "blue".into(), is_player: false, marker: None, profession: None, elite_spec: None, instid: None, damage_out: 0 },
         ];
         let player = skill_and_timeseries_player(None, Some(ps), dps_targets);
         let report = report_with_players(enemies, vec![player]);
@@ -2975,7 +3021,7 @@ mod tests {
     #[test]
     fn per_second_ei_fields_omitted_when_absent() {
         use axilog_schema::EnemyOut;
-        let enemies = vec![EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, instid: None, damage_out: 0 }];
+        let enemies = vec![EnemyOut { id: 9, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()), instid: None, damage_out: 0 }];
         let player = skill_and_timeseries_player(None, None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
@@ -3184,18 +3230,22 @@ mod tests {
             "GW2EI's long.MinValue/MaxValue sentinels survive as exact i64s"
         );
         assert_eq!(crd["iconURL"], "https://i.imgur.com/RiCJalE.png", "Daredevil");
-        // The enemy PLAYER target gets the unknown-spec icon (axilog has no
-        // profession for enemies). MROSTER: there is no NPC target left to
-        // check the "NPCs get no replay block" half against -- the curated
-        // roster is enemy players only, which is exactly GW2EI's own WvW
-        // shape (its 56 enemy-player targets all carry `combatReplayData`).
+        // MENEMYPROF: the enemy PLAYER target now resolves its OWN spec icon
+        // (this fixture's enemy is a Reaper), where before it always got
+        // `UNKNOWN_PROFESSION_ICON` because `model::Enemy` carried no
+        // profession at all. MROSTER: there is no NPC target left to check
+        // the "NPCs get no replay block" half against -- the curated roster
+        // is enemy players only, which is exactly GW2EI's own WvW shape (its
+        // 56 enemy-player targets all carry `combatReplayData`).
         let targets = v["targets"].as_array().unwrap();
         assert!(targets.iter().all(|t| t["enemyPlayer"] == true), "curated roster is enemy players only");
         let enemy = targets.iter().find(|t| t["enemyPlayer"] == true).unwrap();
         assert_eq!(
             enemy["combatReplayData"]["iconURL"],
-            axilog_core::icons::UNKNOWN_PROFESSION_ICON
+            axilog_core::icons::prof_icon_url("Necromancer", "Reaper"),
+            "enemy player resolves its own elite-spec icon, not the unknown fallback"
         );
+        assert_eq!(enemy["profession"], "Reaper", "targets[].profession carries the spec");
     }
 
     /// Corrected audit fix: an enemy-player track with an EMPTY `positions`
@@ -3249,7 +3299,10 @@ mod tests {
         assert_eq!(crd["dc"], json!([[i64::MIN, 0], [600, i64::MAX]]));
         assert_eq!(crd["down"], json!([]));
         assert_eq!(crd["dead"], json!([]));
-        assert_eq!(crd["iconURL"], axilog_core::icons::UNKNOWN_PROFESSION_ICON);
+        // MENEMYPROF: resolved from the enemy's own spec now, not the
+        // unknown-spec fallback. An EMPTY position list does not affect icon
+        // resolution -- the two are independent.
+        assert_eq!(crd["iconURL"], axilog_core::icons::prof_icon_url("Necromancer", "Reaper"));
         // No sentinel garbage: every coordinate must be absent, not just
         // finite -- this is what the real bug produced (~[-2.6e10, 1.9e10]
         // pixel coordinates derived from the int.MinValue world sentinel).

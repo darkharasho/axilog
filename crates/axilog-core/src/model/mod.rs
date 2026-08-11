@@ -48,6 +48,28 @@ pub struct Enemy { pub id: u64, pub instid: u16, pub name: String,
     /// 7, M2). Enemy commanders don't get a `commander_tag` breakdown --
     /// only `Player` does, per the Task 7 brief.
     pub marker: Option<String>,
+    /// The enemy PLAYER's base profession / elite specialization, mirroring
+    /// `Player::profession` / `Player::elite_spec` (MENEMYPROF).
+    ///
+    /// `None` for NPCs and gadgets, which have no profession concept at all
+    /// -- hence `Option`, where `Player`'s equivalents are plain `String`s
+    /// that are merely EMPTY when unresolved. An enemy player whose
+    /// `prof`/`is_elite` pair `profession_name` cannot name still gets
+    /// `Some("")` / `Some(<numeric spec id>)`, exactly as a squad player
+    /// would, so "not a player" stays distinguishable from "a player whose
+    /// spec we failed to resolve".
+    ///
+    /// These come from the agent table's `prof`/`is_elite` columns, which
+    /// arcdps populates for enemy players just as it does for squad members;
+    /// `wvw::apply` reclassifies those agents from `players` into `enemies`
+    /// and carries both fields across. Before MENEMYPROF they were dropped
+    /// on that hop, which left the whole enemy roster class-less: an enemy
+    /// player's spec survived only inside the WvW rank title `name` string
+    /// (e.g. `"Mithril Scout"`), and every consumer that grouped enemies by
+    /// class charted rank titles instead.
+    pub profession: Option<String>,
+    /// See [`Enemy::profession`].
+    pub elite_spec: Option<String>,
     /// Every raw agent addr folded into this enemy. For NPCs/gadgets this is
     /// always exactly `[id]` (distinct spawns are distinct, never deduped).
     /// For enemy players relogging under the same account (Task 4, M2), this
@@ -156,6 +178,17 @@ pub fn profession_name(prof: u32, is_elite: u32) -> (String, String) {
                                     // under Warrior in
                                     // `ParserIcons.BaseResProfIcons`.
             75 => "Amalgam",        // Engineer (post-SotO; fixture-verified)
+            76 => "Ritualist",      // Necromancer (post-SotO; fixture-verified,
+                                    // MENEMYPROF). Identified more strongly
+                                    // than the by-elimination entries above:
+                                    // the post-rework capture's sole
+                                    // spec-76 agent and EI's sole
+                                    // "Ritualist pl-2533" target are the
+                                    // SAME actor -- instid 2533 on both
+                                    // sides -- so this is a direct join, not
+                                    // a count match. The base profession is
+                                    // Necromancer per that agent's arcdps
+                                    // `prof` field.
             80 => "Evoker",         // Elementalist (post-SotO; fixture-verified)
             81 => "Luminary",       // Guardian (post-SotO; fixture-verified)
             _ => "",
@@ -183,8 +216,14 @@ pub fn resolve(raw: &RawLog) -> Encounter {
             }
             _ => {
                 let (name, _, _) = a.name_parts();
+                // NPCs and gadgets: no profession concept -- see
+                // `Enemy::profession`. Enemy PLAYERS never reach this arm;
+                // `agent_kind` classifies them as `AgentKind::Player` above,
+                // and `wvw::apply` is what later moves them into `enemies`
+                // (carrying their profession with them).
                 enemies.push(Enemy { id: a.addr, instid: 0, name,
                     team: String::new(), is_player: false, marker: None,
+                    profession: None, elite_spec: None,
                     agent_addrs: vec![a.addr] });
             }
         }

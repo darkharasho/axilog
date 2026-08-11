@@ -1041,6 +1041,22 @@ pub struct EnemyOut { pub id: u64, pub name: String, pub team: String, pub is_pl
     /// (Task 7, M2). Omitted when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marker: Option<String>,
+    /// The enemy PLAYER's base profession / elite specialization
+    /// (MENEMYPROF), from `axilog_core::model::Enemy::profession` /
+    /// `::elite_spec`. Absent for NPCs and gadgets, which have no
+    /// profession at all -- so a consumer can use presence as the
+    /// "is this a real player" signal without also reading `is_player`.
+    ///
+    /// Mirrors `PlayerOut::profession`/`elite_spec`, and is what lets a
+    /// consumer group the enemy roster by CLASS. Before this existed the
+    /// only class signal on an enemy was whatever the `name` string
+    /// happened to contain, which in WvW is the player's rank title
+    /// ("Mithril Scout"), not their profession.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profession: Option<String>,
+    /// See [`EnemyOut::profession`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elite_spec: Option<String>,
     /// The enemy's arcdps instid -- GW2EI's `targets[].instanceID`
     /// (MEIGAP2 row 3). `#[serde(skip)]`, EI-adapter-only (see
     /// `PlayerOut::instid`).
@@ -1386,6 +1402,7 @@ pub fn build_report(
             .filter(|e| metrics.combat_participant_enemies.contains(&e.id))
             .map(|e| EnemyOut{id:e.id,name:e.name.clone(),
                 team:e.team.clone(),is_player:e.is_player,marker:e.marker.clone(),
+                profession: e.profession.clone(), elite_spec: e.elite_spec.clone(),
                 instid: metrics.instance_ids.get(&e.id).copied(),
                 damage_out: metrics.enemy_damage_out.get(&e.id).copied().unwrap_or(0)})
             .collect(),
@@ -1393,6 +1410,7 @@ pub fn build_report(
             .filter(|e| enc.kind != "wvw" || e.is_player)
             .map(|e| EnemyOut{id:e.id,name:e.name.clone(),
                 team:e.team.clone(),is_player:e.is_player,marker:e.marker.clone(),
+                profession: e.profession.clone(), elite_spec: e.elite_spec.clone(),
                 instid: metrics.instance_ids.get(&e.id).copied(),
                 damage_out: metrics.enemy_damage_out.get(&e.id).copied().unwrap_or(0)})
             .collect(),
@@ -1459,11 +1477,15 @@ mod tests {
             build:"".into(), revision:1, recorded_by:None, teams:vec![], players:vec![],
             enemies: vec![
                 Enemy { id: 9, instid: 0, name: "Participant".into(), team: "blue".into(),
-                    is_player: false, marker: None, agent_addrs: vec![9] },
+                    is_player: false, marker: None, profession: None, elite_spec: None,
+                    agent_addrs: vec![9] },
                 Enemy { id: 10, instid: 0, name: "LootBag".into(), team: "blue".into(),
-                    is_player: false, marker: None, agent_addrs: vec![10] },
+                    is_player: false, marker: None, profession: None, elite_spec: None,
+                    agent_addrs: vec![10] },
                 Enemy { id: 11, instid: 0, name: "EnemyPlayer".into(), team: "blue".into(),
-                    is_player: true, marker: None, agent_addrs: vec![11] },
+                    is_player: true, marker: None,
+                    profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
+                    agent_addrs: vec![11] },
             ],
             markers:vec![], tick_rate:None };
         let m = Metrics { players: vec![],
@@ -1500,7 +1522,8 @@ mod tests {
             build:"".into(), revision:1, recorded_by:None, teams:vec![], players:vec![],
             enemies: vec![
                 Enemy { id: 9, instid: 0, name: "Boss".into(), team: "red".into(),
-                    is_player: false, marker: None, agent_addrs: vec![9] },
+                    is_player: false, marker: None, profession: None, elite_spec: None,
+                    agent_addrs: vec![9] },
             ],
             markers:vec![], tick_rate:None };
         let m = Metrics { players: vec![],
