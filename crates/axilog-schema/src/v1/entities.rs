@@ -81,6 +81,7 @@ pub struct CommanderOut {
 pub struct EntityIndex {
     by_addr: BTreeMap<u64, u32>,
     by_enemy: BTreeMap<u64, u32>,
+    role: BTreeMap<u32, Role>,
 }
 
 impl EntityIndex {
@@ -89,6 +90,12 @@ impl EntityIndex {
     }
     pub fn by_enemy_id(&self, enemy_id: u64) -> Option<u32> {
         self.by_enemy.get(&enemy_id).copied()
+    }
+    /// The entity's [`Role`], for callers that need to filter an aggregate
+    /// down to a specific membership (e.g. a "squad" total must include
+    /// only `Role::Squad` entities, not every friendly player).
+    pub fn role_of(&self, entity_id: u32) -> Option<Role> {
+        self.role.get(&entity_id).copied()
     }
 }
 
@@ -188,6 +195,7 @@ pub fn build_entities(enc: &Encounter, metrics: &Metrics) -> (Vec<EntityOut>, En
         if let Some(enemy_id) = p.enemy_id {
             index.by_enemy.insert(enemy_id, id);
         }
+        index.role.insert(id, p.entity.role);
         entities.push(p.entity);
     }
 

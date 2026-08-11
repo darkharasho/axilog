@@ -1,6 +1,6 @@
 use super::ByEntity;
 use crate::v1::catalogs::CatalogBuilder;
-use crate::v1::entities::EntityIndex;
+use crate::v1::entities::{EntityIndex, Role};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -10,6 +10,12 @@ pub struct DamageBlock {
     pub by_entity: ByEntity<DamageEntity>,
 }
 
+/// Aggregates `Role::Squad` entities ONLY -- not every friendly player.
+/// `DamageBlock::by_entity` is the full roster (squad AND non-squad
+/// friendlies); this aggregate deliberately excludes non-squad friendlies
+/// (`Role::FriendlyPlayer`) so its name stays true even once the upstream
+/// `Player::in_squad` gap (currently hardcoded `true` for every friendly)
+/// is filled and non-squad friendlies start actually appearing.
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct DamageSquad {
     pub total: u64,
@@ -64,8 +70,10 @@ pub fn build_damage(
         let Some(entity_id) = index.by_agent_addr(p.agent_addr) else {
             continue;
         };
-        squad_total += p.damage.total;
-        squad_dps += p.damage.dps;
+        if index.role_of(entity_id) == Some(Role::Squad) {
+            squad_total += p.damage.total;
+            squad_dps += p.damage.dps;
+        }
 
         let per_target = p
             .damage
@@ -162,6 +170,77 @@ mod tests {
                 "every referenced skill id must resolve in the catalog"
             );
         }
+    }
+
+    #[test]
+    fn squad_aggregate_excludes_non_squad_friendlies_while_by_entity_keeps_them() {
+        // Fix round 1 finding: `squad.total`/`squad.dps` must sum ONLY
+        // `Role::Squad` entities, never every friendly player. This is
+        // deliberately NOT built on the committed fixture -- every player
+        // in it is in-squad, so a fixture-based test cannot distinguish a
+        // working filter from a missing one (that's precisely how this
+        // defect survived review of the passing suite). Hand-build a
+        // two-player roster instead, one in-squad and one a non-squad
+        // friendly (`Role::FriendlyPlayer`).
+        use crate::v1::entities::build_entities;
+        use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
+        use axilog_core::model::{Encounter, Player};
+
+        fn player(addr: u64, account: &str, in_squad: bool) -> Player {
+            Player {
+                agent_addr: addr,
+                account: account.into(),
+                character: format!("Char{addr}"),
+                profession: "Guardian".into(),
+                elite_spec: "Firebrand".into(),
+                team: "red".into(),
+                subgroup: 1,
+                in_squad,
+                commander: false,
+                marker: None,
+                commander_tag: None,
+                guild_id: None,
+                agent_addrs: vec![addr],
+            }
+        }
+
+        let enc = Encounter {
+            kind: "wvw".into(),
+            map: "".into(),
+            duration_ms: 1000,
+            build: String::new(),
+            revision: 1,
+            recorded_by: None,
+            teams: vec![],
+            players: vec![player(1, ":Squaddie.1", true), player(2, ":Pug.2", false)],
+            enemies: vec![],
+            markers: vec![],
+            tick_rate: None,
+        };
+        let metrics = Metrics {
+            players: vec![
+                PlayerMetrics { agent_addr: 1, damage_total: 500, dps: 50.0, ..Default::default() },
+                PlayerMetrics { agent_addr: 2, damage_total: 300, dps: 30.0, ..Default::default() },
+            ],
+            timeline: Timeline { resolution_ms: 1000, squad_damage: vec![800], cc_applied: vec![0], downs: vec![0] },
+            boons: Default::default(),
+            boon_uptime: Default::default(),
+            boon_generation: Default::default(),
+            warnings: Default::default(),
+            has_healing_extension: Default::default(),
+            combat_participant_enemies: Default::default(),
+            instance_ids: Default::default(),
+            enemy_damage_out: Default::default(),
+            skill_map: Default::default(),
+        };
+        let report = crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
+        let (_, index) = build_entities(&enc, &metrics);
+        let mut cats = CatalogBuilder::default();
+        let block = build_damage(&report, &index, &mut cats);
+
+        assert_eq!(block.by_entity.len(), 2, "by_entity is the full roster: squad AND non-squad friendlies");
+        assert_eq!(block.squad.total, 500, "squad.total must be the in-squad player's damage only, not the sum of both");
+        assert_eq!(block.squad.dps, 50.0, "squad.dps must likewise exclude the non-squad friendly");
     }
 
     #[test]
