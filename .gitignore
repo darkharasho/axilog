@@ -26,3 +26,6 @@ __pycache__/
 
 # stray browser-session dumps from the Playwright MCP tool -- never committed
 .playwright-mcp/
+
+# SDD isolated worktrees (scratch, never committed)
+.worktrees/
