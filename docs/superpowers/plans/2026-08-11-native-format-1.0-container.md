@@ -1678,11 +1678,29 @@ mod tests {
     }
 
     #[test]
-    fn cc_squad_totals_are_the_sum_of_the_per_entity_rows() {
+    fn cc_squad_totals_sum_only_the_squad_rows() {
+        // On the committed fixture every player is in-squad, so the aggregate
+        // equals the sum of all rows. This pins the arithmetic; the filter
+        // itself is pinned by the non-fixture test below, because a
+        // fixture-only test cannot tell a working filter from a missing one.
         let (report, index) = fixture_report();
         let block = build_cc(&report, &index);
         let summed: u32 = block.by_entity.0.values().map(|r| r.applied_total).sum();
         assert_eq!(block.squad.applied_total, summed, "the aggregate must be the sum of its parts");
+    }
+
+    #[test]
+    fn cc_squad_aggregate_excludes_non_squad_friendlies() {
+        // Hand-built, NOT the fixture: every fixture player is in-squad.
+        // Give the two players DIFFERENT cc totals so an unfiltered sum is
+        // distinguishable from a filtered one.
+        let (report, index) = crate::v1::blocks::tests_support::two_player_report(
+            /* squad applied_total */ 7,
+            /* non-squad applied_total */ 5,
+        );
+        let block = build_cc(&report, &index);
+        assert_eq!(block.by_entity.len(), 2, "the roster keeps both players");
+        assert_eq!(block.squad.applied_total, 7, "only the in-squad player counts");
     }
 
     #[test]
@@ -1775,6 +1793,10 @@ pub struct CcBlock {
     pub by_entity: ByEntity<CcEntity>,
 }
 
+/// Aggregates `Role::Squad` entities ONLY. `by_entity` below carries the
+/// full friendly roster, including `Role::FriendlyPlayer`. Filtering here
+/// rather than summing the roster keeps this correct once the upstream
+/// non-squad-friendly split is populated -- see the spec's decision 3.
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct CcSquad {
     pub applied_total: u32,
@@ -1848,8 +1870,11 @@ pub fn build_cc(report: &crate::Report, index: &EntityIndex) -> CcBlock {
     for p in &report.players {
         let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
         let c = &p.cc;
-        squad.applied_total += c.applied_total;
-        squad.applied_duration_ms += c.applied_duration_ms;
+        // Squad aggregate excludes non-squad friendlies; `by_entity` does not.
+        if index.role_of(id) == Some(crate::v1::entities::Role::Squad) {
+            squad.applied_total += c.applied_total;
+            squad.applied_duration_ms += c.applied_duration_ms;
+        }
         by_entity.insert(
             id,
             CcEntity {
