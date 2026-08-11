@@ -179,62 +179,15 @@ mod tests {
         // deliberately NOT built on the committed fixture -- every player
         // in it is in-squad, so a fixture-based test cannot distinguish a
         // working filter from a missing one (that's precisely how this
-        // defect survived review of the passing suite). Hand-build a
-        // two-player roster instead, one in-squad and one a non-squad
-        // friendly (`Role::FriendlyPlayer`).
-        use crate::v1::entities::build_entities;
-        use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
-        use axilog_core::model::{Encounter, Player};
-
-        fn player(addr: u64, account: &str, in_squad: bool) -> Player {
-            Player {
-                agent_addr: addr,
-                account: account.into(),
-                character: format!("Char{addr}"),
-                profession: "Guardian".into(),
-                elite_spec: "Firebrand".into(),
-                team: "red".into(),
-                subgroup: 1,
-                in_squad,
-                commander: false,
-                marker: None,
-                commander_tag: None,
-                guild_id: None,
-                agent_addrs: vec![addr],
-            }
-        }
-
-        let enc = Encounter {
-            kind: "wvw".into(),
-            map: "".into(),
-            duration_ms: 1000,
-            build: String::new(),
-            revision: 1,
-            recorded_by: None,
-            teams: vec![],
-            players: vec![player(1, ":Squaddie.1", true), player(2, ":Pug.2", false)],
-            enemies: vec![],
-            markers: vec![],
-            tick_rate: None,
-        };
-        let metrics = Metrics {
-            players: vec![
-                PlayerMetrics { agent_addr: 1, damage_total: 500, dps: 50.0, ..Default::default() },
-                PlayerMetrics { agent_addr: 2, damage_total: 300, dps: 30.0, ..Default::default() },
-            ],
-            timeline: Timeline { resolution_ms: 1000, squad_damage: vec![800], cc_applied: vec![0], downs: vec![0] },
-            boons: Default::default(),
-            boon_uptime: Default::default(),
-            boon_generation: Default::default(),
-            warnings: Default::default(),
-            has_healing_extension: Default::default(),
-            combat_participant_enemies: Default::default(),
-            instance_ids: Default::default(),
-            enemy_damage_out: Default::default(),
-            skill_map: Default::default(),
-        };
-        let report = crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-        let (_, index) = build_entities(&enc, &metrics);
+        // defect survived review of the passing suite). Uses the shared
+        // two-player helper (one in-squad, one a non-squad friendly) rather
+        // than a local hand-built roster, so Tasks 6-8 don't each redefine
+        // the same fixture (`tests_support::two_player_report`).
+        let (mut report, index) = crate::v1::blocks::tests_support::two_player_report();
+        report.players[0].damage.total = 500;
+        report.players[0].damage.dps = 50.0;
+        report.players[1].damage.total = 300;
+        report.players[1].damage.dps = 30.0;
         let mut cats = CatalogBuilder::default();
         let block = build_damage(&report, &index, &mut cats);
 
