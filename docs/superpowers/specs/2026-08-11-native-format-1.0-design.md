@@ -298,11 +298,24 @@ back.
 
 ### Three catalogs, not more
 
-`buffs` absorbs boons *and* conditions — arcdps does not distinguish them
-structurally, and `kind` carries the distinction. This catalog holds the
-metadata EI's `buffMap` carries and native currently has nowhere to put
-(stacking type, max stacks, condition-vs-boon), which is a prerequisite for
-spec #2 absorbing the boon-states side channel.
+`buffs` absorbs boons, conditions, *and* effects — arcdps does not
+distinguish them structurally, and `kind` carries the distinction using GW2's
+own three-way taxonomy. This catalog holds the metadata EI's `buffMap`
+carries and native currently has nowhere to put (stacking type, max stacks,
+kind), which is a prerequisite for spec #2 absorbing the boon-states side
+channel.
+
+`kind` is decided by catalog membership, not by damage. Eight of GW2's
+fourteen conditions — Blind, Crippled, Chilled, Immobile, Weakness, Fear,
+Slow, Taunt — deal no damage and are still conditions, so a
+"does it deal condition damage" test mislabels them. Auras and forms (Frost
+Aura, Death Shroud) are `"effect"`; calling them boons would be false.
+
+Stacking metadata comes from `condition_catalog::CONDITION_BUFFS` for
+conditions. The damage-modifier catalog's `buff_stack` table is a 91-entry
+subset scoped to that catalog's needs and contains exactly one condition, so
+reading stacking from it silently reports five of the most common conditions
+in the game as duration-stacking with no stack cap.
 
 Professions and elite specs stay inline strings on entities. They are a closed
 set of ~40 short values with no metadata worth hoisting, and hoisting them
