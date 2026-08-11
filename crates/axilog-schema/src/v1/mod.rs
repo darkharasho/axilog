@@ -36,13 +36,26 @@ pub struct EncounterOut {
     pub tick_rate: Option<crate::TickRateOut>,
 }
 
-/// One `CBTS_MARKER` assignment, rekeyed onto the 1.0 entity id space.
-/// Markers on agents that never resolved to an entity (an observed-but-
-/// unrostered agent) are dropped rather than emitted with a dangling id --
-/// every id in the 1.0 document must resolve.
+/// One `CBTS_MARKER` assignment. `arcdps` does not restrict `CBTS_MARKER`
+/// to squad members -- `Encounter::markers` records it "across all agents
+/// (squad, enemy, and NPC/gadget alike)". Many of those agents never become
+/// tracked entities: `wvw::apply`'s `enc.enemies.retain(...)` drops
+/// friendly-side NPCs/gadgets (siege, pets, own-team guards) that never
+/// took a hostile hit, so a squad marker placed on friendly siege is an
+/// ordinary WvW pattern with no resolvable entity id. Dropping those
+/// markers would silently discard real data, so `agent_addr` is always
+/// carried (the same documented public attribute `EntityOut::agent_addr`
+/// exposes) and `entity_id` is populated only when the agent is in the
+/// roster.
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct MarkerAssignmentOut {
-    pub entity_id: u32,
+    /// The entity this marker is on, when the agent is a tracked entity.
+    /// Absent for agents that carry markers but are not tracked entities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity_id: Option<u32>,
+    /// Always present, so a marker is never lost just because its agent is
+    /// not a tracked entity.
+    pub agent_addr: u64,
     pub marker: String,
     pub time_ms: u64,
 }
@@ -177,12 +190,11 @@ pub fn build_report_v1(
         .encounter
         .markers
         .iter()
-        .filter_map(|m| {
-            index.by_agent_addr(m.agent_addr).map(|entity_id| MarkerAssignmentOut {
-                entity_id,
-                marker: m.marker.clone(),
-                time_ms: m.time_ms,
-            })
+        .map(|m| MarkerAssignmentOut {
+            entity_id: index.by_agent_addr(m.agent_addr),
+            agent_addr: m.agent_addr,
+            marker: m.marker.clone(),
+            time_ms: m.time_ms,
         })
         .collect();
 
@@ -222,5 +234,98 @@ pub fn build_report_v1(
         },
         coverage,
         warnings,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
+    use axilog_core::model::{Encounter, MarkerAssignment, Player};
+
+    fn player(addr: u64, account: &str) -> Player {
+        Player {
+            agent_addr: addr,
+            account: account.into(),
+            character: format!("Char{addr}"),
+            profession: "Guardian".into(),
+            elite_spec: "Firebrand".into(),
+            team: "red".into(),
+            subgroup: 1,
+            in_squad: true,
+            commander: false,
+            marker: None,
+            commander_tag: None,
+            guild_id: None,
+            agent_addrs: vec![addr],
+        }
+    }
+
+    /// A marker on an agent NOT in the roster is an ordinary WvW pattern --
+    /// `arcdps` does not restrict `CBTS_MARKER` to squad members, and
+    /// `wvw::apply`'s retain filter drops friendly siege/pets/guards that
+    /// never took a hostile hit before they ever reach `Encounter::enemies`.
+    /// This must survive as a marker with `entity_id: None`, not be
+    /// silently dropped -- see Finding 1 of Task 9's fix round 1.
+    #[test]
+    fn a_marker_on_an_unrostered_agent_survives_with_no_entity_id() {
+        let enc = Encounter {
+            kind: "wvw".into(),
+            map: "".into(),
+            duration_ms: 1000,
+            build: String::new(),
+            revision: 1,
+            recorded_by: None,
+            teams: vec![],
+            players: vec![player(1, ":Squaddie.1")],
+            enemies: vec![],
+            markers: vec![
+                MarkerAssignment { agent_addr: 1, marker: "arrow".into(), time_ms: 10 },
+                // 99 is never a player or an enemy -- e.g. friendly siege
+                // dropped by `wvw::apply`'s retain filter -- so it never
+                // resolves to an entity id.
+                MarkerAssignment { agent_addr: 99, marker: "star".into(), time_ms: 20 },
+            ],
+            tick_rate: None,
+        };
+        let metrics = Metrics {
+            players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],
+            timeline: Timeline {
+                resolution_ms: 1000,
+                squad_damage: vec![0],
+                cc_applied: vec![0],
+                downs: vec![0],
+            },
+            boons: Default::default(),
+            boon_uptime: Default::default(),
+            boon_generation: Default::default(),
+            warnings: Default::default(),
+            has_healing_extension: Default::default(),
+            combat_participant_enemies: Default::default(),
+            instance_ids: Default::default(),
+            enemy_damage_out: Default::default(),
+            skill_map: Default::default(),
+        };
+        let legacy =
+            crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
+        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, None);
+
+        assert_eq!(v1.encounter.markers.len(), 2, "both markers must survive, not just the resolvable one");
+
+        let resolvable = &v1.encounter.markers[0];
+        assert_eq!(resolvable.agent_addr, 1);
+        assert_eq!(resolvable.entity_id, Some(0), "agent 1 is the sole roster entity, id 0");
+        assert_eq!(resolvable.marker, "arrow");
+
+        let unresolvable = &v1.encounter.markers[1];
+        assert_eq!(unresolvable.agent_addr, 99);
+        assert_eq!(unresolvable.entity_id, None, "agent 99 is not a tracked entity");
+        assert_eq!(unresolvable.marker, "star");
+
+        let v = serde_json::to_value(&v1).expect("serializable");
+        let markers = v["encounter"]["markers"].as_array().expect("markers array");
+        assert!(markers[0].get("entity_id").is_some(), "resolvable marker keeps entity_id");
+        assert!(markers[1].get("entity_id").is_none(), "unresolvable marker omits entity_id, never null");
+        assert_eq!(markers[1]["agent_addr"], 99);
     }
 }

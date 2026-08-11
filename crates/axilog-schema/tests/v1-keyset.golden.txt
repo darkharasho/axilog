@@ -173,6 +173,7 @@ encounter.duration_ms
 encounter.kind
 encounter.map
 encounter.markers
+encounter.markers[].agent_addr
 encounter.markers[].entity_id
 encounter.markers[].marker
 encounter.markers[].time_ms
