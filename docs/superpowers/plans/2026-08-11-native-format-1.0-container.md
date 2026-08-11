@@ -858,13 +858,7 @@ pub fn build_entities(enc: &Encounter, metrics: &Metrics) -> (Vec<EntityOut>, En
         // `profession.is_some()` is the real-player signal (MENEMYPROF);
         // `is_player` agrees but is also true for the gadget case below in
         // some logs, so both are consulted.
-        let role = if e.is_player && e.profession.is_some() {
-            Role::EnemyPlayer
-        } else if e.is_player {
-            Role::EnemyPlayer
-        } else {
-            Role::Npc
-        };
+        let role = if e.is_player { Role::EnemyPlayer } else { Role::Npc };
         let is_player_role = matches!(role, Role::EnemyPlayer);
         pending.push(Pending {
             key: (role, e.team.clone(), 0, String::new(), e.name.clone(), e.id),
@@ -2277,7 +2271,7 @@ pub struct MissilesSquad {
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct MissilesEntity {
     pub fired: u32,
-    pub connected: u32,
+    pub hit: u32,
     pub denied: u32,
 }
 
@@ -2405,11 +2399,13 @@ pub fn build_damage_mods(
 pub fn build_missiles(report: &crate::Report, index: &EntityIndex) -> MissilesBlock {
     let Some(m) = report.missiles.as_ref() else { return MissilesBlock::default() };
     let mut by_entity = ByEntity::default();
-    for (p, row) in report.players.iter().zip(m.players.iter()) {
-        let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
+    // `PlayerMissilesOut` already carries its own `agent_addr` -- join on it
+    // rather than on array position.
+    for row in &m.players {
+        let Some(id) = index.by_agent_addr(row.agent_addr) else { continue };
         by_entity.insert(
             id,
-            MissilesEntity { fired: row.fired, connected: row.connected, denied: row.denied },
+            MissilesEntity { fired: row.fired, hit: row.hit, denied: row.denied },
         );
     }
     MissilesBlock {
@@ -2421,8 +2417,10 @@ pub fn build_missiles(report: &crate::Report, index: &EntityIndex) -> MissilesBl
 pub fn build_replay(report: &crate::Report, index: &EntityIndex) -> ReplayBlock {
     let Some(r) = report.replay.as_ref() else { return ReplayBlock::default() };
     let mut by_entity = ByEntity::default();
-    for (p, track) in report.players.iter().zip(r.tracks.iter()) {
-        let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
+    // Requires Step 1 below: `ReplayTrackOut` must carry the `agent_addr`
+    // that `analysis::replay::Track` already has.
+    for track in &r.tracks {
+        let Some(id) = index.by_agent_addr(track.agent_addr) else { continue };
         by_entity.insert(
             id,
             ReplayTrack {
@@ -2446,14 +2444,23 @@ pub fn build_replay(report: &crate::Report, index: &EntityIndex) -> ReplayBlock 
 
 Implementer notes:
 
-1. `build_missiles` and `build_replay` above use `zip`, which is a
-   POSITIONAL join — exactly what this spec exists to remove. It is
-   acceptable ONLY because both legacy structures are documented as built by
-   iterating `enc.players` in the same order. Add a
-   `debug_assert_eq!(report.players.len(), m.players.len())` to each so a
-   future divergence trips loudly in tests rather than silently mis-attributing
-   a track. If either legacy structure carries its own addr, use that instead
-   and delete the `zip`.
+1. `ReplayTrackOut` carries NO join key today (`name`, `team`, `commander`,
+   `is_squad`, `samples`, intervals) even though its upstream
+   `axilog_core::analysis::replay::Track` has `agent_addr`. That omission is
+   the documented replay join-key gap. Before writing `build_replay`, add to
+   `ReplayTrackOut` in `crates/axilog-schema/src/lib.rs`:
+
+   ```rust
+       /// The representative raw agent addr, carried from
+       /// `analysis::replay::Track`. `#[serde(skip)]` so the legacy JSON
+       /// stays byte-identical; promoted to the 1.0 `by_entity` key.
+       #[serde(skip)]
+       pub agent_addr: u64,
+   ```
+
+   and populate it from `t.agent_addr` where `build_report` builds the
+   tracks. Run `cargo test -p axilog-core --test golden && cargo test -p axilog-ei`
+   to confirm no golden moved.
 2. APM is deliberately NOT a field here. It is `cast_count` over the
    entity's active time, both of which a consumer already has, and storing a
    derived rate in a wire format invites it to disagree with its own inputs.
