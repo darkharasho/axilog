@@ -540,7 +540,7 @@ git commit -m "feat(schema): add the 1.0 document envelope (meta, coverage, warn
 - Consumes: `axilog_core::model::{Encounter, Player, Enemy}`,
   `axilog_core::analysis::Metrics` (for `metrics.instance_ids: BTreeMap<u64, u16>`).
 - Produces:
-  `Role` enum `Squad | FriendlyPlayer | EnemyPlayer | Npc | Gadget` (serialized snake_case);
+  `Role` enum `Squad | FriendlyPlayer | EnemyPlayer | Npc` (serialized snake_case);
   `EntityOut` (fields below);
   `build_entities(enc: &Encounter, metrics: &Metrics) -> (Vec<EntityOut>, EntityIndex)`;
   `EntityIndex` with `by_agent_addr(&self, addr: u64) -> Option<u32>` and
@@ -729,8 +729,12 @@ pub enum Role {
     /// `_nonSquadFriendlies`, which the legacy shape discarded entirely.
     FriendlyPlayer,
     EnemyPlayer,
+    /// Every non-player enemy agent. `axilog_core::model::agent_kind`
+    /// distinguishes gadgets from NPCs, but `model::Enemy` does not retain
+    /// that, so a separate `Gadget` role would be unreachable. Adding one
+    /// later is additive under the 1.x rules; see the spec's known
+    /// simplifications.
     Npc,
-    Gadget,
 }
 
 /// One agent's IDENTITY. No statistics -- those live in `blocks`, keyed by
@@ -750,7 +754,7 @@ pub struct EntityOut {
     /// Players only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub character: Option<String>,
-    /// NPCs and gadgets only -- they have neither account nor character.
+    /// Non-player entities only -- they have neither account nor character.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Present exactly for player roles, preserving MENEMYPROF's property
@@ -855,9 +859,9 @@ pub fn build_entities(enc: &Encounter, metrics: &Metrics) -> (Vec<EntityOut>, En
     }
 
     for e in &enc.enemies {
-        // `profession.is_some()` is the real-player signal (MENEMYPROF);
-        // `is_player` agrees but is also true for the gadget case below in
-        // some logs, so both are consulted.
+        // `is_player` is the friend/foe-split roster's player flag;
+        // `profession.is_some()` (MENEMYPROF) agrees with it on every real
+        // log and is the signal consumers use.
         let role = if e.is_player { Role::EnemyPlayer } else { Role::Npc };
         let is_player_role = matches!(role, Role::EnemyPlayer);
         pending.push(Pending {
