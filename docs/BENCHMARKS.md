@@ -1042,3 +1042,85 @@ every flag combination, on both the committed fixture and the real log
 (37,172,472 B): `Report::enemies` and `Report::ei_targets` are independent
 filters over the same list, and only the second one moved. So is `--format
 html`.
+
+## Native format 1.0 payload
+
+**Task 13** (2026-08-11). Measures the two size claims the 1.0 container
+design made and never checked: that catalog dedup (names, IDs, buff/skill
+metadata pulled into `catalogs{}` and referenced by index instead of
+repeated per row) and RLE-encoded time series (`series` block) make the
+1.0 document smaller than the legacy `axilog-schema::Report` shape on the
+same content.
+
+Both documents are built from the committed fixture
+(`fixtures/wvw-small.anon.zevtc`) with **every** compute gate on — replay,
+missiles, skill-damage, timeseries, rotation, and damage-mods — the same
+"all gates" construction `v1_shape.rs`'s `build_with_encounter()` uses.
+Comparing a fully-populated 1.0 document against a fully-populated legacy
+one matters here: the legacy shape's optional fields are `#[serde(skip)]`
+when absent, so a partial legacy document would make the ratio look far
+better than it is.
+
+The 1.0 shape carries strictly more data than legacy even before dedup is
+counted: enemy statistics that legacy's serializer skips, a
+`combat_participant` flag, and per-skill `crit_hits`/`flank_hits`. So a
+reduction here isn't "the same data organized differently" — it's the same
+data plus more, organized to cost less.
+
+### Total size and ratio
+
+```
+SIZE legacy=1,630,287 v1=899,179 ratio=0.552
+```
+
+The 1.0 document is **45% smaller** than the legacy one carrying equivalent
+(plus strictly more) content. The catalog-dedup and RLE claims are borne
+out: dedup means every player/target/skill name and every buff/skill
+metadata entry is written once in `catalogs{}` and referenced by a small
+integer everywhere else, instead of being repeated as a full string on
+every row of `boons`, `damage`, `rotation`, etc; RLE means the `series`
+block (190,586 B) — the block most exposed to idle-stretch repetition —
+stays a fraction of what a flat per-second array over the same duration
+would cost.
+
+### Per-block breakdown (bytes, serialized JSON)
+
+| block | bytes |
+|---|---|
+| `replay` | 294,141 |
+| `series` | 190,586 |
+| `rotation` | 117,802 |
+| `damage_mods` | 63,507 |
+| `boons` | 72,945 |
+| `damage` | 53,055 |
+| `catalogs` | 23,763 |
+| `entities` | 21,509 |
+| `defenses` | 19,797 |
+| `hit_stats` | 19,283 |
+| `contribution` | 6,356 |
+| `healing` | 4,661 |
+| `cc` | 4,102 |
+| `support` | 3,768 |
+| `missiles` | 2,567 |
+
+`replay` dominates (33% of the document) — unsurprising, since it is raw
+per-frame position/health/state samples for every combat participant over
+the whole encounter duration and is not RLE-encoded like `series` is; it is
+the block most likely to dominate on longer or higher-player-count logs.
+`series` is the second-largest block despite RLE, because the fixture is a
+short, busy WvW skirmish with little idle time for the RLE to collapse —
+RLE's payoff scales with how much of the timeline is flat, which this
+particular fixture doesn't have much of.
+
+### Test bound
+
+`crates/axilog-schema/tests/v1_size.rs` asserts `v1.len() <= legacy.len() *
+7 / 10` (0.70), not the `* 12 / 10` (1.20) bound drafted before any
+measurement existed. At the measured ratio of 0.552, the original 1.20
+bound would have passed even if the entire size win regressed away and 1.0
+came out noticeably *larger* than legacy — it verified nothing. 0.70
+leaves headroom above the measured 0.552 for normal per-fixture and
+per-change drift, while still failing if dedup or RLE silently breaks on a
+code path and erodes most of the win.
+
+Run: `cargo test -p axilog-schema --test v1_size -- --nocapture`
