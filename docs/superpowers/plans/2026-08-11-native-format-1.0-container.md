@@ -1638,7 +1638,39 @@ git commit -m "feat(schema): add the 1.0 damage block and block scaffolding"
   `build_defenses(...)`, `build_hit_stats(...)`, `build_cc(...)`, each with the
   signature `(&crate::Report, &EntityIndex) -> <Block>`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Extract the two-player test helper**
+
+Task 5 built its non-squad-filter test with a hand-constructed `Encounter`
+inline in `damage.rs`. Tasks 6, 7 and 8 all need the same fixture, and every
+fixture-based test is blind to this class of bug (every player in
+`fixtures/wvw-small.anon.zevtc` is in-squad). Promote it to a shared helper
+in `crates/axilog-schema/src/v1/blocks/mod.rs`'s `tests_support` module,
+beside `fixture_report`:
+
+```rust
+    /// A minimal two-player report: `players[0]` is IN squad, `players[1]`
+    /// is a non-squad friendly. Their agent addrs are 1 and 2.
+    ///
+    /// Every statistic starts at zero; a test sets only the fields it
+    /// asserts on, then checks that a `squad` aggregate counted `players[0]`
+    /// alone while `by_entity` kept both rows.
+    ///
+    /// The committed fixture CANNOT serve this purpose: every player in it
+    /// is in-squad, so a fixture-based test passes whether or not the filter
+    /// exists. That is exactly how the defect reached review in Task 5.
+    pub fn two_player_report() -> (crate::Report, EntityIndex) {
+```
+
+Build it from the same `Encounter` -> `analyze` -> `build_report` path
+`fixture_report` uses, with two hand-made `Player`s (`in_squad: true` and
+`in_squad: false`). Rewrite Task 5's inline test in `damage.rs` to call it,
+so there is ONE definition rather than four copies.
+
+Run `cargo test -p axilog-schema --lib v1::blocks::damage` afterwards and
+confirm Task 5's tests still pass unchanged — the helper must be a pure
+refactor of the existing test, not a weakening of it.
+
+- [ ] **Step 2: Write the failing test**
 
 Create `crates/axilog-schema/src/v1/blocks/defense.rs` with ONLY this test
 module:
@@ -1694,10 +1726,9 @@ mod tests {
         // Hand-built, NOT the fixture: every fixture player is in-squad.
         // Give the two players DIFFERENT cc totals so an unfiltered sum is
         // distinguishable from a filtered one.
-        let (report, index) = crate::v1::blocks::tests_support::two_player_report(
-            /* squad applied_total */ 7,
-            /* non-squad applied_total */ 5,
-        );
+        let (mut report, index) = crate::v1::blocks::tests_support::two_player_report();
+        report.players[0].cc.applied_total = 7; // in-squad
+        report.players[1].cc.applied_total = 5; // non-squad friendly
         let block = build_cc(&report, &index);
         assert_eq!(block.by_entity.len(), 2, "the roster keeps both players");
         assert_eq!(block.squad.applied_total, 7, "only the in-squad player counts");
@@ -1720,12 +1751,12 @@ Add to `crates/axilog-schema/src/v1/blocks/mod.rs`:
 pub mod defense;
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Run test to verify it fails**
 
 Run: `cargo test -p axilog-schema --lib v1::blocks::defense`
 Expected: FAIL — compile error, `cannot find function build_defenses in this scope`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 4: Write minimal implementation**
 
 Before writing, enumerate the real legacy field names:
 
@@ -1896,12 +1927,13 @@ the right-hand side and keep the 1.0 name on the left; where the legacy name
 is an EI artifact (e.g. abbreviations), prefer the clearer 1.0 name and note
 the mapping in a comment.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
-Run: `cargo test -p axilog-schema --lib v1::blocks::defense`
-Expected: PASS, 4 tests.
+Run: `cargo test -p axilog-schema --lib v1::blocks`
+Expected: PASS — the 5 defense-file tests plus Task 5's damage tests, which
+the Step 1 refactor must leave green.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add crates/axilog-schema/src/v1/
