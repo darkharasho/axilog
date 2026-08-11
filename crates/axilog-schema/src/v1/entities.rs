@@ -67,6 +67,17 @@ pub struct EntityOut {
     pub agent_addr: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instid: Option<u16>,
+    /// Whether this entity interacted with the squad at all -- it dealt
+    /// damage to the squad, took damage from the squad, or took CC from the
+    /// squad. This is the predicate behind the legacy report's
+    /// combat-participant `enemies[]` view, preserved here so that view
+    /// stays expressible as a filter over `entities[]` rather than being
+    /// lost -- see `Metrics::combat_participant_enemies`'s doc comment for
+    /// the exact criteria. Always `true` for squad members (and non-squad
+    /// friendlies, which are never filtered by this predicate on the
+    /// legacy side either). Never optional: absence would be ambiguous
+    /// between "did not participate" and "not computed".
+    pub combat_participant: bool,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -146,6 +157,10 @@ pub fn build_entities(enc: &Encounter, metrics: &Metrics) -> (Vec<EntityOut>, En
                 marker: p.marker.clone(),
                 agent_addr: p.agent_addr,
                 instid: metrics.instance_ids.get(&p.agent_addr).copied(),
+                // Players (squad and non-squad friendly alike) are never
+                // filtered by the legacy combat-participant predicate --
+                // that filter only ever applies to `enc.enemies`.
+                combat_participant: true,
             },
             addrs: p.agent_addrs.clone(),
             enemy_id: None,
@@ -175,6 +190,13 @@ pub fn build_entities(enc: &Encounter, metrics: &Metrics) -> (Vec<EntityOut>, En
                 marker: e.marker.clone(),
                 agent_addr: e.id,
                 instid: metrics.instance_ids.get(&e.id).copied(),
+                // The single definition of this predicate lives on
+                // `Metrics::combat_participant_enemies` -- see its doc
+                // comment for the exact criteria (dealt damage to the
+                // squad, took damage from the squad, or took CC from the
+                // squad). `crate::build_report`'s `Report.enemies` filter
+                // reads the same set, so this is not a second definition.
+                combat_participant: metrics.combat_participant_enemies.contains(&e.id),
             },
             addrs: e.agent_addrs.clone(),
             enemy_id: Some(e.id),

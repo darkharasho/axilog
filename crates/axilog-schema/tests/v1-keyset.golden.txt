@@ -262,6 +262,7 @@ entities
 entities[].account
 entities[].agent_addr
 entities[].character
+entities[].combat_participant
 entities[].elite_spec
 entities[].id
 entities[].instid

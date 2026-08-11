@@ -441,3 +441,146 @@ fn every_legacy_rotation_cast_survives_the_reshape() {
     assert!(checked >= 1, "expected at least one player with rotation data, got {checked}");
     assert!(total_casts >= 30, "expected a substantial number of casts across the roster, got {total_casts}");
 }
+
+
+/// Fix round 1, Finding 1: `per_player_damage_totals_are_identical` above
+/// only compared `total`/`dps`/`taken` -- `DamageEntity::per_target` (the
+/// legacy `damage.per_enemy`) had zero equivalence coverage, even though
+/// `build()` turns the skill-damage gate on specifically so it is
+/// populated. On the committed fixture this is 872 rows across the roster
+/// (verified with an ad hoc probe before pinning the minimum below).
+#[test]
+fn every_legacy_per_enemy_damage_row_survives_the_reshape() {
+    let (legacy, v1) = build();
+    let damage = v1.blocks.damage.as_ref().expect("damage block present");
+    let by_account = by_account(&legacy);
+
+    let mut checked = 0usize;
+    for e in &v1.entities {
+        let Some(account) = e.account.as_deref() else { continue };
+        let Some(p) = by_account.get(account) else { continue };
+        let row = damage.by_entity.get(e.id).expect("damage row for every player entity");
+
+        // Same entry count: an extra or missing target must fail this.
+        assert_eq!(
+            row.per_target.len(),
+            p.damage.per_enemy.len(),
+            "{account} per_target entry count"
+        );
+
+        for pe in &p.damage.per_enemy {
+            let Some(target_id) = v1
+                .entities
+                .iter()
+                .find(|te| te.agent_addr == pe.enemy_id && !matches!(te.role, axilog_schema::v1::entities::Role::Squad | axilog_schema::v1::entities::Role::FriendlyPlayer))
+                .map(|te| te.id)
+            else {
+                panic!("{account} per_enemy target {} has no entities[] row", pe.enemy_id);
+            };
+            let got = row.per_target.get(&target_id).unwrap_or_else(|| {
+                panic!("{account} per_target missing entry for enemy {} (entity {target_id})", pe.enemy_id)
+            });
+            assert_eq!(got.total, pe.total, "{account} per_target[{target_id}].total");
+            checked += 1;
+        }
+    }
+    assert!(checked >= 800, "expected the full per-target matrix, got {checked} cells");
+}
+
+/// Fix round 1, Finding 1 continued: `DamageEntity::by_skill` (the legacy
+/// `skill_damage.outgoing`) likewise had zero equivalence coverage. On the
+/// committed fixture this is 405 rows across the roster.
+///
+/// NOTE on coverage: the legacy `SkillEntryOut` also carries `crit_hits`/
+/// `flank_hits` (hit COUNTS, not damage sums -- see its doc comment in
+/// `crates/axilog-schema/src/lib.rs`). The 1.0 `SkillRow` type does not
+/// have those fields at all -- `build_damage` never copies them. That is a
+/// genuine field-for-field gap this test cannot assert on (there is no 1.0
+/// field to compare against), reported separately rather than silently
+/// widened around; see the fix-round-1 report appendix.
+#[test]
+fn every_legacy_skill_damage_row_survives_the_reshape() {
+    let (legacy, v1) = build();
+    let damage = v1.blocks.damage.as_ref().expect("damage block present");
+    let by_account = by_account(&legacy);
+
+    let mut checked = 0usize;
+    for e in &v1.entities {
+        let Some(account) = e.account.as_deref() else { continue };
+        let Some(p) = by_account.get(account) else { continue };
+        let Some(skill_damage) = p.skill_damage.as_ref() else { continue };
+        let row = damage.by_entity.get(e.id).expect("damage row for every player entity");
+
+        assert_eq!(
+            row.by_skill.len(),
+            skill_damage.outgoing.len(),
+            "{account} by_skill entry count"
+        );
+
+        for legacy_skill in &skill_damage.outgoing {
+            let got = row
+                .by_skill
+                .get(&legacy_skill.skill_id)
+                .unwrap_or_else(|| panic!("{account} by_skill missing entry for skill {}", legacy_skill.skill_id));
+            assert_eq!(got.total, legacy_skill.total, "{account} by_skill[{}].total", legacy_skill.skill_id);
+            assert_eq!(got.hits, legacy_skill.hits, "{account} by_skill[{}].hits", legacy_skill.skill_id);
+            assert_eq!(got.min, legacy_skill.min, "{account} by_skill[{}].min", legacy_skill.skill_id);
+            assert_eq!(got.max, legacy_skill.max, "{account} by_skill[{}].max", legacy_skill.skill_id);
+            checked += 1;
+        }
+    }
+    assert!(checked >= 380, "expected the full by-skill matrix, got {checked} rows");
+}
+
+/// Fix round 1, Finding 2: the legacy combat-participant predicate
+/// (`Metrics::combat_participant_enemies`, the filter behind `Report.
+/// enemies`) is now surfaced on `EntityOut::combat_participant`, so the
+/// filtered view stays expressible over `entities[]` instead of being
+/// unrecoverable. This makes the superset relationship from
+/// `every_legacy_enemy_resolves_to_exactly_one_entity` precise: not just
+/// bounded (`non_squad_ids.len() > legacy.enemies.len()`), but exactly the
+/// entities with `combat_participant == true`.
+#[test]
+fn combat_participant_flag_reproduces_the_legacy_enemies_filter_exactly() {
+    let (legacy, v1) = build();
+
+    // Every legacy enemy must be a combat participant.
+    let non_squad: std::collections::BTreeMap<u64, &axilog_schema::v1::entities::EntityOut> = v1
+        .entities
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e.role,
+                axilog_schema::v1::entities::Role::Squad
+                    | axilog_schema::v1::entities::Role::FriendlyPlayer
+            )
+        })
+        .map(|e| (e.agent_addr, e))
+        .collect();
+
+    for enemy in &legacy.enemies {
+        let entity = non_squad.get(&enemy.id).expect("legacy enemy has an entities[] row");
+        assert!(entity.combat_participant, "legacy enemy {} must be flagged combat_participant", enemy.name);
+    }
+
+    // And the flag is not just a superset over-approximation: the count of
+    // non-squad entities flagged combat_participant must equal
+    // legacy.enemies.len() exactly, i.e. the flag reproduces the filter,
+    // not merely satisfies it in one direction.
+    let flagged_count = non_squad.values().filter(|e| e.combat_participant).count();
+    assert_eq!(
+        flagged_count,
+        legacy.enemies.len(),
+        "combat_participant-flagged entities must exactly reproduce legacy.enemies"
+    );
+
+    // Every squad/friendly entity is always a participant.
+    for e in &v1.entities {
+        if matches!(
+            e.role,
+            axilog_schema::v1::entities::Role::Squad | axilog_schema::v1::entities::Role::FriendlyPlayer
+        ) {
+            assert!(e.combat_participant, "friendly entities are always combat_participant");
+        }
+    }
+}
