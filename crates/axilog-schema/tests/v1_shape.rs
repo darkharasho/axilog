@@ -194,3 +194,96 @@ fn the_full_key_set_matches_the_committed_golden() {
          breaking change requiring a major bump."
     );
 }
+
+/// After scrubbing/anonymization, no real account or character string
+/// appears ANYWHERE in the serialized 1.0 document.
+///
+/// The 1.0 container makes this assertable for the first time: account and
+/// character names live in `entities[]` and nowhere else, so a leak-scan is
+/// a single pass over the serialized text rather than a hunt through nested
+/// structures. The M15 fix waves found that hunt had already missed a
+/// `_note` field once.
+///
+/// The committed fixture (`fixtures/wvw-small.anon.zevtc`) is already
+/// anonymized: every account is of the form `:Anon<N>.<4 digits>`. So the
+/// assertion is that every account-shaped string appearing anywhere in the
+/// serialized document starts with `:Anon` -- anything else is an
+/// unscrubbed identity that leaked through some field other than
+/// `entities[]`.
+#[test]
+fn no_unscrubbed_identity_survives_in_the_v1_document() {
+    let v = build();
+    let text = serde_json::to_string(&v).expect("stringify");
+
+    let account_like = regex_lite_account_matches(&text);
+    eprintln!("account-shaped strings found: {}", account_like.len());
+    for a in &account_like {
+        assert!(
+            a.starts_with(":Anon"),
+            "unscrubbed account-shaped string {a:?} in the v1 document"
+        );
+    }
+
+    // A scanner that finds nothing still "passes" the loop above -- guard
+    // against a scanner that isn't actually scanning. The fixture has 42
+    // players (each contributing at least one `:AnonN.NNNN` account
+    // reference), so a healthy scan should find dozens of hits, not a
+    // handful. 40 is a floor comfortably below the 43 the scan currently
+    // finds, leaving room for minor future fixture/shape changes without
+    // masking a scanner regression.
+    assert!(
+        account_like.len() >= 40,
+        "the scan found only {} account-shaped strings -- expected at least 40 for a \
+         42-player fixture; the scanner may not actually be scanning",
+        account_like.len()
+    );
+}
+
+/// The scanner (`regex_lite_account_matches`) is hand-rolled, so it needs
+/// its own test proving it can find the thing it's looking for. A scanner
+/// that can't detect a known-bad account makes
+/// `no_unscrubbed_identity_survives_in_the_v1_document` above worthless --
+/// it would pass on a document full of leaks just as happily as on a clean
+/// one.
+#[test]
+fn the_account_scanner_detects_a_known_bad_account() {
+    let text = r#"{"_note":":RealName.1234","other":1}"#;
+    let matches = regex_lite_account_matches(text);
+    assert!(
+        matches.iter().any(|m| m == ":RealName.1234"),
+        "scanner failed to find a planted unscrubbed account in {matches:?}"
+    );
+
+    // Sanity check the negative case too: a clean `:Anon` account should
+    // also be found (it's account-shaped), just not flagged as a leak by
+    // the caller.
+    let clean = r#"{"account":":Anon12.3456"}"#;
+    let clean_matches = regex_lite_account_matches(clean);
+    assert_eq!(clean_matches, vec![":Anon12.3456".to_string()]);
+}
+
+/// Minimal account-shape scanner: `:Name.1234`. Avoids adding a `regex`
+/// dependency to the test suite for one pattern.
+fn regex_lite_account_matches(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    for (i, b) in bytes.iter().enumerate() {
+        if *b != b':' {
+            continue;
+        }
+        let rest = &text[i..];
+        let end = rest
+            .char_indices()
+            .position(|(_, c)| c == '"' || c == ',')
+            .unwrap_or(rest.len());
+        let candidate = &rest[..end];
+        let dot = candidate.rfind('.');
+        if let Some(d) = dot {
+            let digits = &candidate[d + 1..];
+            if digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()) {
+                out.push(candidate.to_string());
+            }
+        }
+    }
+    out
+}
