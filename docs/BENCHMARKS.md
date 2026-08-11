@@ -1061,66 +1061,123 @@ one matters here: the legacy shape's optional fields are `#[serde(skip)]`
 when absent, so a partial legacy document would make the ratio look far
 better than it is.
 
-The 1.0 shape carries strictly more data than legacy even before dedup is
-counted: enemy statistics that legacy's serializer skips, a
-`combat_participant` flag, and per-skill `crit_hits`/`flank_hits`. So a
-reduction here isn't "the same data organized differently" — it's the same
-data plus more, organized to cost less.
+### ⚠️ Re-measured after the final review — the first figure was taken
+### against an incomplete document
+
+**An earlier revision of this section reported ratio 0.552 (a "45%
+reduction") and claimed the 1.0 shape "carries strictly more data than
+legacy". Both were wrong, and they were wrong in the same direction.**
+
+At the time of that measurement, five legacy field families had no 1.0
+destination at all and were being silently dropped: `PlayerOut`'s
+`downs_dealt`/`kills_dealt`/`downs_taken`/`deaths`, the whole of
+`PerTargetStatsOut`, `SkillDamageOut::taken`, `SkillDamageOut::per_target`,
+and `AftercastOut`. One of those — the per-`(player, target, skill)`
+breakdown — is the single bulkiest structure in the schema. So the
+comparison was a *complete* legacy document against an *incomplete* 1.0
+one, and the missing bulk flattered the ratio substantially.
+
+Nothing in the test suite could see it, because every test asserted that
+what was PRESENT matched, and none asserted that nothing was ABSENT. The
+fix adds that missing test (`v1_equivalence.rs`'s
+`every_legacy_player_field_has_a_one_point_oh_destination`, an exhaustive
+compile-time-enforced checklist over the legacy `PlayerOut` field set).
+
+The numbers below are the re-measurement with every gap closed.
+
+### What 1.0 carries relative to legacy
+
+Stated precisely, replacing the earlier "strictly more" claim:
+
+- **Everything legacy publishes is reachable in 1.0**, with one class of
+  exception: two values that are *exact functions of values 1.0 does
+  carry* — `dps_targets[].dps` (that target's damage over
+  `encounter.duration_ms`) and `PlayerOut::commander` (upstream, exactly
+  `commander_tag.is_some()`). The format does not store derived values that
+  can disagree with their own inputs; `rotation` omits APM for the same
+  reason. Both identities are asserted per-player by the completeness
+  checklist, not merely claimed here.
+- **Plus data legacy does not publish at all**: enemy statistics that
+  legacy's serializer `#[serde(skip)]`s, the `combat_participant` flag, and
+  entity-id join keys on structures (`replay` tracks, `per_target` maps)
+  that legacy left unjoinable.
+
+So the reduction is not "the same data organized differently" either — it
+is a near-superset, organized to cost less.
 
 ### Total size and ratio
 
 ```
-SIZE legacy=1,630,287 v1=899,179 ratio=0.552
+SIZE legacy=1630287 v1=1304710 ratio=0.800
 ```
 
-The 1.0 document is **45% smaller** than the legacy one carrying equivalent
-(plus strictly more) content. The catalog-dedup and RLE claims are borne
-out: dedup means every player/target/skill name and every buff/skill
-metadata entry is written once in `catalogs{}` and referenced by a small
-integer everywhere else, instead of being repeated as a full string on
-every row of `boons`, `damage`, `rotation`, etc; RLE means the `series`
-block (190,586 B) — the block most exposed to idle-stretch repetition —
-stays a fraction of what a flat per-second array over the same duration
-would cost.
+The 1.0 document is **20% smaller** than the legacy one on equivalent
+content (was: 45%, against the incomplete document described above). The
+catalog-dedup and RLE claims still hold, and the newly-restored blocks are
+exactly where the win narrowed: `damage` grew from 53,055 B to 448,971 B
+once `per_target[].detail`, `per_target[].by_skill`, and `by_skill_taken`
+were carried, which is the bulk the earlier ratio was quietly omitting.
+Dedup means every player/target/skill name and every buff/skill metadata
+entry is written once in `catalogs{}` and referenced by a small integer
+everywhere else, instead of being repeated as a full string on every row of
+`boons`, `damage`, `rotation`, etc — and it is doing *more* work now, not
+less, since the restored per-target skill rows are precisely the rows that
+would otherwise repeat a skill name thousands of times. RLE means the
+`series` block (190,586 B) stays a fraction of what a flat per-second array
+over the same duration would cost.
 
 ### Per-block breakdown (bytes, serialized JSON)
 
-| block | bytes |
-|---|---|
-| `replay` | 294,141 |
-| `series` | 190,586 |
-| `rotation` | 117,802 |
-| `damage_mods` | 63,507 |
-| `boons` | 72,945 |
-| `damage` | 53,055 |
-| `catalogs` | 23,763 |
-| `entities` | 21,509 |
-| `defenses` | 19,797 |
-| `hit_stats` | 19,283 |
-| `contribution` | 6,356 |
-| `healing` | 4,661 |
-| `cc` | 4,102 |
-| `support` | 3,768 |
-| `missiles` | 2,567 |
+| block | bytes | was (pre-fix) |
+|---|---|---|
+| `damage` | 448,971 | 53,055 |
+| `replay` | 294,141 | 294,141 |
+| `series` | 190,586 | 190,586 |
+| `rotation` | 121,135 | 117,802 |
+| `boons` | 72,945 | 72,945 |
+| `damage_mods` | 63,507 | 63,507 |
+| `catalogs` | 28,911 | 23,763 |
+| `entities` | 21,509 | 21,509 |
+| `defenses` | 20,931 | 19,797 |
+| `hit_stats` | 19,283 | 19,283 |
+| `contribution` | 6,356 | 6,356 |
+| `healing` | 4,661 | 4,661 |
+| `cc` | 4,102 | 4,102 |
+| `support` | 3,768 | 3,768 |
+| `missiles` | 2,567 | 2,567 |
 
-`replay` dominates (33% of the document) — unsurprising, since it is raw
-per-frame position/health/state samples for every combat participant over
-the whole encounter duration and is not RLE-encoded like `series` is; it is
-the block most likely to dominate on longer or higher-player-count logs.
-`series` is the second-largest block despite RLE, because the fixture is a
-short, busy WvW skirmish with little idle time for the RLE to collapse —
-RLE's payoff scales with how much of the timeline is flat, which this
-particular fixture doesn't have much of.
+`damage` is now the largest block (34% of the document), overtaking
+`replay`: its per-`(entity, target, skill)` matrix is 2,105 rows on this
+one 42-player fixture and scales as players × targets × skills, so it will
+dominate harder on larger logs. That is exactly why the legacy shape gates
+the same data behind `--skill-damage`; both documents here are built with
+every gate ON, which is what makes the comparison apples-to-apples. The
+`catalogs` growth (+5,148 B) is the flip side of the same change: the
+restored rows reference skill ids that nothing referenced before, and each
+one now resolves to exactly one catalog entry rather than a repeated name.
+
+`replay` is still raw per-frame position/health/state samples for every
+combat participant over the whole encounter and is not RLE-encoded like
+`series` is. `series` stays large despite RLE because the fixture is a
+short, busy WvW skirmish with little idle time to collapse — RLE's payoff
+scales with how flat the timeline is.
 
 ### Test bound
 
 `crates/axilog-schema/tests/v1_size.rs` asserts `v1.len() <= legacy.len() *
-7 / 10` (0.70), not the `* 12 / 10` (1.20) bound drafted before any
-measurement existed. At the measured ratio of 0.552, the original 1.20
-bound would have passed even if the entire size win regressed away and 1.0
-came out noticeably *larger* than legacy — it verified nothing. 0.70
-leaves headroom above the measured 0.552 for normal per-fixture and
-per-change drift, while still failing if dedup or RLE silently breaks on a
-code path and erodes most of the win.
+85 / 100` (0.85).
+
+The bound has been **0.70** (which the real, complete document no longer
+passes) and, before any measurement existed, **1.20** (which would have
+passed even if 1.0 came out noticeably *larger* than legacy — it verified
+nothing). 0.85 keeps ~6% relative headroom above the measured 0.800 for
+per-fixture drift while still asserting a genuine win: a regression eroding
+even a quarter of the remaining 20% reduction trips it, and dedup or RLE
+breaking outright would push the ratio well past 1.0.
+
+That headroom is thinner than 0.70's was, deliberately — there is less win
+left to protect now that the document is complete. If additive 1.x growth
+eats it, re-measure and re-justify rather than widening the bound
+reflexively.
 
 Run: `cargo test -p axilog-schema --test v1_size -- --nocapture`

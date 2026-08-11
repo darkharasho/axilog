@@ -10,6 +10,16 @@ pub struct DamageBlock {
     pub by_entity: ByEntity<DamageEntity>,
 }
 
+impl DamageBlock {
+    /// Whether this block carries nothing at all, which is what
+    /// [`crate::v1::envelope::CoverageState::Empty`] reports. `squad` is a
+    /// sum over the `by_entity` rows, so no rows implies a zero aggregate
+    /// and there is nothing else to check.
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
+}
+
 /// Aggregates `Role::Squad` entities ONLY -- not every friendly player.
 /// `DamageBlock::by_entity` is the full roster (squad AND non-squad
 /// friendlies); this aggregate deliberately excludes non-squad friendlies
@@ -27,21 +37,89 @@ pub struct DamageEntity {
     pub total: u64,
     pub dps: f64,
     pub taken: u64,
+    /// Enemy players this entity landed the DOWNING blow on -- the legacy
+    /// `PlayerOut::downs_dealt`. An outgoing OUTCOME, so it lives here
+    /// beside the damage that produced it, not on `defenses` (which carries
+    /// the incoming mirror, `downs_taken`/`deaths`) -- the same split GW2EI
+    /// makes, whose `defenses[0]` carries `downCount`/`deadCount` while the
+    /// offensive per-target rows carry `downed`/`killed`. Always present:
+    /// the legacy field is ungated.
+    pub downs_dealt: u32,
+    /// Enemy players this entity landed the KILLING blow on -- the legacy
+    /// `PlayerOut::kills_dealt`. See `downs_dealt`.
+    pub kills_dealt: u32,
     /// Keyed by the TARGET's entity id -- so it joins directly to that
     /// entity's own row. Sparse; omitted when empty.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub per_target: BTreeMap<u32, PerTarget>,
-    /// Keyed by skill id. Present only when the per-skill compute gate
-    /// (`--skill-damage` / SDK `skill_damage: true`, `PlayerOut::
-    /// skill_damage`) was on; omitted otherwise, since the legacy field
-    /// itself is `Option` and absent when the gate is off.
+    /// OUTGOING per-skill damage, keyed by skill id. Present only when the
+    /// per-skill compute gate (`--skill-damage` / SDK `skill_damage: true`,
+    /// `PlayerOut::skill_damage`) was on; omitted otherwise, since the
+    /// legacy field itself is `Option` and absent when the gate is off.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_skill: BTreeMap<u32, SkillRow>,
+    /// INCOMING per-skill damage, keyed by skill id -- the legacy
+    /// `SkillDamageOut::taken`, which had no 1.0 destination at all before
+    /// the final review. Named to mirror this row's own `total`/`taken`
+    /// pair, so the outgoing/incoming split reads the same way at both
+    /// levels. Same gate as `by_skill`; `sum(by_skill_taken[*].total) ==
+    /// taken` holds by construction (see `SkillDamageOut`'s doc comment).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_skill_taken: BTreeMap<u32, SkillRow>,
+}
+
+/// One `(entity, target)` pair.
+///
+/// `total` is ungated (the legacy `DamageOut::per_enemy`). Everything else
+/// here comes from the `--skill-damage`-gated families (`PlayerOut::
+/// per_target` and `SkillDamageOut::per_target`), so a row can legitimately
+/// carry `total` alone.
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
+pub struct PerTarget {
+    pub total: u64,
+    /// The gated per-target offensive detail -- the legacy
+    /// `PerTargetStatsOut`, which had no 1.0 destination before the final
+    /// review.
+    ///
+    /// Grouped under ONE optional key rather than flattened onto
+    /// `PerTarget`, deliberately: the seven fields below are computed only
+    /// when `--skill-damage` is on, so flattening them would force this row
+    /// to publish seven fabricated zeros whenever the gate is off --
+    /// exactly the "absent reported as zero" ambiguity `coverage` exists to
+    /// remove, one level down. One `Option` gives that gate a single,
+    /// unambiguous presence signal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<PerTargetDetail>,
+    /// Per-`(entity, target, skill)` outgoing damage, keyed by skill id --
+    /// the legacy `SkillDamageOut::per_target`, which had no 1.0
+    /// destination before the final review. Same gate as
+    /// `DamageEntity::by_skill`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub by_skill: BTreeMap<u32, SkillRow>,
 }
 
+/// Mirrors the legacy `crate::PerTargetStatsOut` field-for-field, minus
+/// `enemy_id` -- that is the enclosing map's KEY here (as the target's
+/// ENTITY id, joined through `EntityIndex::by_enemy_id`), not carried
+/// redundantly inside the value. Same convention `series::TargetSeries`
+/// already uses.
+///
+/// `downed`/`killed` are this pair's split of `DamageEntity::downs_dealt`/
+/// `kills_dealt`; `interrupts` and `downs_contribution_damage` are NOT
+/// recoverable from any other block, which is what made dropping this
+/// struct a real data loss rather than a redundancy.
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
-pub struct PerTarget {
-    pub total: u64,
+pub struct PerTargetDetail {
+    pub connected_hits: u32,
+    pub connected_damage: u64,
+    pub against_downed_count: u32,
+    pub downed: u32,
+    pub killed: u32,
+    pub interrupts: u32,
+    /// arcdps-methodology down-contribution DAMAGE credited to this entity
+    /// for downs of this specific target -- NOT GW2EI's own
+    /// 90%-to-downstate-window algorithm. See `crate::PerTargetStatsOut`.
+    pub downs_contribution_damage: u64,
 }
 
 /// Mirrors `crate::SkillEntryOut` field-for-field. `min`/`max` are `u64`
@@ -67,6 +145,22 @@ pub struct SkillRow {
     pub flank_hits: u32,
 }
 
+/// One legacy `SkillEntryOut` as a [`SkillRow`]. Shared by the three
+/// per-skill families this block carries (`by_skill`, `by_skill_taken`, and
+/// each `PerTarget::by_skill`) so a field added to one cannot silently miss
+/// the other two -- which is how `crit_hits`/`flank_hits` were dropped once
+/// already.
+fn skill_row(e: &crate::SkillEntryOut) -> SkillRow {
+    SkillRow {
+        total: e.total,
+        hits: e.hits,
+        min: e.min,
+        max: e.max,
+        crit_hits: e.crit_hits,
+        flank_hits: e.flank_hits,
+    }
+}
+
 pub fn build_damage(
     report: &crate::Report,
     index: &EntityIndex,
@@ -85,32 +179,52 @@ pub fn build_damage(
             squad_dps += p.damage.dps;
         }
 
-        let per_target = p
-            .damage
-            .per_enemy
-            .iter()
-            .filter_map(|pe| {
-                index
-                    .by_enemy_id(pe.enemy_id)
-                    .map(|tid| (tid, PerTarget { total: pe.total }))
-            })
-            .collect();
+        // The three per-target families are UNIONED, not zipped: their
+        // enemy-id sets genuinely differ. `PlayerOut::per_target` is itself
+        // already the union of the per-target offense map and the
+        // per-target down-contribution map (see `build_report`), so an
+        // enemy can appear there with no `per_enemy` damage row at all --
+        // a credit inside that enemy's down window without a landed hit
+        // over the whole fight. Keying one map by entity id and filling it
+        // from each source in turn keeps every row reachable.
+        let mut per_target: BTreeMap<u32, PerTarget> = BTreeMap::new();
+        for pe in &p.damage.per_enemy {
+            let Some(tid) = index.by_enemy_id(pe.enemy_id) else { continue };
+            per_target.entry(tid).or_default().total = pe.total;
+        }
+        if let Some(stats) = p.per_target.as_ref() {
+            for s in stats {
+                let Some(tid) = index.by_enemy_id(s.enemy_id) else { continue };
+                per_target.entry(tid).or_default().detail = Some(PerTargetDetail {
+                    connected_hits: s.connected_hits,
+                    connected_damage: s.connected_damage,
+                    against_downed_count: s.against_downed_count,
+                    downed: s.downed,
+                    killed: s.killed,
+                    interrupts: s.interrupts,
+                    downs_contribution_damage: s.downs_contribution_damage,
+                });
+            }
+        }
 
         let mut by_skill = BTreeMap::new();
+        let mut by_skill_taken = BTreeMap::new();
         if let Some(skill_damage) = p.skill_damage.as_ref() {
             for e in &skill_damage.outgoing {
                 cats.reference_skill(e.skill_id);
-                by_skill.insert(
-                    e.skill_id,
-                    SkillRow {
-                        total: e.total,
-                        hits: e.hits,
-                        min: e.min,
-                        max: e.max,
-                        crit_hits: e.crit_hits,
-                        flank_hits: e.flank_hits,
-                    },
-                );
+                by_skill.insert(e.skill_id, skill_row(e));
+            }
+            for e in &skill_damage.taken {
+                cats.reference_skill(e.skill_id);
+                by_skill_taken.insert(e.skill_id, skill_row(e));
+            }
+            for t in &skill_damage.per_target {
+                let Some(tid) = index.by_enemy_id(t.enemy_id) else { continue };
+                let row = per_target.entry(tid).or_default();
+                for e in &t.skills {
+                    cats.reference_skill(e.skill_id);
+                    row.by_skill.insert(e.skill_id, skill_row(e));
+                }
             }
         }
 
@@ -120,8 +234,11 @@ pub fn build_damage(
                 total: p.damage.total,
                 dps: p.damage.dps,
                 taken: p.damage_taken,
+                downs_dealt: p.downs_dealt,
+                kills_dealt: p.kills_dealt,
                 per_target,
                 by_skill,
+                by_skill_taken,
             },
         );
     }

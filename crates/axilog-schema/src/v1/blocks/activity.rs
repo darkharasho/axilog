@@ -18,10 +18,43 @@ pub struct RotationBlock {
     pub by_entity: ByEntity<RotationEntity>,
 }
 
+impl RotationBlock {
+    /// See [`super::damage::DamageBlock::is_empty`].
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
+}
+
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct RotationEntity {
     pub cast_count: u32,
     pub casts: Vec<CastRow>,
+    /// Aftercast/interrupt cast counters -- the legacy
+    /// `PlayerOut::aftercast`, which the spec's own block-source table
+    /// assigns to `rotation` but which no builder read before the final
+    /// review. Always present on a row that exists (the legacy field is
+    /// ungated), though the enclosing block is gated on `--rotation` like
+    /// the casts themselves.
+    pub aftercast: Aftercast,
+}
+
+/// Mirrors the legacy `crate::AftercastOut` field-for-field. Durations are
+/// MILLISECONDS here, the format's convention throughout -- GW2EI emits
+/// the same two quantities as seconds with 3 decimals, which the ei-json
+/// adapter applies at that boundary.
+///
+/// NOTE the name collision the legacy struct documents: `wasted_count` is
+/// a CAST-INTERRUPT count, a completely different quantity from the
+/// boon-generation `*_wasted` in `support::GenerationRow`.
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
+pub struct Aftercast {
+    /// Casts that skipped their aftercast.
+    pub saved_count: u32,
+    pub saved_ms: i64,
+    /// Casts interrupted before firing.
+    pub wasted_count: u32,
+    /// Already the positive "time lost" figure.
+    pub wasted_ms: i64,
 }
 
 /// One cast. Mirrors the real `CastOut` field-for-field (`cast_time_ms`/
@@ -50,6 +83,13 @@ pub struct DamageModsBlock {
     pub by_entity: ByEntity<BTreeMap<i32, DamageModRow>>,
 }
 
+impl DamageModsBlock {
+    /// See [`super::damage::DamageBlock::is_empty`].
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
+}
+
 /// One damage-modifier row. Mirrors the real `DamageModEntryOut`: `id` is
 /// the map KEY (signed, negative for incoming -- see `DamageModEntryOut::
 /// id`'s own doc comment), so a single `BTreeMap<i32, _>` naturally
@@ -66,9 +106,20 @@ pub struct DamageModRow {
 
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct MissilesBlock {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub squad: Option<MissilesSquad>,
+    /// Required, not `Option` -- see [`SeriesBlock::squad`] for the
+    /// consistency rule the four `squad` slots in this format follow.
+    pub squad: MissilesSquad,
     pub by_entity: ByEntity<MissilesEntity>,
+}
+
+impl MissilesBlock {
+    /// Unlike `damage`/`cc`, this block's `squad` rollup is computed
+    /// independently of the per-player rows (`MissilesOut::squad`, not a
+    /// sum over `MissilesOut::players`), so "no rows" alone does not imply
+    /// "nothing to report" -- both have to be vacuous.
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty() && self.squad == MissilesSquad::default()
+    }
 }
 
 /// Mirrors the real `SquadMissilesOut` field-for-field -- the brief's
@@ -107,6 +158,14 @@ pub struct ReplayBlock {
     pub by_entity: ByEntity<ReplayTrack>,
 }
 
+impl ReplayBlock {
+    /// See [`super::damage::DamageBlock::is_empty`]. `poll_ms`/`bounds` are
+    /// metadata about tracks that do not exist when there are none.
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
+}
+
 /// Mirrors the real `ReplayBoundsOut`, which is `f64`, not the brief's
 /// sketch `f32`.
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
@@ -139,11 +198,31 @@ pub struct ReplayTrack {
     pub dead_intervals: Vec<(u64, u64)>,
 }
 
-#[derive(Serialize, Debug, Default, Clone, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct SeriesBlock {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub squad: Option<SquadSeries>,
+    /// Required, not `Option`.
+    ///
+    /// All four `squad` slots in this format (`damage`, `cc`, `missiles`,
+    /// `series`) are required, so a consumer never has to branch on
+    /// whether an aggregate exists. Two of them were `Option` with
+    /// `skip_serializing_if` while being unconditionally `Some(..)` at
+    /// every reachable call site -- optionality that expressed nothing and
+    /// cost every consumer a null check. Absence would only be meaningful
+    /// if a squad aggregate could be *unknown* as distinct from *zero*,
+    /// which no builder here can produce: the squad timeline is computed
+    /// unconditionally by `analyze()`, and a squad with no rows has a
+    /// genuinely zero aggregate, not an unknown one.
+    pub squad: SquadSeries,
     pub by_entity: ByEntity<EntitySeries>,
+}
+
+impl SeriesBlock {
+    /// The squad series is computed unconditionally (it does not need
+    /// `--timeseries`, unlike the per-entity rows), so this block is empty
+    /// only when the encounter produced no buckets at all.
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty() && self.squad.damage.len == 0
+    }
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -179,7 +258,7 @@ pub struct TargetSeries {
 pub fn build_series(report: &crate::Report, index: &EntityIndex) -> SeriesBlock {
     let res = report.timeline.resolution_ms;
     let ps = &report.timeline.per_second;
-    let squad = Some(SquadSeries {
+    let squad = SquadSeries {
         damage: SeriesOut::encode_u64(res, &ps.squad_damage),
         cc_applied: SeriesOut::encode_u64(
             res,
@@ -189,7 +268,7 @@ pub fn build_series(report: &crate::Report, index: &EntityIndex) -> SeriesBlock 
             res,
             &ps.downs.iter().map(|v| u64::from(*v)).collect::<Vec<_>>(),
         ),
-    });
+    };
 
     let mut by_entity = ByEntity::default();
     for p in &report.players {
@@ -248,7 +327,20 @@ pub fn build_rotation(
         }
         casts.sort_by_key(|c| (c.cast_time_ms, c.skill_id));
         let cast_count = casts.len() as u32;
-        by_entity.insert(id, RotationEntity { cast_count, casts });
+        let a = &p.aftercast;
+        by_entity.insert(
+            id,
+            RotationEntity {
+                cast_count,
+                casts,
+                aftercast: Aftercast {
+                    saved_count: a.saved_count,
+                    saved_ms: a.saved_ms,
+                    wasted_count: a.wasted_count,
+                    wasted_ms: a.wasted_ms,
+                },
+            },
+        );
     }
     RotationBlock { by_entity }
 }
@@ -301,13 +393,13 @@ pub fn build_missiles(report: &crate::Report, index: &EntityIndex) -> MissilesBl
         );
     }
     MissilesBlock {
-        squad: Some(MissilesSquad {
+        squad: MissilesSquad {
             fired: m.squad.fired,
             hit: m.squad.hit,
             denied: m.squad.denied,
             incoming_fired: m.squad.incoming_fired,
             incoming_denied: m.squad.incoming_denied,
-        }),
+        },
         by_entity,
     }
 }
@@ -350,7 +442,7 @@ mod tests {
     fn squad_series_use_the_shared_envelope_and_decode_to_the_legacy_arrays() {
         let (report, index) = fixture_report();
         let block = build_series(&report, &index);
-        let squad = block.squad.as_ref().expect("squad series present");
+        let squad = &block.squad;
         assert_eq!(
             squad.damage.decode_u64(),
             report.timeline.per_second.squad_damage,

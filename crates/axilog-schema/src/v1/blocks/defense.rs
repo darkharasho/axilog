@@ -7,6 +7,13 @@ pub struct DefensesBlock {
     pub by_entity: ByEntity<DefensesEntity>,
 }
 
+impl DefensesBlock {
+    /// See [`super::damage::DamageBlock::is_empty`].
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
+}
+
 /// Incoming defenses. Mirrors the legacy `DefensesOut` field-for-field --
 /// this spec reshapes, it does not recompute. Every field below is copied
 /// from the REAL `DefensesOut` in `crates/axilog-schema/src/lib.rs` (the
@@ -45,11 +52,28 @@ pub struct DefensesEntity {
     /// `SupportOut::strips`.
     pub boon_strips_taken: u32,
     pub boon_strips_taken_duration_ms: u64,
+    /// Times this entity entered downstate -- the legacy
+    /// `PlayerOut::downs_taken`. Lives here rather than on `damage`
+    /// following GW2EI's own placement, whose `defenses[0]` carries
+    /// `downCount`/`deadCount`; the outgoing mirrors (`downs_dealt`/
+    /// `kills_dealt`) are on `damage::DamageEntity`. Always present: the
+    /// legacy field is ungated.
+    pub downs_taken: u32,
+    /// Times this entity died -- the legacy `PlayerOut::deaths`, GW2EI's
+    /// `defenses[0].deadCount`. See `downs_taken`.
+    pub deaths: u32,
 }
 
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct HitStatsBlock {
     pub by_entity: ByEntity<HitStatsEntity>,
+}
+
+impl HitStatsBlock {
+    /// See [`super::damage::DamageBlock::is_empty`].
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
 }
 
 /// Outgoing hit quality. Mirrors the legacy `HitStatsOut` field-for-field
@@ -84,6 +108,14 @@ pub struct HitStatsEntity {
 pub struct CcBlock {
     pub squad: CcSquad,
     pub by_entity: ByEntity<CcEntity>,
+}
+
+impl CcBlock {
+    /// See [`super::damage::DamageBlock::is_empty`] -- `squad` is likewise
+    /// a sum over the `by_entity` rows.
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
 }
 
 /// Aggregates `Role::Squad` entities ONLY. `by_entity` below carries the
@@ -140,6 +172,8 @@ pub fn build_defenses(report: &crate::Report, index: &EntityIndex) -> DefensesBl
                 received_cc_duration_ms: d.received_cc_duration_ms,
                 boon_strips_taken: d.boon_strips_taken,
                 boon_strips_taken_duration_ms: d.boon_strips_taken_duration_ms,
+                downs_taken: p.downs_taken,
+                deaths: p.deaths,
             },
         );
     }

@@ -183,8 +183,15 @@ table still resolves — with an honest placeholder (`"Skill 424242"` /
 ## `blocks` — uniform id-keyed statistics
 
 Every block is an aggregate slot plus a `by_entity` map keyed by entity id
-(as a decimal string, since JSON object keys are always strings). Real
-excerpt — entity `22`, the fixture's top damage dealer:
+(as a decimal string, since JSON object keys are always strings).
+
+Four blocks carry a squad-level aggregate — `damage`, `cc`, `missiles`, and
+`series`. All four `squad` slots are **required**: when the block is
+present, so is its `squad`. There is no case where a missing aggregate would
+mean anything a zero aggregate doesn't, so a consumer never has to branch on
+whether one exists.
+
+Real excerpt — entity `22`, the fixture's top damage dealer:
 
 ```json
 {
@@ -195,6 +202,8 @@ excerpt — entity `22`, the fixture's top damage dealer:
         "total": 205612,
         "dps": 4171.898143451354,
         "taken": 25518,
+        "downs_dealt": 1,
+        "kills_dealt": 0,
         "per_target": {
           "49": { "total": 10016 },
           "66": { "total": 18621 }
@@ -226,9 +235,97 @@ Notes proven by this example, not asserted in prose:
   the same integer — no positional joins anywhere in this format.
 - `boons.by_entity`'s inner keys are buff ids from `catalogs.buffs` (`"740"`
   is Might, per the catalog excerpt above).
-- `by_skill` rows (when `--skill-damage` is on) carry `crit_hits`/
-  `flank_hits` hit counts alongside `total`/`hits`/`min`/`max`, mirroring
-  the legacy per-skill row field for field.
+- `downs_dealt`/`kills_dealt` are outgoing outcomes and live here, on
+  `damage`. Their incoming mirrors, `downs_taken` and `deaths`, live on
+  `defenses` — the same split GW2EI makes (`defenses[0].downCount`/
+  `deadCount`). All four are always present; none needs a flag.
+
+### `damage` with `--skill-damage`: per-target detail and per-skill splits
+
+The block above is the default shape. With `--skill-damage` on, each
+`damage.by_entity[]` row gains a second per-skill map and each `per_target`
+entry gains two more keys. Real excerpt (entity `22` against target `42`,
+trimmed — this target was picked because it has only two skill rows):
+
+```json
+{
+  "total": 205612,
+  "dps": 4171.898143451354,
+  "taken": 25518,
+  "downs_dealt": 1,
+  "kills_dealt": 0,
+  "per_target": {
+    "42": {
+      "total": 506,
+      "detail": {
+        "connected_hits": 4,
+        "connected_damage": 506,
+        "against_downed_count": 0,
+        "downed": 0,
+        "killed": 0,
+        "interrupts": 0,
+        "downs_contribution_damage": 0
+      },
+      "by_skill": {
+        "736":   { "total": 248, "hits": 3, "min": 77,  "max": 91,  "crit_hits": 0, "flank_hits": 1 },
+        "76993": { "total": 258, "hits": 1, "min": 258, "max": 258, "crit_hits": 1, "flank_hits": 0 }
+      }
+    }
+  },
+  "by_skill":       { "...": "outgoing, keyed by skill id" },
+  "by_skill_taken": {
+    "723": { "total": 1,    "hits": 1, "min": 1, "max": 1,   "crit_hits": 0, "flank_hits": 0 },
+    "737": { "total": 1045, "hits": 7, "min": 5, "max": 290, "crit_hits": 0, "flank_hits": 3 }
+  }
+}
+```
+
+- `by_skill` is **outgoing** per-skill damage; `by_skill_taken` is
+  **incoming**, mirroring this row's own `total`/`taken` pair.
+  `sum(by_skill[*].total) == total` and `sum(by_skill_taken[*].total) ==
+  taken` hold exactly.
+- `per_target[].by_skill` is the per-`(entity, target, skill)` breakdown —
+  the same `SkillRow` shape, one level down.
+- `per_target[].detail` is grouped under one key rather than flattened
+  because those seven fields are computed only with `--skill-damage`.
+  Flattening them would make an ungated row publish seven fabricated zeros;
+  one optional key gives the gate a single, unambiguous presence signal. A
+  `per_target` row can therefore legitimately carry `total` alone — `total`
+  is ungated.
+- `per_target` is a **union**: a target can appear with `detail` but no
+  `total`, because down-contribution can be credited inside a target's
+  downstate window without that target having taken a landed hit over the
+  whole fight.
+- `interrupts` and `downs_contribution_damage` are not derivable from any
+  other block.
+- Every `SkillRow` (all three families) carries `crit_hits`/`flank_hits` hit
+  counts alongside `total`/`hits`/`min`/`max`. Every skill id emitted here
+  resolves in `catalogs.skills`.
+
+### `defenses` and `rotation` — the always-present extras
+
+`defenses.by_entity[]` mirrors the legacy defensive stat block field for
+field and ends with the two incoming outcome counters:
+
+```json
+{ "...": "...", "boon_strips_taken": 1, "boon_strips_taken_duration_ms": 300652,
+  "downs_taken": 0, "deaths": 0 }
+```
+
+`rotation.by_entity[]` (needs `--rotation`) carries an `aftercast` object
+beside its cast list — cast counters that are computed unconditionally but,
+like the casts themselves, only published when the block is:
+
+```json
+{ "cast_count": 34,
+  "casts": [{ "skill_id": 23275, "cast_time_ms": 7315, "duration_ms": 808, "time_gained_ms": 0, "quickness": 0.0 }, "..."],
+  "aftercast": { "saved_count": 27, "saved_ms": 7749, "wasted_count": 4, "wasted_ms": 975 } }
+```
+
+Both `*_ms` values are milliseconds (GW2EI emits the same two quantities as
+seconds). Note the name collision GW2EI bequeathed: `aftercast.wasted_count`
+is a *cast-interrupt* count, an unrelated quantity to the boon-generation
+`*_wasted` fields under `boons`.
 
 ### `coverage` — what a block's status means, and what to do about it
 
@@ -246,15 +343,34 @@ Real example (default flags — no `--replay`/`--rotation`/`--modifiers`):
 
 | Value | Meaning | What a consumer should do |
 |---|---|---|
-| `present` | Computed, and `blocks` carries it | Read `blocks.<name>` directly |
+| `present` | Computed, and `blocks` carries it, with at least one row | Read `blocks.<name>` directly |
 | `not_computed` | The compute gate for it was off (e.g. `--replay` wasn't passed) | Do not treat this as "empty" — it is a missing flag, not a fact about the log. Re-parse with the flag on if you need it |
-| `empty` | Computed, and there was genuinely nothing to report | Safe to treat as "zero rows", not an error |
+| `empty` | Computed, and there was genuinely nothing to report | Safe to treat as "zero rows", not an error. The block **is still carried** in `blocks` when `empty` — only `not_computed` and `unsupported` omit it |
 | `unsupported` | This log's era or encounter kind cannot produce this block | Do not retry with a flag — the log itself cannot answer this. See `docs/EI-PARITY.md` for era-gated surfaces (pre/post `ResultEnumRework`, pre/post `AnimationAsStateChanges`) |
 
 `not_computed` vs `empty` is the whole point of this map: without it, a
 consumer parsing without `--rotation` and one parsing a log with zero casts
 would both see an absent `rotation` block, with no way to tell "you forgot
 a flag" from "this log really had nothing".
+
+**Which values today's binary can actually emit.** Three of the four are
+live: `present`, `not_computed`, and `empty`. The example above shows none
+`empty` only because this fixture happens to populate every block it
+computes; the everyday case that produces `empty` is a log recorded without
+the arcdps healing addon, where `healing` is computed, carried, and has
+zero rows. Each block decides what "nothing to report" means for its own
+shape — `series` and `missiles` carry squad-level aggregates that are
+computed independently of any per-entity row, so they are not `empty`
+merely for having an empty `by_entity`.
+
+`unsupported` is **reserved vocabulary, not currently emitted by any code
+path**. Nothing this container computes is era- or encounter-kind-gated, so
+there is no honest way to produce it yet; it is named now so that spec #2's
+era-gated surfaces can fill the slot without renegotiating the vocabulary
+(adding a value later would be additive, but consumers would have to learn
+it late). Handle it anyway — a decoder should treat `unsupported` exactly as
+the table says rather than as an unknown value — but do not expect to see it
+from this version.
 
 ## The series envelope
 

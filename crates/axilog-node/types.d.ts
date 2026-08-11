@@ -862,6 +862,20 @@ export interface SeriesOut {
 }
 
 /** Why a block is or is not present in `blocks`. */
+/**
+ * Why a block is or is not in `blocks`.
+ *
+ * - `present` -- computed, carried, at least one row.
+ * - `not_computed` -- the compute gate was off. NOT the same as empty:
+ *   it is a missing flag, not a fact about the log.
+ * - `empty` -- computed and genuinely nothing to report. The block is
+ *   still carried; only `not_computed`/`unsupported` omit it.
+ * - `unsupported` -- RESERVED. No code path in this version emits it:
+ *   nothing this container computes is era- or encounter-kind-gated.
+ *   Named now so spec #2's era-gated surfaces can fill the slot without
+ *   consumers having to learn a new value late. Handle it, but do not
+ *   expect it from this version.
+ */
 export type CoverageState = 'present' | 'not_computed' | 'empty' | 'unsupported'
 
 /**
@@ -904,10 +918,6 @@ export interface DamageSquad {
   dps: number
 }
 
-export interface PerTarget {
-  total: number
-}
-
 /**
  * Mirrors the legacy `SkillEntryOut` field-for-field. `hits`/`min`/`max`
  * count only CONTRIBUTING (`dmg > 0`) events. `crit_hits`/`flank_hits` are
@@ -922,14 +932,63 @@ export interface SkillRow {
   flank_hits: number
 }
 
+/**
+ * Mirrors the legacy `PerTargetStatsOut` field-for-field, minus `enemy_id`
+ * (the enclosing map's key here, as the target's ENTITY id). `interrupts`
+ * and `downs_contribution_damage` are not derivable from any other block.
+ */
+export interface PerTargetDetail {
+  connected_hits: number
+  connected_damage: number
+  against_downed_count: number
+  downed: number
+  killed: number
+  interrupts: number
+  /**
+   * arcdps-methodology down-contribution DAMAGE for downs of this specific
+   * target -- NOT GW2EI's 90%-to-downstate-window algorithm.
+   */
+  downs_contribution_damage: number
+}
+
+/**
+ * One `(entity, target)` pair. `total` is ungated; `detail` and `by_skill`
+ * come from the `skillDamage: true`-gated families, so a row can
+ * legitimately carry `total` alone.
+ */
+export interface PerTarget {
+  total: number
+  /**
+   * Grouped under one key rather than flattened so its absence has a
+   * single unambiguous signal instead of seven fabricated zeros.
+   */
+  detail?: PerTargetDetail
+  /** Per-(entity, target, skill) outgoing damage, keyed by skill id. */
+  by_skill?: Record<string, SkillRow>
+}
+
 export interface DamageEntity {
   total: number
   dps: number
   taken: number
-  /** Keyed by the TARGET's entity id. Sparse; omitted when empty. */
+  /**
+   * Enemy players this entity landed the DOWNING blow on. An outgoing
+   * outcome; the incoming mirrors are `DefensesEntity.downs_taken`/
+   * `deaths`, the same split GW2EI makes.
+   */
+  downs_dealt: number
+  /** Enemy players this entity landed the KILLING blow on. */
+  kills_dealt: number
+  /**
+   * Keyed by the TARGET's entity id. Sparse; omitted when empty. A UNION of
+   * three legacy per-enemy families, so a target can appear with `detail`
+   * and no damage `total`.
+   */
   per_target?: Record<string, PerTarget>
-  /** Keyed by skill id. Present only when the per-skill compute gate (`skillDamage: true`) was on. */
+  /** OUTGOING per-skill damage, keyed by skill id. Present only when the per-skill compute gate (`skillDamage: true`) was on. */
   by_skill?: Record<string, SkillRow>
+  /** INCOMING per-skill damage, keyed by skill id -- mirroring this row's own `total`/`taken` pair. Same gate as `by_skill`. */
+  by_skill_taken?: Record<string, SkillRow>
 }
 
 export interface DamageBlock {
@@ -965,6 +1024,14 @@ export interface DefensesEntity {
   /** Boons stripped OFF this player -- the incoming counterpart of `SupportEntity.strips`. */
   boon_strips_taken: number
   boon_strips_taken_duration_ms: number
+  /**
+   * Times this entity entered downstate -- GW2EI's
+   * `defenses[0].downCount`. The outgoing mirrors live on
+   * `DamageEntity.downs_dealt`/`kills_dealt`.
+   */
+  downs_taken: number
+  /** Times this entity died -- GW2EI's `defenses[0].deadCount`. */
+  deaths: number
 }
 
 export interface DefensesBlock {
@@ -1112,9 +1179,32 @@ export interface CastRow {
   quickness: number
 }
 
+/**
+ * Mirrors the legacy `AftercastOut`. Durations are MILLISECONDS (GW2EI
+ * emits the same quantities as seconds).
+ *
+ * NOTE the name collision GW2EI bequeathed: `wasted_count` is a
+ * CAST-INTERRUPT count, unrelated to the boon-generation `*_wasted` fields
+ * under `boons`.
+ */
+export interface Aftercast {
+  /** Casts that skipped their aftercast. */
+  saved_count: number
+  saved_ms: number
+  /** Casts interrupted before firing. */
+  wasted_count: number
+  /** Already the positive "time lost" figure. */
+  wasted_ms: number
+}
+
 export interface RotationEntity {
   cast_count: number
   casts: CastRow[]
+  /**
+   * Cast counters, computed unconditionally but published only when this
+   * block is (gated on `rotation: true`).
+   */
+  aftercast: Aftercast
 }
 
 export interface RotationBlock {
@@ -1153,8 +1243,13 @@ export interface MissilesEntity {
   reflected_at_self: number
 }
 
+/**
+ * `squad` is REQUIRED, like every other squad aggregate in this format
+ * (`damage`, `cc`, `series`): when the block is present, so is its
+ * aggregate.
+ */
 export interface MissilesBlock {
-  squad?: MissilesSquad
+  squad: MissilesSquad
   by_entity: ByEntity<MissilesEntity>
 }
 
@@ -1205,8 +1300,12 @@ export interface EntitySeries {
   per_target?: Record<string, TargetSeries>
 }
 
+/**
+ * `squad` is REQUIRED (see `MissilesBlock`). The squad series is computed
+ * unconditionally; only `by_entity` needs `timeseries: true`.
+ */
 export interface SeriesBlock {
-  squad?: SquadSeries
+  squad: SquadSeries
   by_entity: ByEntity<EntitySeries>
 }
 

@@ -445,13 +445,23 @@ a consumer learns the access pattern once.
 ```
 
 (Illustrative shape, hand-composed for readability here — see
-`docs/NATIVE-FORMAT.md` for a real trimmed document. Two corrections from
-the earliest draft of this example, found during Task 5/8's implementation:
-`per_target` rows carry only `total` — a target's hit/crit counts are not
-duplicated there, they live on that target's own `by_skill` rows the same
-way any entity's do — and `by_skill` rows (`SkillRow`) carry `crit_hits`/
-`flank_hits` hit *counts*, mirroring the legacy `SkillEntryOut` field for
-field, which this sketch first omitted entirely.)
+`docs/NATIVE-FORMAT.md` for a real trimmed document. Corrections from the
+earliest draft of this example: `by_skill` rows (`SkillRow`) carry
+`crit_hits`/`flank_hits` hit *counts*, mirroring the legacy `SkillEntryOut`
+field for field, which this sketch first omitted entirely.
+
+A second "correction" recorded here during Task 5/8 was itself **wrong**
+and is retracted by the final whole-branch review: it claimed `per_target`
+rows carry only `total`, on the reasoning that "a target's hit/crit counts
+live on that target's own `by_skill` rows the same way any entity's do".
+They do not. `by_skill` is the *attacker's* per-skill totals across all
+targets, so it cannot answer a per-`(attacker, target)` question — and
+`PerTargetStatsOut`'s `interrupts` and `downs_contribution_damage` are not
+reconstructible from any other block at all. Acting on that reasoning
+dropped the whole struct. `per_target` rows now carry `total` plus an
+optional `detail` (the full `PerTargetStatsOut`) and an optional
+`by_skill` (the per-`(attacker, target, skill)` split); see
+`docs/NATIVE-FORMAT.md`.)
 
 The identity/statistics split pays off directly here: `per_target` keys are
 entity ids, so an enemy player's own damage row and the damage dealt *to* them

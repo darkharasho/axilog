@@ -16,6 +16,13 @@ pub struct BoonsBlock {
     pub by_entity: ByEntity<BTreeMap<u32, BoonRow>>,
 }
 
+impl BoonsBlock {
+    /// See [`super::damage::DamageBlock::is_empty`].
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
+}
+
 /// Mirrors `crate::BoonOut` field-for-field, minus `id` (it's the map key)
 /// and `name` (no human-readable name may appear in a block -- a consumer
 /// resolves the id through the buff catalog instead).
@@ -53,6 +60,13 @@ pub struct SupportBlock {
     pub by_entity: ByEntity<SupportEntity>,
 }
 
+impl SupportBlock {
+    /// See [`super::damage::DamageBlock::is_empty`].
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
+}
+
 /// Mirrors `crate::SupportOut` field-for-field, including
 /// `strips_duration_ms` (the brief's sketch dropped it).
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
@@ -67,6 +81,13 @@ pub struct SupportEntity {
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct ContributionBlock {
     pub by_entity: ByEntity<ContributionEntity>,
+}
+
+impl ContributionBlock {
+    /// See [`super::damage::DamageBlock::is_empty`].
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
 }
 
 /// Both directions of the arcdps-methodology down contribution (M11).
@@ -91,6 +112,13 @@ pub struct ContributionRow {
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct HealingBlock {
     pub by_entity: ByEntity<HealingEntity>,
+}
+
+impl HealingBlock {
+    /// See [`super::damage::DamageBlock::is_empty`].
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+    }
 }
 
 /// Mirrors `crate::HealingOut` field-for-field. Field names/shape differ

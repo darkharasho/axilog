@@ -53,16 +53,33 @@ fn build() -> (String, String) {
 #[test]
 fn the_one_point_oh_document_is_not_larger_than_the_legacy_one() {
     let (legacy, v1) = build();
-    // Catalog dedup and RLE DO make 1.0 smaller on the same content, despite
-    // 1.0 carrying strictly more data than legacy (enemy stats that were
-    // `#[serde(skip)]` in legacy, a `combat_participant` flag, per-skill
-    // `crit_hits`/`flank_hits`): measured ratio on the committed fixture is
-    // ~0.55 (see docs/BENCHMARKS.md). The bound below is set at 0.70,
-    // leaving headroom above the measured ratio for normal per-fixture
-    // drift while still catching a regression that erodes most of the win
-    // (e.g. dedup or RLE silently breaking on a code path).
+    // Catalog dedup and RLE DO make 1.0 smaller on the same content:
+    // measured ratio on the committed fixture is ~0.80 (see
+    // docs/BENCHMARKS.md).
+    //
+    // That figure was ~0.55 until the final whole-branch review, which is
+    // the cautionary tale this comment exists to carry: the earlier number
+    // was measured while five legacy field families had no 1.0 destination
+    // at all and were being silently dropped -- including the bulkiest one
+    // in the schema, the per-(player, target, skill) breakdown. A size
+    // comparison against an incomplete document flatters itself, and no
+    // test here could see the difference, because every test asserted that
+    // what was PRESENT matched and none asserted that nothing was ABSENT
+    // (see `v1_equivalence.rs`'s completeness checklist, added with the
+    // fix). Closing the gaps moved the ratio 0.552 -> 0.800.
+    //
+    // The bound is 0.85, down from the pre-fix 0.70 -- which the real,
+    // complete document no longer passes. 0.85 keeps ~6% relative headroom
+    // above the measured 0.800 for per-fixture drift while still asserting
+    // a genuine win: a regression that erodes even a quarter of the
+    // remaining 20% reduction trips it, and dedup or RLE breaking outright
+    // would push the ratio well past 1.0. The headroom is thinner than it
+    // was, and deliberately so -- there is less win left to protect. If
+    // additive 1.x growth eats it, re-measure and re-justify rather than
+    // widening the bound reflexively; a bound loose enough to always pass
+    // is what the pre-measurement 1.20 draft already proved worthless.
     assert!(
-        v1.len() <= legacy.len() * 7 / 10,
+        v1.len() <= legacy.len() * 85 / 100,
         "1.0 is {} bytes vs legacy {} (ratio {:.3}) -- expected the 1.0 document to be meaningfully \
          smaller via catalog dedup + RLE; see docs/BENCHMARKS.md",
         v1.len(),

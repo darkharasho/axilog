@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// Block names the 1.0 schema defines, as an enum to make typos compile errors.
 /// Adding a name is additive under the 1.x rules, renaming one is a major bump.
@@ -143,6 +143,7 @@ pub struct WarningOut {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn coverage_starts_with_every_known_block_not_computed() {

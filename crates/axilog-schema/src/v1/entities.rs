@@ -55,6 +55,27 @@ pub struct EntityOut {
     pub team: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subgroup: Option<u8>,
+    /// The commander tag this entity carries, when it carries one.
+    ///
+    /// Derived from `Player::commander_tag` ALONE. The legacy shape also
+    /// carries a plain `PlayerOut::commander: bool`, which is deliberately
+    /// not reprojected -- and unlike [`Role::FriendlyPlayer`], this costs
+    /// nothing even in principle, because the bool is not independent data:
+    /// `wvw::apply` assigns `p.commander = p.commander_tag.is_some()`
+    /// unconditionally, after dedupe, as the last write to either field
+    /// (`crates/axilog-core/src/wvw/mod.rs`). The non-WvW `model::resolve`
+    /// path leaves both at their `false`/`None` defaults, so the identity
+    /// holds there too.
+    ///
+    /// So `commander.is_some()` here IS `PlayerOut::commander`, exactly,
+    /// and `v1_equivalence.rs`'s completeness checklist asserts that
+    /// identity per player rather than taking this comment's word for it.
+    /// Carrying the bool separately would only create a second commander
+    /// signal that could drift out of agreement with the tag.
+    ///
+    /// If the upstream derivation ever changes so the two can differ, that
+    /// assertion fails and this decision gets remade deliberately instead
+    /// of being rediscovered as a data loss.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commander: Option<CommanderOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -227,7 +248,7 @@ pub fn build_entities(enc: &Encounter, metrics: &Metrics) -> (Vec<EntityOut>, En
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axilog_core::model::{CommanderTag, Encounter, Enemy, Player};
+    use axilog_core::model::{Encounter, Enemy, Player};
     use axilog_core::analysis::Metrics;
 
     fn player(addr: u64, account: &str, in_squad: bool, subgroup: u8) -> Player {

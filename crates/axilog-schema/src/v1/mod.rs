@@ -109,6 +109,31 @@ pub struct Blocks {
     pub series: Option<activity::SeriesBlock>,
 }
 
+/// The coverage state for a block that DID run: [`CoverageState::Empty`]
+/// when it produced nothing, [`CoverageState::Present`] otherwise.
+///
+/// Before the final whole-branch review, every computed block was reported
+/// `Present` unconditionally and `Empty` was unreachable -- which meant a
+/// log with no healing extension reported `healing: "present"` with zero
+/// rows, exactly the "absent reported as zero" ambiguity `coverage` exists
+/// to remove. Each block decides what "produced nothing" means for its own
+/// shape (see each `is_empty`), because a block with an independently
+/// computed aggregate -- `missiles`, `series` -- is not empty just because
+/// it has no per-entity rows.
+///
+/// [`CoverageState::Unsupported`] stays unreachable from this container:
+/// nothing here is era- or encounter-kind-gated, so no code path can
+/// honestly produce it. It is RESERVED vocabulary for spec #2's era-gated
+/// surfaces, and `docs/NATIVE-FORMAT.md` tells consumers so explicitly
+/// rather than implying today's binary can emit it.
+fn computed(is_empty: bool) -> CoverageState {
+    if is_empty {
+        CoverageState::Empty
+    } else {
+        CoverageState::Present
+    }
+}
+
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
 /// [`crate::Report`], which keeps this a pure reprojection instead of a
 /// second, divergent computation from `Metrics`.
@@ -128,43 +153,51 @@ pub fn build_report_v1(
     let mut cats = CatalogBuilder::default();
     let mut coverage = Coverage::new();
 
-    // Always-on blocks.
+    // Always-on blocks. `computed` distinguishes `Present` from `Empty` --
+    // see its doc comment for why that distinction has to be made HERE, at
+    // the only layer that knows a block both ran and produced nothing.
     let damage_block = damage::build_damage(legacy, &index, &mut cats);
-    coverage.set(BlockName::Damage, CoverageState::Present);
+    coverage.set(BlockName::Damage, computed(damage_block.is_empty()));
     let defenses = defense::build_defenses(legacy, &index);
-    coverage.set(BlockName::Defenses, CoverageState::Present);
+    coverage.set(BlockName::Defenses, computed(defenses.is_empty()));
     let hit_stats = defense::build_hit_stats(legacy, &index);
-    coverage.set(BlockName::HitStats, CoverageState::Present);
+    coverage.set(BlockName::HitStats, computed(hit_stats.is_empty()));
     let cc = defense::build_cc(legacy, &index);
-    coverage.set(BlockName::Cc, CoverageState::Present);
+    coverage.set(BlockName::Cc, computed(cc.is_empty()));
     let boons = support::build_boons(legacy, &index, &mut cats);
-    coverage.set(BlockName::Boons, CoverageState::Present);
+    coverage.set(BlockName::Boons, computed(boons.is_empty()));
     let support_block = support::build_support(legacy, &index);
-    coverage.set(BlockName::Support, CoverageState::Present);
+    coverage.set(BlockName::Support, computed(support_block.is_empty()));
     let contribution = support::build_contribution(legacy, &index);
-    coverage.set(BlockName::Contribution, CoverageState::Present);
+    coverage.set(BlockName::Contribution, computed(contribution.is_empty()));
     let healing = support::build_healing(legacy, &index);
-    coverage.set(BlockName::Healing, CoverageState::Present);
+    coverage.set(BlockName::Healing, computed(healing.is_empty()));
     let series = activity::build_series(legacy, &index);
-    coverage.set(BlockName::Series, CoverageState::Present);
+    coverage.set(BlockName::Series, computed(series.is_empty()));
 
     // Gated blocks: presence of the legacy `Option` IS the gate signal, the
-    // same rule the legacy shape already uses.
+    // same rule the legacy shape already uses. A gate that was ON but
+    // produced no rows is `Empty`, not `Present` -- the gate answers
+    // "did it run", the row count answers "was there anything".
     let rotation = legacy.players.iter().any(|p| p.rotation.is_some()).then(|| {
-        coverage.set(BlockName::Rotation, CoverageState::Present);
-        activity::build_rotation(legacy, &index, &mut cats)
+        let block = activity::build_rotation(legacy, &index, &mut cats);
+        coverage.set(BlockName::Rotation, computed(block.is_empty()));
+        block
     });
     let damage_mods_block = legacy.damage_mod_map.is_some().then(|| {
-        coverage.set(BlockName::DamageMods, CoverageState::Present);
-        activity::build_damage_mods(legacy, &index, &mut cats)
+        let block = activity::build_damage_mods(legacy, &index, &mut cats);
+        coverage.set(BlockName::DamageMods, computed(block.is_empty()));
+        block
     });
     let missiles = legacy.missiles.is_some().then(|| {
-        coverage.set(BlockName::Missiles, CoverageState::Present);
-        activity::build_missiles(legacy, &index)
+        let block = activity::build_missiles(legacy, &index);
+        coverage.set(BlockName::Missiles, computed(block.is_empty()));
+        block
     });
     let replay = legacy.replay.is_some().then(|| {
-        coverage.set(BlockName::Replay, CoverageState::Present);
-        activity::build_replay(legacy, &index)
+        let block = activity::build_replay(legacy, &index);
+        coverage.set(BlockName::Replay, computed(block.is_empty()));
+        block
     });
 
     // Reserved for spec #2. Named here so the vocabulary is fixed.

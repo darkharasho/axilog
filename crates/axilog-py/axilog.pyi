@@ -901,6 +901,20 @@ class SeriesOut(TypedDict):
     data: List[Any]
 
 #: Why a block is or is not present in `blocks`.
+#: Why a block is or is not in `blocks`:
+#:
+#: - "present"      -- computed, carried, at least one row.
+#: - "not_computed" -- the compute gate was off. NOT the same as empty:
+#:                     a missing flag, not a fact about the log.
+#: - "empty"        -- computed and genuinely nothing to report. The block
+#:                     is still carried; only "not_computed"/"unsupported"
+#:                     omit it.
+#: - "unsupported"  -- RESERVED. No code path in this version emits it:
+#:                     nothing this container computes is era- or
+#:                     encounter-kind-gated. Named now so spec #2's
+#:                     era-gated surfaces can fill the slot without
+#:                     consumers learning a new value late. Handle it, but
+#:                     do not expect it from this version.
 CoverageState = str  # Literal["present", "not_computed", "empty", "unsupported"]
 
 #: Per-block computation/presence status, keyed by block name (``"damage"``,
@@ -932,9 +946,6 @@ class DamageSquad(TypedDict):
     total: int
     dps: float
 
-class PerTarget(TypedDict):
-    total: int
-
 class SkillRow(TypedDict):
     """Mirrors the legacy `SkillEntryOut` field-for-field (minus `skill_id`,
     which is the map key here). `hits`/`min`/`max` count only CONTRIBUTING
@@ -948,18 +959,60 @@ class SkillRow(TypedDict):
     crit_hits: int
     flank_hits: int
 
+class PerTargetDetail(TypedDict):
+    """Mirrors the legacy `PerTargetStatsOut` field-for-field, minus
+    `enemy_id` (the enclosing map's key here, as the target's ENTITY id).
+    `interrupts` and `downs_contribution_damage` are not derivable from any
+    other block."""
+
+    connected_hits: int
+    connected_damage: int
+    against_downed_count: int
+    downed: int
+    killed: int
+    interrupts: int
+    #: arcdps-methodology down-contribution DAMAGE for downs of this
+    #: specific target -- NOT GW2EI's 90%-to-downstate-window algorithm.
+    downs_contribution_damage: int
+
+class _PerTargetRequired(TypedDict):
+    #: Ungated: the legacy `DamageOut.per_enemy` total.
+    total: int
+
+class PerTarget(_PerTargetRequired, total=False):
+    """One `(entity, target)` pair. `total` is always present; `detail` and
+    `by_skill` come from the `skill_damage=True`-gated families, so a row
+    can legitimately carry `total` alone.
+
+    `detail` is grouped under one key rather than flattened so its absence
+    has a single unambiguous signal instead of seven fabricated zeros."""
+
+    detail: PerTargetDetail
+    #: Per-(entity, target, skill) outgoing damage, keyed by skill id.
+    by_skill: Dict[str, SkillRow]
+
 class _DamageEntityRequired(TypedDict):
     total: int
     dps: float
     taken: int
+    #: Enemy players this entity landed the DOWNING blow on. Outgoing
+    #: outcome; the incoming mirrors are `DefensesEntity.downs_taken`/
+    #: `deaths`, the same split GW2EI makes.
+    downs_dealt: int
+    #: Enemy players this entity landed the KILLING blow on.
+    kills_dealt: int
 
 class DamageEntity(_DamageEntityRequired, total=False):
-    """`per_target` (keyed by the TARGET's entity id) and `by_skill` (keyed
-    by skill id) are both omitted (not `{}`) when empty; `by_skill` is
-    additionally gated by the per-skill compute flag (`skill_damage=True`)."""
+    """`per_target` (keyed by the TARGET's entity id) and the two per-skill
+    maps (keyed by skill id) are all omitted (not `{}`) when empty; the
+    per-skill maps are additionally gated by `skill_damage=True`.
+
+    `by_skill` is OUTGOING, `by_skill_taken` is INCOMING -- mirroring this
+    row's own `total`/`taken` pair."""
 
     per_target: Dict[str, PerTarget]
     by_skill: Dict[str, SkillRow]
+    by_skill_taken: Dict[str, SkillRow]
 
 class DamageBlock(TypedDict):
     squad: DamageSquad
@@ -995,6 +1048,12 @@ class DefensesEntity(TypedDict):
     #: `SupportEntity.strips`.
     boon_strips_taken: int
     boon_strips_taken_duration_ms: int
+    #: Times this entity entered downstate -- GW2EI's
+    #: `defenses[0].downCount`. The outgoing mirrors live on
+    #: `DamageEntity.downs_dealt`/`kills_dealt`.
+    downs_taken: int
+    #: Times this entity died -- GW2EI's `defenses[0].deadCount`.
+    deaths: int
 
 class DefensesBlock(TypedDict):
     by_entity: Dict[str, DefensesEntity]
@@ -1134,9 +1193,28 @@ class CastRow(TypedDict):
     time_gained_ms: int
     quickness: float
 
+class Aftercast(TypedDict):
+    """Mirrors the legacy `AftercastOut`. Durations are MILLISECONDS (GW2EI
+    emits the same quantities as seconds).
+
+    NOTE the name collision GW2EI bequeathed: `wasted_count` is a
+    CAST-INTERRUPT count, unrelated to the boon-generation `*_wasted`
+    fields under `boons`."""
+
+    #: Casts that skipped their aftercast.
+    saved_count: int
+    saved_ms: int
+    #: Casts interrupted before firing.
+    wasted_count: int
+    #: Already the positive "time lost" figure.
+    wasted_ms: int
+
 class RotationEntity(TypedDict):
     cast_count: int
     casts: List[CastRow]
+    #: Cast counters, computed unconditionally but published only when
+    #: this block is (gated on `rotation=True`).
+    aftercast: Aftercast
 
 class RotationBlock(TypedDict):
     by_entity: Dict[str, RotationEntity]
@@ -1171,14 +1249,13 @@ class MissilesEntity(TypedDict):
     denied: int
     reflected_at_self: int
 
-class _MissilesBlockRequired(TypedDict):
-    by_entity: Dict[str, MissilesEntity]
-
-class MissilesBlock(_MissilesBlockRequired, total=False):
-    """`squad` is omitted (not `None`) only in the empty-block default
-    case (missiles not requested); present whenever the block is built."""
+class MissilesBlock(TypedDict):
+    """`squad` is REQUIRED, like every other squad aggregate in this format
+    (`damage`, `cc`, `series`): when the block is present, so is its
+    aggregate."""
 
     squad: MissilesSquad
+    by_entity: Dict[str, MissilesEntity]
 
 class ReplayBounds(TypedDict):
     min_x: float
@@ -1231,13 +1308,12 @@ class EntitySeries(_EntitySeriesRequired, total=False):
 
     per_target: Dict[str, TargetSeries]
 
-class _SeriesBlockRequired(TypedDict):
-    by_entity: Dict[str, EntitySeries]
-
-class SeriesBlock(_SeriesBlockRequired, total=False):
-    """`squad` is omitted (not `None`) only in the empty-block default case."""
+class SeriesBlock(TypedDict):
+    """`squad` is REQUIRED (see `MissilesBlock`). The squad series is
+    computed unconditionally; only `by_entity` needs `timeseries=True`."""
 
     squad: SquadSeries
+    by_entity: Dict[str, EntitySeries]
 
 class Blocks(TypedDict, total=False):
     """Every statistic block. A block is omitted entirely (key absent, not
