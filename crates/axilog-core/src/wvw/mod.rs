@@ -340,6 +340,16 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
             team,
             is_player: true,
             marker: None,
+            // MENEMYPROF: these agents were resolved as full `Player`s by
+            // `model::resolve` (they ARE players -- arcdps fills their
+            // `prof`/`is_elite` agent-table columns exactly as it does for
+            // squad members), and this loop is the ONLY hop where that gets
+            // discarded. Carry both across. Without this the enemy roster is
+            // class-less and consumers grouping enemies by profession fall
+            // back to the `name` string, which in WvW is the player's RANK
+            // title ("Mithril Scout"), not their class.
+            profession: Some(p.profession),
+            elite_spec: Some(p.elite_spec),
             agent_addrs: p.agent_addrs,
         });
     }

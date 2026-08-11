@@ -747,7 +747,8 @@ mod tests {
             kind: "wvw".into(), map: "".into(), duration_ms: 2000,
             build: "".into(), revision: 1, recorded_by: None, teams: vec![],
             players: vec![player],
-            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, agent_addrs: vec![9] }],
+            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None,
+                profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()), agent_addrs: vec![9] }],
             markers: vec![], tick_rate: None,
         };
         let raw = raw_from(vec![
@@ -774,7 +775,8 @@ mod tests {
             kind: "wvw".into(), map: "".into(), duration_ms: 2000,
             build: "".into(), revision: 1, recorded_by: None, teams: vec![],
             players: vec![player],
-            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None, agent_addrs: vec![9] }],
+            enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None,
+                profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()), agent_addrs: vec![9] }],
             markers: vec![], tick_rate: None,
         };
         let raw = raw_from(vec![
@@ -805,7 +807,9 @@ mod tests {
             // Enemy deduped from a relog: representative addr 9, but also
             // covers raw addr 10 (the post-relog addr).
             enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(),
-                is_player: true, marker: None, agent_addrs: vec![9, 10] }],
+                is_player: true, marker: None,
+                profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
+                agent_addrs: vec![9, 10] }],
             markers: vec![], tick_rate: None,
         };
         let raw = raw_from(vec![
@@ -841,19 +845,25 @@ mod tests {
             enemies: vec![
                 // Received damage from the squad.
                 Enemy { id: 9, instid: 0, name: "TookDamage".into(), team: "blue".into(),
-                    is_player: false, marker: None, agent_addrs: vec![9] },
+                    is_player: false, marker: None, profession: None, elite_spec: None,
+                    agent_addrs: vec![9] },
                 // Dealt damage to the squad (e.g. an enemy catapult).
                 Enemy { id: 10, instid: 0, name: "DealtDamage".into(), team: "blue".into(),
-                    is_player: false, marker: None, agent_addrs: vec![10] },
+                    is_player: false, marker: None, profession: None, elite_spec: None,
+                    agent_addrs: vec![10] },
                 // Received CC from the squad, no damage either direction.
                 Enemy { id: 11, instid: 0, name: "TookCc".into(), team: "blue".into(),
-                    is_player: false, marker: None, agent_addrs: vec![11] },
+                    is_player: false, marker: None, profession: None, elite_spec: None,
+                    agent_addrs: vec![11] },
                 // Zero interaction -- the loot-bag/tactivator/chest case.
                 Enemy { id: 12, instid: 0, name: "LootBag".into(), team: "blue".into(),
-                    is_player: false, marker: None, agent_addrs: vec![12] },
+                    is_player: false, marker: None, profession: None, elite_spec: None,
+                    agent_addrs: vec![12] },
                 // Zero interaction, but a real enemy PLAYER -- always kept.
                 Enemy { id: 13, instid: 0, name: "UntouchedFoe".into(), team: "blue".into(),
-                    is_player: true, marker: None, agent_addrs: vec![13] },
+                    is_player: true, marker: None,
+                    profession: Some("Guardian".into()), elite_spec: Some("Firebrand".into()),
+                    agent_addrs: vec![13] },
             ],
             markers: vec![], tick_rate: None,
         };

@@ -61,6 +61,8 @@ fn enemy(addr: u64) -> Enemy {
         team: "blue".into(),
         is_player: true,
         marker: None,
+        profession: Some("Necromancer".into()),
+        elite_spec: Some("Reaper".into()),
         agent_addrs: vec![addr],
     }
 }
