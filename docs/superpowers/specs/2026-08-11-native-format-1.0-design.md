@@ -360,7 +360,9 @@ than papered over here.
   "skills":      { "5491": { "name": "Symbol of Protection", "is_swap": false, "can_crit": true } },
   "buffs":       { "740":  { "name": "Might", "kind": "boon", "stacking": "intensity",
                              "max_stacks": 25, "icon": "..." } },
-  "damage_mods": { "174":  { "name": "Scholar Rune", "kind": "multiplier", "approximate": true } }
+  "damage_mods": { "174":  { "name": "Empowered", "description": "1% per boon<br>...",
+                             "non_multiplier": false, "is_counter": false,
+                             "skill_based": false, "approximate": false } }
 }
 ```
 
@@ -398,6 +400,23 @@ catalog tracks stacking for that is neither a tracked boon nor a tracked
 condition — auras, forms, and similar non-boon non-condition buffs (e.g.
 Frost Aura, Death Shroud). This mirrors GW2's own real three-way taxonomy
 rather than inventing a two-way one arcdps never had.
+
+**Deviation, decided after Task 4 landed:** `DamageModEntry` originally
+folded `is_counter`/`skill_based`/`non_multiplier` into a single `kind`
+string (`"counter"`/`"skill"`/`"flat"`/`"multiplier"`, plus `"unknown"` for
+unresolved ids) via a priority chain. That is lossy — a modifier that is
+BOTH skill-based and a multiplier collapses to `"skill"`, silently erasing
+the multiplier axis — and folds two orthogonal properties into one label
+for no reason `buffs.kind`'s three-way taxonomy doesn't already have (that
+one IS a real single classification; this wasn't). `kind` was replaced with
+the four independent booleans (`non_multiplier`, `is_counter`,
+`skill_based`, `approximate`) plus `description`, mirroring GW2EI's own
+`damageModMap` entry fields and `axilog_core::analysis::damage_mods::
+DamageModifierMeta`, which already stored them this way. For an id with no
+resolved definition, all five fields are omitted together (`Option`,
+`skip_serializing_if`) rather than defaulted to `false`/`""` — absence is
+the honest "no metadata" signal, not an assertion that every property is
+false.
 
 Professions and elite specs stay inline strings on entities. They are a closed
 set of ~40 short values with no metadata worth hoisting, and hoisting them

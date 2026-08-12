@@ -148,7 +148,8 @@ document, since that predicate is not otherwise exposed per-entity outside
 Real excerpt. `buffs` is from the default `/tmp/v1.json` run — `catalogs.skills`
 is `{}` there, because nothing referenced a skill id without `--skill-damage`
 or `--rotation`; the `skills` entry below is from the `--skill-damage` run
-(`/tmp/v1-full.json`) instead, so this is a composite of two real documents,
+(`/tmp/v1-full.json`) instead, and `damage_mods` is from a `--modifiers` run
+(`/tmp/v1-modifiers.json`), so this is a composite of three real documents,
 not one single one:
 
 ```json
@@ -159,6 +160,24 @@ not one single one:
   "buffs": {
     "717": { "name": "Protection", "kind": "boon", "stacking": "duration", "max_stacks": 5 },
     "740": { "name": "Might", "kind": "boon", "stacking": "intensity", "max_stacks": 25 }
+  },
+  "damage_mods": {
+    "-428": {
+      "name": "Stability >= 10",
+      "description": "With at least 10 stacks of Stability<br>Applied on All Damage<br>Compared against All Damage<br>Counter",
+      "non_multiplier": false,
+      "is_counter": true,
+      "skill_based": false,
+      "approximate": false
+    },
+    "174": {
+      "name": "Empowered",
+      "description": "1% per boon<br>No Minions<br>Applied on Strike Damage<br>Compared against All Damage",
+      "non_multiplier": false,
+      "is_counter": false,
+      "skill_based": false,
+      "approximate": false
+    }
   }
 }
 ```
@@ -168,6 +187,18 @@ the omit-when-absent convention — the default `--format json` run above
 never populates it, since damage-modifier attribution needs `--modifiers`.
 `skills`/`buffs` are always present, even when empty, since they are plain
 `BTreeMap` fields with no `skip_serializing_if`.
+
+The map key's SIGN encodes direction: negative ids (like `-428` above) are
+incoming modifiers, positive ids outgoing — matching `-428`'s description
+ending in "Compared against All Damage" applied to damage the player took.
+Each `DamageModEntry`'s `non_multiplier`/`is_counter`/`skill_based`/
+`approximate` are independent booleans, not a single folded classification
+— GW2EI's own `damageModMap` carries them the same way, because a modifier
+can be BOTH skill-based AND a multiplier at once, which a single label
+cannot represent. They (and `description`) are present for every entry that
+resolved against a known definition and omitted together — never `false`
+or `""` — for an id with no known definition, so their absence is itself
+the "no metadata for this id" signal.
 
 Every id is a bare decimal string key — no `"s"`/`"d"` prefix like EI uses.
 A catalog holds an entry **if and only if** some block in `blocks`

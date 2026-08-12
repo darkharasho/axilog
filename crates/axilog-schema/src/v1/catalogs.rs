@@ -45,11 +45,34 @@ pub struct BuffEntry {
     pub max_stacks: Option<u32>,
 }
 
+/// Mirrors GW2EI's `damageModMap` entry fields
+/// (`GW2EIBuilders/JsonModels/JsonLogBuilder.cs`): `non_multiplier`,
+/// `skill_based` and `approximate` are independent booleans there, not a
+/// single classification, because a modifier can be BOTH skill-based AND a
+/// multiplier at once -- folding them into one label (as an earlier draft
+/// of this schema did) silently erases whichever axis lost the tie.
+///
+/// The four booleans are `Option<bool>` and omitted together, rather than
+/// `false`, for ids with no known definition: absence is the honest signal
+/// for "we have no metadata for this id", not "we checked and it's false".
+///
+/// The `damage_mods` map key's SIGN encodes direction: negative ids are
+/// incoming modifiers, positive ids outgoing. This is existing behaviour
+/// carried over unchanged; `DamageModifierMeta::incoming` is redundant with
+/// it and is not exposed as a separate field here.
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct DamageModEntry {
     pub name: String,
-    pub kind: String,
-    pub approximate: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub non_multiplier: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_counter: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_based: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approximate: Option<bool>,
 }
 
 /// Accumulates referenced ids as blocks emit them, then materializes
@@ -137,43 +160,34 @@ impl CatalogBuilder {
                 .damage_mods
                 .into_iter()
                 .map(|id| match m.meta.get(&id) {
-                    Some(meta) => {
-                        // No single existing field is a "kind" string; this
-                        // orders the same three flags `tooltip()`
-                        // (damage_mods/model.rs) already reports in, picking
-                        // the first that applies. (Left as-is per Task 4
-                        // review round 1 -- logged as a Minor for Task 8 to
-                        // revisit.)
-                        let kind = if meta.is_counter {
-                            "counter"
-                        } else if meta.skill_based {
-                            "skill"
-                        } else if meta.non_multiplier {
-                            "flat"
-                        } else {
-                            "multiplier"
-                        }
-                        .to_string();
-                        (
-                            id,
-                            DamageModEntry {
-                                name: meta.name.to_string(),
-                                kind,
-                                approximate: meta.approximate,
-                            },
-                        )
-                    }
+                    Some(meta) => (
+                        id,
+                        DamageModEntry {
+                            name: meta.name.to_string(),
+                            description: Some(meta.description.clone()),
+                            non_multiplier: Some(meta.non_multiplier),
+                            is_counter: Some(meta.is_counter),
+                            skill_based: Some(meta.skill_based),
+                            approximate: Some(meta.approximate),
+                        },
+                    ),
                     // A referenced id ALWAYS resolves (Finding 3, review
                     // round 1) -- GW2EI's own `damageModMap` is built from
                     // inside the same emission loop that writes the rows,
                     // so a dangling reference is unrepresentable there.
                     // Mirrors the skills path's `"Skill {id}"` placeholder.
+                    // The booleans/description are omitted rather than
+                    // defaulted -- there is no metadata to report, and
+                    // `false`/`""` would assert something false.
                     None => (
                         id,
                         DamageModEntry {
                             name: format!("Damage modifier {id}"),
-                            kind: "unknown".to_string(),
-                            approximate: false,
+                            description: None,
+                            non_multiplier: None,
+                            is_counter: None,
+                            skill_based: None,
+                            approximate: None,
                         },
                     ),
                 })
@@ -311,7 +325,78 @@ mod tests {
         let c = b.finish(&Metrics::default(), Some(&DamageModifierResults::default()));
         let e = c.damage_mods.get(&424242).expect("referenced id must resolve");
         assert_eq!(e.name, "Damage modifier 424242");
-        assert_eq!(e.kind, "unknown");
-        assert!(!e.approximate);
+        // Absence, not `false`/`""`, is the honest signal for "no metadata".
+        assert!(e.description.is_none());
+        assert!(e.non_multiplier.is_none());
+        assert!(e.is_counter.is_none());
+        assert!(e.skill_based.is_none());
+        assert!(e.approximate.is_none());
+    }
+
+    #[test]
+    fn a_resolved_damage_mod_carries_all_four_booleans_and_a_description() {
+        use axilog_core::analysis::damage_mods::{
+            DamageModifierMeta, DamageModifierResults,
+        };
+
+        let mut results = DamageModifierResults::default();
+        results.meta.insert(
+            174,
+            DamageModifierMeta {
+                name: "Scholar Rune",
+                icon: "",
+                description: "Deal more damage above 90% health.".into(),
+                non_multiplier: false,
+                is_counter: false,
+                skill_based: false,
+                approximate: true,
+                incoming: false,
+            },
+        );
+
+        let mut b = CatalogBuilder::default();
+        b.reference_damage_mod(174);
+        let c = b.finish(&Metrics::default(), Some(&results));
+        let e = c.damage_mods.get(&174).expect("referenced id must resolve");
+        assert_eq!(e.name, "Scholar Rune");
+        assert_eq!(e.description.as_deref(), Some("Deal more damage above 90% health."));
+        assert_eq!(e.non_multiplier, Some(false));
+        assert_eq!(e.is_counter, Some(false));
+        assert_eq!(e.skill_based, Some(false));
+        assert_eq!(e.approximate, Some(true));
+    }
+
+    #[test]
+    fn a_damage_mod_can_be_both_skill_based_and_a_multiplier_at_once() {
+        // The exact case the old folded `kind` string got wrong: a modifier
+        // with `non_multiplier == false` (i.e. IS a multiplier) that is also
+        // `skill_based`. The priority chain used to emit `"skill"`, silently
+        // erasing the multiplier axis. The independent booleans preserve
+        // both.
+        use axilog_core::analysis::damage_mods::{
+            DamageModifierMeta, DamageModifierResults,
+        };
+
+        let mut results = DamageModifierResults::default();
+        results.meta.insert(
+            999,
+            DamageModifierMeta {
+                name: "Hypothetical Skill Multiplier",
+                icon: "",
+                description: String::new(),
+                non_multiplier: false,
+                is_counter: false,
+                skill_based: true,
+                approximate: false,
+                incoming: false,
+            },
+        );
+
+        let mut b = CatalogBuilder::default();
+        b.reference_damage_mod(999);
+        let c = b.finish(&Metrics::default(), Some(&results));
+        let e = c.damage_mods.get(&999).expect("referenced id must resolve");
+        assert_eq!(e.skill_based, Some(true), "skill-based axis must survive");
+        assert_eq!(e.non_multiplier, Some(false), "multiplier axis must survive too");
     }
 }

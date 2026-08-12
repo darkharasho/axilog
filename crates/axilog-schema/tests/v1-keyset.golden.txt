@@ -255,8 +255,11 @@ catalogs.buffs.<id>.stacking
 catalogs.damage_mods
 catalogs.damage_mods.<id>
 catalogs.damage_mods.<id>.approximate
-catalogs.damage_mods.<id>.kind
+catalogs.damage_mods.<id>.description
+catalogs.damage_mods.<id>.is_counter
 catalogs.damage_mods.<id>.name
+catalogs.damage_mods.<id>.non_multiplier
+catalogs.damage_mods.<id>.skill_based
 catalogs.skills
 catalogs.skills.<id>
 catalogs.skills.<id>.can_crit
