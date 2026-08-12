@@ -175,8 +175,15 @@ fn the_full_key_set_matches_the_committed_golden() {
                 }
             }
             serde_json::Value::Array(items) => {
-                if let Some(first) = items.first() {
-                    walk(first, &format!("{prefix}[]"), out);
+                // EVERY element, not just the first. Optional fields are
+                // omitted when absent, so sampling `items.first()` records
+                // whichever subset element 0 happens to carry -- and the
+                // golden then churns whenever the sort order changes, while
+                // silently failing to guard fields no first element ever
+                // has. Unioning across all elements makes the key set a
+                // property of the SHAPE rather than of element 0.
+                for item in items {
+                    walk(item, &format!("{prefix}[]"), out);
                 }
             }
             _ => {}

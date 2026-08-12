@@ -119,7 +119,7 @@ reports" below.
 | `role` | Meaning |
 |---|---|
 | `squad` | In the recording squad |
-| `friendly_player` | Non-squad player on the squad's team. **Currently unreachable in practice** — `Player::in_squad` is hardcoded `true` upstream, so no real log emits this role yet. Populating it accurately is required follow-up work, not done here |
+| `friendly_player` | Non-squad player on the squad's team — a pug. Derived from the agent's subgroup: GW2 squad subgroups are 1-15, so a friendly with no subgroup is not in the squad. Matches GW2EI's `_nonSquadFriendlies` / `notInSquad` exactly on the calibration fixture |
 | `enemy_player` | Non-squad, non-friendly player |
 | `npc` | Every non-player enemy agent, including gadgets — there is no separate `gadget` role; it was dropped as unreachable (the upstream model cannot distinguish a gadget from an NPC once it reaches this layer) |
 

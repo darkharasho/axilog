@@ -290,15 +290,23 @@ The `isFake` accounting stays as documented in `docs/EI-PARITY.md`: axilog
 does not synthesize GW2EI's `Dummy PvP Agent` aggregate, so every emitted
 entity is a real tracked agent.
 
-`friendly_player` is a role for data axilog currently drops upstream:
-`Player::in_squad` is hardcoded `true` in `model::resolve`, so no non-squad
-friendly is ever produced and the role is unreachable **today**.
+`friendly_player` was unreachable when this spec was written:
+`Player::in_squad` was hardcoded `true` in `model::resolve`, so no non-squad
+friendly was ever produced. It was kept rather than deleted because GW2EI
+computes this split (`_nonSquadFriendlies`), and by decision 3 a capability
+EI has is a gap to close, not speculation to prune.
 
-It is kept rather than deleted because GW2EI computes this split
-(`_nonSquadFriendlies`), and by decision 3 a capability EI has is a gap to
-close. Populating it is REQUIRED follow-up work, not optional — tracked for a
-later spec, since it is new analysis in `axilog-core` rather than a container
-change.
+**That follow-up has since landed (MFRIENDLY).** `in_squad` is now derived
+from the agent name buffer's subgroup field: GW2 squad subgroups are 1-15, so
+a friendly player with no subgroup is not in the squad. Calibrated against the
+EI reference, which reports exactly 4 such players on the committed fixture
+(`in_squad_matches_ei_golden_not_in_squad`), and axilog now agrees exactly.
+
+The bug was not confined to this format. `--format ei-json` emits
+`notInSquad: !p.in_squad`, so every axilog-parsed log claimed a squad with no
+pugs in it — and axibridge's `partitionSquadPlayers` keys on precisely that
+field. Keeping the role rather than deleting it is what made the fix pure
+addition.
 
 What this spec does do is make every aggregate semantically correct in
 advance: `squad` aggregates filter on `Role::Squad` rather than summing the

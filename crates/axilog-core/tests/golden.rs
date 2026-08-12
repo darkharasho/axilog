@@ -312,6 +312,52 @@ fn check_professions_match_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
     println!("professions_match_ei_golden: {matched} accounts joined, 0 mismatches");
 }
 
+/// `in_squad` distinguishes real squad members from non-squad friendlies,
+/// calibrated against EI's own `notInSquad`.
+///
+/// GW2 squad subgroups are 1-15; a friendly player with no subgroup (parsed
+/// as 0) is not in the squad. GW2EI calls these `_nonSquadFriendlies` and
+/// reports them as `notInSquad: true` with the sentinel `group: 51`.
+///
+/// Before this was populated, `in_squad` was hardcoded `true` for every
+/// player, so `--format ei-json` emitted `notInSquad: false` for everyone
+/// and no consumer could split pugs from the squad -- axibridge's
+/// `partitionSquadPlayers` keys on exactly that field. It also made the 1.0
+/// format's `Role::FriendlyPlayer` unreachable, and every "squad" aggregate
+/// silently included pugs.
+#[test]
+fn in_squad_matches_ei_golden_not_in_squad() {
+    let golden = read_golden_json();
+    let expected_non_squad = golden["players"]
+        .as_array()
+        .expect("players array")
+        .iter()
+        .filter(|p| p["notInSquad"].as_bool().unwrap_or(false))
+        .count();
+    assert_eq!(expected_non_squad, 4, "EI reference pins 4 non-squad friendlies");
+
+    let raw = decode_raw(&read_anon_fixture()).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+
+    let non_squad: Vec<&axilog_core::model::Player> =
+        enc.players.iter().filter(|p| !p.in_squad).collect();
+    assert_eq!(
+        non_squad.len(),
+        expected_non_squad,
+        "expected {expected_non_squad} non-squad friendlies to match EI's notInSquad, got {}",
+        non_squad.len()
+    );
+
+    // The signal is the subgroup, so every one of them must carry 0 and no
+    // squad member may.
+    for p in &non_squad {
+        assert_eq!(p.subgroup, 0, "a non-squad friendly has no subgroup");
+    }
+    for p in enc.players.iter().filter(|p| p.in_squad) {
+        assert_ne!(p.subgroup, 0, "a squad member always has a subgroup (1-15)");
+    }
+}
+
 #[test]
 fn professions_match_ei_golden() {
     let golden = read_golden_json();

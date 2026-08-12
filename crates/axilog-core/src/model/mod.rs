@@ -223,7 +223,19 @@ pub fn resolve(raw: &RawLog) -> Encounter {
                 players.push(Player {
                     agent_addr: a.addr, account, character, profession, elite_spec,
                     team: String::new(), subgroup: sub.unwrap_or(0),
-                    in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
+                    // GW2 squad subgroups are 1-15, so a friendly player
+                    // with no subgroup in the agent name buffer is not in
+                    // the squad -- GW2EI's `_nonSquadFriendlies`, which it
+                    // reports as `notInSquad: true`. Calibrated against the
+                    // EI reference by `in_squad_matches_ei_golden_not_in_squad`.
+                    //
+                    // This was hardcoded `true` until MFRIENDLY, which made
+                    // `notInSquad` uniformly false in `--format ei-json` (so
+                    // no consumer could split pugs from the squad), left the
+                    // 1.0 format's `Role::FriendlyPlayer` unreachable, and
+                    // let every "squad" aggregate silently include pugs.
+                    in_squad: sub.unwrap_or(0) != 0,
+                    commander: false, marker: None, commander_tag: None, guild_id: None,
                     agent_addrs: vec![a.addr],
                 });
             }

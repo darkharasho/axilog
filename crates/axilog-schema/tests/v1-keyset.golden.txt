@@ -301,9 +301,14 @@ entities[].account
 entities[].agent_addr
 entities[].character
 entities[].combat_participant
+entities[].commander
+entities[].commander.guid
+entities[].commander.variant
 entities[].elite_spec
+entities[].guild_id
 entities[].id
 entities[].instid
+entities[].name
 entities[].profession
 entities[].role
 entities[].subgroup
