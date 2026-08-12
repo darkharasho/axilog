@@ -83,13 +83,22 @@ pub struct ParseOptions {
     pub modifiers: Option<bool>,
 }
 
-/// Shared decode -> resolve -> analyze -> build_report pipeline (identical
-/// to `axilog-cli`'s `Cmd::Parse` handler) over an already-read byte
-/// buffer. `want_replay` mirrors `ParseOptions.replay`; `want_skill_damage`
-/// mirrors `ParseOptions.skill_damage`; `want_missiles` mirrors
+/// Shared decode -> resolve -> analyze -> build_report -> build_report_v1
+/// pipeline (identical up through `build_report` to `axilog-cli`'s
+/// `Cmd::Parse` handler) over an already-read byte buffer, returning the
+/// native 1.0 container (Task 12: the native entry points -- `parseFile`/
+/// `parseBuffer` -- emit the 1.0 document, mirroring the CLI's `--format
+/// json`; `parseFileEi` is untouched and keeps consuming the legacy
+/// `Report` via `build_report_and_activity_from_bytes` below).
+/// `want_replay` mirrors `ParseOptions.replay`; `want_skill_damage` mirrors
+/// `ParseOptions.skill_damage`; `want_missiles` mirrors
 /// `ParseOptions.missiles` (all defaulted to `false` by callers that pass
-/// no options at all).
-fn build_report_from_bytes(
+/// no options at all). `generated_from` is the origin file NAME (never a
+/// full path -- paths are environment-specific and routinely contain a
+/// user name, which the PII policy scrubs); `parseBuffer` has no file name
+/// to offer and passes `None`.
+#[allow(clippy::too_many_arguments)]
+fn build_report_v1_from_bytes(
     bytes: &[u8],
     want_replay: bool,
     want_skill_damage: bool,
@@ -97,7 +106,8 @@ fn build_report_from_bytes(
     want_missiles: bool,
     want_rotation: bool,
     want_modifiers: bool,
-) -> Result<axilog_schema::Report> {
+    generated_from: Option<&str>,
+) -> Result<axilog_schema::v1::ReportV1> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
@@ -117,9 +127,17 @@ fn build_report_from_bytes(
             &raw, &axilog_core::analysis::damage::InstidRegistry::build(&raw), &enc, false,
         )
     });
-    Ok(axilog_schema::build_report(
+    let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
+    );
+    Ok(axilog_schema::v1::build_report_v1(
+        &enc,
+        &metrics,
+        &report,
+        env!("CARGO_PKG_VERSION"),
+        generated_from,
+        damage_mods.as_ref(),
     ))
 }
 
@@ -266,27 +284,43 @@ fn build_report_and_activity_from_bytes(
     ))
 }
 
-fn report_to_value(report: &axilog_schema::Report) -> Result<Value> {
+fn report_v1_to_value(report: &axilog_schema::v1::ReportV1) -> Result<Value> {
     serde_json::to_value(report).map_err(napi_err)
 }
 
-/// Parses a `.evtc`/`.zevtc` file at `path` and returns the native
-/// `Report` as a plain JS object (see module docs for the field-name
-/// behavior). `opts.replay` (M9, Task 2) opts into embedding the native
-/// combat-replay block; omitted entirely for back-compat with every
-/// existing zero-arg call site.
+/// Parses a `.evtc`/`.zevtc` file at `path` and returns the native 1.0
+/// container (Task 12) as a plain JS object (see module docs for the
+/// field-name behavior). `opts.replay` (M9, Task 2) opts into embedding the
+/// native combat-replay block; omitted entirely for back-compat with every
+/// existing zero-arg call site. Unlike `parseBuffer`, this entry point has
+/// a real file name to offer, so it threads `path`'s file name (never the
+/// full path -- see `build_report_v1_from_bytes`'s doc comment) into the
+/// document's `generated_from`.
 #[napi]
 pub fn parse_file(path: String, opts: Option<ParseOptions>) -> Result<Value> {
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    parse_buffer(bytes.into(), opts)
+    let want_replay = opts.and_then(|o| o.replay).unwrap_or(false);
+    let want_skill_damage = opts.and_then(|o| o.skill_damage).unwrap_or(false);
+    let want_timeseries = opts.and_then(|o| o.timeseries).unwrap_or(false);
+    let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
+    let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
+    let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
+    let generated_from =
+        std::path::Path::new(&path).file_name().and_then(|s| s.to_str());
+    let report = build_report_v1_from_bytes(
+        &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
+        want_modifiers, generated_from,
+    )?;
+    report_v1_to_value(&report)
 }
 
 /// Parses an already-read `.evtc`/`.zevtc` buffer and returns the native
-/// `Report` as a plain JS object. `opts.replay` (M9, Task 2) opts into
-/// embedding the native combat-replay block; `opts.skill_damage` (M12,
-/// Task 1) opts into embedding the native per-skill damage distribution
-/// block; `opts.missiles` (final-review fix wave) opts into embedding the
-/// native top-level missile analytics block.
+/// 1.0 container (Task 12) as a plain JS object. `opts.replay` (M9, Task 2)
+/// opts into embedding the native combat-replay block; `opts.skill_damage`
+/// (M12, Task 1) opts into embedding the native per-skill damage
+/// distribution block; `opts.missiles` (final-review fix wave) opts into
+/// embedding the native top-level missile analytics block. A buffer has no
+/// file name to offer, so `generated_from` is always absent here.
 #[napi]
 pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
     let want_replay = opts.and_then(|o| o.replay).unwrap_or(false);
@@ -295,11 +329,11 @@ pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
     let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
     let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
     let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
-    let report = build_report_from_bytes(
+    let report = build_report_v1_from_bytes(
         buf.as_ref(), want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
-        want_modifiers,
+        want_modifiers, None,
     )?;
-    report_to_value(&report)
+    report_v1_to_value(&report)
 }
 
 /// Parses a `.evtc`/`.zevtc` file at `path` and returns the Elite

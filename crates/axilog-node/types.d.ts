@@ -699,3 +699,648 @@ export interface Report {
    */
   damage_mod_map?: Record<string, DamageModDescOut>
 }
+
+/* -------------------------------------------------------------------- */
+/* Native format 1.0 (`axilog_schema::v1::ReportV1`), Task 12            */
+/* -------------------------------------------------------------------- */
+
+/**
+ * Hand-transcribed types for `axilog_schema::v1::ReportV1`
+ * (`crates/axilog-schema/src/v1/{mod.rs,envelope.rs,entities.rs,catalogs.rs,
+ * series.rs,blocks/*.rs}`), the native output format 1.0 container.
+ * `parseFile`/`parseBuffer` now return THIS shape, not the legacy `Report`
+ * above (kept in place, unused by these two entry points as of Task 12, but
+ * left untouched -- see this file's own top comment). `parseFileEi` is
+ * unaffected and keeps returning the EI-compatibility JSON typed `any` in
+ * `index.d.ts`.
+ *
+ * Same numeric-field convention as above: every Rust `u64`/`u32`/`f64`/`i32`
+ * field is `number`, exact for every value this schema actually produces but
+ * lossy in principle for a `u64` beyond 2^53.
+ */
+
+/** The FORMAT contract version plus the producing binary's version and the input file name. */
+export interface AxilogMeta {
+  /** The FORMAT contract version. Moves independently of `version`. Currently always `"1.0"`. */
+  schema: string
+  /** The binary that produced this document (`CARGO_PKG_VERSION`). */
+  version: string
+  /** The input log's file NAME, never a full path. Omitted when unknown (e.g. `parseBuffer`, which has no file name to offer). */
+  generated_from?: string
+}
+
+/**
+ * One `CBTS_MARKER` assignment, native 1.0 shape. `agent_addr` is always
+ * present (arcdps does not restrict `CBTS_MARKER` to squad members, and many
+ * carrying agents never become tracked entities); `entity_id` is present
+ * only when the agent resolves to a roster entity.
+ */
+export interface MarkerAssignmentOutV1 {
+  /** The entity this marker is on. Absent for agents that carry markers but are not tracked entities. */
+  entity_id?: number
+  agent_addr: number
+  marker: string
+  time_ms: number
+}
+
+/**
+ * The 1.0 encounter envelope -- a reprojection of the legacy `EncounterOut`
+ * with `markers[]` rekeyed from `agent_addr` to `entity_id`.
+ */
+export interface EncounterOutV1 {
+  kind: string
+  map: string
+  duration_ms: number
+  build: string
+  revision: number
+  /** The recording player, as an entity id. Omitted when the recorder does not resolve to an entity. */
+  recorded_by?: number
+  teams: TeamOut[]
+  markers: MarkerAssignmentOutV1[]
+  tick_rate?: TickRateOut
+}
+
+/**
+ * What an entity IS -- squad member, non-squad friendly, enemy player, or
+ * NPC/gadget. Declaration order is `entities[]`'s sort order.
+ */
+export type Role = 'squad' | 'friendly_player' | 'enemy_player' | 'npc'
+
+export interface CommanderOut {
+  variant: string
+  guid: string
+}
+
+/**
+ * One agent's IDENTITY only -- no statistics; those live in `blocks`, keyed
+ * by `id`. The single place account and character names appear, so a PII
+ * scrub is one pass rather than a hunt through nested structures.
+ */
+export interface EntityOut {
+  /** Dense index into `entities[]`, from 0. Stable WITHIN a report only -- join across logs on `account`. */
+  id: number
+  role: Role
+  /** Players only. */
+  account?: string
+  /** Players only. */
+  character?: string
+  /** Non-player entities only. */
+  name?: string
+  /** Present exactly for player roles. */
+  profession?: string
+  /** Empty string when the agent has no elite spec, or one this project cannot name. Never a numeric spec id. */
+  elite_spec?: string
+  team: string
+  subgroup?: number
+  commander?: CommanderOut
+  guild_id?: string
+  marker?: string
+  /** The arcdps agent address -- a documented attribute, not a secret. */
+  agent_addr: number
+  instid?: number
+  /**
+   * Whether this entity interacted with the squad at all (dealt damage to
+   * the squad, took damage from the squad, or took CC from the squad).
+   * Always `true` for squad members and non-squad friendlies. Never
+   * optional -- absence would be ambiguous between "did not participate"
+   * and "not computed".
+   */
+  combat_participant: boolean
+}
+
+/** Definition metadata for one referenced skill id. */
+export interface SkillEntry {
+  name: string
+  is_swap: boolean
+  can_crit: boolean
+  auto_attack?: boolean
+}
+
+/**
+ * Definition metadata for one referenced buff id. `kind` is GW2's real
+ * three-way taxonomy (arcdps does not distinguish these structurally).
+ */
+export interface BuffEntry {
+  name: string
+  kind: 'condition' | 'boon' | 'effect'
+  stacking: 'intensity' | 'duration'
+  max_stacks?: number
+}
+
+/** Definition metadata for one referenced damage-modifier id. */
+export interface DamageModEntry {
+  name: string
+  kind: string
+  approximate: boolean
+}
+
+/**
+ * Definition metadata for every id any block references. No human-readable
+ * name appears outside `catalogs` or `entities` -- every block references
+ * integers instead. Keys serialize as decimal strings.
+ */
+export interface Catalogs {
+  skills: Record<string, SkillEntry>
+  buffs: Record<string, BuffEntry>
+  /** Omitted entirely (not `{}`) when no damage-modifier id was referenced (e.g. `modifiers` was not requested). */
+  damage_mods?: Record<string, DamageModEntry>
+}
+
+/**
+ * One time series in the format's single series envelope. `enc` is `"raw"`
+ * (a plain array of values) or `"rle"` (an array of `[value, run_length]`
+ * pairs), chosen per series by whichever serializes smaller. `len` is the
+ * DECODED length in both cases (NOT `data.length`), so a consumer can
+ * allocate before decoding and validate after.
+ */
+export interface SeriesOut {
+  interval_ms: number
+  /** Decoded length, NOT `data.length`. */
+  len: number
+  enc: 'raw' | 'rle'
+  data: unknown[]
+}
+
+/** Why a block is or is not present in `blocks`. */
+/**
+ * Why a block is or is not in `blocks`.
+ *
+ * - `present` -- computed, carried, at least one row.
+ * - `not_computed` -- the compute gate was off. NOT the same as empty:
+ *   it is a missing flag, not a fact about the log.
+ * - `empty` -- computed and genuinely nothing to report. The block is
+ *   still carried; only `not_computed`/`unsupported` omit it.
+ * - `unsupported` -- RESERVED. No code path in this version emits it:
+ *   nothing this container computes is era- or encounter-kind-gated.
+ *   Named now so spec #2's era-gated surfaces can fill the slot without
+ *   consumers having to learn a new value late. Handle it, but do not
+ *   expect it from this version.
+ */
+export type CoverageState = 'present' | 'not_computed' | 'empty' | 'unsupported'
+
+/**
+ * Per-block computation/presence status, keyed by block name
+ * (`"damage"`, `"defenses"`, `"hit_stats"`, `"cc"`, `"boons"`, `"support"`,
+ * `"contribution"`, `"healing"`, `"rotation"`, `"damage_mods"`,
+ * `"missiles"`, `"replay"`, `"series"`, `"conditions"`, `"minions"`).
+ * Always names every known block, even ones this schema version never
+ * computes (`"conditions"`/`"minions"`, reserved for spec #2, always
+ * `"not_computed"`).
+ */
+export type Coverage = Record<string, CoverageState>
+
+export type Severity = 'info' | 'warn' | 'error'
+
+/**
+ * A structured, user-facing analysis warning. `code` is a closed,
+ * documented set: adding a code is additive, changing one's meaning is a
+ * break.
+ */
+export interface WarningOut {
+  code: string
+  severity: Severity
+  message: string
+  /** The entity this warning is about, when it is about one. */
+  entity_id?: number
+}
+
+/** The uniform entity-keyed map every block uses. Keys serialize as decimal strings. */
+export type ByEntity<T> = Record<string, T>
+
+/* --- damage block -------------------------------------------------------- */
+
+/**
+ * Aggregates `Role::Squad` entities ONLY -- not every friendly player (see
+ * `by_entity`, which is the full roster).
+ */
+export interface DamageSquad {
+  total: number
+  dps: number
+}
+
+/**
+ * Mirrors the legacy `SkillEntryOut` field-for-field. `hits`/`min`/`max`
+ * count only CONTRIBUTING (`dmg > 0`) events. `crit_hits`/`flank_hits` are
+ * hit COUNTS, not damage sums.
+ */
+export interface SkillRow {
+  total: number
+  hits: number
+  min: number
+  max: number
+  crit_hits: number
+  flank_hits: number
+}
+
+/**
+ * Mirrors the legacy `PerTargetStatsOut` field-for-field, minus `enemy_id`
+ * (the enclosing map's key here, as the target's ENTITY id). `interrupts`
+ * and `downs_contribution_damage` are not derivable from any other block.
+ */
+export interface PerTargetDetail {
+  connected_hits: number
+  connected_damage: number
+  against_downed_count: number
+  downed: number
+  killed: number
+  interrupts: number
+  /**
+   * arcdps-methodology down-contribution DAMAGE for downs of this specific
+   * target -- NOT GW2EI's 90%-to-downstate-window algorithm.
+   */
+  downs_contribution_damage: number
+}
+
+/**
+ * One `(entity, target)` pair. `total` is ungated; `detail` and `by_skill`
+ * come from the `skillDamage: true`-gated families, so a row can
+ * legitimately carry `total` alone.
+ */
+export interface PerTarget {
+  total: number
+  /**
+   * Grouped under one key rather than flattened so its absence has a
+   * single unambiguous signal instead of seven fabricated zeros.
+   */
+  detail?: PerTargetDetail
+  /** Per-(entity, target, skill) outgoing damage, keyed by skill id. */
+  by_skill?: Record<string, SkillRow>
+}
+
+export interface DamageEntity {
+  total: number
+  dps: number
+  taken: number
+  /**
+   * Enemy players this entity landed the DOWNING blow on. An outgoing
+   * outcome; the incoming mirrors are `DefensesEntity.downs_taken`/
+   * `deaths`, the same split GW2EI makes.
+   */
+  downs_dealt: number
+  /** Enemy players this entity landed the KILLING blow on. */
+  kills_dealt: number
+  /**
+   * Keyed by the TARGET's entity id. Sparse; omitted when empty. A UNION of
+   * three legacy per-enemy families, so a target can appear with `detail`
+   * and no damage `total`.
+   */
+  per_target?: Record<string, PerTarget>
+  /** OUTGOING per-skill damage, keyed by skill id. Present only when the per-skill compute gate (`skillDamage: true`) was on. */
+  by_skill?: Record<string, SkillRow>
+  /** INCOMING per-skill damage, keyed by skill id -- mirroring this row's own `total`/`taken` pair. Same gate as `by_skill`. */
+  by_skill_taken?: Record<string, SkillRow>
+}
+
+export interface DamageBlock {
+  squad: DamageSquad
+  by_entity: ByEntity<DamageEntity>
+}
+
+/* --- defenses / hit_stats / cc blocks ------------------------------------ */
+
+/** Incoming defenses. Mirrors the legacy `DefensesOut` field-for-field. */
+export interface DefensesEntity {
+  blocked_count: number
+  evaded_count: number
+  dodge_count: number
+  missed_count: number
+  interrupted_count: number
+  invulned_count: number
+  strike_count: number
+  strike_damage: number
+  power_count: number
+  power_damage: number
+  condition_count: number
+  condition_damage: number
+  life_leech_count: number
+  life_leech_damage: number
+  barrier_count: number
+  barrier_damage: number
+  breakbar_count: number
+  breakbar_damage: number
+  /** Incoming crowd control. */
+  received_cc_count: number
+  received_cc_duration_ms: number
+  /** Boons stripped OFF this player -- the incoming counterpart of `SupportEntity.strips`. */
+  boon_strips_taken: number
+  boon_strips_taken_duration_ms: number
+  /**
+   * Times this entity entered downstate -- GW2EI's
+   * `defenses[0].downCount`. The outgoing mirrors live on
+   * `DamageEntity.downs_dealt`/`kills_dealt`.
+   */
+  downs_taken: number
+  /** Times this entity died -- GW2EI's `defenses[0].deadCount`. */
+  deaths: number
+}
+
+export interface DefensesBlock {
+  by_entity: ByEntity<DefensesEntity>
+}
+
+/**
+ * Outgoing hit quality. Mirrors the legacy `HitStatsOut` field-for-field.
+ * `above90_*` counts/damage are against a target at or above 90% health.
+ */
+export interface HitStatsEntity {
+  crit_count: number
+  crit_damage: number
+  flank_count: number
+  glance_count: number
+  moving_count: number
+  connected_count: number
+  connected_damage: number
+  direct_count: number
+  direct_damage: number
+  condition_count: number
+  condition_damage: number
+  critable_direct_count: number
+  against_downed_count: number
+  against_downed_damage: number
+  life_leech_count: number
+  life_leech_damage: number
+  above90_power_count: number
+  above90_power_damage: number
+  above90_condition_count: number
+  above90_condition_damage: number
+}
+
+export interface HitStatsBlock {
+  by_entity: ByEntity<HitStatsEntity>
+}
+
+/** Aggregates `Role::Squad` entities ONLY. */
+export interface CcSquad {
+  applied_total: number
+  applied_duration_ms: number
+}
+
+/**
+ * Mirrors the legacy `CcOut` field-for-field. Incoming CC lives on
+ * `DefensesEntity.received_cc_count`/`received_cc_duration_ms` instead.
+ */
+export interface CcEntity {
+  applied_total: number
+  applied_duration_ms: number
+  stun_breaks: number
+  removed_stun_duration_ms: number
+}
+
+export interface CcBlock {
+  squad: CcSquad
+  by_entity: ByEntity<CcEntity>
+}
+
+/* --- boons / support / contribution / healing blocks --------------------- */
+
+/**
+ * Mirrors the legacy `GenerationOut` field-for-field. WASTED fields are
+ * rounded to 3 decimals and omitted when exactly zero -- read them as 0
+ * when absent.
+ */
+export interface GenerationRow {
+  self_pct: number
+  group_pct: number
+  squad_pct: number
+  self_wasted?: number
+  group_wasted?: number
+  squad_wasted?: number
+}
+
+/** Mirrors the legacy `BoonOut` field-for-field, minus `id` (the map key) and `name` (resolve via `catalogs.buffs`). */
+export interface BoonRow {
+  uptime_pct: number
+  avg_stacks?: number
+  generation: GenerationRow
+}
+
+/** entity id -> buff id -> row. Two levels of real ids, no positional joins. */
+export interface BoonsBlock {
+  by_entity: ByEntity<Record<string, BoonRow>>
+}
+
+/** Mirrors the legacy `SupportOut` field-for-field. */
+export interface SupportEntity {
+  cleanses: number
+  cleanses_self: number
+  strips: number
+  strips_duration_ms: number
+  resurrects: number
+}
+
+export interface SupportBlock {
+  by_entity: ByEntity<SupportEntity>
+}
+
+/** Mirrors the legacy `ContributionOut` field-for-field. */
+export interface ContributionRow {
+  damage: number
+  cc: number
+  strips: number
+  movement_impairing: number
+}
+
+/** Both directions of the arcdps-methodology down contribution. */
+export interface ContributionEntity {
+  downs_contribution: ContributionRow
+  downed_by: ContributionRow
+}
+
+export interface ContributionBlock {
+  by_entity: ByEntity<ContributionEntity>
+}
+
+/** Mirrors the legacy `HealingOut` field-for-field. */
+export interface HealingEntity {
+  outgoing_total: number
+  outgoing_allies: number
+  outgoing_self: number
+  barrier_out: number
+  downed_healing_out: number
+}
+
+export interface HealingBlock {
+  by_entity: ByEntity<HealingEntity>
+}
+
+/* --- rotation / damage_mods / missiles / replay / series blocks ---------- */
+
+/**
+ * One cast. Mirrors the legacy `CastOut` field-for-field, plus `skill_id`
+ * hoisted from the enclosing skill grouping so this is a flat,
+ * time-ordered cast list per entity.
+ */
+export interface CastRow {
+  skill_id: number
+  cast_time_ms: number
+  duration_ms: number
+  /** Negative when the cast was interrupted/cancelled early. */
+  time_gained_ms: number
+  quickness: number
+}
+
+/**
+ * Mirrors the legacy `AftercastOut`. Durations are MILLISECONDS (GW2EI
+ * emits the same quantities as seconds).
+ *
+ * NOTE the name collision GW2EI bequeathed: `wasted_count` is a
+ * CAST-INTERRUPT count, unrelated to the boon-generation `*_wasted` fields
+ * under `boons`.
+ */
+export interface Aftercast {
+  /** Casts that skipped their aftercast. */
+  saved_count: number
+  saved_ms: number
+  /** Casts interrupted before firing. */
+  wasted_count: number
+  /** Already the positive "time lost" figure. */
+  wasted_ms: number
+}
+
+export interface RotationEntity {
+  cast_count: number
+  casts: CastRow[]
+  /**
+   * Cast counters, computed unconditionally but published only when this
+   * block is (gated on `rotation: true`).
+   */
+  aftercast: Aftercast
+}
+
+export interface RotationBlock {
+  by_entity: ByEntity<RotationEntity>
+}
+
+/**
+ * One damage-modifier row. `id` (the map key) is SIGNED -- negative means
+ * incoming -- so one map naturally separates outgoing from incoming.
+ */
+export interface DamageModRow {
+  hit_count: number
+  total_hit_count: number
+  damage_gain: number
+  total_damage: number
+}
+
+export interface DamageModsBlock {
+  /** Keyed by the signed damage-modifier id as a decimal string. */
+  by_entity: ByEntity<Record<string, DamageModRow>>
+}
+
+export interface MissilesSquad {
+  fired: number
+  hit: number
+  denied: number
+  incoming_fired: number
+  incoming_denied: number
+}
+
+/** Mirrors the legacy `PlayerMissilesOut`, minus `agent_addr`/`account` (identity already lives on this row's own `entities[]` entry). */
+export interface MissilesEntity {
+  fired: number
+  hit: number
+  denied: number
+  reflected_at_self: number
+}
+
+/**
+ * `squad` is REQUIRED, like every other squad aggregate in this format
+ * (`damage`, `cc`, `series`): when the block is present, so is its
+ * aggregate.
+ */
+export interface MissilesBlock {
+  squad: MissilesSquad
+  by_entity: ByEntity<MissilesEntity>
+}
+
+export interface ReplayBounds {
+  min_x: number
+  min_y: number
+  max_x: number
+  max_y: number
+}
+
+/**
+ * One entity's replay track. `samples` are `[t_ms, x, y]` triples;
+ * `down_intervals`/`dead_intervals` are `[start_ms, end_ms]` pairs.
+ * `name`/`team`/`commander`/`is_squad` are dropped versus the legacy
+ * `ReplayTrackOut` -- they live on this entity's own `entities[]` row.
+ */
+export interface ReplayTrack {
+  samples: [number, number, number][]
+  down_intervals: [number, number][]
+  dead_intervals: [number, number][]
+}
+
+export interface ReplayBlock {
+  /** Shared polling interval for every track. */
+  poll_ms: number
+  bounds?: ReplayBounds
+  /** Keyed by entity id. */
+  by_entity: ByEntity<ReplayTrack>
+}
+
+export interface SquadSeries {
+  damage: SeriesOut
+  cc_applied: SeriesOut
+  downs: SeriesOut
+}
+
+/** Mirrors the legacy `PlayerTargetSeriesOut`, minus `enemy_id` (that's the map key here, joined by entity id). */
+export interface TargetSeries {
+  damage: SeriesOut
+  power_damage: SeriesOut
+}
+
+/** Mirrors the legacy `PlayerPerSecondOut` field-for-field. `per_target` is keyed by the TARGET's entity id. */
+export interface EntitySeries {
+  damage: SeriesOut
+  damage_taken: SeriesOut
+  power_damage_taken: SeriesOut
+  per_target?: Record<string, TargetSeries>
+}
+
+/**
+ * `squad` is REQUIRED (see `MissilesBlock`). The squad series is computed
+ * unconditionally; only `by_entity` needs `timeseries: true`.
+ */
+export interface SeriesBlock {
+  squad: SquadSeries
+  by_entity: ByEntity<EntitySeries>
+}
+
+/**
+ * Every statistic block. A block is omitted entirely when `coverage` says
+ * `not_computed`/`unsupported`; an `empty` block is still carried, so a
+ * consumer can tell "computed and there was nothing" from "never ran".
+ */
+export interface Blocks {
+  damage?: DamageBlock
+  defenses?: DefensesBlock
+  hit_stats?: HitStatsBlock
+  cc?: CcBlock
+  boons?: BoonsBlock
+  support?: SupportBlock
+  contribution?: ContributionBlock
+  healing?: HealingBlock
+  rotation?: RotationBlock
+  damage_mods?: DamageModsBlock
+  missiles?: MissilesBlock
+  replay?: ReplayBlock
+  series?: SeriesBlock
+}
+
+/**
+ * axilog's native output format 1.0 container (`axilog_schema::v1::
+ * ReportV1`), as returned by `parseFile`/`parseBuffer` (Task 12).
+ */
+export interface ReportV1 {
+  axilog: AxilogMeta
+  encounter: EncounterOutV1
+  entities: EntityOut[]
+  catalogs: Catalogs
+  blocks: Blocks
+  coverage: Coverage
+  /** Structured, user-facing analysis warnings. Omitted entirely (not `[]`) when there are none. */
+  warnings?: WarningOut[]
+}

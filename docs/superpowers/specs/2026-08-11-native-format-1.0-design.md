@@ -1,6 +1,10 @@
 # Native output format 1.0 — container, identity, catalogs, encoding
 
-Status: approved design, not yet implemented.
+Status: implemented (`--format json` emits this shape as of Task 12 of the
+implementation plan). This document has been reconciled against what
+shipped (Task 14); divergences found during implementation are called out
+inline as "Deviation" notes rather than silently rewritten, so the design
+history stays legible.
 Date: 2026-08-11.
 Scope: the first of four specs in the EI-compat → native cutover program (see
 "Program context" below). This spec covers ONLY the container: document shape,
@@ -63,7 +67,14 @@ These were settled in brainstorming and constrain every spec in the program.
    fixed-rate `ei_replay` track is the motivating case — native has its own
    richer `ReplayOut`, and EI's resampled shape exists because GW2EI's replay
    engine wants it.
-   (Landed by spec #2, not this one.)
+   (Landed by spec #2, not this one. Spec #1's implementation plan deferred
+   the adapter re-point specifically — see "Program context" and Section 5
+   below — because re-pointing `crates/axilog-ei/src/lib.rs` is the single
+   riskiest change in the program and spec #2 already has to touch the
+   adapter to delete `EiInputs`. Spec #1 instead proves the reshape lost
+   nothing via `crates/axilog-schema/tests/v1_equivalence.rs`, which asserts
+   the 1.0 blocks agree field-for-field with the legacy `Report` on the
+   committed fixture.)
 7. **Flags demote from payload gates to compute gates.** `--timeseries` comes
    to mean "spend the CPU", not "make the file legible". Anything cheap is
    default-on.
@@ -75,14 +86,22 @@ both have to speak the vocabulary it defines; landing them first would mean
 reshaping everything twice.
 
 1. **Container (this spec)** — document shape, versioning, `entities[]`,
-   catalogs, block layout, series encoding. Changes no numbers.
+   catalogs, block layout, series encoding. Changes no numbers. The `ei-json`
+   adapter re-point promised by decision 6 above is explicitly OUT of this
+   spec's implementation — its plan defers that move to spec #2 (see Section
+   5) and proves the reshape instead with an equivalence test against the
+   still-untouched legacy adapter path.
 2. **Absorb the side channel** — the eight EI-only passes get id-first native
    shapes in the block slots this spec reserves; ends with `EiInputs` deleted
-   and decision 6 enforced.
+   and decision 6 enforced, including the `ei-json` adapter re-point deferred
+   from spec #1.
 3. **Wart fixes** — replay track join keys, the `down`/`dead` gaps in
    `ei_replay`, and anything else the reshape surfaces.
-4. **Consumers and docs** — HTML report, Node/Python SDKs, axibridge migration
-   guide, native-format reference page on the arcdps wiki.
+4. **Consumers and docs** — HTML report, Node/Python SDKs (including SDK
+   series hydration — decoding `enc`-tagged series into plain arrays so no
+   SDK user sees the wire encoding, previously described in "Series encoding"
+   below), axibridge migration guide, native-format reference page on the
+   arcdps wiki.
 
 Each gets its own spec → plan → execution cycle.
 
@@ -167,37 +186,68 @@ Stays a plain singular object: kind, map, duration, arcdps build/revision,
 recorded-by, teams, marker assignment timeline, tick-rate telemetry. It is
 genuinely singular and is deliberately NOT modelled as an entity.
 
-Marker assignments rekey from `agent_addr` to entity `id` (see below).
+`recorded_by` is `Option<u32>` — an entity id, resolved by matching the
+legacy `Encounter::recorded_by` account string against the roster and
+joining through that player's `agent_addr` — NOT the raw account string the
+legacy `EncounterOut.recorded_by` still carries. This keeps the "account and
+character names live in exactly one block" rule from "PII gets a real
+boundary" below true for `encounter` too: a consumer who needs the
+recorder's identity looks it up in `entities[]` by id, the same way every
+other cross-reference in the document works. Absent (field omitted, not
+`null`) when the recorder's account does not resolve to a tracked entity.
+
+Marker assignments carry BOTH `agent_addr` (always present) and `entity_id`
+(present only when the agent resolves to a tracked entity) rather than a
+pure rekey from one to the other. `arcdps` does not restrict `CBTS_MARKER`
+to squad members, and this project's WvW roster builder drops friendly-side
+NPCs/gadgets (siege, pets, own-team guards) that never took a hostile hit
+before they ever become tracked entities — so a squad marker placed on
+friendly siege is an ordinary pattern with no resolvable entity id. A pure
+rekey would silently discard that marker; carrying `agent_addr`
+unconditionally keeps it, at the cost of one extra field per marker (see
+`entities[]` below).
 
 ## `entities[]` — the single roster
 
-Identity only. No statistics.
+Identity only. No statistics. Real, trimmed rows from
+`fixtures/wvw-small.anon.zevtc` (`--format json`; see `docs/NATIVE-FORMAT.md`
+for the full worked example):
 
 ```json
 "entities": [
-  { "id": 0, "role": "squad", "account": ":Bob.1234", "character": "Bobbo",
-    "profession": "Guardian", "elite_spec": "Firebrand",
-    "team": "red", "team_id": 705, "subgroup": 3,
-    "commander": { "variant": "blue", "guid": "..." },
-    "guild_id": "ABC-...", "marker": "arrow",
-    "agent_addr": 2000123456789, "instid": 1042,
-    "first_aware_ms": 0, "last_aware_ms": 184320 },
+  { "id": 0, "role": "squad", "account": ":Anon145.6365", "character": "Anon145",
+    "profession": "Elementalist", "elite_spec": "Evoker", "team": "green",
+    "subgroup": 0, "agent_addr": 9512, "instid": 5489, "combat_participant": true },
 
-  { "id": 41, "role": "enemy_player", "profession": "Necromancer",
-    "elite_spec": "Reaper", "team": "green", "team_id": 2202,
-    "instid": 3311, "first_aware_ms": 12040, "last_aware_ms": 180221 },
+  { "id": 7, "role": "squad", "account": ":Anon106.4922", "character": "Anon106",
+    "profession": "Guardian", "elite_spec": "Dragonhunter", "team": "green",
+    "subgroup": 2,
+    "commander": { "variant": "purple-commander", "guid": "1993fadb6fb70e4383a223a54d311f7d" },
+    "guild_id": "00000000-0000-0000-0000-000000000000",
+    "agent_addr": 4566, "instid": 3684, "combat_participant": true },
 
-  { "id": 98, "role": "npc", "name": "Keep Lord", "team": "green",
-    "instid": 9001, "first_aware_ms": 0, "last_aware_ms": 184320 }
+  { "id": 42, "role": "enemy_player", "profession": "Guardian",
+    "elite_spec": "Dragonhunter", "team": "blue",
+    "agent_addr": 9594, "instid": 5089, "combat_participant": true },
+
+  { "id": 74, "role": "npc", "name": "Blood Fiend", "team": "blue",
+    "agent_addr": 9718, "instid": 3287, "combat_participant": true }
 ]
 ```
 
-Player entities carry `account` + `character`; non-player entities (`npc`,
-`gadget`) carry `name` instead, since they have neither. Absent fields are
-omitted rather than emitted as empty strings, per the omit-when-absent
-convention. `profession`/`elite_spec` are present exactly for player roles,
-preserving the MENEMYPROF property that presence is itself the
-"is this a real player" signal.
+Player entities carry `account` + `character`; non-player entities (`npc`)
+carry `name` instead, since they have neither. Absent fields are omitted
+rather than emitted as empty strings, per the omit-when-absent convention.
+`profession`/`elite_spec` are present exactly for player roles, preserving
+the MENEMYPROF property that presence is itself the "is this a real player"
+signal.
+
+**Deviation from the original draft, found during implementation:** there is
+no `team_id` field (only the `team` string) and no `first_aware_ms`/
+`last_aware_ms` on `EntityOut` — see "What lives here and why" below for
+why those two were dropped rather than added. `combat_participant: bool`
+was added instead (not in the original draft) — see "`role` replaces three
+overlapping notions" below.
 
 ### `role` replaces three overlapping notions
 
@@ -211,7 +261,15 @@ encode the same fact. One field replaces them:
 | `friendly_player` | non-squad player on the squad's team (GW2EI's `_nonSquadFriendlies`, which axilog currently discards) |
 | `enemy_player` | non-squad, non-friendly player |
 | `npc` | non-player agent |
-| `gadget` | gadget agent |
+
+**Deviation, decided before Task 1 (recorded in the plan's pre-flight
+rulings):** the fifth role sketched here, `gadget`, was dropped as
+unreachable. `axilog_core::model::agent_kind` can distinguish gadgets from
+NPCs, but `model::Enemy` does not retain that distinction once an agent
+reaches this layer, so a `Role::Gadget` arm could never actually be
+constructed — every non-player enemy agent is `role: "npc"`. Adding a real
+`Gadget` role later, if `model::Enemy` grows the distinction, is additive
+under the 1.x rules.
 
 Two stored rosters collapse into one, and both existing views become
 documented filters:
@@ -221,7 +279,12 @@ documented filters:
   comment become a query.
 - Native's combat-participant `enemies[]` is `role != "squad"` intersected
   with the nonzero-interaction criterion, which stays exactly as
-  `Metrics::combat_participant_enemies` defines it today.
+  `Metrics::combat_participant_enemies` defines it today. This criterion now
+  has its own field, `EntityOut::combat_participant: bool` (not in the
+  original draft), populated for every non-squad entity so the legacy
+  combat-participant `enemies[]` view stays expressible as a plain filter
+  (`role != "squad" && combat_participant`) rather than requiring a consumer
+  to re-derive the predicate.
 
 The `isFake` accounting stays as documented in `docs/EI-PARITY.md`: axilog
 does not synthesize GW2EI's `Dummy PvP Agent` aggregate, so every emitted
@@ -245,9 +308,11 @@ silent meaning change across every block.
 ### Id assignment and determinism
 
 `entities[]` is sorted deterministically — by `role` (in the table order
-above), then `team_id`, then `subgroup`, then account, then character, then
-`agent_addr` as the final tiebreak — and `id` is the array index, dense from
-0.
+above), then `team` (the string, e.g. `"red"`/`"green"`/`"blue"` — there is
+no separate `team_id` field on `entities[]`; the numeric WvW team id lives
+only on `encounter.teams[]`), then `subgroup`, then account, then character,
+then `agent_addr` as the final tiebreak — and `id` is the array index, dense
+from 0.
 
 The full sort key is specified rather than left to "whatever order the
 encounter produced", because ids are the join key for every block and the
@@ -281,11 +346,23 @@ in the document.
 
 ### What lives here and why
 
-`first_aware_ms` / `last_aware_ms` are identity — when this agent existed —
-and are already computed unconditionally for the EI adapter's
-`combatReplayData.start`/`end`. `commander`, `guild_id`, and the current
-`marker` are attributes of who someone is. The marker *timeline* stays in
-`encounter.markers[]`.
+`commander`, `guild_id`, and the current `marker` are attributes of who
+someone is. The marker *timeline* stays in `encounter.markers[]`.
+
+**Deviation from the original draft:** `first_aware_ms` / `last_aware_ms`
+were originally sketched as identity fields here — when this agent existed
+— on the reasoning that they are already computed unconditionally for the
+EI adapter's `combatReplayData.start`/`end`. They did not land on
+`EntityOut` during implementation. The values remain available, but only
+per replay track and only when `--replay` is on: each entity's track in
+`blocks.replay.by_entity[id].samples` starts at that agent's own
+first-aware time rounded up to the polling grid (see `blocks.replay` and
+`ReplayTrack`'s doc comment), and `down_intervals`/`dead_intervals` on the
+same track carry the down/dead windows. A consumer who needs first/last
+aware unconditionally (without paying for `--replay`) cannot get it from
+the 1.0 document today; this is a real gap relative to the original design,
+not a documentation-only correction, and is left for a later spec rather
+than papered over here.
 
 ## `catalogs` — names appear exactly once
 
@@ -294,7 +371,9 @@ and are already computed unconditionally for the EI adapter's
   "skills":      { "5491": { "name": "Symbol of Protection", "is_swap": false, "can_crit": true } },
   "buffs":       { "740":  { "name": "Might", "kind": "boon", "stacking": "intensity",
                              "max_stacks": 25, "icon": "..." } },
-  "damage_mods": { "174":  { "name": "Scholar Rune", "kind": "multiplier", "approximate": true } }
+  "damage_mods": { "174":  { "name": "Empowered", "description": "1% per boon<br>...",
+                             "non_multiplier": false, "is_counter": false,
+                             "skill_based": false, "approximate": false } }
 }
 ```
 
@@ -333,6 +412,25 @@ subset scoped to that catalog's needs and contains exactly one condition, so
 reading stacking from it silently reports five of the most common conditions
 in the game as duration-stacking with no stack cap.
 
+**Deviation, decided during Task 4's implementation review:** this section originally sketched `kind` as a binary condition-vs-boon field decided by whether the buff deals condition damage. Both halves of that were wrong, as the three paragraphs above now record.
+
+**Deviation, decided after Task 4 landed:** `DamageModEntry` originally
+folded `is_counter`/`skill_based`/`non_multiplier` into a single `kind`
+string (`"counter"`/`"skill"`/`"flat"`/`"multiplier"`, plus `"unknown"` for
+unresolved ids) via a priority chain. That is lossy — a modifier that is
+BOTH skill-based and a multiplier collapses to `"skill"`, silently erasing
+the multiplier axis — and folds two orthogonal properties into one label
+for no reason `buffs.kind`'s three-way taxonomy doesn't already have (that
+one IS a real single classification; this wasn't). `kind` was replaced with
+the four independent booleans (`non_multiplier`, `is_counter`,
+`skill_based`, `approximate`) plus `description`, mirroring GW2EI's own
+`damageModMap` entry fields and `axilog_core::analysis::damage_mods::
+DamageModifierMeta`, which already stored them this way. For an id with no
+resolved definition, all five fields are omitted together (`Option`,
+`skip_serializing_if`) rather than defaulted to `false`/`""` — absence is
+the honest "no metadata" signal, not an assertion that every property is
+false.
+
 Professions and elite specs stay inline strings on entities. They are a closed
 set of ~40 short values with no metadata worth hoisting, and hoisting them
 would make entities unreadable for no gain.
@@ -361,9 +459,10 @@ a consumer learns the access pattern once.
     "squad": { "total": 41203311, "dps": 22345.1 },
     "by_entity": {
       "0": {
-        "total": 1203311, "dps": 652.4,
-        "per_target": { "41": { "total": 88123, "hits": 412, "crits": 190 } },
-        "by_skill":   { "5491": { "total": 44012, "hits": 88, "min": 320, "max": 1204 } }
+        "total": 1203311, "dps": 652.4, "taken": 88123,
+        "per_target": { "41": { "total": 88123 } },
+        "by_skill":   { "5491": { "total": 44012, "hits": 88, "min": 320, "max": 1204,
+                                   "crit_hits": 31, "flank_hits": 9 } }
       }
     }
   },
@@ -376,6 +475,25 @@ a consumer learns the access pattern once.
   }
 }
 ```
+
+(Illustrative shape, hand-composed for readability here — see
+`docs/NATIVE-FORMAT.md` for a real trimmed document. Corrections from the
+earliest draft of this example: `by_skill` rows (`SkillRow`) carry
+`crit_hits`/`flank_hits` hit *counts*, mirroring the legacy `SkillEntryOut`
+field for field, which this sketch first omitted entirely.
+
+A second "correction" recorded here during Task 5/8 was itself **wrong**
+and is retracted by the final whole-branch review: it claimed `per_target`
+rows carry only `total`, on the reasoning that "a target's hit/crit counts
+live on that target's own `by_skill` rows the same way any entity's do".
+They do not. `by_skill` is the *attacker's* per-skill totals across all
+targets, so it cannot answer a per-`(attacker, target)` question — and
+`PerTargetStatsOut`'s `interrupts` and `downs_contribution_damage` are not
+reconstructible from any other block at all. Acting on that reasoning
+dropped the whole struct. `per_target` rows now carry `total` plus an
+optional `detail` (the full `PerTargetStatsOut`) and an optional
+`by_skill` (the per-`(attacker, target, skill)` split); see
+`docs/NATIVE-FORMAT.md`.)
 
 The identity/statistics split pays off directly here: `per_target` keys are
 entity ids, so an enemy player's own damage row and the damage dealt *to* them
@@ -441,12 +559,16 @@ Under the 1.x additive rule a third `enc` value can land later if profiling
 justifies it, and consumers that already switch on `enc` will not break. That
 is the whole reason `enc` is a tagged field rather than an implicit format.
 
-### The SDKs hide it
+### `enc` is a wire-format concern only
 
-`enc` is a wire-format concern only. The Node and Python SDKs hydrate series
-into plain arrays, so no SDK user sees an encoding tag. Decode is roughly five
-lines in any language and the reference doc (spec #4) states the algorithm
-explicitly for consumers not using an SDK.
+Decode is roughly five lines in any language, and the reference doc (spec
+#4, `docs/NATIVE-FORMAT.md`) states the algorithm explicitly for consumers
+not using an SDK. Whether the Node and Python SDKs hydrate series into plain
+arrays so no SDK user ever sees the encoding tag is consumer-facing polish,
+not a container concern — that promise belongs to spec #4's "Consumers and
+docs" scope, not this one, which changes no consumer surface. This spec's
+job stops at defining `enc` as a tagged field precisely so a future SDK (or
+consumer) can make that choice without a format break.
 
 ## `warnings` becomes structured
 
@@ -488,9 +610,21 @@ an unchanged assertion throughout the work, and any diff means the reshape
 lost or corrupted data.
 
 That is a far stronger guarantee than a new native golden alone, and it is
-free: the tests already exist. The adapter reads from the new shape; its
-output does not move. Implementation should treat any EI golden diff as a
-hard stop, not a golden to re-bless.
+free: the tests already exist. **Amendment, decided during implementation:**
+the adapter does NOT re-point to the new shape in this spec, contrary to
+decision 5 above. Re-pointing `crates/axilog-ei/src/lib.rs` (3,331 lines) was
+judged the single riskiest change in the program, and spec #2 already has to
+touch the adapter to delete `EiInputs`, so the re-point lands there in one
+motion instead. The adapter keeps reading the legacy `Report` completely
+unchanged, so `ei-json` output is byte-identical by construction rather than
+by assertion — a strictly stronger guarantee than "the adapter reads from
+the new shape and we assert its output does not move" would have been. The
+reshape itself (that the 1.0 blocks lose or corrupt nothing relative to the
+legacy `Report`) is instead proven by
+`crates/axilog-schema/tests/v1_equivalence.rs`, which asserts the 1.0 blocks
+agree field-for-field with the legacy `Report` on the committed fixture.
+Implementation should treat any EI golden diff as a hard stop, not a golden
+to re-bless.
 
 ### New tests
 

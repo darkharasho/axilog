@@ -160,7 +160,7 @@ fn check_healing_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
 
     assert!(metrics.has_healing_extension, "fixture must carry the healing extension");
     assert!(
-        !metrics.warnings.iter().any(|w| w.contains("healing extension not present")),
+        !metrics.warnings.iter().any(|w| w.message.contains("healing extension not present")),
         "healing extension IS present in this fixture; the absent-warning must not fire, got {:?}",
         metrics.warnings
     );
@@ -373,7 +373,7 @@ fn healing_extension_present_and_sane_on_local_postrework_when_available() {
     let metrics = analyze(&enc, &raw);
 
     assert!(metrics.has_healing_extension, "local post-rework fixture must carry the healing extension");
-    assert!(!metrics.warnings.iter().any(|w| w.contains("healing extension not present")));
+    assert!(!metrics.warnings.iter().any(|w| w.message.contains("healing extension not present")));
 
     let squad_total: u64 = metrics.players.iter().map(|p| p.healing.healing_out_total).sum();
     let squad_self: u64 = metrics.players.iter().map(|p| p.healing.healing_out_self).sum();

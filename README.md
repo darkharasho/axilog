@@ -80,7 +80,7 @@ and its size/time cost. The tables below are the index.
 
 | Format | What it is |
 | --- | --- |
-| `json` | axilog's native schema (`axilog_schema::Report`) — the richest, most accurate output; every other format is a lossy view of it |
+| `json` | axilog's native format 1.0 (`axilog_schema::v1::ReportV1`) — the richest, most accurate output; every other format is a lossy view of it. [Reference →](docs/NATIVE-FORMAT.md) |
 | `table` | Human-readable per-player summary, one row per player (see `--view`) |
 | `csv` | The same fields as the default `table` view, machine-readable |
 | `ei-json` | A subset of the real Elite Insights / dps.report JSON shape, for tools that already consume it |
@@ -204,17 +204,21 @@ and no JSON-over-subprocess; parity tests assert they stay identical to the CLI'
 
 ```js
 const { parseFile, parseFileEi } = require('@axiapps/axilog')
-const report = parseFile('./fight.zevtc')                 // native schema, typed via index.d.ts
-const ei = parseFileEi('./fight.zevtc')                   // Elite Insights JSON shape
-console.log(report.players.length, report.players[0].damage.total)
+const report = parseFile('./fight.zevtc')                 // native format 1.0, typed via index.d.ts
+const ei = parseFileEi('./fight.zevtc')                    // Elite Insights JSON shape
+console.log(report.entities.length, report.blocks.damage.squad.total)
 ```
 
 ```python
 import axilog
-report = axilog.parse_file("./fight.zevtc")               # native schema, typed via axilog.pyi
-ei = axilog.parse_file_ei("./fight.zevtc")                # Elite Insights JSON shape
-print(len(report["players"]), report["players"][0]["damage"]["total"])
+report = axilog.parse_file("./fight.zevtc")               # native format 1.0, typed via axilog.pyi
+ei = axilog.parse_file_ei("./fight.zevtc")                 # Elite Insights JSON shape
+print(len(report["entities"]), report["blocks"]["damage"]["squad"]["total"])
 ```
+
+See [`docs/NATIVE-FORMAT.md`](docs/NATIVE-FORMAT.md) for the shape of `report` — six top-level
+keys (`axilog`, `encounter`, `entities`, `catalogs`, `blocks`, `coverage`), id-first, no positional
+joins.
 
 Full API (`parseFile`/`parseBuffer`/`parseFileEi`/`anonymizeFile` and their Python equivalents), the
 opt-in analysis options and build-from-source instructions:
@@ -228,6 +232,7 @@ User-facing docs live on the arcdps wiki — [overview](https://arcdps.axi.link/
 [methodology](https://arcdps.axi.link/axilog/methodology/),
 [schema](https://arcdps.axi.link/axilog/schema/), [accuracy](https://arcdps.axi.link/axilog/accuracy/).
 In this repo:
+[`docs/NATIVE-FORMAT.md`](docs/NATIVE-FORMAT.md) ·
 [`docs/EI-PARITY.md`](docs/EI-PARITY.md) · [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) ·
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md) · [`docs/ROADMAP.md`](docs/ROADMAP.md) ·
 [`CONTRIBUTING.md`](CONTRIBUTING.md) (build/test, fixture and PII policy, the accuracy bar, the
