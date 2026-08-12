@@ -26,8 +26,12 @@ fn check_parses_fixture_to_json(fixture_path: &str) {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["schema_version"], "0.2");
-    assert!(v["players"].as_array().unwrap().len() > 0);
+    // Task 12: `--format json` (the default) now emits the native 1.0
+    // container, not the legacy `Report` shape -- `schema_version` and
+    // `players[]` are gone, replaced by `axilog.schema` and `entities[]`
+    // (see `crates/cli_v1.rs` for the dedicated 1.0-shape assertions).
+    assert_eq!(v["axilog"]["schema"], "1.0");
+    assert!(v["entities"].as_array().unwrap().len() > 0);
 }
 
 /// Committed, PII-safe fixture — always present, so this runs in CI too
@@ -225,20 +229,25 @@ fn anonymize_subcommand_roundtrips_metrics() {
     let mut v_after: serde_json::Value = serde_json::from_slice(&after.stdout).unwrap();
 
     // Strip name fields (expected to differ — re-anonymized to fresh
-    // Anon<N> values) before comparing the rest of the report.
+    // Anon<N> values) before comparing the rest of the report. Task 12:
+    // `--format json` now emits the native 1.0 container, where every
+    // account/character/name field lives on `entities[]` (see
+    // `EntityOut`'s doc comment on why identity was consolidated there),
+    // and `encounter.recorded_by` is already an entity id (not a raw
+    // account string), so it needs no separate nulling.
     for v in [&mut v_before, &mut v_after] {
-        if let Some(players) = v["players"].as_array_mut() {
-            for p in players {
-                p.as_object_mut().unwrap().remove("account");
-                p.as_object_mut().unwrap().remove("character");
+        if let Some(entities) = v["entities"].as_array_mut() {
+            for e in entities {
+                let obj = e.as_object_mut().unwrap();
+                obj.remove("account");
+                obj.remove("character");
+                obj.remove("name");
             }
         }
-        if let Some(enemies) = v["enemies"].as_array_mut() {
-            for e in enemies {
-                e.as_object_mut().unwrap().remove("name");
-            }
-        }
-        v["encounter"]["recorded_by"] = serde_json::Value::Null;
+        // The before/after files have different names by construction (the
+        // anonymized copy is written to a fresh temp path), so
+        // `axilog.generated_from` is expected to differ too.
+        v["axilog"]["generated_from"] = serde_json::Value::Null;
     }
     assert_eq!(v_before, v_after, "anonymize subcommand must not change any metric-bearing field");
 }

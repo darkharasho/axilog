@@ -6,6 +6,8 @@ use axilog_core::analysis::replay::Replay;
 use axilog_core::analysis::missiles::Missiles;
 use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
 
+pub mod v1;
+
 #[derive(Serialize)]
 pub struct Report {
     pub schema_version: &'static str,
@@ -266,6 +268,12 @@ pub struct ReplayTrackOut {
     pub samples: Vec<(u64, f64, f64)>,
     pub down_intervals: Vec<(u64, u64)>,
     pub dead_intervals: Vec<(u64, u64)>,
+    /// The representative raw agent addr, carried from
+    /// `analysis::replay::Track`. `#[serde(skip)]` so the legacy JSON stays
+    /// byte-identical; promoted to the 1.0 `by_entity` key (native format
+    /// 1.0, Task 8) -- the legacy shape above has no join key at all.
+    #[serde(skip)]
+    pub agent_addr: u64,
 }
 
 /// Round to 1 decimal place -- keeps `ReplayTrackOut.samples`' JSON
@@ -294,6 +302,7 @@ pub fn build_replay_out(replay: &Replay) -> ReplayOut {
             samples: t.samples.iter().map(|s| (s.t_ms, round1(s.x), round1(s.y))).collect(),
             down_intervals: t.down_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
             dead_intervals: t.dead_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
+            agent_addr: t.agent_addr,
         })
         .collect();
 
@@ -338,7 +347,7 @@ pub fn build_replay_out(replay: &Replay) -> ReplayOut {
         tracks,
     }
 }
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u64,
     pub build: String, pub revision: u8, pub recorded_by: Option<String>,
     pub teams: Vec<TeamOut>,
@@ -354,13 +363,13 @@ pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u6
     /// convention.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tick_rate: Option<TickRateOut> }
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct MarkerAssignmentOut { pub agent_addr: u64, pub marker: String, pub time_ms: u64 }
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct TickRateOut { pub avg: f64, pub min: f64, pub per_second: Vec<f64> }
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct CommanderTagOut { pub variant: String, pub guid: String }
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct TeamOut {
     pub color: String,
     pub team_id: u32,
@@ -1418,7 +1427,7 @@ pub fn build_report(
             per_second: PerSecondOut { squad_damage: metrics.timeline.squad_damage.clone(),
                 cc_applied: metrics.timeline.cc_applied.clone(),
                 downs: metrics.timeline.downs.clone() } },
-        warnings: metrics.warnings.clone(),
+        warnings: metrics.warnings.iter().map(|w| w.message.clone()).collect(),
         replay: replay.map(build_replay_out),
         missiles: missiles.map(|m| build_missiles_out(m, enc)),
         // M14 Task 2: straight copy of `Metrics::skill_map` -- already

@@ -1,7 +1,11 @@
 # EI-JSON parity (full reference)
 
-The complete, per-field parity accounting for `axilog parse --format ei-json`, moved out of the
-README so the README can stay short. The reader-facing summary lives in
+**Native format 1.0 (`--format json`, the default) is now the primary output surface** — see
+[`docs/NATIVE-FORMAT.md`](NATIVE-FORMAT.md) for its reference. `--format ei-json` remains
+supported and CI-asserted indefinitely as a frozen compat adapter for tools that already consume
+Elite Insights' shape; it is no longer the surface axilog recommends to a new consumer. This page
+is the per-field parity accounting for that adapter, moved out of the README so the README can
+stay short. The reader-facing summary lives in
 [the README's Accuracy section](../README.md#accuracy) and on the wiki's
 [accuracy page](https://arcdps.axi.link/axilog/accuracy/).
 

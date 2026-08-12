@@ -318,6 +318,82 @@ fn professions_match_ei_golden() {
     check_professions_match_ei_golden(&read_anon_fixture(), &golden);
 }
 
+/// No agent -- squad player OR enemy -- may report an elite-spec id as its
+/// spec NAME.
+///
+/// `check_professions_match_ei_golden` above cannot cover this: it joins
+/// against `fixtures/wvw-small.ei.json`'s `players[]`, and the fixture's
+/// unnamed specs are all on ENEMIES, for which the committed EI reference
+/// carries no rows at all (its `targets[]` is empty -- non-detailed WvW
+/// mode). So the one surface where the defect was reachable had no golden
+/// over it.
+///
+/// The fixture holds two spec ids this project does not name: 77 on a Thief
+/// and 79 on four Revenants. They must resolve to a blank `elite_spec` so
+/// every consumer's `elite_spec` -> `profession` fallback yields the true
+/// base profession; before this was fixed they resolved to the literal
+/// strings "77"/"79", which axibridge rendered as class names.
+///
+/// Deliberately asserts the SHAPE (never numeric) rather than the specific
+/// ids, so it keeps holding when 77/79 are eventually named by elimination
+/// against a real EI export -- and still catches a new unnamed id arriving
+/// with a future expansion.
+#[test]
+fn no_agent_reports_a_numeric_elite_spec() {
+    let raw = decode_raw(&read_anon_fixture()).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+
+    let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+
+    let mut offenders: Vec<String> = Vec::new();
+    for p in &enc.players {
+        if numeric(&p.elite_spec) {
+            offenders.push(format!(
+                "player {} ({}): elite_spec {:?}",
+                p.account, p.profession, p.elite_spec
+            ));
+        }
+    }
+    for e in &enc.enemies {
+        let spec = e.elite_spec.as_deref().unwrap_or("");
+        if numeric(spec) {
+            offenders.push(format!(
+                "enemy {} ({:?}): elite_spec {spec:?}",
+                e.name, e.profession
+            ));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "elite-spec ids leaked into spec NAMES (an unnamed spec must be blank \
+         so consumers fall back to the base profession):\n{}",
+        offenders.join("\n")
+    );
+
+    // Pin the known-unnamed population, straight off the agent table --
+    // `Enemy`/`Player` do not retain the raw `is_elite`, so a resolved blank
+    // spec cannot tell "core build, no elite spec" (`is_elite == 0`) apart
+    // from "elite spec this table does not name". Only the raw column can.
+    //
+    // The fixture holds exactly 5 of the latter: id 77 on a Thief, id 79 on
+    // four Revenants. If that number moves, either the mapping table gained
+    // a name (drop the count) or a fixture changed (re-derive it) -- both
+    // deserve a human look rather than a silently-passing test.
+    let mut unnamed: Vec<(u32, u32)> = raw
+        .agents
+        .iter()
+        .filter(|a| a.is_player() && a.is_elite != 0)
+        .filter(|a| axilog_core::model::profession_name(a.prof, a.is_elite).1.is_empty())
+        .map(|a| (a.prof, a.is_elite))
+        .collect();
+    unnamed.sort_unstable();
+    assert_eq!(
+        unnamed,
+        vec![(5, 77), (9, 79), (9, 79), (9, 79), (9, 79)],
+        "expected exactly the known-unnamed specs (prof 5 Thief / id 77, prof 9 Revenant / id 79)"
+    );
+}
+
 #[test]
 fn professions_match_ei_golden_local_raw_when_present() {
     let Some(bytes) = read_local_fixture_or_skip("professions_match_ei_golden") else { return };

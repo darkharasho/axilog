@@ -1,0 +1,140 @@
+//! Bytes per block on the committed fixture.
+//!
+//! Reducing payload is part of this spec's point (catalog dedup + RLE);
+//! unmeasured, it will regress. Both documents are built with EVERY
+//! compute gate on (replay, missiles, skill-damage, timeseries, rotation,
+//! damage-mods) -- see `v1_shape.rs`'s `build_with_encounter` -- so the
+//! comparison is apples-to-apples rather than a full 1.0 document against
+//! a partial legacy one.
+
+fn build() -> (String, String) {
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc"))
+        .expect("read committed fixture");
+    let raw = axilog_core::evtc::decode_raw(&bytes).expect("decode fixture");
+    let enc = axilog_core::model::resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let replay_data = axilog_core::analysis::replay::build_replay(
+        &raw,
+        &enc,
+        axilog_core::analysis::replay::DEFAULT_POLL_MS,
+    );
+    let missiles_data = axilog_core::analysis::missiles::build_missiles(&raw, &enc);
+    let damage_mods = axilog_core::analysis::damage_mods::evaluate_catalog_full(
+        &raw,
+        &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+        &enc,
+        false,
+    );
+    let legacy = axilog_schema::build_report(
+        &enc,
+        &metrics,
+        "0.0.0-test",
+        Some(&replay_data),
+        Some(&missiles_data),
+        true,
+        true,
+        true,
+        Some(&damage_mods),
+    );
+    let v1 = axilog_schema::v1::build_report_v1(
+        &enc,
+        &metrics,
+        &legacy,
+        "0.0.0-test",
+        Some("wvw-small.anon.zevtc"),
+        Some(&damage_mods),
+    );
+    (
+        serde_json::to_string(&legacy).expect("legacy serializes"),
+        serde_json::to_string(&v1).expect("v1 serializes"),
+    )
+}
+
+#[test]
+fn the_one_point_oh_document_is_not_larger_than_the_legacy_one() {
+    let (legacy, v1) = build();
+    // Catalog dedup and RLE DO make 1.0 smaller on the same content:
+    // measured ratio on the committed fixture is ~0.80 (see
+    // docs/BENCHMARKS.md).
+    //
+    // That figure was ~0.55 until the final whole-branch review, which is
+    // the cautionary tale this comment exists to carry: the earlier number
+    // was measured while five legacy field families had no 1.0 destination
+    // at all and were being silently dropped -- including the bulkiest one
+    // in the schema, the per-(player, target, skill) breakdown. A size
+    // comparison against an incomplete document flatters itself, and no
+    // test here could see the difference, because every test asserted that
+    // what was PRESENT matched and none asserted that nothing was ABSENT
+    // (see `v1_equivalence.rs`'s completeness checklist, added with the
+    // fix). Closing the gaps moved the ratio 0.552 -> 0.800.
+    //
+    // The bound is 0.85, down from the pre-fix 0.70 -- which the real,
+    // complete document no longer passes. 0.85 keeps ~6% relative headroom
+    // above the measured 0.800 for per-fixture drift while still asserting
+    // a genuine win: a regression that erodes even a quarter of the
+    // remaining 20% reduction trips it, and dedup or RLE breaking outright
+    // would push the ratio well past 1.0. The headroom is thinner than it
+    // was, and deliberately so -- there is less win left to protect. If
+    // additive 1.x growth eats it, re-measure and re-justify rather than
+    // widening the bound reflexively; a bound loose enough to always pass
+    // is what the pre-measurement 1.20 draft already proved worthless.
+    assert!(
+        v1.len() <= legacy.len() * 85 / 100,
+        "1.0 is {} bytes vs legacy {} (ratio {:.3}) -- expected the 1.0 document to be meaningfully \
+         smaller via catalog dedup + RLE; see docs/BENCHMARKS.md",
+        v1.len(),
+        legacy.len(),
+        v1.len() as f64 / legacy.len() as f64
+    );
+    println!("SIZE legacy={} v1={} ratio={:.3}", legacy.len(), v1.len(), v1.len() as f64 / legacy.len() as f64);
+}
+
+#[test]
+fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc"))
+        .expect("read committed fixture");
+    let raw = axilog_core::evtc::decode_raw(&bytes).expect("decode fixture");
+    let enc = axilog_core::model::resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let replay_data = axilog_core::analysis::replay::build_replay(
+        &raw,
+        &enc,
+        axilog_core::analysis::replay::DEFAULT_POLL_MS,
+    );
+    let missiles_data = axilog_core::analysis::missiles::build_missiles(&raw, &enc);
+    let damage_mods = axilog_core::analysis::damage_mods::evaluate_catalog_full(
+        &raw,
+        &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+        &enc,
+        false,
+    );
+    let legacy = axilog_schema::build_report(
+        &enc,
+        &metrics,
+        "0.0.0-test",
+        Some(&replay_data),
+        Some(&missiles_data),
+        true,
+        true,
+        true,
+        Some(&damage_mods),
+    );
+    let v1 = axilog_schema::v1::build_report_v1(
+        &enc,
+        &metrics,
+        &legacy,
+        "0.0.0-test",
+        Some("wvw-small.anon.zevtc"),
+        Some(&damage_mods),
+    );
+    let v = serde_json::to_value(&v1).expect("serializable");
+
+    for (name, value) in v["blocks"].as_object().expect("blocks").iter() {
+        let size = serde_json::to_string(value).expect("stringify").len();
+        println!("BLOCK {name} {size}");
+    }
+    let cats = serde_json::to_string(&v["catalogs"]).expect("stringify").len();
+    let ents = serde_json::to_string(&v["entities"]).expect("stringify").len();
+    println!("BLOCK catalogs {cats}");
+    println!("BLOCK entities {ents}");
+}
