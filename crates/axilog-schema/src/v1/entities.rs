@@ -1,3 +1,4 @@
+use crate::v1::order::SourceOrder;
 use axilog_core::analysis::Metrics;
 use axilog_core::model::Encounter;
 use serde::Serialize;
@@ -137,7 +138,10 @@ impl EntityIndex {
 /// because `id` is the join key for every block and the goldens are
 /// byte-exact diffs: role, then team, then subgroup, then account, then
 /// character/name, then `agent_addr` as the final tiebreak.
-pub fn build_entities(enc: &Encounter, metrics: &Metrics) -> (Vec<EntityOut>, EntityIndex) {
+pub fn build_entities(
+    enc: &Encounter,
+    metrics: &Metrics,
+) -> (Vec<EntityOut>, EntityIndex, SourceOrder) {
     // (sort key, entity-without-id, every addr that should resolve to it,
     //  enemy id when it came from `enc.enemies`)
     struct Pending {
@@ -242,7 +246,31 @@ pub fn build_entities(enc: &Encounter, metrics: &Metrics) -> (Vec<EntityOut>, En
         entities.push(p.entity);
     }
 
-    (entities, index)
+    // Source order is derived AFTER ids are assigned, by re-walking the
+    // encounter in its own order and resolving each agent through the
+    // index. Deriving it from the index rather than tracking it through
+    // the sort keeps the sort logic untouched -- and it means a lookup
+    // miss is impossible by construction, since every encounter agent
+    // produced a `Pending`.
+    let players = enc
+        .players
+        .iter()
+        .filter_map(|p| index.by_agent_addr(p.agent_addr))
+        .collect::<Vec<_>>();
+    debug_assert_eq!(
+        players.len(),
+        enc.players.len(),
+        "every encounter player must resolve to an entity"
+    );
+
+    let targets = enc
+        .enemies
+        .iter()
+        .filter(|e| e.is_player)
+        .filter_map(|e| index.by_enemy_id(e.id))
+        .collect::<Vec<_>>();
+
+    (entities, index, SourceOrder::new(players, targets))
 }
 
 #[cfg(test)]
@@ -309,7 +337,7 @@ mod tests {
             vec![player(20, ":Bea.2", true, 3), player(10, ":Al.1", true, 1)],
             vec![enemy(90, "Gold Invader", true, Some("Reaper"))],
         );
-        let (entities, _) = build_entities(&enc, &Metrics::default());
+        let (entities, _, _) = build_entities(&enc, &Metrics::default());
 
         let ids: Vec<u32> = entities.iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![0, 1, 2], "ids are dense array indices from 0");
@@ -325,7 +353,7 @@ mod tests {
             vec![player(10, ":Al.1", true, 1), player(11, ":Pug.9", false, 0)],
             vec![],
         );
-        let (entities, _) = build_entities(&enc, &Metrics::default());
+        let (entities, _, _) = build_entities(&enc, &Metrics::default());
         assert_eq!(entities[0].role, Role::Squad);
         assert_eq!(entities[1].role, Role::FriendlyPlayer);
     }
@@ -333,7 +361,7 @@ mod tests {
     #[test]
     fn npcs_carry_a_name_and_no_account_or_profession() {
         let enc = encounter(vec![], vec![enemy(90, "Footman", false, None)]);
-        let (entities, _) = build_entities(&enc, &Metrics::default());
+        let (entities, _, _) = build_entities(&enc, &Metrics::default());
         assert_eq!(entities[0].role, Role::Npc);
         assert_eq!(entities[0].name.as_deref(), Some("Footman"));
         assert!(entities[0].account.is_none(), "an NPC has no account");
@@ -347,7 +375,7 @@ mod tests {
     #[test]
     fn player_entities_carry_account_and_character_not_name() {
         let enc = encounter(vec![player(10, ":Al.1", true, 1)], vec![]);
-        let (entities, _) = build_entities(&enc, &Metrics::default());
+        let (entities, _, _) = build_entities(&enc, &Metrics::default());
         let v = serde_json::to_value(&entities[0]).expect("serializable");
         assert_eq!(v["account"], ":Al.1");
         assert_eq!(v["character"], "Char10");
@@ -360,7 +388,7 @@ mod tests {
             vec![player(10, ":Al.1", true, 1)],
             vec![enemy(90, "Gold Invader", true, Some("Reaper"))],
         );
-        let (entities, index) = build_entities(&enc, &Metrics::default());
+        let (entities, index, _) = build_entities(&enc, &Metrics::default());
         assert_eq!(index.by_agent_addr(10), Some(entities[0].id));
         assert_eq!(index.by_enemy_id(90), Some(entities[1].id));
         assert_eq!(index.by_agent_addr(9999), None);
@@ -374,7 +402,7 @@ mod tests {
         let mut p = player(10, ":Al.1", true, 1);
         p.agent_addrs = vec![10, 11, 12];
         let enc = encounter(vec![p], vec![]);
-        let (entities, index) = build_entities(&enc, &Metrics::default());
+        let (entities, index, _) = build_entities(&enc, &Metrics::default());
         assert_eq!(entities.len(), 1, "relogs are one person, not three");
         for addr in [10, 11, 12] {
             assert_eq!(index.by_agent_addr(addr), Some(0), "addr {addr} must resolve");

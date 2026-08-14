@@ -56,7 +56,7 @@ pub(crate) mod tests_support {
         let metrics = axilog_core::analysis::analyze(&enc, &raw);
         let report =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, true, false, false, None);
-        let (_, index) = build_entities(&enc, &metrics);
+        let (_, index, _) = build_entities(&enc, &metrics);
         (report, index)
     }
 
@@ -128,7 +128,7 @@ pub(crate) mod tests_support {
         };
         let report =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-        let (_, index) = build_entities(&enc, &metrics);
+        let (_, index, _) = build_entities(&enc, &metrics);
         (report, index)
     }
 }

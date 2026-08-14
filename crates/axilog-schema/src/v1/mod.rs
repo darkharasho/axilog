@@ -6,12 +6,14 @@ pub mod blocks;
 pub mod catalogs;
 pub mod entities;
 pub mod envelope;
+pub mod order;
 pub mod series;
 
 use crate::v1::blocks::{activity, damage, defense, support};
 use crate::v1::catalogs::{CatalogBuilder, Catalogs};
 use crate::v1::entities::{build_entities, EntityOut};
 use crate::v1::envelope::{AxilogMeta, BlockName, Coverage, CoverageState, Severity, WarningOut};
+pub use order::SourceOrder;
 use axilog_core::analysis::damage_mods::DamageModifierResults;
 use axilog_core::analysis::Metrics;
 use axilog_core::model::Encounter;
@@ -69,6 +71,10 @@ pub struct ReportV1 {
     pub axilog: AxilogMeta,
     pub encounter: EncounterOut,
     pub entities: Vec<EntityOut>,
+    /// The encounter's original agent order, for reprojections that need
+    /// positional arrays. Never serialized -- see [`SourceOrder`].
+    #[serde(skip)]
+    pub source_order: SourceOrder,
     pub catalogs: Catalogs,
     pub blocks: Blocks,
     pub coverage: Coverage,
@@ -149,7 +155,7 @@ pub fn build_report_v1(
     generated_from: Option<&str>,
     damage_mods: Option<&DamageModifierResults>,
 ) -> ReportV1 {
-    let (entities, index) = build_entities(enc, metrics);
+    let (entities, index, source_order) = build_entities(enc, metrics);
     let mut cats = CatalogBuilder::default();
     let mut coverage = Coverage::new();
 
@@ -269,6 +275,7 @@ pub fn build_report_v1(
             tick_rate: legacy.encounter.tick_rate.clone(),
         },
         entities,
+        source_order,
         catalogs: cats.finish(metrics, damage_mods),
         blocks: Blocks {
             damage: Some(damage_block),
