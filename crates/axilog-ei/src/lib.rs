@@ -13,6 +13,16 @@ use axilog_core::analysis::timeseries::EnemySeries;
 use axilog_core::icons::prof_icon_url;
 use axilog_schema::Report;
 
+mod join;
+
+/// Test-only accessors. Not part of the supported surface.
+#[doc(hidden)]
+pub mod test_support {
+    pub fn join(report: &axilog_schema::v1::ReportV1) -> crate::join::EiJoin<'_> {
+        crate::join::EiJoin::new(report)
+    }
+}
+
 // Representative real WvW team ids per color (Task 2, M2) — one id drawn
 // from each of `axilog_core::wvw`'s RED/GREEN/BLUE_TEAM_IDS fixed tables
 // (sourced from axibridge's `src/shared/wvwTeams.ts`, itself reconciled

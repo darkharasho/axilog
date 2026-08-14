@@ -11,8 +11,9 @@ pub mod series;
 
 use crate::v1::blocks::{activity, damage, defense, support};
 use crate::v1::catalogs::{CatalogBuilder, Catalogs};
-use crate::v1::entities::{build_entities, EntityOut};
+use crate::v1::entities::build_entities;
 use crate::v1::envelope::{AxilogMeta, BlockName, Coverage, CoverageState, Severity, WarningOut};
+pub use entities::EntityOut;
 pub use order::SourceOrder;
 use axilog_core::analysis::damage_mods::DamageModifierResults;
 use axilog_core::analysis::Metrics;
