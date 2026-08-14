@@ -108,6 +108,7 @@ fn build_report_v1_from_bytes(
 /// the inline form had stopped being readable.
 type EiPipelineOutputs = (
     axilog_schema::Report,
+    axilog_schema::v1::ReportV1,
     Vec<axilog_core::analysis::replay::ActivityIntervals>,
     Option<axilog_core::analysis::ei_replay::EiReplay>,
     Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
@@ -176,6 +177,15 @@ fn build_report_and_activity_from_bytes(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
     );
+    // Side-channel absorption Task 3: the transitional `ei_doc`/
+    // `to_ei_json` signature now also needs the 1.0 `ReportV1` alongside
+    // `report`. `parse_file_ei`/`parse_buffer_ei` have no file name to
+    // offer (unlike `parse_file`'s own `build_report_v1_from_bytes`), so
+    // `generated_from` stays `None`, matching this function's existing
+    // convention.
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, env!("CARGO_PKG_VERSION"), None, damage_mods.as_ref(),
+    );
     // MEIGAP Task 1b: GW2EI-shape boon stack timelines
     // (`buffUptimes[].states`/`.statesPerSource`), gated on the timeseries
     // flag -- the same setting GW2EI itself gates those two arrays behind
@@ -235,6 +245,7 @@ fn build_report_and_activity_from_bytes(
         want_timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
     Ok((
         report,
+        report_v1,
         activity,
         ei_replay,
         damage_mods,
@@ -345,10 +356,11 @@ fn parse_file_ei(
     modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let (report, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist,
+    let (report, report_v1, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist,
          target_conditions, healing_detail, minion_rollups, dist_outcomes, health_percents) =
         build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     let ei = axilog_ei::to_ei_json(
+        &report_v1,
         &report,
         &axilog_ei::EiInputs {
             activity: &activity,

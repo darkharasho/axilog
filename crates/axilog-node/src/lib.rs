@@ -168,6 +168,7 @@ fn build_report_and_activity_from_bytes(
     want_modifiers: bool,
 ) -> Result<(
     axilog_schema::Report,
+    axilog_schema::v1::ReportV1,
     Vec<axilog_core::analysis::replay::ActivityIntervals>,
     Option<axilog_core::analysis::ei_replay::EiReplay>,
     Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
@@ -210,6 +211,15 @@ fn build_report_and_activity_from_bytes(
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
+    );
+    // Side-channel absorption Task 3: the transitional `ei_doc`/
+    // `to_ei_json` signature now also needs the 1.0 `ReportV1` alongside
+    // `report`. `parseFileEi`/`parseBufferEi` have no file name to offer
+    // (unlike `parse_file`'s own `build_report_v1_from_bytes`), so
+    // `generated_from` stays `None`, matching this function's existing
+    // convention.
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, env!("CARGO_PKG_VERSION"), None, damage_mods.as_ref(),
     );
     // MEIGAP Task 1b: GW2EI-shape boon stack timelines
     // (`buffUptimes[].states`/`.statesPerSource`), gated on the timeseries
@@ -270,6 +280,7 @@ fn build_report_and_activity_from_bytes(
         want_timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
     Ok((
         report,
+        report_v1,
         activity,
         ei_replay,
         damage_mods,
@@ -372,12 +383,13 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
     let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let (report, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist,
+    let (report, report_v1, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist,
          target_conditions, healing_detail, minion_rollups, dist_outcomes, health_percents) = build_report_and_activity_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
         want_modifiers,
     )?;
     Ok(axilog_ei::to_ei_json(
+        &report_v1,
         &report,
         &axilog_ei::EiInputs {
             activity: &activity,

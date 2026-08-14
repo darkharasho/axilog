@@ -79,6 +79,8 @@ fn render_both(flags: Flags) -> (String, String) {
         false,
         None,
     );
+    let report_v1 =
+        axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
     let boon_states = flags
         .timeseries
         .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
@@ -144,9 +146,10 @@ fn render_both(flags: Flags) -> (String, String) {
     };
 
     let mut streamed: Vec<u8> = Vec::new();
-    axilog_ei::write_ei_json(&report, &inputs(), &mut streamed).expect("stream ei-json");
+    axilog_ei::write_ei_json(&report_v1, &report, &inputs(), &mut streamed)
+        .expect("stream ei-json");
     let streamed = String::from_utf8(streamed).expect("ei-json is UTF-8");
-    let tree = serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report, &inputs()))
+    let tree = serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report_v1, &report, &inputs()))
         .expect("pretty-print ei-json tree");
     (streamed, tree)
 }

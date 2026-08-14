@@ -86,6 +86,7 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
 
     let registry = axilog_core::analysis::damage::InstidRegistry::build(&raw);
     let enemies: BTreeSet<u64> =
@@ -105,7 +106,7 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
         axilog_core::analysis::target_conditions::build_with_registry(&raw, &registry, &enc);
 
     let ours = axilog_ei::to_ei_json(
-        &report,
+        &report_v1, &report,
         &EiInputs {
             activity: &activity,
             enemy_series: Some(&enemy_series),

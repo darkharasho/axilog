@@ -156,8 +156,9 @@ fn ei_json_damage_modifiers_match_the_reference_export_text_when_available() {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, false, false, false, Some(&mods),
     );
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, Some(&mods));
     let ours = axilog_ei::to_ei_json(
-        &report,
+        &report_v1, &report,
         &EiInputs { activity: &activity, replay: None, modifiers: Some(&mods), boon_states: None, ..Default::default() },
     );
 
@@ -486,8 +487,9 @@ fn committed_fixture_damage_modifier_emission_is_correctly_shaped_and_gated() {
     // -- gating: absent without the option, on BOTH surfaces --
     let plain =
         axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
+    let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, None);
     let plain_ei =
-        axilog_ei::to_ei_json(&plain, &EiInputs { activity: &activity, ..Default::default() });
+        axilog_ei::to_ei_json(&plain_v1, &plain, &EiInputs { activity: &activity, ..Default::default() });
     assert!(plain_ei.get("damageModMap").is_none(), "damageModMap must be omitted when not requested");
     for p in plain_ei["players"].as_array().expect("players") {
         for k in [
@@ -511,8 +513,9 @@ fn committed_fixture_damage_modifier_emission_is_correctly_shaped_and_gated() {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, false, false, false, Some(&mods),
     );
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, Some(&mods));
     let ei = axilog_ei::to_ei_json(
-        &report,
+        &report_v1, &report,
         &EiInputs { activity: &activity, replay: None, modifiers: Some(&mods), boon_states: None, ..Default::default() },
     );
 
@@ -601,7 +604,7 @@ fn committed_fixture_damage_modifier_emission_is_correctly_shaped_and_gated() {
 
     // -- determinism: the same inputs must produce byte-identical JSON --
     let again = axilog_ei::to_ei_json(
-        &report,
+        &report_v1, &report,
         &EiInputs { activity: &activity, replay: None, modifiers: Some(&mods), boon_states: None, ..Default::default() },
     );
     assert_eq!(

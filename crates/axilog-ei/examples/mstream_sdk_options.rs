@@ -24,6 +24,7 @@ fn main() {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-bench", None, None, true, true, true, None,
     );
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-bench", None, None);
     let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
     let enemies: std::collections::BTreeSet<u64> =
         enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
@@ -57,10 +58,10 @@ fn main() {
 
     let t0 = std::time::Instant::now();
     let v: serde_json::Value = match mode.as_str() {
-        "to_value" => axilog_ei::to_ei_json(&report, &inputs),
+        "to_value" => axilog_ei::to_ei_json(&report_v1, &report, &inputs),
         "string" => {
             let mut buf: Vec<u8> = Vec::new();
-            axilog_ei::write_ei_json(&report, &inputs, &mut buf).expect("stream");
+            axilog_ei::write_ei_json(&report_v1, &report, &inputs, &mut buf).expect("stream");
             serde_json::from_slice(&buf).expect("parse back")
         }
         other => panic!("unknown mode {other}"),

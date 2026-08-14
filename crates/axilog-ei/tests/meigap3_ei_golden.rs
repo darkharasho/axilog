@@ -82,6 +82,7 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
 
     let registry = axilog_core::analysis::damage::InstidRegistry::build(&raw);
     let healing_detail =
@@ -90,7 +91,7 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
         axilog_core::analysis::minions::build_with_registry(&raw, &registry, &enc);
 
     let ours = axilog_ei::to_ei_json(
-        &report,
+        &report_v1, &report,
         &EiInputs {
             activity: &activity,
             healing_detail: healing_detail.as_ref(),

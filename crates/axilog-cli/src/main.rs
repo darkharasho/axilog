@@ -338,6 +338,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 rotation,
                 damage_mods.as_ref(),
             );
+            // Hoisted above the `format == Format::EiJson` branch (side-
+            // channel absorption, Task 3) so both the `ei-json` streaming
+            // path and the `json` arm below share the one `ReportV1` build
+            // instead of constructing it twice.
+            let report_v1 = axilog_schema::v1::build_report_v1(
+                &enc,
+                &metrics,
+                &report,
+                env!("CARGO_PKG_VERSION"),
+                path.file_name().and_then(|s| s.to_str()),
+                damage_mods.as_ref(),
+            );
             // Final-review fix wave: surface analysis warnings (e.g. a
             // post-2026-05-01 buff-statechange-rework build producing
             // all-zero boon/support metrics) on stderr for every output
@@ -384,7 +396,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 use std::io::Write as _;
                 let mut w = std::io::BufWriter::with_capacity(1 << 20, sink);
-                axilog_ei::write_ei_json(&report, &ei_inputs, &mut w)?;
+                axilog_ei::write_ei_json(&report_v1, &report, &ei_inputs, &mut w)?;
                 w.write_all(b"\n")?;
                 // Explicit flush: a `BufWriter`'s `Drop` swallows write
                 // errors (a full disk would otherwise truncate silently).
@@ -400,15 +412,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Task 1) can apply uniformly regardless of `--format`.
             let rendered = match format {
                 Format::Json => {
-                    let v1 = axilog_schema::v1::build_report_v1(
-                        &enc,
-                        &metrics,
-                        &report,
-                        env!("CARGO_PKG_VERSION"),
-                        path.file_name().and_then(|s| s.to_str()),
-                        damage_mods.as_ref(),
-                    );
-                    format!("{}\n", serde_json::to_string_pretty(&v1)?)
+                    format!("{}\n", serde_json::to_string_pretty(&report_v1)?)
                 }
                 Format::EiJson => unreachable!("handled by the streaming path above"),
                 Format::Table => axilog_cli_table(&report, view, &metrics, &activity),

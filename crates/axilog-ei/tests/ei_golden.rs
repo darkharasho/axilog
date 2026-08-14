@@ -46,7 +46,8 @@ fn ei_json_matches_the_golden_isfake_down_dead_and_active_times() {
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, ..Default::default() });
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { activity: &activity, ..Default::default() });
 
     // -- isFake: every target, no exceptions --
     let targets = ei["targets"].as_array().expect("targets must be an array");
@@ -205,7 +206,8 @@ fn ei_json_per_skill_and_per_second_blocks_match_the_golden() {
     // gate-respecting omission-when-absent behavior is covered by
     // `axilog-ei`'s own unit tests, not this golden-fixture test).
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true, false, None);
-    let ei = axilog_ei::to_ei_json(&report, &EiInputs::default());
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs::default());
 
     let mut joined = 0usize;
     let mut dist_mismatches: Vec<String> = Vec::new();
@@ -322,7 +324,8 @@ fn ei_json_rotation_cast_counts_match_the_golden() {
     // omission-when-absent behavior is covered by `axilog-ei`'s own unit
     // tests, not this golden-fixture test).
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, true, None);
-    let ei = axilog_ei::to_ei_json(&report, &EiInputs::default());
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs::default());
 
     let mut joined = 0usize;
     let mut count_mismatches: Vec<String> = Vec::new();
@@ -417,7 +420,8 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
     let enc = resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-    let ei = axilog_ei::to_ei_json(&report, &EiInputs::default());
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs::default());
 
     // (ei-json statsAll[0] key, golden hitStats key) EXACT count/sum pairs.
     const HIT_STATS_FIELDS: &[&str] = &[
@@ -762,8 +766,9 @@ fn ei_json_combat_replay_matches_the_golden() {
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
+    let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
 
     // -- combatReplayMetaData: EXACT, field by field, as text --
     let meta = &ei["combatReplayMetaData"];
@@ -874,10 +879,11 @@ fn ei_json_replay_fields_do_not_disturb_the_always_on_surface() {
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
 
-    let without = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, ..Default::default() });
+    let without = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { activity: &activity, ..Default::default() });
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let mut with = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
+    let mut with = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
 
     // Sanity: the replay-on document really does carry the new surface
     // (otherwise this test would pass vacuously).
@@ -944,8 +950,9 @@ fn ei_json_combat_replay_matches_the_local_postrework_export() {
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let ei = axilog_ei::to_ei_json(&report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
+    let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
 
     // metaData: text-exact against the export's own object.
     let want_meta = &golden["combatReplayMetaData"];
@@ -1065,7 +1072,8 @@ fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
     // -- gated off: today's `totalDmg`-only row, split keys ABSENT (not 0) --
     let plain =
         axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-    let plain_ei = axilog_ei::to_ei_json(&plain, &EiInputs::default());
+    let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, None);
+    let plain_ei = axilog_ei::to_ei_json(&plain_v1, &plain, &EiInputs::default());
     for p in plain_ei["players"].as_array().expect("players") {
         for t in p["statsTargets"].as_array().expect("statsTargets") {
             let row = t[0].as_object().expect("statsTargets row");
@@ -1081,7 +1089,8 @@ fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
     // -- gated on: the full split, summing back to statsAll[0] --
     let full =
         axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, false, false, None);
-    let ei = axilog_ei::to_ei_json(&full, &EiInputs::default());
+    let full_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &full, "0.0.0-test", None, None);
+    let ei = axilog_ei::to_ei_json(&full_v1, &full, &EiInputs::default());
     let mut exact_players = 0usize;
     let mut checked = 0usize;
     for p in ei["players"].as_array().expect("players") {
@@ -1146,7 +1155,8 @@ fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
     let plain = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
     );
-    let off = axilog_ei::to_ei_json(&plain, &EiInputs { activity: &activity, ..Default::default() });
+    let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, None);
+    let off = axilog_ei::to_ei_json(&plain_v1, &plain, &EiInputs { activity: &activity, ..Default::default() });
     for p in off["players"].as_array().expect("players") {
         assert!(p.get("powerDamageTaken1S").is_none(), "powerDamageTaken1S must ride --timeseries");
         assert!(p.get("targetPowerDamage1S").is_none(), "targetPowerDamage1S must ride --timeseries");
@@ -1181,8 +1191,9 @@ fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
     let full = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
+    let full_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &full, "0.0.0-test", None, None);
     let on = axilog_ei::to_ei_json(
-        &full,
+        &full_v1, &full,
         &EiInputs {
             activity: &activity,
             enemy_series: Some(&series),
@@ -1366,8 +1377,9 @@ fn ei_json_enemy_player_skill_dist_matches_the_golden_aggregate() {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, false, false, None,
     );
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
     let ei = axilog_ei::to_ei_json(
-        &report,
+        &report_v1, &report,
         &EiInputs { activity: &activity, enemy_dist: Some(&dist), ..Default::default() },
     );
 
@@ -1454,7 +1466,8 @@ fn ei_json_meigap3_healing_detail_minions_and_guild_are_gated_and_consistent() {
     let plain = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
     );
-    let off = axilog_ei::to_ei_json(&plain, &EiInputs { activity: &activity, ..Default::default() });
+    let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, None);
+    let off = axilog_ei::to_ei_json(&plain_v1, &plain, &EiInputs { activity: &activity, ..Default::default() });
     for p in off["players"].as_array().expect("players") {
         assert!(p.get("minions").is_none(), "minions[] must ride --skill-damage");
         let h = &p["extHealingStats"];
@@ -1479,8 +1492,9 @@ fn ei_json_meigap3_healing_detail_minions_and_guild_are_gated_and_consistent() {
     let full = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
+    let full_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &full, "0.0.0-test", None, None);
     let on = axilog_ei::to_ei_json(
-        &full,
+        &full_v1, &full,
         &EiInputs {
             activity: &activity,
             healing_detail: Some(&detail),

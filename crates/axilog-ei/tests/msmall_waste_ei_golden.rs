@@ -47,8 +47,9 @@ fn render_ei(bytes: &[u8]) -> Value {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
     axilog_ei::to_ei_json(
-        &report,
+        &report_v1, &report,
         &EiInputs { activity: &activity, ..Default::default() },
     )
 }
