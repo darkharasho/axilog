@@ -42,7 +42,13 @@ pub struct EntityOut {
     /// Players only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub character: Option<String>,
-    /// Non-player entities only -- they have neither account nor character.
+    /// Every `enc.enemies`-derived entity -- `Role::Npc` AND
+    /// `Role::EnemyPlayer` alike, neither of which has an `account` or
+    /// `character`. Enemy players are still players, but their identity
+    /// comes from the encounter's foe-side roster (`Enemy::name`), not the
+    /// friend-side one (`Player::account`/`Player::character`), so they get
+    /// this field instead of those two rather than going label-less. See
+    /// `build_entities`'s enemy loop for the full rationale.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Present exactly for player roles, preserving MENEMYPROF's property
@@ -197,7 +203,6 @@ pub fn build_entities(
         // `profession.is_some()` (MENEMYPROF) agrees with it on every real
         // log and is the signal consumers use.
         let role = if e.is_player { Role::EnemyPlayer } else { Role::Npc };
-        let is_player_role = matches!(role, Role::EnemyPlayer);
         pending.push(Pending {
             key: (role, e.team.clone(), 0, String::new(), e.name.clone(), e.id),
             entity: EntityOut {
@@ -205,7 +210,19 @@ pub fn build_entities(
                 role,
                 account: None,
                 character: None,
-                name: (!is_player_role).then(|| e.name.clone()),
+                // Unconditional, for every `enc.enemies` row regardless of
+                // role -- NOT gated on `!is_player_role` as an earlier
+                // version of this had it. `Role::EnemyPlayer` needs a label
+                // too: ei-json emits `targets[].name` unconditionally (EI
+                // parity is a floor per the program's decision 3), and spec
+                // #1's design claims `entities[]` is the single roster
+                // carrying identity -- both claims were false for this role
+                // until this line, since an enemy-player entity previously
+                // carried neither `character` nor `name`, making it
+                // label-less. This is not a PII regression: it is still the
+                // one place names live (`entities[]`), matching every other
+                // row here.
+                name: Some(e.name.clone()),
                 profession: e.profession.clone(),
                 elite_spec: e.elite_spec.clone(),
                 team: e.team.clone(),

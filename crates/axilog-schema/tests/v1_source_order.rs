@@ -28,25 +28,14 @@ fn player_order_matches_the_legacy_report() {
     let _ = (&enc, &metrics);
 }
 
-// RULING PF-2 FINDING (reported in task-1-report.md): with the corrected,
-// character-first label precedence this test fails on the committed
-// fixture -- NOT because the precedence is wrong, but because
-// `build_entities` (crates/axilog-schema/src/v1/entities.rs) never
-// populates `character` OR `name` for `Role::EnemyPlayer` entities at all
-// (`character: None` unconditionally for every `enc.enemies`-derived
-// entity, and `name: (!is_player_role).then(...)` is `None` precisely
-// for `Role::EnemyPlayer`). Enemy-player entities in `entities[]` today
-// carry NO display label. `SourceOrder` itself (this task's actual
-// deliverable) is unaffected -- the id sequence in
-// `v1.source_order.targets()` is correct, as `positions_round_trip`
-// proves. This is left `#[ignore]`, not fixed or reverted, per the
-// controller ruling: fixing `EntityOut`'s label gap is out of this
-// task's scope (it touches `build_entities`'s Pending-construction body,
-// which the brief says stays "unchanged"), and flipping the precedence
-// back to `name.or(character)` would not even mask the bug -- both
-// fields are `None` for `Role::EnemyPlayer` regardless of order.
+// RULING PF-2 FINDING, fixed under RULING T1-1 (see task-1-report.md): this
+// test originally failed under the corrected, character-first label
+// precedence because `build_entities` never populated `character` OR `name`
+// for `Role::EnemyPlayer` entities. Fixed at the source
+// (`crates/axilog-schema/src/v1/entities.rs`'s enemy loop now sets
+// `name: Some(e.name.clone())` unconditionally), not by changing this test's
+// precedence or by ignoring the failure.
 #[test]
-#[ignore = "pre-existing gap: EntityOut carries no label for Role::EnemyPlayer -- see comment above and task-1-report.md"]
 fn target_order_matches_the_legacy_ei_targets() {
     let (_enc, _metrics, legacy, v1) = fixture_report();
 
