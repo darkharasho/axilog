@@ -68,6 +68,58 @@ def sum_by(items, key):
     return sum(key(x) for x in items)
 
 
+# ----------------------------------------------------------------------
+# Native 1.0 container accessors.
+#
+# `parse_file`/`parse_bytes` return `{axilog, blocks, catalogs, coverage,
+# encounter, entities}` -- there is no flat `players[]` any more. The
+# roster lives in `entities[]` and every per-entity analysis block is a
+# `blocks.<name>.by_entity` map keyed by `entities[].id`, so the shape
+# assertions below join the two rather than reading nested objects. Same
+# accessors as the Node suite's, kept name-for-name.
+# ----------------------------------------------------------------------
+
+# The pre-1.0 `Report.players[]` was the log-recording squad PLUS
+# non-squad friendly players -- 42 on this fixture, which is also what the
+# golden EI export's `players` length and `parse_file_ei` report. The two
+# roles have to stay split: the squad alone accounts for all 2,138,414
+# damage but only 776 of the 801 cleanses.
+PLAYER_ROLES = frozenset(("squad", "friendly_player"))
+
+
+def players(report):
+    return [e for e in report["entities"] if e["role"] in PLAYER_ROLES]
+
+
+def slot(block, entity):
+    """`entity`'s row in a `blocks.<name>` map, or None if it has none.
+
+    Keys are JSON object keys, so they arrive as strings even though
+    `entities[].id` is an int.
+    """
+    if not block:
+        return None
+    return block.get("by_entity", {}).get(str(entity["id"]))
+
+
+def buff_id_by_name(report, name):
+    """The buff catalog id `name` is published under, e.g. 'Quickness' -> '1187'."""
+    for buff_id, desc in report["catalogs"]["buffs"].items():
+        if desc["name"] == name:
+            return buff_id
+    return None
+
+
+def decode_series(test, series):
+    """Expand a run-length-encoded `blocks.series` channel to a flat list."""
+    test.assertEqual(series["enc"], "rle", "series channels are run-length encoded")
+    out = []
+    for value, run in series["data"]:
+        out.extend([value] * run)
+    test.assertEqual(len(out), series["len"], "the run lengths must sum to the declared len")
+    return out
+
+
 def first_diff_paths(a, b, limit=10, path="$", out=None):
     """First `limit` paths where `a` and `b` differ, DFS over plain
     dicts/lists. Used only to produce a readable failure message for the
@@ -115,31 +167,45 @@ class ParseFileTests(unittest.TestCase):
     def test_shape_and_calibrated_values(self):
         report = axilog.parse_file(FIXTURE)
 
-        self.assertEqual(report["schema_version"], "0.2")
-        self.assertIsInstance(report["axilog_version"], str)
-        self.assertGreater(len(report["players"]), 0)
-        self.assertEqual(len(report["players"]), EXPECTED_PLAYER_COUNT)
+        self.assertEqual(report["axilog"]["schema"], "1.0")
+        self.assertIsInstance(report["axilog"]["version"], str)
+        # `parse_file` has a real file name to thread through; only the
+        # bare name, never the full path.
+        self.assertEqual(report["axilog"]["generated_from"], "wvw-small.anon.zevtc")
 
-        squad_damage_total = sum_by(report["players"], lambda p: p["damage"]["total"])
+        roster = players(report)
+        self.assertGreater(len(roster), 0)
+        self.assertEqual(len(roster), EXPECTED_PLAYER_COUNT)
+
+        damage = report["blocks"]["damage"]
+        squad_damage_total = sum_by(roster, lambda p: (slot(damage, p) or {}).get("total", 0))
         self.assertEqual(squad_damage_total, EXPECTED_SQUAD_DAMAGE_TOTAL)
+        # The squad rollup is computed independently of the per-entity map,
+        # so this pins the two against each other as well as the golden.
+        self.assertEqual(damage["squad"]["total"], EXPECTED_SQUAD_DAMAGE_TOTAL)
 
-        support = {
-            "cleanses": sum_by(report["players"], lambda p: p["support"]["cleanses"]),
-            "cleanses_self": sum_by(report["players"], lambda p: p["support"]["cleanses_self"]),
-            "strips": sum_by(report["players"], lambda p: p["support"]["strips"]),
-            "resurrects": sum_by(report["players"], lambda p: p["support"]["resurrects"]),
-        }
+        support_block = report["blocks"]["support"]
+
+        def support_sum(key):
+            return sum_by(roster, lambda p: (slot(support_block, p) or {}).get(key, 0))
+
+        support = {k: support_sum(k) for k in EXPECTED_SUPPORT_SUMS}
         self.assertEqual(support, EXPECTED_SUPPORT_SUMS)
 
     def test_one_boon_uptime_cross_checked_against_golden_ei_json(self):
         report = axilog.parse_file(FIXTURE)
         player = next(
-            (p for p in report["players"] if p["account"] == STABLE_BOON_ACCOUNT), None
+            (p for p in players(report) if p["account"] == STABLE_BOON_ACCOUNT), None
         )
         self.assertIsNotNone(
             player, f"expected fixture to contain account {STABLE_BOON_ACCOUNT}"
         )
-        boon = next((b for b in player["boons"] if b["name"] == STABLE_BOON_NAME), None)
+        # Boon rows are keyed by buff id, with the display name in the catalog.
+        buff_id = buff_id_by_name(report, STABLE_BOON_NAME)
+        self.assertIsNotNone(
+            buff_id, f"expected the buff catalog to describe {STABLE_BOON_NAME}"
+        )
+        boon = (slot(report["blocks"]["boons"], player) or {}).get(buff_id)
         self.assertIsNotNone(
             boon, f"expected {STABLE_BOON_ACCOUNT} to have a {STABLE_BOON_NAME} entry"
         )
@@ -156,9 +222,9 @@ class ParseFileTests(unittest.TestCase):
         golden_presence_pct = golden_player["boons"][STABLE_BOON_ID]["uptime"]
 
         self.assertLess(
-            abs(boon["presence_pct"] - golden_presence_pct),
+            abs(boon["uptime_pct"] - golden_presence_pct),
             0.05,
-            f"{STABLE_BOON_NAME} presence_pct {boon['presence_pct']} not within 0.05 "
+            f"{STABLE_BOON_NAME} uptime_pct {boon['uptime_pct']} not within 0.05 "
             f"of golden {golden_presence_pct}",
         )
 
@@ -170,27 +236,39 @@ class ReplayOptInTests(unittest.TestCase):
 
     def test_replay_absent_by_default_present_and_shaped_when_requested(self):
         without_replay = axilog.parse_file(FIXTURE)
-        self.assertNotIn("replay", without_replay)
+        self.assertNotIn("replay", without_replay["blocks"])
+        self.assertEqual(without_replay["coverage"]["replay"], "not_computed")
 
         with_replay = axilog.parse_file(FIXTURE, replay=True)
-        self.assertIn("replay", with_replay)
-        replay = with_replay["replay"]
+        self.assertIn("replay", with_replay["blocks"])
+        self.assertEqual(with_replay["coverage"]["replay"], "present")
+        replay = with_replay["blocks"]["replay"]
         self.assertIsInstance(replay["poll_ms"], int)
-        self.assertGreater(len(replay["tracks"]), 0)
-        track = replay["tracks"][0]
-        self.assertIsInstance(track["name"], str)
-        self.assertIsInstance(track["team"], str)
-        self.assertIsInstance(track["is_squad"], bool)
+        for k in ("min_x", "max_x", "min_y", "max_y"):
+            self.assertIsInstance(replay["bounds"][k], (int, float), f"bounds.{k}")
+
+        # Tracks are a by-entity map, not a flat array: the name/team/squad
+        # membership the pre-1.0 `tracks[]` duplicated now live once on the
+        # `entities[]` row the key joins to.
+        track_ids = list(replay["by_entity"])
+        self.assertGreater(len(track_ids), 0, "expected at least one replay track")
+        entity_ids = {str(e["id"]) for e in with_replay["entities"]}
+        for tid in track_ids:
+            self.assertIn(tid, entity_ids, f"replay track {tid} joins to no entities[] row")
+        track = replay["by_entity"][track_ids[0]]
+        self.assertIsInstance(track["samples"], list)
+        self.assertIsInstance(track["down_intervals"], list)
+        self.assertIsInstance(track["dead_intervals"], list)
         if track["samples"]:
             self.assertEqual(len(track["samples"][0]), 3, "each sample is a [t, x, y] triple")
 
         explicitly_off = axilog.parse_file(FIXTURE, replay=False)
-        self.assertNotIn("replay", explicitly_off)
+        self.assertNotIn("replay", explicitly_off["blocks"])
 
         with open(FIXTURE, "rb") as f:
             data = f.read()
         bytes_with_replay = axilog.parse_bytes(data, replay=True)
-        self.assertIn("replay", bytes_with_replay)
+        self.assertIn("replay", bytes_with_replay["blocks"])
 
 
 class SkillDamageOptInTests(unittest.TestCase):
@@ -200,31 +278,38 @@ class SkillDamageOptInTests(unittest.TestCase):
 
     def test_skill_damage_absent_by_default_present_and_shaped_when_requested(self):
         without = axilog.parse_file(FIXTURE)
-        self.assertNotIn("skill_damage", without["players"][0])
+        any_player = players(without)[0]
+        self.assertNotIn("by_skill", slot(without["blocks"]["damage"], any_player))
+        self.assertNotIn("by_skill_taken", slot(without["blocks"]["damage"], any_player))
 
         with_it = axilog.parse_file(FIXTURE, skill_damage=True)
-        p0 = next(p for p in with_it["players"] if p["damage"]["total"] > 0)
-        self.assertIn("skill_damage", p0)
-        sd = p0["skill_damage"]
-        self.assertIsInstance(sd["outgoing"], list)
-        self.assertIsInstance(sd["taken"], list)
-        self.assertIsInstance(sd["per_target"], list)
-        self.assertGreater(len(sd["outgoing"]), 0, "expected at least one outgoing skill entry")
-        entry = sd["outgoing"][0]
-        self.assertIsInstance(entry["skill_id"], int)
-        self.assertIsInstance(entry["total"], int)
-        self.assertIsInstance(entry["hits"], int)
-        # sum(outgoing[*]["total"]) == damage["total"] exactly (internal invariant).
-        total = sum(e["total"] for e in sd["outgoing"])
-        self.assertEqual(total, p0["damage"]["total"])
+        damage = with_it["blocks"]["damage"]
+        p0 = next(p for p in players(with_it) if (slot(damage, p) or {}).get("total", 0) > 0)
+        d0 = slot(damage, p0)
+        self.assertIn("by_skill", d0)
+        self.assertIn("by_skill_taken", d0)
+        skill_ids = list(d0["by_skill"])
+        self.assertGreater(len(skill_ids), 0, "expected at least one outgoing skill entry")
+        entry = d0["by_skill"][skill_ids[0]]
+        for k in ("total", "hits", "crit_hits", "flank_hits", "min", "max"):
+            self.assertIsInstance(entry[k], int, f"by_skill entries carry a numeric {k}")
+        # Every referenced skill id must be described by the skill catalog.
+        for sid in skill_ids:
+            self.assertIn(sid, with_it["catalogs"]["skills"], f"skill {sid} missing from catalog")
+        # sum(by_skill[*]["total"]) == the damage total exactly (internal invariant).
+        self.assertEqual(sum(e["total"] for e in d0["by_skill"].values()), d0["total"])
+        # The per-target breakdown gains the same distribution under the flag.
+        per_target = list(d0["per_target"].values())
+        self.assertGreater(len(per_target), 0, "expected at least one per-target entry")
+        self.assertTrue(all("by_skill" in t for t in per_target))
 
         explicitly_off = axilog.parse_file(FIXTURE, skill_damage=False)
-        self.assertNotIn("skill_damage", explicitly_off["players"][0])
+        self.assertNotIn("by_skill", slot(explicitly_off["blocks"]["damage"], any_player))
 
         with open(FIXTURE, "rb") as f:
             data = f.read()
         bytes_with_it = axilog.parse_bytes(data, skill_damage=True)
-        self.assertIn("skill_damage", bytes_with_it["players"][0])
+        self.assertIn("by_skill", slot(bytes_with_it["blocks"]["damage"], p0))
 
 
 class TimeseriesOptInTests(unittest.TestCase):
@@ -235,42 +320,48 @@ class TimeseriesOptInTests(unittest.TestCase):
 
     def test_timeseries_absent_by_default_present_and_shaped_when_requested(self):
         without = axilog.parse_file(FIXTURE)
-        self.assertNotIn("per_second", without["players"][0])
-        self.assertNotIn("dps_targets", without["players"][0])
+        any_player = players(without)[0]
+        self.assertIsNone(
+            slot(without["blocks"]["series"], any_player),
+            "the per-entity series must be absent by default",
+        )
+        # The squad-level series is always on -- only the per-entity map is gated.
+        self.assertIn("damage", without["blocks"]["series"]["squad"])
 
         with_it = axilog.parse_file(FIXTURE, timeseries=True)
-        p0 = next(p for p in with_it["players"] if p["damage"]["total"] > 0)
-        self.assertIn("per_second", p0)
-        ps = p0["per_second"]
-        self.assertIsInstance(ps["damage"], list)
-        self.assertIsInstance(ps["damage_taken"], list)
-        self.assertIsInstance(ps["per_target"], list)
-        self.assertGreater(len(ps["damage"]), 0, "expected at least one bucket")
-        # Cumulative: final bucket == damage.total exactly (internal invariant).
-        self.assertEqual(ps["damage"][-1], p0["damage"]["total"])
-        # Monotonic non-decreasing.
-        for a, b in zip(ps["damage"], ps["damage"][1:]):
-            self.assertLessEqual(a, b, "per_second.damage must be cumulative (monotonic non-decreasing)")
+        damage_block = with_it["blocks"]["damage"]
+        p0 = next(p for p in players(with_it) if (slot(damage_block, p) or {}).get("total", 0) > 0)
+        series = slot(with_it["blocks"]["series"], p0)
+        self.assertIsNotNone(series, "expected a per-entity series when timeseries=True")
+        for k in ("damage", "damage_taken", "power_damage_taken"):
+            self.assertIsInstance(series[k]["interval_ms"], int, f"{k} carries its bucket width")
 
-        self.assertIn("dps_targets", p0)
-        self.assertGreater(len(p0["dps_targets"]), 0, "expected at least one dps_targets entry")
-        dt = p0["dps_targets"][0]
-        self.assertIsInstance(dt["enemy_id"], int)
-        self.assertIsInstance(dt["damage"], int)
-        self.assertIsInstance(dt["dps"], float)
-        # sum(dps_targets[*]["damage"]) == damage.total exactly (internal invariant).
-        dt_sum = sum(d["damage"] for d in p0["dps_targets"])
-        self.assertEqual(dt_sum, p0["damage"]["total"])
+        damage = decode_series(self, series["damage"])
+        self.assertGreater(len(damage), 0, "expected at least one bucket")
+        # Cumulative: the final bucket equals the damage total exactly.
+        self.assertEqual(damage[-1], slot(damage_block, p0)["total"])
+        # Monotonic non-decreasing.
+        for a, b in zip(damage, damage[1:]):
+            self.assertLessEqual(a, b, "the damage series must be cumulative")
+
+        # The per-target series joins to the always-on per-target damage map.
+        per_target_ids = list(series["per_target"])
+        self.assertGreater(len(per_target_ids), 0, "expected at least one per-target series")
+        damage_targets = slot(damage_block, p0)["per_target"]
+        for tid in per_target_ids:
+            self.assertIn(tid, damage_targets, f"per-target series {tid} has no damage entry")
+        # sum(per_target[*]["total"]) == damage total exactly (internal invariant).
+        self.assertEqual(
+            sum(t["total"] for t in damage_targets.values()), slot(damage_block, p0)["total"]
+        )
 
         explicitly_off = axilog.parse_file(FIXTURE, timeseries=False)
-        self.assertNotIn("per_second", explicitly_off["players"][0])
-        self.assertNotIn("dps_targets", explicitly_off["players"][0])
+        self.assertIsNone(slot(explicitly_off["blocks"]["series"], any_player))
 
         with open(FIXTURE, "rb") as f:
             data = f.read()
         bytes_with_it = axilog.parse_bytes(data, timeseries=True)
-        self.assertIn("per_second", bytes_with_it["players"][0])
-        self.assertIn("dps_targets", bytes_with_it["players"][0])
+        self.assertIsNotNone(slot(bytes_with_it["blocks"]["series"], p0))
 
 
 class MissilesOptInTests(unittest.TestCase):
@@ -280,22 +371,22 @@ class MissilesOptInTests(unittest.TestCase):
 
     def test_missiles_absent_by_default_present_and_shaped_when_requested(self):
         without = axilog.parse_file(FIXTURE)
-        self.assertNotIn("missiles", without)
+        self.assertNotIn("missiles", without["blocks"])
+        self.assertEqual(without["coverage"]["missiles"], "not_computed")
 
         with_it = axilog.parse_file(FIXTURE, missiles=True)
-        self.assertIn("missiles", with_it)
-        missiles = with_it["missiles"]
-        self.assertIsInstance(missiles["players"], list)
-        self.assertIn("squad", missiles)
-        squad = missiles["squad"]
-        self.assertIsInstance(squad["fired"], int)
-        self.assertIsInstance(squad["hit"], int)
-        self.assertIsInstance(squad["denied"], int)
-        self.assertIsInstance(squad["incoming_fired"], int)
-        self.assertIsInstance(squad["incoming_denied"], int)
+        self.assertIn("missiles", with_it["blocks"])
+        self.assertEqual(with_it["coverage"]["missiles"], "present")
+        missiles = with_it["blocks"]["missiles"]
+        for k in ("fired", "hit", "denied", "incoming_fired", "incoming_denied"):
+            self.assertIsInstance(missiles["squad"][k], int, f"squad.{k}")
+        per_entity = list(missiles["by_entity"].values())
+        self.assertGreater(len(per_entity), 0, "expected at least one per-entity missile row")
+        for k in ("fired", "hit", "denied", "reflected_at_self"):
+            self.assertIsInstance(per_entity[0][k], int, f"by_entity rows carry a numeric {k}")
 
         explicitly_off = axilog.parse_file(FIXTURE, missiles=False)
-        self.assertNotIn("missiles", explicitly_off)
+        self.assertNotIn("missiles", explicitly_off["blocks"])
 
 
 class ModifiersOptInTests(unittest.TestCase):
@@ -308,44 +399,46 @@ class ModifiersOptInTests(unittest.TestCase):
         top-level `damage_mod_map`. Mirrors `crates/axilog-node/__test__/
         sdk.test.mjs`'s equivalent test."""
         without = axilog.parse_file(FIXTURE)
-        self.assertNotIn("damage_mod_map", without)
-        self.assertNotIn("damage_mods", without["players"][0])
+        self.assertNotIn("damage_mods", without["catalogs"])
+        self.assertNotIn("damage_mods", without["blocks"])
+        self.assertEqual(without["coverage"]["damage_mods"], "not_computed")
 
         with_it = axilog.parse_file(FIXTURE, modifiers=True)
-        self.assertIn("damage_mod_map", with_it)
-        mod_map = with_it["damage_mod_map"]
-        self.assertGreater(len(mod_map), 0)
+        catalog = with_it["catalogs"]["damage_mods"]
+        self.assertGreater(len(catalog), 0, "expected at least one referenced modifier id")
+        self.assertEqual(with_it["coverage"]["damage_mods"], "present")
 
-        with_rows = 0
-        for p in with_it["players"]:
-            block = p["damage_mods"]
-            self.assertIsInstance(block["outgoing"], list)
-            self.assertIsInstance(block["incoming"], list)
-            if block["outgoing"] or block["incoming"]:
-                with_rows += 1
-            for rows, incoming in ((block["outgoing"], False), (block["incoming"], True)):
-                for r in rows:
-                    # The SIGN of the id is the direction, and every id must
-                    # be described by damage_mod_map (native keys carry no
-                    # "d" prefix -- that is an ei-json-only convention).
-                    self.assertEqual(r["id"] < 0, incoming, f"d{r['id']} is on the wrong side")
-                    self.assertIn(str(r["id"]), mod_map)
-                    self.assertIsInstance(r["hit_count"], int)
-                    self.assertIsInstance(r["total_hit_count"], int)
-                    self.assertIsInstance(r["damage_gain"], float)
-                    self.assertIsInstance(r["total_damage"], int)
-                    self.assertGreaterEqual(r["hit_count"], 1)
-                    self.assertLessEqual(r["hit_count"], r["total_hit_count"])
-        self.assertGreater(with_rows, 0, "expected at least one player with modifier rows")
+        # One flat map per entity: the direction that used to be an
+        # outgoing/incoming array split is now carried by the id's SIGN.
+        row_sets = list(with_it["blocks"]["damage_mods"]["by_entity"].values())
+        self.assertGreater(len(row_sets), 0, "expected at least one entity with modifier rows")
+        saw_incoming = saw_outgoing = False
+        for rows in row_sets:
+            for mod_id, r in rows.items():
+                if int(mod_id) < 0:
+                    saw_incoming = True
+                else:
+                    saw_outgoing = True
+                # Native keys carry no "d" prefix -- that is an ei-json-ism.
+                self.assertFalse(mod_id.startswith("d"), f"unexpected 'd' prefix on {mod_id}")
+                self.assertIn(mod_id, catalog, f"modifier {mod_id} missing from the catalog")
+                for k in ("hit_count", "total_hit_count", "total_damage"):
+                    self.assertIsInstance(r[k], int, f"{k} must be an int")
+                self.assertIsInstance(r["damage_gain"], float)
+                self.assertGreaterEqual(r["hit_count"], 1)
+                self.assertLessEqual(r["hit_count"], r["total_hit_count"])
+        self.assertTrue(saw_outgoing, "expected at least one outgoing (positive-id) row")
+        self.assertTrue(saw_incoming, "expected at least one incoming (negative-id) row")
 
-        desc = next(iter(mod_map.values()))
-        for k in ("name", "icon", "description"):
+        desc = next(iter(catalog.values()))
+        for k in ("name", "description"):
             self.assertIsInstance(desc[k], str)
-        for k in ("non_multiplier", "is_counter", "skill_based", "approximate", "incoming"):
+        for k in ("non_multiplier", "is_counter", "skill_based", "approximate"):
             self.assertIsInstance(desc[k], bool)
 
         explicitly_off = axilog.parse_file(FIXTURE, modifiers=False)
-        self.assertNotIn("damage_mod_map", explicitly_off)
+        self.assertNotIn("damage_mods", explicitly_off["catalogs"])
+        self.assertNotIn("damage_mods", explicitly_off["blocks"])
 
 
 class ParseFileEiOptInTests(unittest.TestCase):
@@ -450,7 +543,16 @@ class ParseBytesTests(unittest.TestCase):
         with open(FIXTURE, "rb") as f:
             data = f.read()
         from_bytes = axilog.parse_bytes(data)
-        self.assertEqual(from_bytes, from_file)
+
+        # `generated_from` is the ONE documented difference: a buffer has no
+        # file name to offer, so `parse_bytes` omits the key entirely.
+        self.assertNotIn("generated_from", from_bytes["axilog"])
+        file_header = {k: v for k, v in from_file["axilog"].items() if k != "generated_from"}
+        self.assertEqual(from_bytes["axilog"], file_header)
+        self.assertEqual(
+            {k: v for k, v in from_bytes.items() if k != "axilog"},
+            {k: v for k, v in from_file.items() if k != "axilog"},
+        )
 
     def test_parse_bytes_rejects_bytearray(self):
         """Verify parse_bytes only accepts bytes, not bytearray."""
@@ -534,18 +636,22 @@ class AnonymizeFileTests(unittest.TestCase):
             original = axilog.parse_file(FIXTURE)
             round_tripped = axilog.parse_file(out_path)
 
-            self.assertEqual(len(round_tripped["players"]), len(original["players"]))
+            self.assertEqual(len(players(round_tripped)), len(players(original)))
+            self.assertEqual(len(round_tripped["entities"]), len(original["entities"]))
 
-            original_damage = sum_by(original["players"], lambda p: p["damage"]["total"])
-            round_tripped_damage = sum_by(
-                round_tripped["players"], lambda p: p["damage"]["total"]
-            )
-            self.assertEqual(round_tripped_damage, original_damage)
+            def squad_damage(report):
+                block = report["blocks"]["damage"]
+                return sum_by(players(report), lambda p: (slot(block, p) or {}).get("total", 0))
+
+            self.assertEqual(squad_damage(round_tripped), squad_damage(original))
 
             self.assertEqual(
                 round_tripped["encounter"]["duration_ms"], original["encounter"]["duration_ms"]
             )
-            self.assertEqual(len(round_tripped["enemies"]), len(original["enemies"]))
+            self.assertEqual(
+                round_tripped["blocks"]["damage"]["squad"]["total"],
+                original["blocks"]["damage"]["squad"]["total"],
+            )
 
 
 class ErrorHandlingTests(unittest.TestCase):
