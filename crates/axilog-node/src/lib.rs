@@ -127,6 +127,15 @@ fn build_report_v1_from_bytes(
             &raw, &axilog_core::analysis::damage::InstidRegistry::build(&raw), &enc, false,
         )
     });
+    // Side-channel absorption Task 6: these two passes were previously run
+    // only on the ei-json path, so the NATIVE path emitted no `minions`
+    // block and no `healthPercents` even when the caller asked for the
+    // gates that produce them. They are native blocks now, so they run
+    // here on the same options that gate them everywhere else.
+    let minion_rollups =
+        want_skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
+    let health_percents =
+        want_timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
@@ -137,7 +146,11 @@ fn build_report_v1_from_bytes(
         &report,
         env!("CARGO_PKG_VERSION"),
         generated_from,
-        damage_mods.as_ref(),
+        &axilog_schema::v1::Passes {
+            damage_mods: damage_mods.as_ref(),
+            minions: minion_rollups.as_ref(),
+            health_percents: health_percents.as_ref(),
+        },
     ))
 }
 
@@ -177,9 +190,7 @@ fn build_report_and_activity_from_bytes(
     Option<std::collections::BTreeMap<u64, Vec<axilog_core::analysis::skill_damage::SkillEntry>>>,
     Option<axilog_core::analysis::target_conditions::TargetConditionStates>,
     Option<axilog_core::analysis::healing_detail::HealingDetail>,
-    Option<axilog_core::analysis::minions::MinionRollups>,
     Option<std::collections::BTreeMap<u64, axilog_core::analysis::dist_outcomes::DistOutcomes>>,
-    Option<std::collections::BTreeMap<u64, Vec<(u64, f64)>>>,
 )> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -218,8 +229,21 @@ fn build_report_and_activity_from_bytes(
     // (unlike `parse_file`'s own `build_report_v1_from_bytes`), so
     // `generated_from` stays `None`, matching this function's existing
     // convention.
+    // Task 6: hoisted above the `ReportV1` build, which now consumes them
+    // as native blocks (`minions`, and `healthPercents` on `series`).
+    // MEIGAP Task 3b rides `--skill-damage`; MEIGAP2 row 2 rides
+    // `--timeseries`, GW2EI's own `RawFormatTimelineArrays` gate.
+    let minion_rollups =
+        want_skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
+    let health_percents =
+        want_timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
     let report_v1 = axilog_schema::v1::build_report_v1(
-        &enc, &metrics, &report, env!("CARGO_PKG_VERSION"), None, damage_mods.as_ref(),
+        &enc, &metrics, &report, env!("CARGO_PKG_VERSION"), None,
+        &axilog_schema::v1::Passes {
+            damage_mods: damage_mods.as_ref(),
+            minions: minion_rollups.as_ref(),
+            health_percents: health_percents.as_ref(),
+        },
     );
     // MEIGAP Task 1b: GW2EI-shape boon stack timelines
     // (`buffUptimes[].states`/`.statesPerSource`), gated on the timeseries
@@ -269,15 +293,10 @@ fn build_report_and_activity_from_bytes(
     let healing_detail = (want_skill_damage || want_timeseries)
         .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
         .flatten();
-    let minion_rollups =
-        want_skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
-    // MEIGAP2 rows 1 and 2 -- same gates the CLI uses (`--skill-damage`
-    // for the distributions' outcome columns, `--timeseries` for the
-    // health series, GW2EI's own `RawFormatTimelineArrays`).
+    // MEIGAP2 row 1 -- same gate the CLI uses (`--skill-damage`, the gate
+    // on the distributions these columns annotate).
     let dist_outcomes =
         want_skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
-    let health_percents =
-        want_timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
     Ok((
         report,
         report_v1,
@@ -289,9 +308,7 @@ fn build_report_and_activity_from_bytes(
         enemy_dist,
         target_conditions,
         healing_detail,
-        minion_rollups,
         dist_outcomes,
-        health_percents,
     ))
 }
 
@@ -384,7 +401,7 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
     let (report, report_v1, activity, ei_replay, damage_mods, boon_states, enemy_series, enemy_dist,
-         target_conditions, healing_detail, minion_rollups, dist_outcomes, health_percents) = build_report_and_activity_from_bytes(
+         target_conditions, healing_detail, dist_outcomes) = build_report_and_activity_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
         want_modifiers,
     )?;
@@ -402,9 +419,7 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
             healing_detail: healing_detail.as_ref(),
             healing_series: want_timeseries,
             healing_dist: want_skill_damage,
-            minions: minion_rollups.as_ref(),
             dist_outcomes: dist_outcomes.as_ref(),
-            health_percents: health_percents.as_ref(),
         },
     ))
 }

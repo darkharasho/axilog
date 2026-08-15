@@ -72,7 +72,7 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let activity = build_activity_intervals(&raw, &enc);
     let report =
         axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true, false, None);
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
     let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
     let ours = axilog_ei::to_ei_json(
         &report_v1, &report,

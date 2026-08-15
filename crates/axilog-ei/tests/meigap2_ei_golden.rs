@@ -86,7 +86,7 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
 
     let registry = axilog_core::analysis::damage::InstidRegistry::build(&raw);
     let enemies: BTreeSet<u64> =

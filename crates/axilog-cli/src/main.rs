@@ -298,8 +298,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let healing_detail = ((skill_damage || timeseries) && format == Format::EiJson)
                 .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
                 .flatten();
-            let minion_rollups = (skill_damage && format == Format::EiJson)
-                .then(|| axilog_core::analysis::minions::build(&raw, &enc));
+            // Side-channel absorption Task 6: no longer `&& format ==
+            // Format::EiJson`. `minions` is now a native block, so the
+            // pass runs for whatever `--skill-damage` was asked for,
+            // regardless of which format is being written.
+            let minion_rollups =
+                skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
             // MEIGAP2 row 1: the player-side distributions' outcome columns
             // ride `--skill-damage`, the same gate as the distributions they
             // annotate -- so this pass cannot run for output that would not
@@ -311,8 +315,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // MEIGAP2 row 2: `players[].healthPercents` rides
             // `--timeseries`, GW2EI's own `RawFormatTimelineArrays` gate on
             // that field.
-            let health_percents = (timeseries && format == Format::EiJson)
-                .then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
+            // Task 6, as above: `blocks.series` carries these natively now.
+            let health_percents =
+                timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
             // M16: the damage-modifier engine runs ONLY on `--modifiers`
             // (see the flag's doc comment -- it is a separate full event
             // pass, not a copy of something `analyze()` already computed).
@@ -348,7 +353,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &report,
                 env!("CARGO_PKG_VERSION"),
                 path.file_name().and_then(|s| s.to_str()),
-                damage_mods.as_ref(),
+                &axilog_schema::v1::Passes {
+                    damage_mods: damage_mods.as_ref(),
+                    minions: minion_rollups.as_ref(),
+                    health_percents: health_percents.as_ref(),
+                },
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
             // post-2026-05-01 buff-statechange-rework build producing
@@ -383,9 +392,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     healing_detail: healing_detail.as_ref(),
                     healing_series: timeseries,
                     healing_dist: skill_damage,
-                    minions: minion_rollups.as_ref(),
                     dist_outcomes: dist_outcomes.as_ref(),
-                    health_percents: health_percents.as_ref(),
                 };
                 // One `dyn Write` so the two destinations share the emit
                 // code; the `BufWriter` (not the trait object) is what makes

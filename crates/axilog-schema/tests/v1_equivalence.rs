@@ -32,6 +32,8 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
         &enc,
         false,
     );
+    let minion_rollups = axilog_core::analysis::minions::build(&raw, &enc);
+    let health_percents = axilog_core::analysis::health::ei_health_percents(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -49,7 +51,11 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
         &legacy,
         "0.0.0-test",
         None,
-        Some(&damage_mods),
+        &axilog_schema::v1::Passes {
+            damage_mods: Some(&damage_mods),
+            minions: Some(&minion_rollups),
+            health_percents: Some(&health_percents),
+        },
     );
     (legacy, v1)
 }
@@ -814,7 +820,7 @@ fn a_computed_block_with_no_rows_reports_empty_not_present() {
     let legacy = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
     );
-    let v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, None);
+    let v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &Default::default());
 
     assert!(
         legacy.players.iter().all(|p| p.healing.is_none()),

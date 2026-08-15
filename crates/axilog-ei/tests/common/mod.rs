@@ -42,6 +42,6 @@ pub fn fixture_legacy_and_v1() -> (Report, ReportV1) {
         true,
         Some(&damage_mods),
     );
-    let v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, Some(&damage_mods));
+    let v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &axilog_schema::v1::Passes { damage_mods: Some(&damage_mods), ..Default::default() });
     (legacy, v1)
 }

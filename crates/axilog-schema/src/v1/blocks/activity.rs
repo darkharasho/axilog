@@ -247,6 +247,32 @@ pub struct EntitySeries {
     pub power_damage_taken: SeriesOut,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub per_target: BTreeMap<u32, TargetSeries>,
+    /// `[[time_ms, percent], ...]` -- this entity's health as a STEP
+    /// function, not a fixed-rate series.
+    ///
+    /// That is why it is a plain pair list rather than a [`SeriesOut`]
+    /// like its three neighbours: those are one value per bucket at
+    /// `timeline.resolution_ms`, and re-sampling a step function onto that
+    /// grid would either invent readings between updates or lose updates
+    /// that fall inside a bucket. The source
+    /// (`axilog_core::analysis::health::ei_health_percents`) is a
+    /// `ListFromStates` transcription whose whole contract is that a value
+    /// holds until the next pair, so the pairs ARE the data.
+    ///
+    /// `Option`, not a possibly-empty `Vec`, because absent and empty are
+    /// genuinely different here and the ei-json surface distinguishes
+    /// them. The pass keys its map off `HEALTH_UPDATE` events, so a player
+    /// that emitted none is ABSENT from it -- and GW2EI (and this
+    /// project's adapter) then omits `healthPercents` for that player
+    /// entirely, rather than writing `[]`. A `Vec` would collapse "the
+    /// pass never saw this entity" into "the pass saw it and it had no
+    /// transitions", which is the same absent-reported-as-zero ambiguity
+    /// `coverage` exists to remove, one level down.
+    ///
+    /// Same `--timeseries` gate as the rest of this block's per-entity
+    /// rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_percents: Option<Vec<(u64, f64)>>,
 }
 
 /// Mirrors the real `PlayerTargetSeriesOut`, minus `enemy_id` (that's the
@@ -258,7 +284,23 @@ pub struct TargetSeries {
     pub power_damage: SeriesOut,
 }
 
-pub fn build_series(report: &crate::Report, index: &EntityIndex) -> SeriesBlock {
+/// An [`EntitySeries`] with no per-second data, for a row that exists only
+/// because some other quantity on it does.
+fn empty_series(res: u64) -> EntitySeries {
+    EntitySeries {
+        damage: SeriesOut::encode_u64(res, &[]),
+        damage_taken: SeriesOut::encode_u64(res, &[]),
+        power_damage_taken: SeriesOut::encode_u64(res, &[]),
+        per_target: BTreeMap::new(),
+        health_percents: None,
+    }
+}
+
+pub fn build_series(
+    report: &crate::Report,
+    index: &EntityIndex,
+    health_percents: Option<&BTreeMap<u64, Vec<(u64, f64)>>>,
+) -> SeriesBlock {
     let res = report.timeline.resolution_ms;
     let ps = &report.timeline.per_second;
     let squad = SquadSeries {
@@ -276,7 +318,28 @@ pub fn build_series(report: &crate::Report, index: &EntityIndex) -> SeriesBlock 
     let mut by_entity = ByEntity::default();
     for p in &report.players {
         let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
-        let Some(series) = p.per_second.as_ref() else { continue };
+        // Keyed by the account's REPRESENTATIVE agent address, which is
+        // what `PlayerOut::agent_addr` already is -- a relogged account is
+        // one player here and one folded series there. Looking the map up
+        // by this row's addr (rather than iterating the map) is the same
+        // join the ei-json adapter has always done, and it means a map
+        // entry for an agent that is not a roster player cannot invent a
+        // row.
+        let health: Option<Vec<(u64, f64)>> =
+            health_percents.and_then(|m| m.get(&p.agent_addr)).cloned();
+        // Both quantities ride `--timeseries` today -- `per_second` is
+        // `Some` under exactly the flag that makes the caller run the
+        // health pass -- so in practice these are present and absent
+        // together. The row is built when EITHER exists rather than
+        // requiring `per_second`, so that if those gates ever diverge the
+        // result is an honest row with empty series arrays instead of a
+        // health series that silently vanishes.
+        let Some(series) = p.per_second.as_ref() else {
+            if health.is_some() {
+                by_entity.insert(id, EntitySeries { health_percents: health, ..empty_series(res) });
+            }
+            continue;
+        };
         let per_target = series
             .per_target
             .iter()
@@ -299,6 +362,7 @@ pub fn build_series(report: &crate::Report, index: &EntityIndex) -> SeriesBlock 
                 damage_taken: SeriesOut::encode_u64(res, &series.damage_taken),
                 power_damage_taken: SeriesOut::encode_u64(res, &series.power_damage_taken),
                 per_target,
+                health_percents: health,
             },
         );
     }
@@ -447,7 +511,7 @@ mod tests {
     #[test]
     fn squad_series_use_the_shared_envelope_and_decode_to_the_legacy_arrays() {
         let (report, index) = fixture_report();
-        let block = build_series(&report, &index);
+        let block = build_series(&report, &index, None);
         let squad = &block.squad;
         assert_eq!(
             squad.damage.decode_u64(),

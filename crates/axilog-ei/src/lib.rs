@@ -6,7 +6,6 @@ use axilog_core::analysis::dist_outcomes::{DistOutcomes, SkillOutcomes};
 use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::analysis::replay::{ActivityIntervals, Interval};
 use axilog_core::analysis::healing_detail::{HealDistEntry, HealingDetail};
-use axilog_core::analysis::minions::MinionRollups;
 use axilog_core::analysis::skill_damage::SkillEntry;
 use axilog_core::analysis::target_conditions::TargetConditionStates;
 use axilog_core::analysis::timeseries::EnemySeries;
@@ -777,16 +776,6 @@ pub struct EiInputs<'a> {
     /// `totalDamageDist` already gets, and axibridge hardcodes that flag to
     /// `true`. Ignored when [`Self::healing_detail`] is `None`.
     pub healing_dist: bool,
-    /// `minions` (MEIGAP Task 3b): per-player minion damage-taken rollups
-    /// from `axilog_core::analysis::minions::build`, or `None`. The OPT-IN
-    /// gate for `players[].minions[]`, positionally joined to
-    /// `report.players`.
-    ///
-    /// Gated by the caller on `--skill-damage` -- it is a per-skill
-    /// distribution like every other `*Dist` block. See
-    /// `axilog_core::analysis::minions`' module doc for the (very small)
-    /// read surface this reproduces.
-    pub minions: Option<&'a MinionRollups>,
     /// `dist_outcomes` (MEIGAP2 row 1): per-skill hit-OUTCOME columns for
     /// the two player-side distributions, from
     /// `axilog_core::analysis::dist_outcomes::build`, or `None`. Keyed by
@@ -798,15 +787,6 @@ pub struct EiInputs<'a> {
     /// `--skill-damage`, the flag that already gates the distributions
     /// themselves, so this can never annotate rows that are not emitted.
     pub dist_outcomes: Option<&'a BTreeMap<u64, DistOutcomes>>,
-    /// `health_percents` (MEIGAP2 row 2): per-player health-percent step
-    /// series from `axilog_core::analysis::health::ei_health_percents`, or
-    /// `None`. Keyed by player representative addr.
-    ///
-    /// The OPT-IN gate for `players[].healthPercents` -- set by the caller
-    /// on `--timeseries`, which is this project's mapping of GW2EI's own
-    /// `RawFormatTimelineArrays` gate on that field
-    /// (`JsonActorBuilder.cs:90-100`).
-    pub health_percents: Option<&'a BTreeMap<u64, Vec<(u64, f64)>>>,
 }
 
 /// A lazily-serialized JSON array (MSTREAM).
@@ -969,16 +949,13 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         healing_detail,
         healing_series,
         healing_dist,
-        minions,
         dist_outcomes,
-        health_percents,
     } = *inputs;
     // Positional-join guards, same convention `replay` uses just below: a
     // hand-built `Report` (every unit test) can violate them, and dropping
     // the whole surface beats mis-attributing one player's healing to
     // another.
     let healing_detail = healing_detail.filter(|d| d.len() == legacy.players.len());
-    let minions = minions.filter(|m| m.len() == legacy.players.len());
     // Positional join guard: the tracks must be `legacy.players` followed by
     // the enemy-PLAYER subset of `legacy.ei_targets`, in those orders. A
     // caller that hand-builds a `Report` (every unit test below) can violate
@@ -1031,6 +1008,10 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             .and_then(|id| report.blocks.contribution.as_ref()?.by_entity.get(id));
         let n_rotation = entity_id
             .and_then(|id| report.blocks.rotation.as_ref()?.by_entity.get(id));
+        let n_series = entity_id
+            .and_then(|id| report.blocks.series.as_ref()?.by_entity.get(id));
+        let n_minions = entity_id
+            .and_then(|id| report.blocks.minions.as_ref()?.by_entity.get(id));
         let team_id_for = |color: &str| -> u64 {
             detected_players.get(color).copied().unwrap_or_else(|| representative_team_id(color))
         };
@@ -1780,7 +1761,14 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // See `axilog_core::analysis::health::ei_health_percents` for the
         // `ListFromStates` transcription. Emitted even when empty, matching
         // GW2EI's own always-a-list shape for a tracked actor.
-        if let Some(series) = health_percents.and_then(|m| m.get(&p.agent_addr)) {
+        //
+        // Task 6: read from `blocks.series`, whose per-entity rows exist
+        // exactly when `--timeseries` was requested -- the same condition
+        // that used to make `EiInputs::health_percents` `Some`. The field
+        // is itself an `Option` (see its doc comment): a player who never
+        // emitted a `HEALTH_UPDATE` is absent from the pass's map and gets
+        // no key here, exactly as when this read the side channel.
+        if let Some(series) = n_series.and_then(|s| s.health_percents.as_ref()) {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert(
                 "healthPercents".to_string(),
@@ -1929,7 +1917,12 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // readers both start with an `Array.isArray(...) ? ... : []` guard,
         // so an empty array and an absent key are equivalent to it. Absent
         // is the smaller and the more faithful of the two.
-        if let Some(groups) = minions.and_then(|m| m.get(player_idx)).filter(|g| !g.is_empty()) {
+        //
+        // Task 6: read from `blocks.minions`. The block omits a player
+        // with no minions rather than storing an empty vec, so the row's
+        // mere presence is the condition the `filter(|g| !g.is_empty())`
+        // used to express.
+        if let Some(groups) = n_minions {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert(
                 "minions".to_string(),
@@ -1937,11 +1930,20 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                     groups
                         .iter()
                         .map(|g| {
+                            // Identity comes back through `catalogs.
+                            // minions` -- no block in the native format
+                            // inlines a name, so the block carries only
+                            // the join key.
+                            let ident = report.catalogs.minions.get(&g.minion_id);
                             json!({
-                                "id": g.species_id,
-                                "name": g.name,
-                                "totalDamageTakenDist": [ g.taken.iter().map(|r| json!({
-                                    "id": r.skill_id,
+                                "id": ident.map_or(0, |m| m.species_id),
+                                "name": ident.map_or("", |m| m.name.as_str()),
+                                // `taken` is a `BTreeMap` keyed by skill
+                                // id, which iterates in the same ascending
+                                // order the pass's sorted vec had, so this
+                                // array's order is unchanged.
+                                "totalDamageTakenDist": [ g.taken.iter().map(|(skill_id, r)| json!({
+                                    "id": skill_id,
                                     "totalDamage": r.total,
                                     "hits": r.hits,
                                     "connectedHits": r.connected_hits,
@@ -2746,7 +2748,7 @@ mod tests {
     fn sample_report_v1() -> axilog_schema::v1::ReportV1 {
         let (enc, m) = sample_inputs();
         let legacy = axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false, None);
-        axilog_schema::v1::build_report_v1(&enc, &m, &legacy, "0.1.0", None, None)
+        axilog_schema::v1::build_report_v1(&enc, &m, &legacy, "0.1.0", None, &Default::default())
     }
 
     #[test]
@@ -2847,7 +2849,7 @@ mod tests {
     -> (axilog_schema::v1::ReportV1, axilog_schema::Report) {
         let legacy = sample_report_with_boons();
         let (enc, m) = sample_boon_inputs();
-        let v1 = axilog_schema::v1::build_report_v1(&enc, &m, &legacy, "0.1.0", None, None);
+        let v1 = axilog_schema::v1::build_report_v1(&enc, &m, &legacy, "0.1.0", None, &Default::default());
         (v1, legacy)
     }
 

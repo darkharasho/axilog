@@ -36,6 +36,8 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
         &enc,
         false,
     );
+    let minion_rollups = axilog_core::analysis::minions::build(&raw, &enc);
+    let health_percents = axilog_core::analysis::health::ei_health_percents(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -53,7 +55,11 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
         &legacy,
         "0.0.0-test",
         Some("wvw-small.anon.zevtc"),
-        Some(&damage_mods),
+        &axilog_schema::v1::Passes {
+            damage_mods: Some(&damage_mods),
+            minions: Some(&minion_rollups),
+            health_percents: Some(&health_percents),
+        },
     );
     (serde_json::to_value(&v1).expect("serializable"), enc)
 }

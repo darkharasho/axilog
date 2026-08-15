@@ -46,6 +46,13 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
         )
     });
 
+    // Side-channel absorption Task 6: the two passes behind `blocks.
+    // minions` and `series[].health_percents`. Gated with everything else
+    // so `build(false)` still exercises the not-computed path.
+    let minion_rollups = all_gates.then(|| axilog_core::analysis::minions::build(&raw, &enc));
+    let health_percents =
+        all_gates.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
+
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -63,7 +70,11 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
         &legacy,
         "0.0.0-test",
         None,
-        damage_mods.as_ref(),
+        &axilog_schema::v1::Passes {
+            damage_mods: damage_mods.as_ref(),
+            minions: minion_rollups.as_ref(),
+            health_percents: health_percents.as_ref(),
+        },
     );
     (enc, metrics, legacy, v1)
 }

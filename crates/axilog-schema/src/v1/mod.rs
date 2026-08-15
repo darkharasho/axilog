@@ -9,7 +9,7 @@ pub mod envelope;
 pub mod order;
 pub mod series;
 
-use crate::v1::blocks::{activity, damage, defense, support};
+use crate::v1::blocks::{activity, damage, defense, minions, support};
 use crate::v1::catalogs::{CatalogBuilder, Catalogs};
 use crate::v1::entities::build_entities;
 use crate::v1::envelope::{AxilogMeta, BlockName, Coverage, CoverageState, Severity, WarningOut};
@@ -114,6 +114,8 @@ pub struct Blocks {
     pub replay: Option<activity::ReplayBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub series: Option<activity::SeriesBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minions: Option<minions::MinionsBlock>,
 }
 
 /// The coverage state for a block that DID run: [`CoverageState::Empty`]
@@ -141,21 +143,56 @@ fn computed(is_empty: bool) -> CoverageState {
     }
 }
 
+/// The optional analysis passes this container is built from.
+///
+/// Every field is a pass that `analyze()` does NOT run -- an opt-in gated
+/// on a CLI flag or SDK option -- borrowed from whichever caller ran it.
+/// `None` means "that pass did not run", which is exactly what the
+/// corresponding block's `coverage` reports as `not_computed`.
+///
+/// This exists because of what the absorption program does to this
+/// function's arity. `damage_mods` arrived as a seventh positional
+/// parameter, and Tasks 6-12 each move one or two more passes in here:
+/// following that pattern ends at a fourteen-argument function whose call
+/// sites are a row of bare `None`s, and rewrites all ~40 of them seven
+/// times over. A `Default`-able borrow struct costs those call sites one
+/// edit total (this task's), after which a new pass is a new field and no
+/// call site moves at all.
+///
+/// It is emphatically NOT a second `EiInputs`. The distinction that makes
+/// the program work is *who reads it*: this is consumed HERE, by the
+/// native builder, and every value in it lands in a block on the native
+/// wire. `EiInputs` is read by the ei-json adapter, which is precisely the
+/// data path spec #2 exists to delete -- data that reached ei-json without
+/// ever existing natively. A pass entering through this struct has already
+/// been absorbed.
+#[derive(Default, Clone, Copy)]
+pub struct Passes<'a> {
+    /// M16 `--modifiers`. Was the seventh positional parameter.
+    pub damage_mods: Option<&'a DamageModifierResults>,
+    /// MEIGAP Task 3b `--skill-damage`: per-player minion damage-taken
+    /// rollups, positionally joined to `enc.players`.
+    pub minions: Option<&'a axilog_core::analysis::minions::MinionRollups>,
+    /// MEIGAP2 row 2 `--timeseries`: per-player health-percent step series,
+    /// keyed by the account's representative agent address.
+    pub health_percents: Option<&'a std::collections::BTreeMap<u64, Vec<(u64, f64)>>>,
+}
+
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
 /// [`crate::Report`], which keeps this a pure reprojection instead of a
 /// second, divergent computation from `Metrics`.
 ///
 /// `enc` is used only for [`build_entities`] -- every block routes through
-/// `legacy`/`metrics` instead, since those are what Tasks 5-8's builders
-/// already take.
+/// `legacy`/`metrics`/[`Passes`] instead.
 pub fn build_report_v1(
     enc: &Encounter,
     metrics: &Metrics,
     legacy: &crate::Report,
     axilog_version: &str,
     generated_from: Option<&str>,
-    damage_mods: Option<&DamageModifierResults>,
+    passes: &Passes<'_>,
 ) -> ReportV1 {
+    let damage_mods = passes.damage_mods;
     let (entities, index, source_order) = build_entities(enc, metrics);
     let mut cats = CatalogBuilder::default();
     let mut coverage = Coverage::new();
@@ -179,7 +216,7 @@ pub fn build_report_v1(
     coverage.set(BlockName::Contribution, computed(contribution.is_empty()));
     let healing = support::build_healing(legacy, &index);
     coverage.set(BlockName::Healing, computed(healing.is_empty()));
-    let series = activity::build_series(legacy, &index);
+    let series = activity::build_series(legacy, &index, passes.health_percents);
     coverage.set(BlockName::Series, computed(series.is_empty()));
 
     // Gated blocks: presence of the legacy `Option` IS the gate signal, the
@@ -216,9 +253,20 @@ pub fn build_report_v1(
         block
     });
 
+    // The pass runs only under `--skill-damage`, so its presence IS the
+    // gate signal -- the same "presence, not a flag" rule the legacy
+    // `Option` blocks above follow.
+    let minions_block = passes.minions.map(|rollups| {
+        let block = minions::build_minions(rollups, &source_order, &mut cats);
+        coverage.set(BlockName::Minions, computed(block.is_empty()));
+        block
+    });
+    if minions_block.is_none() {
+        coverage.set(BlockName::Minions, CoverageState::NotComputed);
+    }
+
     // Reserved for spec #2. Named here so the vocabulary is fixed.
     coverage.set(BlockName::Conditions, CoverageState::NotComputed);
-    coverage.set(BlockName::Minions, CoverageState::NotComputed);
 
     // `Metrics::warnings` carries a code at the source as of this task --
     // see `axilog_core::analysis::Warning`. A catch-all code would defeat
@@ -332,6 +380,7 @@ pub fn build_report_v1(
             missiles,
             replay,
             series: Some(series),
+            minions: minions_block,
         },
         coverage,
         warnings,
@@ -409,7 +458,7 @@ mod tests {
         };
         let legacy =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, None);
+        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &Default::default());
 
         assert_eq!(v1.encounter.markers.len(), 2, "both markers must survive, not just the resolvable one");
 
@@ -475,7 +524,7 @@ mod tests {
         };
         let legacy =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, None);
+        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &Default::default());
 
         assert_eq!(v1.encounter.recorded_by, None, "an unresolvable recorder must not fabricate an entity id");
 
@@ -542,7 +591,7 @@ mod tests {
         };
         let legacy =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, None);
+        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &Default::default());
 
         assert_eq!(v1.encounter.recorded_by, None);
         assert!(

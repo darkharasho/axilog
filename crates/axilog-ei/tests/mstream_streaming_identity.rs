@@ -79,8 +79,18 @@ fn render_both(flags: Flags) -> (String, String) {
         false,
         None,
     );
-    let report_v1 =
-        axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let minion_rollups =
+        flags.skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
+    let health_percents =
+        flags.timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-test", None,
+        &axilog_schema::v1::Passes {
+            minions: minion_rollups.as_ref(),
+            health_percents: health_percents.as_ref(),
+            ..Default::default()
+        },
+    );
     let boon_states = flags
         .timeseries
         .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
@@ -112,12 +122,8 @@ fn render_both(flags: Flags) -> (String, String) {
     let healing_detail = (flags.skill_damage || flags.timeseries)
         .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
         .flatten();
-    let minion_rollups =
-        flags.skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
     let dist_outcomes =
         flags.skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
-    let health_percents =
-        flags.timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
     let damage_mods = flags.modifiers.then(|| {
         axilog_core::analysis::damage_mods::evaluate_catalog_full(
             &raw,
@@ -140,9 +146,7 @@ fn render_both(flags: Flags) -> (String, String) {
         healing_detail: healing_detail.as_ref(),
         healing_series: flags.timeseries,
         healing_dist: flags.skill_damage,
-        minions: minion_rollups.as_ref(),
         dist_outcomes: dist_outcomes.as_ref(),
-        health_percents: health_percents.as_ref(),
     };
 
     let mut streamed: Vec<u8> = Vec::new();

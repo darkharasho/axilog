@@ -46,7 +46,7 @@ fn ei_json_matches_the_golden_isfake_down_dead_and_active_times() {
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
     let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { activity: &activity, ..Default::default() });
 
     // -- isFake: every target, no exceptions --
@@ -206,7 +206,7 @@ fn ei_json_per_skill_and_per_second_blocks_match_the_golden() {
     // gate-respecting omission-when-absent behavior is covered by
     // `axilog-ei`'s own unit tests, not this golden-fixture test).
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true, false, None);
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
     let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs::default());
 
     let mut joined = 0usize;
@@ -324,7 +324,7 @@ fn ei_json_rotation_cast_counts_match_the_golden() {
     // omission-when-absent behavior is covered by `axilog-ei`'s own unit
     // tests, not this golden-fixture test).
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, true, None);
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
     let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs::default());
 
     let mut joined = 0usize;
@@ -420,7 +420,7 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
     let enc = resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
     let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs::default());
 
     // (ei-json statsAll[0] key, golden hitStats key) EXACT count/sum pairs.
@@ -766,7 +766,7 @@ fn ei_json_combat_replay_matches_the_golden() {
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
     let ei_replay = build_ei_replay_auto(&raw, &enc);
     let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
 
@@ -879,7 +879,7 @@ fn ei_json_replay_fields_do_not_disturb_the_always_on_surface() {
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
 
     let without = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { activity: &activity, ..Default::default() });
     let ei_replay = build_ei_replay_auto(&raw, &enc);
@@ -950,7 +950,7 @@ fn ei_json_combat_replay_matches_the_local_postrework_export() {
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
     let ei_replay = build_ei_replay_auto(&raw, &enc);
     let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { activity: &activity, replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
 
@@ -1072,7 +1072,7 @@ fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
     // -- gated off: today's `totalDmg`-only row, split keys ABSENT (not 0) --
     let plain =
         axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-    let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, None);
+    let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, &Default::default());
     let plain_ei = axilog_ei::to_ei_json(&plain_v1, &plain, &EiInputs::default());
     for p in plain_ei["players"].as_array().expect("players") {
         for t in p["statsTargets"].as_array().expect("statsTargets") {
@@ -1089,7 +1089,7 @@ fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
     // -- gated on: the full split, summing back to statsAll[0] --
     let full =
         axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, false, false, None);
-    let full_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &full, "0.0.0-test", None, None);
+    let full_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &full, "0.0.0-test", None, &Default::default());
     let ei = axilog_ei::to_ei_json(&full_v1, &full, &EiInputs::default());
     let mut exact_players = 0usize;
     let mut checked = 0usize;
@@ -1155,7 +1155,7 @@ fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
     let plain = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
     );
-    let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, None);
+    let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, &Default::default());
     let off = axilog_ei::to_ei_json(&plain_v1, &plain, &EiInputs { activity: &activity, ..Default::default() });
     for p in off["players"].as_array().expect("players") {
         assert!(p.get("powerDamageTaken1S").is_none(), "powerDamageTaken1S must ride --timeseries");
@@ -1191,7 +1191,7 @@ fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
     let full = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
-    let full_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &full, "0.0.0-test", None, None);
+    let full_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &full, "0.0.0-test", None, &Default::default());
     let on = axilog_ei::to_ei_json(
         &full_v1, &full,
         &EiInputs {
@@ -1377,7 +1377,7 @@ fn ei_json_enemy_player_skill_dist_matches_the_golden_aggregate() {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, false, false, None,
     );
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
     let ei = axilog_ei::to_ei_json(
         &report_v1, &report,
         &EiInputs { activity: &activity, enemy_dist: Some(&dist), ..Default::default() },
@@ -1466,7 +1466,7 @@ fn ei_json_meigap3_healing_detail_minions_and_guild_are_gated_and_consistent() {
     let plain = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
     );
-    let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, None);
+    let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, &Default::default());
     let off = axilog_ei::to_ei_json(&plain_v1, &plain, &EiInputs { activity: &activity, ..Default::default() });
     for p in off["players"].as_array().expect("players") {
         assert!(p.get("minions").is_none(), "minions[] must ride --skill-damage");
@@ -1492,7 +1492,10 @@ fn ei_json_meigap3_healing_detail_minions_and_guild_are_gated_and_consistent() {
     let full = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
-    let full_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &full, "0.0.0-test", None, None);
+    let full_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &full, "0.0.0-test", None,
+        &axilog_schema::v1::Passes { minions: Some(&minions), ..Default::default() },
+    );
     let on = axilog_ei::to_ei_json(
         &full_v1, &full,
         &EiInputs {
@@ -1500,7 +1503,6 @@ fn ei_json_meigap3_healing_detail_minions_and_guild_are_gated_and_consistent() {
             healing_detail: Some(&detail),
             healing_series: true,
             healing_dist: true,
-            minions: Some(&minions),
             ..Default::default()
         },
     );

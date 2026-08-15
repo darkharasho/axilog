@@ -82,17 +82,22 @@ fn rendered_and_golden() -> (Value, Vec<Value>, HashMap<String, usize>) {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
     let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
     let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
     let health_percents = axilog_core::analysis::health::ei_health_percents(&raw, &enc);
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-test", None,
+        &axilog_schema::v1::Passes {
+            health_percents: Some(&health_percents),
+            ..Default::default()
+        },
+    );
     let ei = axilog_ei::to_ei_json(
         &report_v1, &report,
         &EiInputs {
             activity: &activity,
             boon_states: Some(&boon_states),
             dist_outcomes: Some(&dist_outcomes),
-            health_percents: Some(&health_percents),
             ..Default::default()
         },
     );

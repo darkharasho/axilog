@@ -24,7 +24,16 @@ fn main() {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-bench", None, None, true, true, true, None,
     );
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-bench", None, None);
+    let minions = axilog_core::analysis::minions::build(&raw, &enc);
+    let health_percents = axilog_core::analysis::health::ei_health_percents(&raw, &enc);
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-bench", None,
+        &axilog_schema::v1::Passes {
+            minions: Some(&minions),
+            health_percents: Some(&health_percents),
+            ..Default::default()
+        },
+    );
     let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
     let enemies: std::collections::BTreeSet<u64> =
         enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
@@ -36,9 +45,7 @@ fn main() {
     let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
     let enemy_dist = axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &rep);
     let healing_detail = axilog_core::analysis::healing_detail::build(&raw, &enc);
-    let minions = axilog_core::analysis::minions::build(&raw, &enc);
     let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
-    let health_percents = axilog_core::analysis::health::ei_health_percents(&raw, &enc);
 
     let inputs = EiInputs {
         activity: &activity,
@@ -51,9 +58,7 @@ fn main() {
         healing_detail: healing_detail.as_ref(),
         healing_series: true,
         healing_dist: true,
-        minions: Some(&minions),
         dist_outcomes: Some(&dist_outcomes),
-        health_percents: Some(&health_percents),
     };
 
     let t0 = std::time::Instant::now();
