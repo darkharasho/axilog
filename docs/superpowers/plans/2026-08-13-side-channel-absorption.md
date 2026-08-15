@@ -1291,6 +1291,45 @@ read from `report.blocks.replay.by_entity`. Delete `EiInputs::activity`.
 
 ---
 
+**Execution notes (Task 11, done):**
+
+1. **`by_entity` is squad-only, and that is a roster fact, not a
+   simplification.** `replay::build_replay` walks squad players AND
+   enemy-player representatives; `build_activity_intervals` walks
+   `enc.players` alone. So the sketch's `ReplayTrackRow` could not simply
+   shed its intervals -- doing so would delete every enemy player's
+   down/dead history. `ReplayTrack` keeps them; for a squad entity the two
+   copies come from the same `build_intervals` call over the same folded
+   addr set and a test asserts they agree. Extending the always-on pass
+   over the enemy roster was the alternative and was rejected: it puts a
+   per-enemy event scan on the path of every parse, for data nothing reads.
+
+2. **`poll_ms`/`bounds` moved down into `tracks` with the samples.** Left at
+   the block's top level they would serialize as a zero polling interval on
+   every parse without `--replay` -- metadata describing tracks that are not
+   there.
+
+3. **`active_ms` is carried, not derived.** GW2EI subtracts dead time and
+   NOT down time. A consumer deriving "active" from the other four fields
+   under the intuitive reading under-reports every player who went down, so
+   the field is emitted and `active_ms_subtracts_dead_time_but_not_down_time`
+   pins it against a fixture that actually contains downs.
+
+4. **This is the program's first key REMOVAL.** Nine keys moved under
+   `tracks`; five new intervals keys appeared. The 1.x rules call a
+   relocation breaking, so it is recorded explicitly in
+   `docs/NATIVE-FORMAT.md`'s compatibility section rather than absorbed
+   silently -- 1.0 has no external reader yet, which is what makes it
+   payable now and not later.
+
+5. **ei-json is byte-identical in all five gate combos** (none, `--replay`,
+   `--skill-damage`, `--timeseries`, all three) -- the first task in the
+   program with no ei-json delta at all. The native document, meanwhile,
+   gains 42 interval rows and `coverage.replay: "present"` on a default
+   parse that previously carried no replay block whatsoever.
+
+---
+
 ### Task 12: `boon_states` and `target_conditions` — the name→id redesign
 
 Follow Task 6's spine. This is the task the spec's PII section is about.

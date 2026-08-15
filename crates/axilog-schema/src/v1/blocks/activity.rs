@@ -148,8 +148,80 @@ pub struct MissilesEntity {
     pub reflected_at_self: u32,
 }
 
+/// The replay block is the one block in this format whose two halves ride
+/// different gates, and the split is deliberate.
+///
+/// `by_entity` -- down/dead intervals plus first/last-aware bounds -- is
+/// ALWAYS present. `axilog_core::analysis::replay::build_activity_intervals`
+/// is a min/max scan plus a status-event walk, with no position decode,
+/// sort, or interpolation, so every caller already computes it
+/// unconditionally; the cutover audit records the matching ei-json fact,
+/// that `combatReplayData.{start,end,down,dead}` are emitted with or
+/// without `--replay` while `{positions,orientations,iconURL}` are not.
+///
+/// `tracks` -- the downsampled position samples -- rides `--replay`,
+/// because THAT is the expensive half.
+///
+/// **`coverage.replay == "present"` therefore does not mean positions are
+/// available.** It answers the intervals question, which is the one this
+/// block can always answer. A consumer wanting the position map must check
+/// `tracks` for itself; that is a presence check on the data, not a flag it
+/// has to be told about out of band.
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct ReplayBlock {
+    /// Keyed by entity id, and covering the SQUAD roster only -- the
+    /// always-on pass walks `Encounter::players`, nothing else. Enemy
+    /// players get intervals only inside [`ReplayTracks`], whose roster is
+    /// wider; see [`ReplayTrack::down_intervals`] for why that is not
+    /// redundancy to be collapsed.
+    pub by_entity: ByEntity<ReplayIntervals>,
+    /// Present only under `--replay`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracks: Option<ReplayTracks>,
+}
+
+impl ReplayBlock {
+    /// See [`super::damage::DamageBlock::is_empty`]. Either half alone is
+    /// enough to make this block non-empty: on a log parsed with `--replay`
+    /// but no activity pass the intervals map is bare and the tracks still
+    /// are not, and reporting that `Empty` would claim nobody moved.
+    pub fn is_empty(&self) -> bool {
+        self.by_entity.is_empty()
+            && self.tracks.as_ref().map_or(true, |t| t.by_entity.is_empty())
+    }
+}
+
+/// One squad entity's activity intervals: the cheap half of the replay,
+/// carried whether or not positions were requested.
+#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+pub struct ReplayIntervals {
+    /// This entity's own first-aware time, log-relative ms -- the earliest
+    /// event of ANY kind naming it, matching GW2EI's `AgentItem.FirstAware`
+    /// and its exported `combatReplayData.start`.
+    pub start_ms: u64,
+    /// Last-aware, the same way (`combatReplayData.end`).
+    pub end_ms: u64,
+    /// `(end_ms - start_ms) - dead_ms`. Carried rather than left to the
+    /// reader to derive, because the derivation has a trap in it: down time
+    /// is NOT subtracted, only dead time is -- verified against a real EI
+    /// export in `ActivityIntervals::active_ms`'s doc comment, which has
+    /// the GW2EI source citation. A consumer who reasonably assumes "active
+    /// means neither downed nor dead" gets a different, wrong number.
+    pub active_ms: u64,
+    /// `[start_ms, end_ms)` pairs. Half-open, matching GW2EI's own exported
+    /// `down`/`dead` arrays -- the end timestamp is the closing
+    /// transition's own time and is not part of the interval.
+    pub down: Vec<(u64, u64)>,
+    pub dead: Vec<(u64, u64)>,
+}
+
+/// The gated half of [`ReplayBlock`]: position tracks and the metadata that
+/// only describes them. `poll_ms` and `bounds` live here rather than beside
+/// `by_entity` precisely because they are meaningless without tracks -- at
+/// the block's top level they would have to serialize as a zero polling
+/// interval on every log parsed without `--replay`.
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
+pub struct ReplayTracks {
     /// Shared polling interval for every track below -- real `ReplayOut`
     /// carries one `poll_ms` for the whole replay, not per track, so it is
     /// hoisted here rather than duplicated onto each `ReplayTrack`.
@@ -159,14 +231,6 @@ pub struct ReplayBlock {
     /// Keyed by entity id. The legacy `ReplayTrackOut` carried no join key
     /// at all, so a consumer could not tell whose track it was reading.
     pub by_entity: ByEntity<ReplayTrack>,
-}
-
-impl ReplayBlock {
-    /// See [`super::damage::DamageBlock::is_empty`]. `poll_ms`/`bounds` are
-    /// metadata about tracks that do not exist when there are none.
-    pub fn is_empty(&self) -> bool {
-        self.by_entity.is_empty()
-    }
 }
 
 /// Mirrors the real `ReplayBoundsOut`, which is `f64`, not the brief's
@@ -197,6 +261,17 @@ pub struct ReplayBounds {
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct ReplayTrack {
     pub samples: Vec<(u64, f64, f64)>,
+    /// For a SQUAD entity these repeat [`ReplayIntervals::down`]/`dead`
+    /// exactly -- both come from the same `replay::build_intervals` call
+    /// over the same folded addr set, so they cannot disagree. They are not
+    /// dropped here because the track roster is WIDER than the always-on
+    /// one: `replay::build_replay` walks squad players AND enemy-player
+    /// representatives, while `build_activity_intervals` walks squad
+    /// players only. Deleting these would silently take every enemy
+    /// player's down/dead history with them, and extending the always-on
+    /// pass over the enemy roster instead would put a per-enemy event scan
+    /// on the path of every parse -- paying, on a WvW log, for data nothing
+    /// currently reads.
     pub down_intervals: Vec<(u64, u64)>,
     pub dead_intervals: Vec<(u64, u64)>,
 }
@@ -592,33 +667,64 @@ pub fn build_missiles(report: &crate::Report, index: &EntityIndex) -> MissilesBl
     }
 }
 
-pub fn build_replay(report: &crate::Report, index: &EntityIndex) -> ReplayBlock {
-    let Some(r) = report.replay.as_ref() else { return ReplayBlock::default() };
-    let mut by_entity = ByEntity::default();
-    // Requires the `ReplayTrackOut::agent_addr` field added in this task:
-    // `ReplayTrackOut` carried no join key at all even though its upstream
-    // `axilog_core::analysis::replay::Track` already has `agent_addr`.
-    for track in &r.tracks {
-        let Some(id) = index.by_agent_addr(track.agent_addr) else { continue };
-        by_entity.insert(
-            id,
-            ReplayTrack {
-                samples: track.samples.clone(),
-                down_intervals: track.down_intervals.clone(),
-                dead_intervals: track.dead_intervals.clone(),
-            },
-        );
+/// `activity` is positionally joined to `report.players` (both are built by
+/// iterating `Encounter::players` 1:1 -- see `build_activity_intervals`'s
+/// own doc comment), so a caller that hand-builds a `Report` can hand over
+/// a slice of the wrong length. Rather than attribute one player's downs to
+/// another, a mismatched slice is dropped whole, the same guard
+/// `support::build_healing` uses on its own positional pass.
+pub fn build_replay(
+    report: &crate::Report,
+    index: &EntityIndex,
+    activity: Option<&[axilog_core::analysis::replay::ActivityIntervals]>,
+) -> ReplayBlock {
+    let activity = activity.filter(|a| a.len() == report.players.len());
+    let mut intervals = ByEntity::default();
+    if let Some(activity) = activity {
+        for (p, a) in report.players.iter().zip(activity) {
+            let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
+            intervals.insert(
+                id,
+                ReplayIntervals {
+                    start_ms: a.start_ms,
+                    end_ms: a.end_ms,
+                    active_ms: a.active_ms(),
+                    down: a.down_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
+                    dead: a.dead_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
+                },
+            );
+        }
     }
-    ReplayBlock {
-        poll_ms: r.poll_ms,
-        bounds: Some(ReplayBounds {
-            min_x: r.bounds.min_x,
-            min_y: r.bounds.min_y,
-            max_x: r.bounds.max_x,
-            max_y: r.bounds.max_y,
-        }),
-        by_entity,
-    }
+
+    let tracks = report.replay.as_ref().map(|r| {
+        let mut by_entity = ByEntity::default();
+        // Requires the `ReplayTrackOut::agent_addr` field added in this task:
+        // `ReplayTrackOut` carried no join key at all even though its upstream
+        // `axilog_core::analysis::replay::Track` already has `agent_addr`.
+        for track in &r.tracks {
+            let Some(id) = index.by_agent_addr(track.agent_addr) else { continue };
+            by_entity.insert(
+                id,
+                ReplayTrack {
+                    samples: track.samples.clone(),
+                    down_intervals: track.down_intervals.clone(),
+                    dead_intervals: track.dead_intervals.clone(),
+                },
+            );
+        }
+        ReplayTracks {
+            poll_ms: r.poll_ms,
+            bounds: Some(ReplayBounds {
+                min_x: r.bounds.min_x,
+                min_y: r.bounds.min_y,
+                max_x: r.bounds.max_x,
+                max_y: r.bounds.max_y,
+            }),
+            by_entity,
+        }
+    });
+
+    ReplayBlock { by_entity: intervals, tracks }
 }
 
 #[cfg(test)]
@@ -644,10 +750,10 @@ mod tests {
         // The legacy `ReplayTrackOut` carries NO join key at all, so a
         // consumer cannot tell whose track it is reading.
         let (report, index) = fixture_report();
-        let block = build_replay(&report, &index);
+        let block = build_replay(&report, &index, None);
         // The committed fixture is parsed without `--replay`, so the block
         // is empty -- the assertion that matters is the SHAPE.
-        for entity_id in block.by_entity.0.keys() {
+        for entity_id in block.tracks.iter().flat_map(|t| t.by_entity.0.keys()) {
             assert!(
                 index.by_agent_addr(u64::from(*entity_id)).is_some() || *entity_id < 1000,
                 "keys are entity ids"

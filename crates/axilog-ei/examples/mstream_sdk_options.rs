@@ -38,7 +38,7 @@ fn main() {
     let healing_detail = axilog_core::analysis::healing_detail::build(&raw, &enc);
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, "0.0.0-bench", None,
-        &axilog_schema::v1::Passes {
+        &axilog_schema::v1::Passes { activity: Some(&activity),
             minions: Some(&minions),
             health_percents: Some(&health_percents),
             enemy_dist: Some(&enemy_dist),
@@ -53,7 +53,6 @@ fn main() {
     let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
 
     let inputs = EiInputs {
-        activity: &activity,
         replay: None,
         modifiers: None,
         boon_states: Some(&boon_states),

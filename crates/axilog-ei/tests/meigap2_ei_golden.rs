@@ -106,7 +106,7 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     );
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, "0.0.0-test", None,
-        &axilog_schema::v1::Passes {
+        &axilog_schema::v1::Passes { activity: Some(&activity),
             enemy_dist: Some(&enemy_dist),
             enemy_series: Some(&enemy_series),
             dist_outcomes: Some(&dist_outcomes),
@@ -119,7 +119,6 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let ours = axilog_ei::to_ei_json(
         &report_v1, &report,
         &EiInputs {
-            activity: &activity,
             target_conditions: Some(&target_conditions),
             ..Default::default()
         },

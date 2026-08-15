@@ -367,7 +367,7 @@ Real example (default flags — no `--replay`/`--rotation`/`--modifiers`):
   "boons": "present", "cc": "present", "conditions": "not_computed",
   "contribution": "present", "damage": "present", "damage_mods": "not_computed",
   "defenses": "present", "healing": "present", "hit_stats": "present",
-  "minions": "not_computed", "missiles": "not_computed", "replay": "not_computed",
+  "minions": "not_computed", "missiles": "not_computed", "replay": "present",
   "rotation": "not_computed", "series": "present", "support": "present"
 }
 ```
@@ -477,26 +477,64 @@ Both decoders were executed against `/tmp/v1.json` (default flags) and
 real RLE row) as part of writing this document; both round-tripped `len`
 correctly and matched the raw/RLE encoding the binary actually chose.
 
-## Combat replay — NOT series-encoded
+## Combat replay — two halves, two gates
 
-`blocks.replay` (present only with `--replay`) is the one exception to the
-series envelope. Each entity's track is raw `(t_ms, x, y)` triples:
+`blocks.replay` is the one block whose halves are gated differently, and
+the only place in this document where `coverage` does not settle the whole
+question.
+
+`by_entity` — down/dead intervals plus each squad player's own first/last-
+aware bounds — is **always present**. Computing it is a min/max scan plus a
+status-event walk with no position decode, so every parse pays for it
+whether or not you asked for a replay.
+
+`tracks` — the downsampled position samples, and the `poll_ms`/`bounds`
+metadata that only describes them — rides `--replay`, because that is the
+expensive half.
 
 ```json
 {
-  "poll_ms": 300,
-  "bounds": { "min_x": -23880.6, "min_y": -31541.4, "max_x": -197.0, "max_y": 15974.8 },
   "by_entity": {
     "0": {
-      "samples": [[300, -11097.6, -23619.4], [600, -11156.3, -23711.1], "..."],
-      "down_intervals": [],
-      "dead_intervals": []
+      "start_ms": 3,
+      "end_ms": 49266,
+      "active_ms": 49263,
+      "down": [[12642, 15512]],
+      "dead": []
+    }
+  },
+  "tracks": {
+    "poll_ms": 300,
+    "bounds": { "min_x": -23880.6, "min_y": -31541.4, "max_x": -197.0, "max_y": 15974.8 },
+    "by_entity": {
+      "0": {
+        "samples": [[300, -11097.6, -23619.4], [600, -11156.3, -23711.1], "..."],
+        "down_intervals": [[12642, 15512]],
+        "dead_intervals": []
+      }
     }
   }
 }
 ```
 
-This is deliberate, not an oversight: `SeriesOut` assumes a dense array
+Three things a consumer needs to know about that shape:
+
+- **`coverage.replay == "present"` does not mean positions are available.**
+  It answers the intervals question, which this block can always answer.
+  Check for `tracks` yourself.
+- **`active_ms` subtracts dead time but NOT down time.** That is GW2EI's own
+  definition, verified against a real export; it is carried as a field
+  precisely so nobody re-derives it under the more intuitive reading and
+  quietly under-reports every player who went down.
+- **`by_entity` covers the squad only; `tracks.by_entity` also covers enemy
+  players.** That is why a track keeps its own copy of the intervals: the
+  always-on pass never walks the enemy roster, so dropping them from the
+  track would take every enemy player's down/dead history with it. For a
+  squad entity the two copies come from the same computation and cannot
+  disagree.
+
+The position track itself is the one exception to the series envelope —
+raw `(t_ms, x, y)` triples rather than a `SeriesOut`. This is deliberate, not an oversight: `SeriesOut` assumes a dense array
 starting at `t=0` on a fixed step, but a replay track starts at that
 agent's own first-aware time rounded up to the polling grid — usually not
 zero. Encoding it through `SeriesOut` would silently drop that start offset
@@ -518,6 +556,14 @@ Enforced by test (`crates/axilog-schema/tests/v1_shape.rs`,
 - Absent optional fields are omitted entirely, never serialized as `null`.
   A consumer should treat "key absent" and "key null" as the same signal,
   but should not expect to see the latter.
+
+**One relocation predates these rules taking effect.** The replay split
+above moved `blocks.replay.{poll_ms,bounds,by_entity}` down under
+`blocks.replay.tracks`, and gave `blocks.replay.by_entity` a new meaning —
+which under the rules above is breaking. It was done while 1.0 still had no
+external consumer reading it (the ei-json adapter is 1.0's only reader, and
+it is in-tree), and it is recorded here rather than passed over because the
+key-set golden diff will show nine removals to anyone bisecting.
 
 ## Joining across reports
 

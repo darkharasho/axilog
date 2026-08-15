@@ -112,7 +112,7 @@ fn render_both(flags: Flags) -> (String, String) {
         .flatten();
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, "0.0.0-test", None,
-        &axilog_schema::v1::Passes {
+        &axilog_schema::v1::Passes { activity: Some(&activity),
             minions: minion_rollups.as_ref(),
             health_percents: health_percents.as_ref(),
             enemy_dist: enemy_dist.as_ref(),
@@ -141,7 +141,6 @@ fn render_both(flags: Flags) -> (String, String) {
     // Rebuilt per render: `EiInputs` is `Copy`, but each `write_ei_json`/
     // `to_ei_json` call builds its own single-use document.
     let inputs = || EiInputs {
-        activity: &activity,
         replay: ei_replay_data.as_ref(),
         modifiers: damage_mods.as_ref(),
         boon_states: boon_states.as_ref(),

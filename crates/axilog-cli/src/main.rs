@@ -381,6 +381,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     dist_outcomes: dist_outcomes.as_ref(),
                     healing_detail: healing_detail.as_ref().filter(|_| skill_damage),
                     healing_series: healing_detail.as_ref().filter(|_| timeseries),
+                    activity: Some(&activity),
                 },
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
@@ -406,7 +407,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // `streaming_matches_value_tree_byte_for_byte` test).
             if format == Format::EiJson {
                 let ei_inputs = axilog_ei::EiInputs {
-                    activity: &activity,
                     replay: ei_replay_data.as_ref(),
                     modifiers: damage_mods.as_ref(),
                     boon_states: boon_states.as_ref(),

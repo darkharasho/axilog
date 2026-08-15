@@ -222,6 +222,15 @@ pub struct Passes<'a> {
     /// a flag can claim a pass ran when it did not, a `&HealingDetail`
     /// cannot.
     pub healing_series: Option<&'a axilog_core::analysis::healing_detail::HealingDetail>,
+    /// M11 Task 3's activity pass, positionally joined to `enc.players`.
+    /// Lands on `blocks.replay.by_entity` -- the ALWAYS-ON half of that
+    /// block, which is why this field is unlike every other one here: the
+    /// rest name an optional pass, so `None` means "the flag was off", while
+    /// this one names a pass every caller already runs unconditionally
+    /// (`build_activity_intervals` is cheap by construction -- see its doc
+    /// comment). `None` here therefore means a caller that has no log to
+    /// scan at all, not a gate.
+    pub activity: Option<&'a [axilog_core::analysis::replay::ActivityIntervals]>,
 }
 
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
@@ -318,8 +327,13 @@ pub fn build_report_v1(
         coverage.set(BlockName::Missiles, computed(block.is_empty()));
         block
     });
-    let replay = legacy.replay.is_some().then(|| {
-        let block = activity::build_replay(legacy, &index);
+    // Two gates, one block: the intervals half is always computed, the
+    // position half rides `--replay` (see `ReplayBlock`'s doc comment). So
+    // the block exists when EITHER input does, and `coverage.replay`
+    // answers the intervals question -- `Present` on a log parsed with no
+    // `--replay` at all, because the down/dead history really is there.
+    let replay = (passes.activity.is_some() || legacy.replay.is_some()).then(|| {
+        let block = activity::build_replay(legacy, &index, passes.activity);
         coverage.set(BlockName::Replay, computed(block.is_empty()));
         block
     });

@@ -76,7 +76,7 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, "0.0.0-test", None,
-        &axilog_schema::v1::Passes {
+        &axilog_schema::v1::Passes { activity: Some(&activity),
             health_percents: Some(&health_percents),
             // Task 9: the outcome columns enter through the native damage
             // block now, not through `EiInputs`.
@@ -90,7 +90,6 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let ours = axilog_ei::to_ei_json(
         &report_v1, &report,
         &EiInputs {
-            activity: &activity,
             boon_states: Some(&boon_states),
             ..Default::default()
         },

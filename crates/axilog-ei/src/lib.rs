@@ -3,7 +3,6 @@ use serde_json::{json, Value};
 use axilog_core::analysis::buffs::{BoonStates, BOON_IDS};
 use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
 use axilog_core::analysis::ei_replay::EiReplay;
-use axilog_core::analysis::replay::{ActivityIntervals, Interval};
 use axilog_core::analysis::target_conditions::TargetConditionStates;
 use axilog_core::icons::prof_icon_url;
 use axilog_schema::v1::ReportV1;
@@ -52,8 +51,8 @@ fn detected_team_ids(teams: &[axilog_schema::TeamOut]) -> BTreeMap<&str, u64> {
 
 /// Render one interval as EI's own `[start_ms, end_ms]` two-element array
 /// shape (`combatReplayData.down`/`.dead`).
-fn interval_json(iv: &Interval) -> Value {
-    json!([iv.start_ms, iv.end_ms])
+fn interval_json(&(start_ms, end_ms): &(u64, u64)) -> Value {
+    json!([start_ms, end_ms])
 }
 
 /// One GW2EI-serialized floating point number (M15, Task 3).
@@ -547,8 +546,8 @@ fn ei_damage_mod_split(rows: Vec<(i32, &DamageModifierStat)>) -> (Vec<Value>, Ve
 /// is then a source-compatible change for in-workspace callers that build it
 /// with `..Default::default()`, and a one-line change for the rest.
 ///
-/// [`Default`] is the "nothing available" case (`activity: &[]`,
-/// `replay: None`), which every field's own default behaviour treats as a
+/// [`Default`] is the "nothing available" case (`replay: None`), which every
+/// field's own default behaviour treats as a
 /// harmless zero/empty, never a panic — so
 /// `to_ei_json(&report_v1, &report, &EiInputs::default())` is always valid.
 ///
@@ -556,17 +555,6 @@ fn ei_damage_mod_split(rows: Vec<(i32, &DamageModifierStat)>) -> (Vec<Value>, Ve
 /// never takes ownership of the caller's buffers.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EiInputs<'a> {
-    /// `activity` (M11 Task 3): per-player down/dead intervals + first/last-
-    /// aware bounds from
-    /// `axilog_core::analysis::replay::build_activity_intervals`
-    /// — ALWAYS computed by every caller (CLI/Node/Python), unlike
-    /// `--replay`'s position track, since intervals are cheap (see that
-    /// function's module doc). Positionally joined to `report.players` (both
-    /// built by iterating `enc.players` in the same order — see
-    /// `build_activity_intervals`'s doc comment); leave it empty if
-    /// unavailable (every field this powers is then a harmless zero/empty
-    /// default, not a panic).
-    pub activity: &'a [ActivityIntervals],
     /// `replay` (M15 Task 3): the GW2EI-shape fixed-rate combat replay from
     /// `axilog_core::analysis::ei_replay::build_ei_replay_auto`, or `None`.
     /// This is the OPT-IN gate for `combatReplayData.{positions,
@@ -829,7 +817,6 @@ impl serde::Serialize for EiDoc<'_> {
 /// everything that is derivable from the `Report` alone.
 fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
     let EiInputs {
-        activity,
         replay,
         modifiers,
         boon_states,
@@ -896,7 +883,7 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         let team_id_for = |color: &str| -> u64 {
             detected_players.get(color).copied().unwrap_or_else(|| representative_team_id(color))
         };
-        let act = activity.get(player_idx);
+        let act = entity_id.and_then(|id| report.blocks.replay.as_ref()?.by_entity.get(id));
         // Real EI shape (verified against a real dps.report export,
         // axibridge's `test-fixtures/boon/20260117-181030.json`,
         // `players[0].statsAll[0]`): whole-fight/whole-phase aggregates —
@@ -1409,8 +1396,10 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // M15 Task 3: `.positions`/`.orientations`/`.dc`/`.iconURL` join
         // this object when -- and only when -- `replay` was requested (see
         // `to_ei_json`'s `replay` argument). The four M11 fields above stay
-        // ALWAYS-ON and are still sourced from `activity`, unchanged, in
-        // both modes: `ei_golden.rs`'s
+        // ALWAYS-ON and are now read from the native
+        // `blocks.replay.by_entity` row -- whose own always-on/gated split
+        // (see `ReplayBlock`) is the native mirror of exactly this
+        // distinction -- unchanged in both modes: `ei_golden.rs`'s
         // `ei_json_replay_fields_do_not_disturb_the_always_on_surface`
         // asserts the two objects are byte-identical apart from the four
         // added keys.
@@ -1418,11 +1407,11 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             let (active_ms, start_ms, end_ms, down, dead) = match act {
                 Some(a) => (
-                    a.active_ms(),
+                    a.active_ms,
                     a.start_ms,
                     a.end_ms,
-                    a.down_intervals.iter().map(interval_json).collect::<Vec<_>>(),
-                    a.dead_intervals.iter().map(interval_json).collect::<Vec<_>>(),
+                    a.down.iter().map(interval_json).collect::<Vec<_>>(),
+                    a.dead.iter().map(interval_json).collect::<Vec<_>>(),
                 ),
                 None => (0, 0, 0, Vec::new(), Vec::new()),
             };
@@ -2686,9 +2675,17 @@ mod tests {
     /// give `build_report_v1` at all and assert only on surfaces still
     /// read from `legacy`.
     fn sample_report_v1() -> axilog_schema::v1::ReportV1 {
+        sample_report_v1_with(&Default::default())
+    }
+
+    /// [`sample_report_v1`] with the caller's own optional passes -- Task 11
+    /// moved `activeTimes`/`combatReplayData` onto `blocks.replay`, so a
+    /// test about those fields now has to put the data in the DOCUMENT
+    /// rather than hand it to `to_ei_json` on the side.
+    fn sample_report_v1_with(passes: &axilog_schema::v1::Passes<'_>) -> axilog_schema::v1::ReportV1 {
         let (enc, m) = sample_inputs();
         let legacy = axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false, None);
-        axilog_schema::v1::build_report_v1(&enc, &m, &legacy, "0.1.0", None, &Default::default())
+        axilog_schema::v1::build_report_v1(&enc, &m, &legacy, "0.1.0", None, passes)
     }
 
     #[test]
@@ -2974,7 +2971,7 @@ mod tests {
 
     /// M11 Task 3: `activeTimes`/`combatReplayData` are ALWAYS present (not
     /// gated on `--replay`), with harmless zero/empty defaults when the
-    /// caller passes no `activity` data at all (`&[]`).
+    /// document carries no `blocks.replay` row for this player at all.
     #[test]
     fn active_times_and_combat_replay_data_default_to_zero_when_no_activity_supplied() {
         let v = to_ei_json(&sample_report_v1(), &sample_report(), &EiInputs::default());
@@ -2985,13 +2982,13 @@ mod tests {
         assert_eq!(v["players"][0]["combatReplayData"]["dead"], json!([]));
     }
 
-    /// M11 Task 3: real (non-empty) `activity` data flows through to
-    /// `activeTimes`/`combatReplayData`, positionally joined to
-    /// `report.players` by index -- `sample_report()` has 2 players (agent
-    /// addrs 1 and 2, in that order), matching `activity`'s own order here.
+    /// M11 Task 3: real (non-empty) activity data flows through to
+    /// `activeTimes`/`combatReplayData`. Task 11 changed the ROUTE, not the
+    /// numbers: the intervals now travel in `blocks.replay.by_entity`, and
+    /// the adapter joins them by entity id rather than by player index.
     #[test]
     fn active_times_and_combat_replay_data_map_real_activity_intervals() {
-        use axilog_core::analysis::replay::Interval;
+        use axilog_core::analysis::replay::{ActivityIntervals, Interval};
         let activity = vec![
             ActivityIntervals {
                 agent_addr: 1,
@@ -3005,7 +3002,11 @@ mod tests {
                 down_intervals: vec![], dead_intervals: vec![],
             },
         ];
-        let v = to_ei_json(&sample_report_v1(), &sample_report(), &EiInputs { activity: &activity, ..Default::default() });
+        let v1 = sample_report_v1_with(&axilog_schema::v1::Passes {
+            activity: Some(&activity),
+            ..Default::default()
+        });
+        let v = to_ei_json(&v1, &sample_report(), &EiInputs::default());
         assert_eq!(v["players"][0]["combatReplayData"]["start"], 100);
         assert_eq!(v["players"][0]["combatReplayData"]["end"], 10_100);
         assert_eq!(v["players"][0]["combatReplayData"]["down"], json!([[2_000, 3_000]]));

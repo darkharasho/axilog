@@ -167,6 +167,9 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
     // Task 10: the healing detail feeds two families under two different
     // flags; with every gate on, both are set from the one pass.
     let healing_detail = axilog_core::analysis::healing_detail::build(&raw, &enc);
+    // Task 11: ungated, like every real caller -- `blocks.replay.by_entity`
+    // is the always-on half of that block.
+    let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -193,6 +196,7 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
             dist_outcomes: Some(&dist_outcomes),
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
+            activity: Some(&activity),
         },
     );
     let v = serde_json::to_value(&v1).expect("serializable");

@@ -88,6 +88,12 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
     let healing_detail =
         all_gates.then(|| axilog_core::analysis::healing_detail::build(&raw, &enc)).flatten();
 
+    // Task 11: the activity pass is NOT gated -- every caller runs it
+    // unconditionally, so it is supplied in BOTH modes here and
+    // `build(false)` still yields a populated `blocks.replay.by_entity`
+    // with no `tracks`.
+    let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -114,6 +120,7 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
             dist_outcomes: dist_outcomes.as_ref(),
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
+            activity: Some(&activity),
         },
     );
     (enc, metrics, legacy, v1)

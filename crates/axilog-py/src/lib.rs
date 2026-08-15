@@ -49,7 +49,7 @@ fn value_err(e: impl std::fmt::Display) -> PyErr {
 /// over an already-read byte buffer, returning the native 1.0 container
 /// (Task 12: `parse_file`/`parse_bytes` emit the 1.0 document, mirroring
 /// the CLI's `--format json`; `parse_file_ei` is untouched and keeps
-/// consuming the legacy `Report` via `build_report_and_activity_from_bytes`
+/// consuming the legacy `Report` via `build_report_and_ei_inputs_from_bytes`
 /// below). `want_replay` mirrors the `replay` keyword arg (M9, Task 2);
 /// `want_skill_damage` mirrors the `skill_damage` keyword arg (M12, Task
 /// 1); `want_missiles` mirrors the `missiles` keyword arg (final-review
@@ -138,6 +138,10 @@ fn build_report_v1_from_bytes(
     // native path runs the pass on the gate that produces them.
     let dist_outcomes =
         want_skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
+    // Task 11: ungated on purpose. `blocks.replay.by_entity` is the
+    // always-on half of that block, so the native document carries
+    // down/dead intervals whether or not positions were asked for.
+    let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
     Ok(axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
@@ -153,18 +157,18 @@ fn build_report_v1_from_bytes(
             dist_outcomes: dist_outcomes.as_ref(),
             healing_detail: healing_detail.as_ref().filter(|_| want_skill_damage),
             healing_series: healing_detail.as_ref().filter(|_| want_timeseries),
+            activity: Some(&activity),
         },
     ))
 }
 
-/// `build_report_and_activity_from_bytes`'s return tuple. Named because it
+/// `build_report_and_ei_inputs_from_bytes`'s return tuple. Named because it
 /// grew a fourth member in M16 (and a fifth in MEIGAP) and
 /// `clippy::type_complexity` is right that
 /// the inline form had stopped being readable.
 type EiPipelineOutputs = (
     axilog_schema::Report,
     axilog_schema::v1::ReportV1,
-    Vec<axilog_core::analysis::replay::ActivityIntervals>,
     Option<axilog_core::analysis::ei_replay::EiReplay>,
     Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
     Option<axilog_core::analysis::buffs::BoonStates>,
@@ -172,11 +176,12 @@ type EiPipelineOutputs = (
 );
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
-/// but additionally returns the M11 Task 3 activity intervals
-/// (`axilog_core::analysis::replay::build_activity_intervals`) the ei-json
-/// adapter needs for `combatReplayData`/`activeTimes` -- computed
-/// unconditionally (cheap, unlike `--replay`'s position track), independent
-/// of `want_replay`.
+/// but additionally returns the EI-SHAPE side inputs `axilog_ei::EiInputs`
+/// still carries -- the data the native document deliberately does not
+/// model. The M11 Task 3 activity intervals used to be among them;
+/// side-channel absorption Task 11 moved them onto
+/// `blocks.replay.by_entity`, so both builders now compute them and neither
+/// hands them out.
 ///
 /// `want_skill_damage`/`want_timeseries` (final-review fix wave) are
 /// threaded into the `build_report` call below so `parse_file_ei`'s
@@ -188,7 +193,7 @@ type EiPipelineOutputs = (
 /// is threaded the same way for symmetry with `parse_file`/`parse_bytes`,
 /// even though `to_ei_json` does not currently read `Report::missiles`.
 #[allow(clippy::too_many_arguments)]
-fn build_report_and_activity_from_bytes(
+fn build_report_and_ei_inputs_from_bytes(
     bytes: &[u8],
     want_replay: bool,
     want_skill_damage: bool,
@@ -301,6 +306,7 @@ fn build_report_and_activity_from_bytes(
             dist_outcomes: dist_outcomes.as_ref(),
             healing_detail: healing_detail.as_ref().filter(|_| want_skill_damage),
             healing_series: healing_detail.as_ref().filter(|_| want_timeseries),
+            activity: Some(&activity),
         },
     );
     // MEIGAP Task 1b: GW2EI-shape boon stack timelines
@@ -315,7 +321,6 @@ fn build_report_and_activity_from_bytes(
     Ok((
         report,
         report_v1,
-        activity,
         ei_replay,
         damage_mods,
         boon_states,
@@ -419,14 +424,13 @@ fn parse_file_ei(
     modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let (report, report_v1, activity, ei_replay, damage_mods, boon_states,
+    let (report, report_v1, ei_replay, damage_mods, boon_states,
          target_conditions) =
-        build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
+        build_report_and_ei_inputs_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     let ei = axilog_ei::to_ei_json(
         &report_v1,
         &report,
         &axilog_ei::EiInputs {
-            activity: &activity,
             replay: ei_replay.as_ref(),
             modifiers: damage_mods.as_ref(),
             boon_states: boon_states.as_ref(),
