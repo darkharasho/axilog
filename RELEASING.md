@@ -114,6 +114,10 @@ and re-runnable locally at any time):
   maturin-`dynamic`, so it needs the same manual bump as the Node versions; see the
   comment at the top of `scripts/check-versions.sh` for why this crate doesn't use
   maturin's `dynamic = ["version"]` option)
+- `crates/axilog-node/package-lock.json` (root `version`, `packages[""].version`, and a
+  resolved entry per `optionalDependencies` pin) — **the one exception to "bump in
+  lockstep": it is refreshed *after* the release publishes, not with the bump. See
+  step 6 of "Cutting a release" for why it cannot be done earlier.**
 
 `scripts/check-versions.sh` prints every mismatch it finds (not just the first) and
 exits non-zero if anything is out of sync — run it after bumping, before tagging:
@@ -151,6 +155,9 @@ release needs both to agree.
    git push origin main
    git push origin vX.Y.Z
    ```
+
+   Note `crates/axilog-node/package-lock.json` is deliberately NOT bumped here.
+   It cannot be — see step 6.
 5. Watch the `Release` workflow run in GitHub Actions. On success, a GitHub Release
    named `vX.Y.Z` will exist with:
    - One `axilog-X.Y.Z-<target>.tar.gz` / `.zip` per CLI target, each with a `.sha256`
@@ -159,6 +166,36 @@ release needs both to agree.
    - One `.whl` per Python wheel target, plus one sdist `.tar.gz`
    - A consolidated `SHA256SUMS` covering every archive/tarball/wheel/sdist
    - Auto-generated release notes
+
+6. **After `npm-publish` has succeeded**, refresh the Node lockfile and push it to
+   `main` as a follow-up commit:
+   ```sh
+   cd crates/axilog-node && npm install --package-lock-only && cd -
+   scripts/check-versions.sh          # must pass, including the lockfile section
+   git commit -am "chore: refresh package-lock for X.Y.Z"
+   git push origin main
+   ```
+
+   **This step cannot be folded into the bump, and that ordering is not a style
+   preference.** `npm ci` demands a lock entry for every `optionalDependencies`
+   pin, carrying a matching `version` and a real `resolved`/`integrity` — and it
+   rejects the lock whether those entries are stubbed *or* absent (both were
+   tested). Those fields only exist once `@axiapps/axilog-*@X.Y.Z` is on the
+   registry, and publishing happens in `npm-publish`, which is gated on the tag
+   push from step 4. So at bump time the packages provably do not exist yet:
+   `npm install` resolves an unresolvable *optional* dependency to a bare
+   `{"optional": true}` stub and **exits 0**, so a lock regenerated in step 1
+   looks fine locally and only fails later, on every `npm ci` leg of CI.
+
+   That is exactly how 0.3.1 and 0.3.2 both broke — 12c9f71 omitted the lock,
+   and 08cf911 "fixed" it by regenerating at bump time, reproducing the outage
+   one cycle later. `scripts/check-versions.sh` now fails on stubbed entries, so
+   a skipped step 6 is caught by the gate rather than by four red CI legs.
+
+   Consequence to accept: between the step-4 tag push and this commit, `main`'s
+   `npm ci` legs are red. That window is inherent to publishing on tag — closing
+   it means having CI commit the refreshed lock back to `main` automatically
+   after `npm-publish`, which is a deliberate design change, not a fix.
 
 If the tag doesn't match `Cargo.toml`'s version, the workflow fails immediately in the
 `version-guard` job (and again, redundantly, right before the Release is created) with a
