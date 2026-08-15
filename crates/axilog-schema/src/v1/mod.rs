@@ -215,7 +215,7 @@ pub fn build_report_v1(
     // see `axilog_core::analysis::Warning`. A catch-all code would defeat
     // the whole point of making warnings structured, so there is no `_ =>`
     // arm here -- every `WarningSeverity` variant maps explicitly.
-    let warnings = metrics
+    let mut warnings: Vec<WarningOut> = metrics
         .warnings
         .iter()
         .map(|w| WarningOut {
@@ -251,12 +251,43 @@ pub fn build_report_v1(
     // roster player (or doesn't resolve to a tracked entity) is dropped
     // rather than falling back to the string: a missing join is
     // recoverable, a duplicated identity is not.
-    let recorded_by = legacy.encounter.recorded_by.as_deref().and_then(|account| {
+    let recorded_by_account = legacy.encounter.recorded_by.as_deref();
+    let recorded_by = recorded_by_account.and_then(|account| {
         enc.players
             .iter()
             .find(|p| p.account == account)
             .and_then(|p| index.by_agent_addr(p.agent_addr))
     });
+    // RULING T3-6 (side-channel absorption, Task 3, review round 1): a
+    // recorder whose account fails this join used to fail SILENTLY --
+    // `encounter.recordedBy` just goes missing (native) / `recordedBy`
+    // serializes `null` (ei-json, via the adapter's `entities[]` hop), with
+    // no signal that anything was dropped. This is the one new failure
+    // mode the entity-id-first `recorded_by` design (this task) introduces
+    // that the string-carrying legacy shape never had, so it gets its own
+    // warning rather than silence. Structured, not a bare string --
+    // `Metrics::warnings`'s own "closed, documented set, no catch-all"
+    // convention (see its doc comment) extends here even though this
+    // producer lives in `axilog-schema`, not `axilog-core`: `metrics` is
+    // `&Metrics` (immutable) by the time this function runs, so there is no
+    // `Metrics::warnings` to push into, and the join itself only has
+    // `index`/`enc`/`legacy` to work with, none of which `analyze()` sees.
+    // No account text in the message: that would recreate exactly the kind
+    // of second, less-guarded identity surface commit 6eeb4d8 (spec #1)
+    // removed `encounter.recordedBy`-as-a-raw-string to prevent -- see
+    // `no_unscrubbed_identity_survives_in_the_v1_document`
+    // (`crates/axilog-schema/tests/v1_shape.rs`), which scans this whole
+    // document's serialized text for exactly that leak shape.
+    if recorded_by_account.is_some() && recorded_by.is_none() {
+        warnings.push(WarningOut {
+            code: "recorded_by_unresolved".to_string(),
+            severity: Severity::Warn,
+            message: "the recording player's account did not resolve to a tracked entity; \
+                encounter.recordedBy is omitted rather than guessed"
+                .to_string(),
+            entity_id: None,
+        });
+    }
 
     ReportV1 {
         axilog: AxilogMeta {
@@ -388,5 +419,126 @@ mod tests {
         assert!(markers[0].get("entity_id").is_some(), "resolvable marker keeps entity_id");
         assert!(markers[1].get("entity_id").is_none(), "unresolvable marker omits entity_id, never null");
         assert_eq!(markers[1]["agent_addr"], 99);
+    }
+
+    /// RULING T3-6 (side-channel absorption, Task 3, review round 1): a
+    /// recorder whose account does not join any roster player must not
+    /// fail silently -- `encounter.recordedBy` still goes missing (the
+    /// join is genuinely unrecoverable, same as the marker case above),
+    /// but a structured `recorded_by_unresolved` warning must appear so
+    /// the drop is visible instead of indistinguishable from "this log
+    /// never recorded a recorder at all".
+    #[test]
+    fn an_unresolvable_recorder_drops_recorded_by_but_warns_loudly() {
+        let enc = Encounter {
+            kind: "wvw".into(),
+            map: "".into(),
+            duration_ms: 1000,
+            build: String::new(),
+            revision: 1,
+            // Never in `players` below -- e.g. the recorder relogged/left
+            // and the account arcdps captured for `recorded_by` doesn't
+            // match any surviving roster entry.
+            recorded_by: Some(":Ghost.9999".into()),
+            teams: vec![],
+            players: vec![player(1, ":Squaddie.1")],
+            enemies: vec![],
+            markers: vec![],
+            tick_rate: None,
+        };
+        let metrics = Metrics {
+            players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],
+            timeline: Timeline {
+                resolution_ms: 1000,
+                squad_damage: vec![0],
+                cc_applied: vec![0],
+                downs: vec![0],
+            },
+            boons: Default::default(),
+            boon_uptime: Default::default(),
+            boon_generation: Default::default(),
+            warnings: Default::default(),
+            has_healing_extension: Default::default(),
+            combat_participant_enemies: Default::default(),
+            instance_ids: Default::default(),
+            enemy_damage_out: Default::default(),
+            skill_map: Default::default(),
+        };
+        let legacy =
+            crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
+        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, None);
+
+        assert_eq!(v1.encounter.recorded_by, None, "an unresolvable recorder must not fabricate an entity id");
+
+        let w = v1
+            .warnings
+            .iter()
+            .find(|w| w.code == "recorded_by_unresolved")
+            .expect("an unresolvable recorder must produce a recorded_by_unresolved warning");
+        assert_eq!(w.severity, envelope::Severity::Warn);
+        assert!(w.entity_id.is_none(), "there is no resolvable entity to attach this warning to");
+        assert!(
+            !w.message.contains("Ghost"),
+            "the warning message must not leak the unresolved account string: {:?}",
+            w.message
+        );
+
+        // The native document's top-level `warnings` key carries it (no
+        // adapter/CLI-specific plumbing needed for the field itself).
+        let v = serde_json::to_value(&v1).expect("serializable");
+        let warnings = v["warnings"].as_array().expect("warnings array");
+        assert!(
+            warnings.iter().any(|x| x["code"] == "recorded_by_unresolved"),
+            "the v1 document's warnings[] must carry the code, not just Rust-side"
+        );
+    }
+
+    /// A log that never recorded a `recorded_by` at all (common -- see
+    /// `Encounter::recorded_by`'s own doc comment) is the ordinary,
+    /// unremarkable case: nothing to resolve, so no warning either. This
+    /// guards against a version of the T3-6 fix that fires on absence
+    /// instead of on a genuine join failure.
+    #[test]
+    fn no_recorded_by_at_all_produces_no_warning() {
+        let enc = Encounter {
+            kind: "wvw".into(),
+            map: "".into(),
+            duration_ms: 1000,
+            build: String::new(),
+            revision: 1,
+            recorded_by: None,
+            teams: vec![],
+            players: vec![player(1, ":Squaddie.1")],
+            enemies: vec![],
+            markers: vec![],
+            tick_rate: None,
+        };
+        let metrics = Metrics {
+            players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],
+            timeline: Timeline {
+                resolution_ms: 1000,
+                squad_damage: vec![0],
+                cc_applied: vec![0],
+                downs: vec![0],
+            },
+            boons: Default::default(),
+            boon_uptime: Default::default(),
+            boon_generation: Default::default(),
+            warnings: Default::default(),
+            has_healing_extension: Default::default(),
+            combat_participant_enemies: Default::default(),
+            instance_ids: Default::default(),
+            enemy_damage_out: Default::default(),
+            skill_map: Default::default(),
+        };
+        let legacy =
+            crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
+        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, None);
+
+        assert_eq!(v1.encounter.recorded_by, None);
+        assert!(
+            !v1.warnings.iter().any(|w| w.code == "recorded_by_unresolved"),
+            "absence of a recorder is not a join failure and must not warn"
+        );
     }
 }
