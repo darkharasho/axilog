@@ -736,3 +736,32 @@ class CliParityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EverythingOptionTests(unittest.TestCase):
+    """`everything=True` is the SDK mirror of the CLI's `--all`."""
+
+    def test_everything_computes_every_gate(self):
+        # Stated in terms of `coverage`, not of a block list: `everything`
+        # means "every pass this version knows about", so a test that
+        # enumerated blocks would drift from it exactly the way a
+        # consumer's option list does -- the drift it exists to prevent.
+        all_on = axilog.parse_file(FIXTURE, everything=True)
+        not_computed = [b for b, s in all_on["coverage"].items() if s == "not_computed"]
+        self.assertEqual(
+            not_computed, [], "everything=True must leave no block reporting not_computed"
+        )
+
+        # `unsupported` stays permitted -- it is the LOG's answer, and no
+        # option can change it.
+        for block, state in all_on["coverage"].items():
+            self.assertIn(state, ("present", "empty", "unsupported"), f"{block}={state}")
+
+        # A UNION with the individual options, never an override.
+        also_replay = axilog.parse_file(FIXTURE, everything=True, replay=True)
+        self.assertEqual(also_replay["coverage"], all_on["coverage"])
+
+        # And it genuinely turns gates on: the default parse leaves several off.
+        bare = axilog.parse_file(FIXTURE)
+        bare_off = [b for b, s in bare["coverage"].items() if s == "not_computed"]
+        self.assertGreaterEqual(len(bare_off), 3, f"expected gates off by default, got {bare_off}")

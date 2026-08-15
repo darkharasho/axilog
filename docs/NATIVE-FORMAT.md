@@ -400,8 +400,34 @@ ever produce those numbers. Earlier versions reported that case as `empty`,
 which told you the squad healed for zero; it is the difference between an
 unanswered question and an answer of nothing, and it is the whole reason
 this map exists. Every other block is era- and encounter-kind-agnostic, so
-`unsupported` stays reserved vocabulary for the rest of them until spec #2's
+`unsupported` stays reserved vocabulary for the rest of them until the
 era-gated surfaces land.
+
+All four states are pinned as REACHABLE by
+`crates/axilog-schema/tests/v1_coverage_states.rs`, deliberately by
+reachability rather than by pinning particular blocks to particular values:
+a block moving between `present` and `empty` as the analysis improves is
+not a regression, but a state that no longer occurs anywhere is — an
+unreachable state is one a consumer cannot rely on.
+
+### Getting a complete document: `--all`
+
+Rather than enumerating the gates, pass `--all` (CLI) or `everything: true`
+/ `everything=True` (Node/Python SDKs). It is defined as **"every analysis
+pass this version knows about"**, not as a fixed list, so a consumer that
+sets it keeps getting complete documents as later versions add passes.
+
+That definition is the point. The first axibridge cutover audit found 30
+blank fields caused by exactly the opposite: a consumer's hand-maintained
+option list drifting from the parser's. With `--all`, the only blocks left
+reporting anything other than `present`/`empty` are the ones the LOG cannot
+answer — which is the `unsupported` case above, and no flag can change it.
+
+It is a UNION with the individual flags, never an override, so `--all` and
+`--all --replay` mean the same thing. The cost is the sum of each gate's own
+cost; `--replay` and `--modifiers` dominate. See `docs/BENCHMARKS.md` for
+measured timings, peak memory, and per-block payload on the committed
+fixture.
 
 ## The series envelope
 

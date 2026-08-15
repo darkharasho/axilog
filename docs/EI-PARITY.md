@@ -12,6 +12,26 @@ stay short. The reader-facing summary lives in
 Every row below is asserted in CI (committed fixture) or by a local-fixture-gated test (the real
 post-rework capture, which is never committed). Numbers are current as of v0.3.1.
 
+**ei-json is now a pure projection of the native document.** Side-channel absorption (spec #2,
+2026-08-15) removed the last data path that reached this adapter without existing natively: it
+once took eight side-channel inputs plus the whole pre-1.0 `Report` alongside the 1.0 one, and
+several fields — the per-target damage-modifier split, the `--skill-damage` and `--rotation`
+gate records, per-skill down contribution — were visible to an ei-json consumer and to *no*
+consumer of the native format. `to_ei_json(report, replay)` now renders every row on this page
+from `ReportV1` alone.
+
+The single exception is deliberate and named: the GW2EI combat-replay position surface
+(`combatReplayData.{positions, orientations, dc}` and `combatReplayMetaData`) is still handed in
+separately. `blocks.replay` carries the same actors in world units, but it carries neither
+orientations nor GW2EI's sentinel-bracketed `dc`, and its positions come from a different
+resampler — so deriving the EI surface from it would mean widening the native `--replay` shape
+into GW2EI's, which spec #1 decision 6 declined to do. See `axilog_ei::EiReplayInput`.
+
+What this buys a reader of this page: every "Exact" row below is now evidence about the native
+document too, since the number this adapter emits and the number `--format json` carries are the
+same number, read from the same field. It also means anything this adapter can show you, the
+native format can — which was not true before.
+
 Calibrated against a real dps.report EI export for one WvW log (Green Alpine Borderlands,
 41 friendly players). "Golden" below means the committed anonymized fixture
 (`fixtures/wvw-small.anon.zevtc` + `fixtures/wvw-small.ei.json`), asserted exactly by

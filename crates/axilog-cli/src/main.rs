@@ -148,6 +148,21 @@ enum Cmd {
         /// fixture (release build, `--format ei-json`): 0.074s -> 0.155s.
         #[arg(long)]
         modifiers: bool,
+        /// Compute every analysis pass this binary knows about.
+        ///
+        /// Deliberately defined as "everything that exists in this
+        /// version", not as an enumerated flag list: a consumer that sets
+        /// this keeps getting complete documents as later milestones add
+        /// passes. The first axibridge cutover audit found 30 blank fields
+        /// caused by exactly the opposite -- a consumer's option list
+        /// drifting from the parser's.
+        ///
+        /// It is a UNION with the individual flags, never an override, so
+        /// `--all` alone and `--all --replay` mean the same thing. Cost is
+        /// the sum of every gate's own documented cost -- see each flag
+        /// above; the expensive ones are `--replay` and `--modifiers`.
+        #[arg(long)]
+        all: bool,
     },
     /// Rewrite every player's character/account name in a .zevtc to a
     /// deterministic `Anon<N>` placeholder and write the result as a new
@@ -203,7 +218,18 @@ enum View {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage, timeseries, rotation, modifiers } => {
+        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage, timeseries, rotation, modifiers, all } => {
+            // `--all` is folded in HERE, once, rather than at each gate's
+            // own read site: every gate below then sees a single already-
+            // resolved bool, so a new pass cannot be added and silently
+            // left out of `--all` by forgetting one `|| all`. Union, not
+            // override -- see the flag's doc.
+            let replay = replay || all;
+            let missiles = missiles || all;
+            let skill_damage = skill_damage || all;
+            let timeseries = timeseries || all;
+            let rotation = rotation || all;
+            let modifiers = modifiers || all;
             let bytes = std::fs::read(&path)?;
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
@@ -433,13 +459,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 return Ok(());
             }
+            // `--format json` streams, for the same reason `--format
+            // ei-json` above does (MSTREAM): `to_string_pretty` holds the
+            // whole pretty-printed document in a `String` ALONGSIDE the
+            // document it was rendered from, so peak memory was the sum of
+            // the two. Measured on the committed fixture with `--all`
+            // (Task 14 Step 3), that second copy was 7.4 MB of a 45 MB
+            // peak. Byte-identical output: same `PrettyFormatter`, same
+            // trailing newline.
+            //
+            // The document itself is still fully resident here -- it is
+            // built before anything is written, unlike ei-json's row-at-a-
+            // time `LazyRows`. Removing THAT is a reprojection-direction
+            // change, not a serializer change, and is out of this task's
+            // scope.
+            if format == Format::Json {
+                let sink: Box<dyn std::io::Write> = match &output {
+                    Some(path) => Box::new(std::fs::File::create(path)?),
+                    None => Box::new(std::io::stdout().lock()),
+                };
+                use std::io::Write as _;
+                let mut w = std::io::BufWriter::with_capacity(1 << 20, sink);
+                serde_json::to_writer_pretty(&mut w, &report_v1)?;
+                w.write_all(b"\n")?;
+                // Explicit flush: a `BufWriter`'s `Drop` swallows write
+                // errors, which on a full disk would silently truncate.
+                w.flush()?;
+                drop(w);
+                if let Some(path) = &output {
+                    eprintln!("wrote {}", path.display());
+                }
+                return Ok(());
+            }
             // Every other format renders to a single `String` (with its own
             // trailing newline where appropriate) so `-o/--output` (M7,
             // Task 1) can apply uniformly regardless of `--format`.
             let rendered = match format {
-                Format::Json => {
-                    format!("{}\n", serde_json::to_string_pretty(&report_v1)?)
-                }
+                Format::Json => unreachable!("handled by the streaming path above"),
                 Format::EiJson => unreachable!("handled by the streaming path above"),
                 Format::Table => axilog_cli_table(&report, view, &metrics, &activity),
                 Format::Csv => axilog_cli_csv(&report),

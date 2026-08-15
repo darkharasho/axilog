@@ -82,6 +82,50 @@ pub struct ParseOptions {
     pub missiles: Option<bool>,
     pub rotation: Option<bool>,
     pub modifiers: Option<bool>,
+    /// Compute every analysis pass this build knows about -- the SDK
+    /// mirror of the CLI's `--all`.
+    ///
+    /// Deliberately defined as "everything that exists in this version",
+    /// not as an enumerated option list: a consumer that sets this keeps
+    /// getting complete documents as later milestones add passes. The
+    /// first axibridge cutover audit found 30 blank fields caused by
+    /// exactly the opposite -- a consumer's option list drifting from the
+    /// parser's.
+    ///
+    /// A UNION with the individual options, never an override.
+    pub everything: Option<bool>,
+}
+
+/// The six compute gates, resolved once from [`ParseOptions`].
+///
+/// Every entry point reads its gates through this rather than unpacking
+/// `opts` itself: `everything` is folded in HERE, so a pass added later
+/// cannot be left out of it by forgetting one `|| all` at one of three
+/// call sites (which is exactly the drift `everything` exists to prevent).
+#[derive(Clone, Copy)]
+struct Gates {
+    replay: bool,
+    skill_damage: bool,
+    timeseries: bool,
+    missiles: bool,
+    rotation: bool,
+    modifiers: bool,
+}
+
+impl Gates {
+    fn resolve(opts: Option<&ParseOptions>) -> Self {
+        let on = |pick: fn(&ParseOptions) -> Option<bool>| {
+            opts.is_some_and(|o| pick(o).unwrap_or(false) || o.everything.unwrap_or(false))
+        };
+        Gates {
+            replay: on(|o| o.replay),
+            skill_damage: on(|o| o.skill_damage),
+            timeseries: on(|o| o.timeseries),
+            missiles: on(|o| o.missiles),
+            rotation: on(|o| o.rotation),
+            modifiers: on(|o| o.modifiers),
+        }
+    }
 }
 
 /// Shared decode -> resolve -> analyze -> build_report -> build_report_v1
@@ -380,17 +424,12 @@ fn report_v1_to_value(report: &axilog_schema::v1::ReportV1) -> Result<Value> {
 #[napi]
 pub fn parse_file(path: String, opts: Option<ParseOptions>) -> Result<Value> {
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let want_replay = opts.and_then(|o| o.replay).unwrap_or(false);
-    let want_skill_damage = opts.and_then(|o| o.skill_damage).unwrap_or(false);
-    let want_timeseries = opts.and_then(|o| o.timeseries).unwrap_or(false);
-    let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
-    let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
-    let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
+    let g = Gates::resolve(opts.as_ref());
     let generated_from =
         std::path::Path::new(&path).file_name().and_then(|s| s.to_str());
     let report = build_report_v1_from_bytes(
-        &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
-        want_modifiers, generated_from,
+        &bytes, g.replay, g.skill_damage, g.timeseries, g.missiles, g.rotation,
+        g.modifiers, generated_from,
     )?;
     report_v1_to_value(&report)
 }
@@ -404,15 +443,10 @@ pub fn parse_file(path: String, opts: Option<ParseOptions>) -> Result<Value> {
 /// file name to offer, so `generated_from` is always absent here.
 #[napi]
 pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
-    let want_replay = opts.and_then(|o| o.replay).unwrap_or(false);
-    let want_skill_damage = opts.and_then(|o| o.skill_damage).unwrap_or(false);
-    let want_timeseries = opts.and_then(|o| o.timeseries).unwrap_or(false);
-    let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
-    let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
-    let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
+    let g = Gates::resolve(opts.as_ref());
     let report = build_report_v1_from_bytes(
-        buf.as_ref(), want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
-        want_modifiers, None,
+        buf.as_ref(), g.replay, g.skill_damage, g.timeseries, g.missiles, g.rotation,
+        g.modifiers, None,
     )?;
     report_v1_to_value(&report)
 }
@@ -446,16 +480,11 @@ pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
 /// entirely keeps every existing zero-arg call site's behavior unchanged.
 #[napi]
 pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> {
-    let want_replay = opts.and_then(|o| o.replay).unwrap_or(false);
-    let want_skill_damage = opts.and_then(|o| o.skill_damage).unwrap_or(false);
-    let want_timeseries = opts.and_then(|o| o.timeseries).unwrap_or(false);
-    let want_missiles = opts.and_then(|o| o.missiles).unwrap_or(false);
-    let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
-    let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
+    let g = Gates::resolve(opts.as_ref());
     let bytes = std::fs::read(&path).map_err(napi_err)?;
     let (report_v1, ei_replay) = build_report_and_ei_inputs_from_bytes(
-        &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
-        want_modifiers,
+        &bytes, g.replay, g.skill_damage, g.timeseries, g.missiles, g.rotation,
+        g.modifiers,
     )?;
     Ok(axilog_ei::to_ei_json(
         &report_v1, ei_replay.as_ref(),

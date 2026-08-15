@@ -116,4 +116,18 @@ export interface ParseOptions {
   missiles?: boolean
   rotation?: boolean
   modifiers?: boolean
+  /**
+   * Compute every analysis pass this build knows about -- the SDK
+   * mirror of the CLI's `--all`.
+   *
+   * Deliberately defined as "everything that exists in this version",
+   * not as an enumerated option list: a consumer that sets this keeps
+   * getting complete documents as later milestones add passes. The
+   * first axibridge cutover audit found 30 blank fields caused by
+   * exactly the opposite -- a consumer's option list drifting from the
+   * parser's.
+   *
+   * A UNION with the individual options, never an override.
+   */
+  everything?: boolean
 }

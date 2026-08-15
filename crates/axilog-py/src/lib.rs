@@ -359,18 +359,59 @@ fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
 /// (measured +66.9% JSON size on the committed fixture when always-on, see
 /// `PlayerOut::rotation`'s doc comment). All five default to `False` for
 /// back-compat with every existing positional-only call site.
+/// The six compute gates, resolved once from the keyword arguments.
+///
+/// `everything` is folded in HERE rather than at each gate's own read
+/// site, so a pass added later cannot be left out of it by forgetting one
+/// `|| everything` at one of three entry points -- which is exactly the
+/// option-list drift `everything` exists to prevent.
+#[derive(Clone, Copy)]
+struct Gates {
+    replay: bool,
+    skill_damage: bool,
+    timeseries: bool,
+    missiles: bool,
+    rotation: bool,
+    modifiers: bool,
+}
+
+impl Gates {
+    #[allow(clippy::too_many_arguments)]
+    fn resolve(
+        replay: bool,
+        skill_damage: bool,
+        timeseries: bool,
+        missiles: bool,
+        rotation: bool,
+        modifiers: bool,
+        everything: bool,
+    ) -> Self {
+        Gates {
+            replay: replay || everything,
+            skill_damage: skill_damage || everything,
+            timeseries: timeseries || everything,
+            missiles: missiles || everything,
+            rotation: rotation || everything,
+            modifiers: modifiers || everything,
+        }
+    }
+}
+
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (path, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false, modifiers=false))]
+#[pyo3(signature = (path, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false, modifiers=false, everything=false))]
 fn parse_file(
     py: Python<'_>, path: &str, replay: bool, skill_damage: bool, timeseries: bool, missiles: bool,
     rotation: bool,
     modifiers: bool,
+    everything: bool,
 ) -> PyResult<Py<PyAny>> {
+    let g = Gates::resolve(replay, skill_damage, timeseries, missiles, rotation, modifiers, everything);
     let bytes = std::fs::read(path).map_err(io_err)?;
     let generated_from = std::path::Path::new(path).file_name().and_then(|s| s.to_str());
     let report = build_report_v1_from_bytes(
-        &bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers, generated_from,
+        &bytes, g.replay, g.skill_damage, g.timeseries, g.missiles, g.rotation, g.modifiers,
+        generated_from,
     )?;
     value_to_py(py, &report_v1_to_value(&report)?)
 }
@@ -387,14 +428,16 @@ fn parse_file(
 /// top-level missile analytics block.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (data, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false, modifiers=false))]
+#[pyo3(signature = (data, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false, modifiers=false, everything=false))]
 fn parse_bytes(
     py: Python<'_>, data: &[u8], replay: bool, skill_damage: bool, timeseries: bool, missiles: bool,
     rotation: bool,
     modifiers: bool,
+    everything: bool,
 ) -> PyResult<Py<PyAny>> {
+    let g = Gates::resolve(replay, skill_damage, timeseries, missiles, rotation, modifiers, everything);
     let report = build_report_v1_from_bytes(
-        data, replay, skill_damage, timeseries, missiles, rotation, modifiers, None,
+        data, g.replay, g.skill_damage, g.timeseries, g.missiles, g.rotation, g.modifiers, None,
     )?;
     value_to_py(py, &report_v1_to_value(&report)?)
 }
@@ -418,15 +461,18 @@ fn parse_bytes(
 /// unchanged.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (path, *, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false, modifiers=false))]
+#[pyo3(signature = (path, *, replay=false, skill_damage=false, timeseries=false, missiles=false, rotation=false, modifiers=false, everything=false))]
 fn parse_file_ei(
     py: Python<'_>, path: &str, replay: bool, skill_damage: bool, timeseries: bool, missiles: bool,
     rotation: bool,
     modifiers: bool,
+    everything: bool,
 ) -> PyResult<Py<PyAny>> {
+    let g = Gates::resolve(replay, skill_damage, timeseries, missiles, rotation, modifiers, everything);
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let (report_v1, ei_replay) =
-        build_report_and_ei_inputs_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
+    let (report_v1, ei_replay) = build_report_and_ei_inputs_from_bytes(
+        &bytes, g.replay, g.skill_damage, g.timeseries, g.missiles, g.rotation, g.modifiers,
+    )?;
     let ei = axilog_ei::to_ei_json(
         &report_v1, ei_replay.as_ref(),
     );

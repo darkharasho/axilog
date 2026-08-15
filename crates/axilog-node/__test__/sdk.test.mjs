@@ -584,3 +584,37 @@ test('dual-path parity: node parseFile matches the CLI\'s --format json output',
     )
   }
 })
+
+test('parseFile: { everything: true } computes every gate -- nothing left not_computed', () => {
+  // The contract is stated in terms of `coverage`, not of a block list:
+  // `everything` means "every pass this version knows about", so a test
+  // that enumerated blocks would drift from it exactly the way a
+  // consumer's option list does -- which is the drift `everything` exists
+  // to prevent.
+  const all = sdk.parseFile(FIXTURE, { everything: true })
+  const notComputed = Object.entries(all.coverage).filter(([, s]) => s === 'not_computed')
+  assert.deepEqual(
+    notComputed,
+    [],
+    'everything: true must leave no block reporting not_computed'
+  )
+
+  // `unsupported` is deliberately still permitted -- it is the LOG's
+  // answer, and no option can change it.
+  const states = new Set(Object.values(all.coverage))
+  for (const s of states) {
+    assert.ok(
+      ['present', 'empty', 'unsupported'].includes(s),
+      `unexpected coverage state ${s}`
+    )
+  }
+
+  // A UNION with the individual options, never an override.
+  const alsoReplay = sdk.parseFile(FIXTURE, { everything: true, replay: true })
+  assert.deepEqual(alsoReplay.coverage, all.coverage, 'everything + replay == everything')
+
+  // And it genuinely turns gates ON: the default parse leaves several off.
+  const bare = sdk.parseFile(FIXTURE)
+  const bareOff = Object.values(bare.coverage).filter((s) => s === 'not_computed').length
+  assert.ok(bareOff >= 3, `expected the default parse to leave gates off, got ${bareOff}`)
+})

@@ -1384,6 +1384,7 @@ def parse_file(
     missiles: bool = False,
     rotation: bool = False,
     modifiers: bool = False,
+    everything: bool = False,
 ) -> ReportV1:
     """Parse a `.evtc`/`.zevtc` file at `path` into the native output format
     1.0 container (`ReportV1`, Task 12).
@@ -1404,6 +1405,14 @@ def parse_file(
     damage-modifier block (`Blocks.damage_mods`), mirroring the CLI's
     `--modifiers` flag. All six default to `False`.
 
+    `everything` is the SDK mirror of the CLI's `--all`: compute every
+    analysis pass this version knows about. Deliberately defined as
+    "everything that exists in this version" rather than as a fixed option
+    list, so a caller that sets it keeps getting complete documents as
+    later versions add passes -- the first axibridge cutover audit found 30
+    blank fields caused by exactly the opposite. It is a UNION with the
+    individual options, never an override.
+
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.
     """
@@ -1417,6 +1426,7 @@ def parse_bytes(
     missiles: bool = False,
     rotation: bool = False,
     modifiers: bool = False,
+    everything: bool = False,
 ) -> ReportV1:
     """Parse an already-read `.evtc`/`.zevtc` buffer into the native output
     format 1.0 container (`ReportV1`, Task 12).
@@ -1434,6 +1444,11 @@ def parse_bytes(
     `modifiers` (M16) opts into the per-entity damage-modifier block
     (`Blocks.damage_mods`).
 
+    `everything` is the SDK mirror of the CLI's `--all`: compute every
+    analysis pass this version knows about, a UNION with the individual
+    options rather than an override. See `parse_file` for why it is
+    defined that way.
+
     Raises `ValueError` if `data` is not a decodable/parseable arcdps log.
     """
     ...
@@ -1447,6 +1462,7 @@ def parse_file_ei(
     missiles: bool = False,
     rotation: bool = False,
     modifiers: bool = False,
+    everything: bool = False,
 ) -> Dict[str, Any]:
     """Parse a `.evtc`/`.zevtc` file at `path` into Elite Insights-compatibility JSON.
 
@@ -1477,6 +1493,11 @@ def parse_file_ei(
     `damageModMap`; the per-target arrays dominate that payload (measured
     +441% on the committed fixture), hence opt-in. All six default to
     `False`, keeping `parse_file_ei(path)` back-compatible.
+
+    `everything` is the SDK mirror of the CLI's `--all`: compute every
+    analysis pass this version knows about, a UNION with the individual
+    options rather than an override. See `parse_file` for why it is
+    defined that way.
 
     Raises `OSError` if `path` cannot be read, `ValueError` if the bytes
     are not a decodable/parseable arcdps log.

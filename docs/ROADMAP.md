@@ -42,6 +42,42 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   M8-parked publish hardening landed (index.js version-literal guard in check-versions.sh,
   pypi-validate wheel install-smoke gate, npm/PyPI publish idempotency).
 
+## Native format program (the axibridge cutover)
+
+The destination: **axibridge runs entirely off axilog's native output, with no
+ei-json shim.** The `to_ei_json` layer is PERMANENT regardless — it stays as a
+thin compat path so other downstream consumers can migrate on their own
+schedule. Absorption removed ei-json's *private data*, not ei-json.
+
+- **Spec #1 / native container 1.0 — DONE**, merged 2026-08-11 (`747875b`).
+  `--format json` emits the 1.0 document (`axilog`/`encounter`/`entities`/
+  `catalogs`/`blocks`/`coverage`); `docs/NATIVE-FORMAT.md` is the reference.
+  Was missing from this roadmap entirely until spec #2 Task 14.
+- **Phase A / spec #2 side-channel absorption — DONE** (this branch, Tasks
+  1–14; spec `docs/superpowers/specs/2026-08-13-side-channel-absorption-design.md`,
+  plan `docs/superpowers/plans/2026-08-13-side-channel-absorption.md`).
+  Absorbed the whole `EiInputs` side channel into native blocks, re-pointed the
+  adapter at `ReportV1`, deleted `EiInputs` and the two-`Report` split, and
+  added `--all` / `everything`. **The ei-json goldens never moved** — which is
+  the proof the spec was built to produce: every field ei-json emits is now
+  read from the native document, so the goldens attest to native's
+  completeness. One named exception, the GW2EI combat-replay position surface
+  (`axilog_ei::EiReplayInput`), which spec #1 decision 6 deliberately keeps out
+  of the native shape.
+- **Phase B — NEXT.** Gaps native can close that ei-json can't: the
+  `statsTargets` field subset, replay join keys + down/dead export, enemy class
+  as a field, and the six values axibridge derives client-side today
+  (zone/map split, encounterDuration, timeStart, distToCom/stackDist). Absorbs
+  what an older roadmap called spec #3.
+- **Phase C — icons DONE, proc flags open.** Two generated catalogs ship:
+  `analysis::skill_icons` (GW2 `/v2/skills`, 4,656 entries, plus `autoAttack`
+  from `slot == "Weapon_1"`) and `analysis::buff_icons` (GW2EI's `new Buff(...)`
+  table, 2,267 entries). Fixture coverage 329/368; the 39 misses are internal
+  damage-proc ids neither source has art for — a floor, not a gap. Proc flags
+  still unsourced.
+- **Phase D — the axibridge-side reader rewrite. NOT ours**: axilog-side
+  readiness only unless the owner says otherwise.
+
 ## In flight
 (none)
 
