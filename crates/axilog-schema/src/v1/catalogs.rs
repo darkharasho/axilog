@@ -82,9 +82,20 @@ pub struct DamageModEntry {
     pub approximate: Option<bool>,
 }
 
-/// Accumulates referenced ids as blocks emit them, then materializes
-/// exactly that subset. This is what makes "every catalog entry is
-/// referenced" true by construction.
+/// Accumulates referenced ids as blocks emit them, then materializes that
+/// subset -- for buffs and damage modifiers, exactly it.
+///
+/// `skills` is the deliberate exception. It carries the WHOLE of
+/// `Metrics::skill_map` (always computed, never gated) unioned with any
+/// referenced id, rather than referenced ids alone. Relaxing "every
+/// catalog entry is referenced" here is what makes the native document a
+/// superset of ei-json: EI's `skillMap` is unconditionally the full table,
+/// so a referenced-only native catalog is EMPTY with every gate off while
+/// the adapter emits 368 rows on the committed fixture. The side channel
+/// cannot be deleted while the adapter needs a source native lacks.
+///
+/// The inverse invariant still holds, and is the one worth keeping: every
+/// id any row references resolves to an entry.
 #[derive(Debug, Default, Clone)]
 pub struct CatalogBuilder {
     skills: BTreeSet<u32>,
@@ -103,7 +114,11 @@ impl CatalogBuilder {
         self.damage_mods.insert(id);
     }
 
-    pub fn finish(self, metrics: &Metrics, mods: Option<&DamageModifierResults>) -> Catalogs {
+    pub fn finish(mut self, metrics: &Metrics, mods: Option<&DamageModifierResults>) -> Catalogs {
+        // The always-on half of the skill catalog (see the struct's doc
+        // comment). Union, not replacement: a referenced id the log table
+        // never named still has to resolve, and keeps its placeholder.
+        self.skills.extend(metrics.skill_map.keys().copied());
         let skills = self
             .skills
             .into_iter()
@@ -235,13 +250,23 @@ mod tests {
         m
     }
 
+    /// The buff and damage-mod catalogs are still referenced-only. Skills
+    /// are the documented exception (see `CatalogBuilder`'s doc comment):
+    /// they carry the whole always-on `Metrics::skill_map` so the ei-json
+    /// adapter's unconditionally-full `skillMap` has a native source.
     #[test]
-    fn a_catalog_holds_only_referenced_ids() {
+    fn only_the_skill_catalog_admits_unreferenced_definitions() {
         let mut b = CatalogBuilder::default();
         b.reference_skill(5491);
+        b.reference_buff(1187);
         let c = b.finish(&metrics_with_skills(), None);
         assert!(c.skills.contains_key(&5491), "referenced id must resolve");
-        assert!(!c.skills.contains_key(&9999), "an unreferenced definition must not appear");
+        assert!(
+            c.skills.contains_key(&9999),
+            "an unreferenced skill definition rides along -- EI's skillMap is the full table"
+        );
+        assert_eq!(c.buffs.len(), 1, "buffs stay referenced-only");
+        assert!(c.damage_mods.is_empty(), "damage mods stay referenced-only");
     }
 
     #[test]
@@ -250,7 +275,9 @@ mod tests {
         b.reference_skill(5491);
         b.reference_skill(5491);
         let c = b.finish(&metrics_with_skills(), None);
-        assert_eq!(c.skills.len(), 1);
+        // 5491 once, plus the always-on 9999 the skill table carries.
+        assert_eq!(c.skills.len(), 2);
+        assert!(c.skills.contains_key(&5491));
     }
 
     #[test]

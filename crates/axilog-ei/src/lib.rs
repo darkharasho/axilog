@@ -2396,11 +2396,12 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // external DB) are NOT computed anywhere in this project, so they're
     // omitted rather than faked, same "don't fake absent data" convention
     // `statsTargets`/`support`/`extHealingStats` above already follow.
-    // NOT yet re-pointed onto `report.catalogs.skills`: that map is
-    // referenced-scoped, and with every gate off it is EMPTY while this
-    // one carries 368 entries on the committed fixture. Closing that is
-    // absorption work, not a re-point, so it stays on `legacy` here.
-    let skill_map: BTreeMap<String, Value> = legacy.skill_map.iter().map(|(&id, e)| {
+    // Side-channel absorption, Task 3: sourced from
+    // `report.catalogs.skills`, which now carries the whole always-on
+    // `Metrics::skill_map` rather than referenced ids alone -- see
+    // `axilog_schema::v1::catalogs::CatalogBuilder`'s doc comment for why
+    // that invariant was relaxed for skills specifically.
+    let skill_map: BTreeMap<String, Value> = report.catalogs.skills.iter().map(|(&id, e)| {
         (ei_catalog_key('s', i64::from(id)), json!({
             "name": e.name,
             "isSwap": e.is_swap,
@@ -3308,7 +3309,24 @@ mod tests {
             can_crit: true,
         });
 
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs::default());
+        // Task 3 moved `skillMap` onto `report.catalogs.skills`, so the
+        // two entries have to be staged there rather than on `legacy`.
+        // Set directly instead of round-tripping a `Metrics` through
+        // `build_report_v1`: this test is about the adapter's key spelling
+        // and field omission, and a synthetic catalog keeps it that way.
+        let mut v1 = empty_report_v1();
+        for (id, name, is_swap, can_crit) in
+            [(5492u32, "Fire Attunement", true, false), (5008, "Skill 5008", false, true)]
+        {
+            v1.catalogs.skills.insert(id, axilog_schema::v1::catalogs::SkillEntry {
+                name: name.into(),
+                is_swap,
+                can_crit,
+                auto_attack: None,
+            });
+        }
+
+        let v = to_ei_json(&v1, &report, &EiInputs::default());
         let skill_map = v["skillMap"].as_object().expect("skillMap must be an object");
         assert_eq!(skill_map.len(), 2);
         assert_eq!(v["skillMap"]["s5492"]["name"], "Fire Attunement");
