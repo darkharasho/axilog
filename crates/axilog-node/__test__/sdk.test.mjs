@@ -177,31 +177,54 @@ test('parseBuffer produces the same 1.0 document as parseFile', () => {
   assert.deepStrictEqual({ ...fromBuffer, axilog: null }, { ...fromFile, axilog: null })
 })
 
-test('parseFile: replay opt-in (M9 Task 2) -- absent by default, present + shaped when requested', () => {
+// `opts.replay` gates POSITIONS, not the whole block. The down/dead
+// intervals under `blocks.replay.by_entity` are computed on every parse and
+// are there with no opts at all, so -- unlike every other opt-in below --
+// `coverage.replay === 'present'` is NOT a statement about whether the flag
+// was passed. What the flag adds is `blocks.replay.tracks`.
+test('parseFile: replay opt-in -- intervals always on, positions gated behind { replay: true }', () => {
   const withoutReplay = sdk.parseFile(FIXTURE)
-  assert.equal(withoutReplay.blocks.replay, undefined, 'replay must be absent by default')
-  assert.equal(withoutReplay.coverage.replay, 'not_computed')
+  const intervalsOnly = withoutReplay.blocks.replay
+  assert.ok(intervalsOnly, 'the intervals half of blocks.replay is present with no opts')
+  assert.equal(withoutReplay.coverage.replay, 'present')
+  assert.equal(intervalsOnly.tracks, undefined, 'positions must be absent without { replay: true }')
+  assert.ok(Object.keys(intervalsOnly.by_entity).length > 0, 'expected intervals rows')
+  const row = intervalsOnly.by_entity[Object.keys(intervalsOnly.by_entity)[0]]
+  for (const k of ['start_ms', 'end_ms', 'active_ms']) {
+    assert.equal(typeof row[k], 'number', `by_entity row ${k} must be a number`)
+  }
+  assert.ok(Array.isArray(row.down) && Array.isArray(row.dead))
 
   const withReplay = sdk.parseFile(FIXTURE, { replay: true })
   const replay = withReplay.blocks.replay
   assert.ok(replay, 'expected a replay block when { replay: true }')
   assert.equal(withReplay.coverage.replay, 'present')
-  assert.equal(typeof replay.poll_ms, 'number')
+  assert.deepEqual(
+    replay.by_entity,
+    intervalsOnly.by_entity,
+    'turning the position gate on must not change the intervals half',
+  )
+
+  const tracks = replay.tracks
+  assert.ok(tracks, 'expected positions under { replay: true }')
+  assert.equal(typeof tracks.poll_ms, 'number')
   for (const k of ['min_x', 'max_x', 'min_y', 'max_y']) {
-    assert.equal(typeof replay.bounds[k], 'number', `bounds.${k} must be a number`)
+    assert.equal(typeof tracks.bounds[k], 'number', `bounds.${k} must be a number`)
   }
 
   // Tracks are a by-entity map, not a flat array: the name/team/squad
   // membership the pre-1.0 `tracks[]` duplicated now live once on the
   // `entities[]` row the key joins to.
-  const trackIds = Object.keys(replay.by_entity)
+  const trackIds = Object.keys(tracks.by_entity)
   assert.ok(trackIds.length > 0, 'expected at least one replay track')
   const entityIds = new Set(withReplay.entities.map((e) => String(e.id)))
   for (const id of trackIds) {
     assert.ok(entityIds.has(id), `replay track ${id} does not join to any entities[] row`)
   }
-  const track = replay.by_entity[trackIds[0]]
+  const track = tracks.by_entity[trackIds[0]]
   assert.ok(Array.isArray(track.samples))
+  // Kept on the track as well as on `by_entity`: the track roster also covers
+  // enemy players, whom the always-on intervals pass never walks.
   assert.ok(Array.isArray(track.down_intervals))
   assert.ok(Array.isArray(track.dead_intervals))
   if (track.samples.length > 0) {
@@ -210,12 +233,12 @@ test('parseFile: replay opt-in (M9 Task 2) -- absent by default, present + shape
 
   // opts.replay: false must behave the same as omitting opts entirely.
   const explicitlyOff = sdk.parseFile(FIXTURE, { replay: false })
-  assert.equal(explicitlyOff.blocks.replay, undefined)
+  assert.equal(explicitlyOff.blocks.replay.tracks, undefined)
 
   // parseBuffer accepts the same opts shape.
   const buf = readFileSync(FIXTURE)
   const bufWithReplay = sdk.parseBuffer(buf, { replay: true })
-  assert.ok(bufWithReplay.blocks.replay)
+  assert.ok(bufWithReplay.blocks.replay.tracks)
 })
 
 test('parseFile: skillDamage opt-in (M12 Task 1) -- absent by default, present + shaped when requested', () => {

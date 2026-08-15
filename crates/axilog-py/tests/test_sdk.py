@@ -230,45 +230,63 @@ class ParseFileTests(unittest.TestCase):
 
 
 class ReplayOptInTests(unittest.TestCase):
-    """M9 Task 2: `replay=True` opts into the native combat-replay block;
-    absent by default. Mirrors `crates/axilog-node/__test__/sdk.test.mjs`'s
-    equivalent test."""
+    """`replay=True` gates POSITIONS, not the whole block. The down/dead
+    intervals under `blocks.replay.by_entity` are computed on every parse, so
+    -- unlike every other opt-in in this file -- `coverage.replay ==
+    "present"` is not a statement about whether the flag was passed. What the
+    flag adds is `blocks.replay.tracks`. Mirrors
+    `crates/axilog-node/__test__/sdk.test.mjs`'s equivalent test."""
 
-    def test_replay_absent_by_default_present_and_shaped_when_requested(self):
+    def test_intervals_are_always_on_and_positions_are_gated(self):
         without_replay = axilog.parse_file(FIXTURE)
-        self.assertNotIn("replay", without_replay["blocks"])
-        self.assertEqual(without_replay["coverage"]["replay"], "not_computed")
+        intervals_only = without_replay["blocks"]["replay"]
+        self.assertEqual(without_replay["coverage"]["replay"], "present")
+        self.assertNotIn("tracks", intervals_only, "positions need replay=True")
+        self.assertGreater(len(intervals_only["by_entity"]), 0, "expected intervals rows")
+        row = next(iter(intervals_only["by_entity"].values()))
+        for k in ("start_ms", "end_ms", "active_ms"):
+            self.assertIsInstance(row[k], int, f"by_entity row {k}")
+        self.assertIsInstance(row["down"], list)
+        self.assertIsInstance(row["dead"], list)
 
         with_replay = axilog.parse_file(FIXTURE, replay=True)
-        self.assertIn("replay", with_replay["blocks"])
         self.assertEqual(with_replay["coverage"]["replay"], "present")
         replay = with_replay["blocks"]["replay"]
-        self.assertIsInstance(replay["poll_ms"], int)
+        self.assertEqual(
+            replay["by_entity"],
+            intervals_only["by_entity"],
+            "turning the position gate on must not change the intervals half",
+        )
+
+        tracks = replay["tracks"]
+        self.assertIsInstance(tracks["poll_ms"], int)
         for k in ("min_x", "max_x", "min_y", "max_y"):
-            self.assertIsInstance(replay["bounds"][k], (int, float), f"bounds.{k}")
+            self.assertIsInstance(tracks["bounds"][k], (int, float), f"bounds.{k}")
 
         # Tracks are a by-entity map, not a flat array: the name/team/squad
         # membership the pre-1.0 `tracks[]` duplicated now live once on the
         # `entities[]` row the key joins to.
-        track_ids = list(replay["by_entity"])
+        track_ids = list(tracks["by_entity"])
         self.assertGreater(len(track_ids), 0, "expected at least one replay track")
         entity_ids = {str(e["id"]) for e in with_replay["entities"]}
         for tid in track_ids:
             self.assertIn(tid, entity_ids, f"replay track {tid} joins to no entities[] row")
-        track = replay["by_entity"][track_ids[0]]
+        track = tracks["by_entity"][track_ids[0]]
         self.assertIsInstance(track["samples"], list)
+        # Kept on the track as well as on `by_entity`: the track roster also
+        # covers enemy players, whom the always-on intervals pass never walks.
         self.assertIsInstance(track["down_intervals"], list)
         self.assertIsInstance(track["dead_intervals"], list)
         if track["samples"]:
             self.assertEqual(len(track["samples"][0]), 3, "each sample is a [t, x, y] triple")
 
         explicitly_off = axilog.parse_file(FIXTURE, replay=False)
-        self.assertNotIn("replay", explicitly_off["blocks"])
+        self.assertNotIn("tracks", explicitly_off["blocks"]["replay"])
 
         with open(FIXTURE, "rb") as f:
             data = f.read()
         bytes_with_replay = axilog.parse_bytes(data, replay=True)
-        self.assertIn("replay", bytes_with_replay["blocks"])
+        self.assertIn("tracks", bytes_with_replay["blocks"]["replay"])
 
 
 class SkillDamageOptInTests(unittest.TestCase):

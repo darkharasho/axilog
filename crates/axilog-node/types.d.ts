@@ -1265,6 +1265,11 @@ export interface ReplayBounds {
  * `down_intervals`/`dead_intervals` are `[start_ms, end_ms]` pairs.
  * `name`/`team`/`commander`/`is_squad` are dropped versus the legacy
  * `ReplayTrackOut` -- they live on this entity's own `entities[]` row.
+ *
+ * The intervals are ALSO on `ReplayIntervals`, and that is deliberate: the
+ * track roster covers enemy players too, whom the always-on intervals pass
+ * never walks, so dropping them here would lose that history entirely. For
+ * an entity present in both, the two copies are the same values.
  */
 export interface ReplayTrack {
   samples: [number, number, number][]
@@ -1272,12 +1277,42 @@ export interface ReplayTrack {
   dead_intervals: [number, number][]
 }
 
-export interface ReplayBlock {
+/**
+ * One SQUAD entity's activity window. `down`/`dead` are `[start_ms, end_ms]`
+ * pairs.
+ *
+ * `active_ms` is carried rather than derivable: matching GW2EI, it subtracts
+ * dead time and NOT down time. Recomputing it as "neither downed nor dead"
+ * under-reports every player who went down.
+ */
+export interface ReplayIntervals {
+  start_ms: number
+  end_ms: number
+  active_ms: number
+  down: [number, number][]
+  dead: [number, number][]
+}
+
+/** The gated half of `ReplayBlock` -- present only under `{ replay: true }`. */
+export interface ReplayTracks {
   /** Shared polling interval for every track. */
   poll_ms: number
   bounds?: ReplayBounds
-  /** Keyed by entity id. */
+  /** Keyed by entity id. Wider than `ReplayBlock.by_entity`: enemy players appear here too. */
   by_entity: ByEntity<ReplayTrack>
+}
+
+/**
+ * Two halves on two different gates -- the only block in the format shaped
+ * this way. `by_entity` (down/dead intervals, squad only) is computed on
+ * every parse; `tracks` (positions) needs `{ replay: true }`. So
+ * `coverage.replay === "present"` does NOT mean positions are available --
+ * check `tracks` for that.
+ */
+export interface ReplayBlock {
+  /** Keyed by entity id. Squad players only. */
+  by_entity: ByEntity<ReplayIntervals>
+  tracks?: ReplayTracks
 }
 
 export interface SquadSeries {

@@ -66,12 +66,13 @@ export declare function parseFileEi(path: string, opts?: ParseOptions | undefine
 
 /**
  * Optional per-call parse settings (M9, Task 2). `replay: true` opts into
- * computing and embedding the native combat-replay block (`ReplayOut`) in
- * the returned `Report`; omitted (or `false`, or the argument itself
+ * computing and embedding combat-replay POSITIONS, which land on
+ * `blocks.replay.tracks`; omitted (or `false`, or the argument itself
  * omitted entirely -- napi treats a trailing `Option<T>` parameter as
- * optional in the generated TypeScript signature) keeps the existing
- * zero-arg call shape's behavior unchanged (no `replay` key in the
- * output, matching `Report.replay`'s serde skip-when-absent).
+ * optional in the generated TypeScript signature) leaves `tracks` off.
+ * Note that `blocks.replay` itself is NOT gated: its `by_entity` down/dead
+ * intervals are computed on every parse, so `coverage.replay` reads
+ * `present` even with no opts, and is not a statement about positions.
  * `skill_damage: true` (M12, Task 1) opts into embedding the native
  * per-skill damage distribution block (`SkillDamageOut`) on every
  * `players[]` entry -- see `axilog_schema::Report::players`'s
