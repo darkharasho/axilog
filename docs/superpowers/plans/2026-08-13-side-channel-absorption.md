@@ -902,6 +902,52 @@ git add crates/axilog-schema/ crates/axilog-ei/ crates/axilog-cli/ crates/axilog
 SSH_AUTH_SOCK="$HOME/.1password/agent.sock" git commit -m "feat(schema): absorb minions and health percents into native blocks"
 ```
 
+**Execution notes (Task 6, done).** Five deviations from the steps above.
+Tasks 7-12 follow this task's spine, so they inherit all five.
+
+1. **`build_report_v1` takes a `Passes<'a>` struct, not more positional
+   parameters.** Step 4 says "add the parameter". `damage_mods` was already
+   a seventh positional parameter and this task adds two more; carried
+   through Task 12 that is a fourteen-argument function whose call sites
+   are a row of bare `None`s, rewritten across ~40 sites seven times. The
+   struct absorbs `damage_mods` too, so those sites moved once, here.
+   **Later tasks add a field and touch no call site.**
+
+2. **Minion identity lives in `catalogs.minions`, not on the block's rows.**
+   The interface sketch puts `species_id`/`name` on `MinionRow`, which trips
+   `v1_shape.rs::no_block_inlines_a_human_readable_name` -- this format
+   keeps names in `catalogs` and `entities[]` only. Minions are not tracked
+   entities, so a new catalog keyed by a synthetic id is the only home that
+   satisfies the invariant. Check any absorbed surface carrying a name
+   against that test BEFORE writing the block.
+
+3. **`series[].health_percents` is `Option<Vec<_>>`, not `Vec<_>`.** The
+   pass keys its map off `HEALTH_UPDATE` events, so a player who emitted
+   none is ABSENT from it, and ei-json omits `healthPercents` for that
+   player rather than writing `[]`. A plain `Vec` collapses those two into
+   an empty list and silently adds the key to every player. Caught by the
+   byte comparison, not by any test.
+
+4. **ei-json output is NOT byte-identical: `skillMap` gains 18 entries on
+   the committed fixture (16 on the local capture).** Every added id was
+   already referenced by `minions[].totalDamageTakenDist` and did NOT
+   resolve in `skillMap` before, so this fixes dangling references rather
+   than changing data -- verified additive, zero changed or removed values,
+   across five gate combinations on both fixtures. It follows from the
+   block registering its skill ids in the catalog, which the native format
+   requires; **expect the same from any later task whose block references
+   catalog ids.**
+
+5. **The `v1_size.rs` ratio test now excludes `Passes`-supplied data.** It
+   is a ratio against the legacy document, which has nowhere to put an
+   absorbed pass, so including one compares a document carrying data
+   against one that structurally cannot -- the ratio moved 0.800 -> 0.885
+   with no encoding regression whatsoever. Excluding them keeps it honest.
+   The measured ratio is nonetheless 0.837 against a 0.85 bound, because
+   Tasks 4/5 absorbed onto ALWAYS-ON blocks and cannot be excluded. **When
+   a later task trips this, do not widen the bound** -- see the comment
+   there.
+
 ---
 
 ### Task 7: `enemy_dist` — enemy rows on `blocks.damage`
