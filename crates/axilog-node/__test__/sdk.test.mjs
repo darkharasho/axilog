@@ -49,6 +49,48 @@ function sumBy(arr, fn) {
   return arr.reduce((acc, x) => acc + fn(x), 0)
 }
 
+// ---------------------------------------------------------------------
+// Native 1.0 container accessors (Task 12).
+//
+// `parseFile`/`parseBuffer` return `{axilog, blocks, catalogs, coverage,
+// encounter, entities}` -- there is no flat `players[]` any more. The
+// roster lives in `entities[]` and every per-player analysis block is a
+// `blocks.<name>.by_entity` map keyed by `entities[].id`, so the shape
+// assertions below join the two rather than reading nested objects.
+// ---------------------------------------------------------------------
+
+// The pre-1.0 `Report.players[]` was the log-recording squad PLUS
+// non-squad friendly players -- 42 on this fixture, which is also what
+// the golden EI export's `players.length` and `parseFileEi` report. The
+// two roles have to stay split here: the squad alone accounts for all
+// 2,138,414 damage but only 776 of the 801 cleanses.
+const PLAYER_ROLES = new Set(['squad', 'friendly_player'])
+
+function players(report) {
+  return report.entities.filter((e) => PLAYER_ROLES.has(e.role))
+}
+
+/** `entity`'s slot in a `blocks.<name>` map, or `undefined` if it has none. */
+function slot(block, entity) {
+  return block?.by_entity?.[entity.id]
+}
+
+/** The buff catalog id `name` is published under, e.g. 'Quickness' -> '1187'. */
+function buffIdByName(report, name) {
+  return Object.keys(report.catalogs.buffs).find((id) => report.catalogs.buffs[id].name === name)
+}
+
+/** Expands a run-length-encoded `blocks.series` channel back to a flat array. */
+function decodeSeries(series) {
+  assert.equal(series.enc, 'rle', 'series channels are run-length encoded')
+  const out = []
+  for (const [value, run] of series.data) {
+    for (let i = 0; i < run; i++) out.push(value)
+  }
+  assert.equal(out.length, series.len, 'the run lengths must sum to the declared len')
+  return out
+}
+
 /** First `limit` paths where `a` and `b` differ, DFS over plain objects/arrays. Used only to produce a readable failure message for the dual-path parity test -- `assert.deepStrictEqual` alone just dumps the entire (huge) report object on mismatch. */
 function firstDiffPaths(a, b, limit = 10, path = '$', out = []) {
   if (out.length >= limit) return out
@@ -83,185 +125,248 @@ function firstDiffPaths(a, b, limit = 10, path = '$', out = []) {
 test('parseFile: schema, player count, squad damage, one boon value, support sums', () => {
   const report = sdk.parseFile(FIXTURE)
 
-  assert.equal(report.schema_version, '0.2')
-  assert.equal(typeof report.axilog_version, 'string')
-  assert.ok(report.players.length > 0, 'expected at least one player')
-  assert.equal(report.players.length, 42)
+  assert.equal(report.axilog.schema, '1.0')
+  assert.equal(typeof report.axilog.version, 'string')
+  // `parseFile` has a real file name to thread through; only the bare
+  // name, never the full path.
+  assert.equal(report.axilog.generated_from, 'wvw-small.anon.zevtc')
 
-  const squadDamageTotal = sumBy(report.players, (p) => p.damage.total)
+  const roster = players(report)
+  assert.ok(roster.length > 0, 'expected at least one player')
+  assert.equal(roster.length, 42)
+
+  const damage = report.blocks.damage
+  const squadDamageTotal = sumBy(roster, (p) => slot(damage, p)?.total ?? 0)
   assert.equal(squadDamageTotal, EXPECTED_SQUAD_DAMAGE_TOTAL)
+  // The squad rollup is computed independently of the per-entity map, so
+  // this pins the two against each other as well as against the golden.
+  assert.equal(damage.squad.total, EXPECTED_SQUAD_DAMAGE_TOTAL)
 
+  const supportBlock = report.blocks.support
   const support = {
-    cleanses: sumBy(report.players, (p) => p.support.cleanses),
-    cleanses_self: sumBy(report.players, (p) => p.support.cleanses_self),
-    strips: sumBy(report.players, (p) => p.support.strips),
-    resurrects: sumBy(report.players, (p) => p.support.resurrects),
+    cleanses: sumBy(roster, (p) => slot(supportBlock, p)?.cleanses ?? 0),
+    cleanses_self: sumBy(roster, (p) => slot(supportBlock, p)?.cleanses_self ?? 0),
+    strips: sumBy(roster, (p) => slot(supportBlock, p)?.strips ?? 0),
+    resurrects: sumBy(roster, (p) => slot(supportBlock, p)?.resurrects ?? 0),
   }
   assert.deepEqual(support, EXPECTED_SUPPORT_SUMS)
 
-  const player = report.players.find((p) => p.account === STABLE_BOON_ACCOUNT)
+  const player = roster.find((p) => p.account === STABLE_BOON_ACCOUNT)
   assert.ok(player, `expected fixture to contain account ${STABLE_BOON_ACCOUNT}`)
-  const boon = player.boons.find((b) => b.name === STABLE_BOON_NAME)
+  // Boon rows are keyed by buff id, with the display name in the catalog.
+  const buffId = buffIdByName(report, STABLE_BOON_NAME)
+  assert.ok(buffId, `expected the buff catalog to describe ${STABLE_BOON_NAME}`)
+  const boon = slot(report.blocks.boons, player)?.[buffId]
   assert.ok(boon, `expected ${STABLE_BOON_ACCOUNT} to have a ${STABLE_BOON_NAME} entry`)
   assert.ok(
-    Math.abs(boon.presence_pct - STABLE_BOON_EXPECTED_PRESENCE_PCT) < 0.05,
-    `${STABLE_BOON_NAME} presence_pct ${boon.presence_pct} not within 0.05 of golden ${STABLE_BOON_EXPECTED_PRESENCE_PCT}`,
+    Math.abs(boon.uptime_pct - STABLE_BOON_EXPECTED_PRESENCE_PCT) < 0.05,
+    `${STABLE_BOON_NAME} uptime_pct ${boon.uptime_pct} not within 0.05 of golden ${STABLE_BOON_EXPECTED_PRESENCE_PCT}`,
   )
 })
 
-test('parseBuffer produces the same Report as parseFile', () => {
+test('parseBuffer produces the same 1.0 document as parseFile', () => {
   const fromFile = sdk.parseFile(FIXTURE)
   const buf = readFileSync(FIXTURE)
   const fromBuffer = sdk.parseBuffer(buf)
-  assert.deepStrictEqual(fromBuffer, fromFile)
+
+  // `generated_from` is the ONE documented difference: a buffer has no
+  // file name to offer, so `parseBuffer` omits the key entirely.
+  assert.equal(fromBuffer.axilog.generated_from, undefined)
+  const { generated_from: _dropped, ...fileHeader } = fromFile.axilog
+  assert.deepStrictEqual(fromBuffer.axilog, fileHeader)
+  assert.deepStrictEqual({ ...fromBuffer, axilog: null }, { ...fromFile, axilog: null })
 })
 
 test('parseFile: replay opt-in (M9 Task 2) -- absent by default, present + shaped when requested', () => {
   const withoutReplay = sdk.parseFile(FIXTURE)
-  assert.equal(withoutReplay.replay, undefined, 'replay must be absent by default')
+  assert.equal(withoutReplay.blocks.replay, undefined, 'replay must be absent by default')
+  assert.equal(withoutReplay.coverage.replay, 'not_computed')
 
   const withReplay = sdk.parseFile(FIXTURE, { replay: true })
-  assert.ok(withReplay.replay, 'expected a replay block when { replay: true }')
-  assert.equal(typeof withReplay.replay.poll_ms, 'number')
-  assert.ok(withReplay.replay.tracks.length > 0, 'expected at least one replay track')
-  const track = withReplay.replay.tracks[0]
-  assert.equal(typeof track.name, 'string')
-  assert.equal(typeof track.team, 'string')
-  assert.equal(typeof track.is_squad, 'boolean')
+  const replay = withReplay.blocks.replay
+  assert.ok(replay, 'expected a replay block when { replay: true }')
+  assert.equal(withReplay.coverage.replay, 'present')
+  assert.equal(typeof replay.poll_ms, 'number')
+  for (const k of ['min_x', 'max_x', 'min_y', 'max_y']) {
+    assert.equal(typeof replay.bounds[k], 'number', `bounds.${k} must be a number`)
+  }
+
+  // Tracks are a by-entity map, not a flat array: the name/team/squad
+  // membership the pre-1.0 `tracks[]` duplicated now live once on the
+  // `entities[]` row the key joins to.
+  const trackIds = Object.keys(replay.by_entity)
+  assert.ok(trackIds.length > 0, 'expected at least one replay track')
+  const entityIds = new Set(withReplay.entities.map((e) => String(e.id)))
+  for (const id of trackIds) {
+    assert.ok(entityIds.has(id), `replay track ${id} does not join to any entities[] row`)
+  }
+  const track = replay.by_entity[trackIds[0]]
   assert.ok(Array.isArray(track.samples))
+  assert.ok(Array.isArray(track.down_intervals))
+  assert.ok(Array.isArray(track.dead_intervals))
   if (track.samples.length > 0) {
     assert.equal(track.samples[0].length, 3, 'each sample is a [t, x, y] triple')
   }
 
   // opts.replay: false must behave the same as omitting opts entirely.
   const explicitlyOff = sdk.parseFile(FIXTURE, { replay: false })
-  assert.equal(explicitlyOff.replay, undefined)
+  assert.equal(explicitlyOff.blocks.replay, undefined)
 
   // parseBuffer accepts the same opts shape.
   const buf = readFileSync(FIXTURE)
   const bufWithReplay = sdk.parseBuffer(buf, { replay: true })
-  assert.ok(bufWithReplay.replay)
+  assert.ok(bufWithReplay.blocks.replay)
 })
 
 test('parseFile: skillDamage opt-in (M12 Task 1) -- absent by default, present + shaped when requested', () => {
   const without = sdk.parseFile(FIXTURE)
-  assert.equal(without.players[0].skill_damage, undefined, 'skill_damage must be absent by default')
+  const anyPlayer = players(without)[0]
+  assert.equal(slot(without.blocks.damage, anyPlayer).by_skill, undefined, 'by_skill must be absent by default')
+  assert.equal(slot(without.blocks.damage, anyPlayer).by_skill_taken, undefined)
 
   const withIt = sdk.parseFile(FIXTURE, { skillDamage: true })
-  const p0 = withIt.players.find((p) => p.damage.total > 0)
+  const p0 = players(withIt).find((p) => (slot(withIt.blocks.damage, p)?.total ?? 0) > 0)
   assert.ok(p0, 'expected at least one player with nonzero damage')
-  assert.ok(p0.skill_damage, 'expected a skill_damage block when { skillDamage: true }')
-  assert.ok(Array.isArray(p0.skill_damage.outgoing))
-  assert.ok(Array.isArray(p0.skill_damage.taken))
-  assert.ok(Array.isArray(p0.skill_damage.per_target))
-  assert.ok(p0.skill_damage.outgoing.length > 0, 'expected at least one outgoing skill entry')
-  const entry = p0.skill_damage.outgoing[0]
-  assert.equal(typeof entry.skill_id, 'number')
-  assert.equal(typeof entry.total, 'number')
-  assert.equal(typeof entry.hits, 'number')
-  // sum(outgoing[*].total) == damage.total exactly (internal invariant).
-  const sum = sumBy(p0.skill_damage.outgoing, (e) => e.total)
-  assert.equal(sum, p0.damage.total, 'sum(outgoing totals) must equal damage.total exactly')
+  const d0 = slot(withIt.blocks.damage, p0)
+  assert.ok(d0.by_skill, 'expected a by_skill map when { skillDamage: true }')
+  assert.ok(d0.by_skill_taken, 'expected a by_skill_taken map when { skillDamage: true }')
+  const skillIds = Object.keys(d0.by_skill)
+  assert.ok(skillIds.length > 0, 'expected at least one outgoing skill entry')
+  const entry = d0.by_skill[skillIds[0]]
+  for (const k of ['total', 'hits', 'crit_hits', 'flank_hits', 'min', 'max']) {
+    assert.equal(typeof entry[k], 'number', `by_skill entries carry a numeric ${k}`)
+  }
+  // Every referenced skill id must be described by the skill catalog.
+  for (const id of skillIds) {
+    assert.ok(id in withIt.catalogs.skills, `skill ${id} missing from catalogs.skills`)
+  }
+  // sum(by_skill[*].total) == damage total exactly (internal invariant).
+  const sum = sumBy(Object.values(d0.by_skill), (e) => e.total)
+  assert.equal(sum, d0.total, 'sum(by_skill totals) must equal the damage total exactly')
+  // The per-target breakdown gains the same distribution under the flag.
+  const perTarget = Object.values(d0.per_target)
+  assert.ok(perTarget.length > 0, 'expected at least one per-target entry')
+  assert.ok(perTarget.every((t) => t.by_skill), 'per_target entries gain by_skill under the flag')
 
   // opts.skillDamage: false must behave the same as omitting opts entirely.
   const explicitlyOff = sdk.parseFile(FIXTURE, { skillDamage: false })
-  assert.equal(explicitlyOff.players[0].skill_damage, undefined)
+  assert.equal(slot(explicitlyOff.blocks.damage, anyPlayer).by_skill, undefined)
 })
 
-test('parseFile: timeseries opt-in (M12 Task 2) -- per_second AND dps_targets both absent by default, both present + shaped when requested', () => {
+test('parseFile: timeseries opt-in (M12 Task 2) -- per-entity series absent by default, present + shaped when requested', () => {
   const without = sdk.parseFile(FIXTURE)
-  assert.equal(without.players[0].per_second, undefined, 'per_second must be absent by default')
-  assert.equal(without.players[0].dps_targets, undefined, 'dps_targets must be absent by default')
+  const anyPlayer = players(without)[0]
+  assert.equal(slot(without.blocks.series, anyPlayer), undefined, 'per-entity series must be absent by default')
+  // The squad-level series is always on -- only the per-entity map is gated.
+  assert.ok(without.blocks.series.squad.damage, 'squad series stays present by default')
 
   const withIt = sdk.parseFile(FIXTURE, { timeseries: true })
-  const p0 = withIt.players.find((p) => p.damage.total > 0)
+  const p0 = players(withIt).find((p) => (slot(withIt.blocks.damage, p)?.total ?? 0) > 0)
   assert.ok(p0, 'expected at least one player with nonzero damage')
-  assert.ok(p0.per_second, 'expected a per_second block when { timeseries: true }')
-  assert.ok(Array.isArray(p0.per_second.damage))
-  assert.ok(Array.isArray(p0.per_second.damage_taken))
-  assert.ok(Array.isArray(p0.per_second.per_target))
-  assert.ok(p0.per_second.damage.length > 0, 'expected at least one bucket')
-  // Cumulative: the final bucket equals damage.total exactly (internal invariant).
-  const finalDamage = p0.per_second.damage[p0.per_second.damage.length - 1]
-  assert.equal(finalDamage, p0.damage.total, 'final per_second.damage bucket must equal damage.total exactly')
-  // Monotonic non-decreasing.
-  for (let i = 1; i < p0.per_second.damage.length; i++) {
-    assert.ok(p0.per_second.damage[i] >= p0.per_second.damage[i - 1], 'per_second.damage must be cumulative (monotonic non-decreasing)')
+  const series = slot(withIt.blocks.series, p0)
+  assert.ok(series, 'expected a per-entity series when { timeseries: true }')
+  for (const k of ['damage', 'damage_taken', 'power_damage_taken']) {
+    assert.equal(typeof series[k].interval_ms, 'number', `${k} carries its bucket width`)
   }
 
-  assert.ok(Array.isArray(p0.dps_targets), 'expected a dps_targets array when { timeseries: true }')
-  assert.ok(p0.dps_targets.length > 0, 'expected at least one dps_targets entry')
-  const dt = p0.dps_targets[0]
-  assert.equal(typeof dt.enemy_id, 'number')
-  assert.equal(typeof dt.damage, 'number')
-  assert.equal(typeof dt.dps, 'number')
-  // sum(dps_targets[*].damage) == damage.total exactly (internal invariant).
-  const dtSum = sumBy(p0.dps_targets, (d) => d.damage)
-  assert.equal(dtSum, p0.damage.total, 'sum(dps_targets damage) must equal damage.total exactly')
+  const damage = decodeSeries(series.damage)
+  assert.ok(damage.length > 0, 'expected at least one bucket')
+  // Cumulative: the final bucket equals the damage total exactly.
+  assert.equal(
+    damage[damage.length - 1],
+    slot(withIt.blocks.damage, p0).total,
+    'final damage bucket must equal the damage total exactly',
+  )
+  // Monotonic non-decreasing.
+  for (let i = 1; i < damage.length; i++) {
+    assert.ok(damage[i] >= damage[i - 1], 'the damage series must be cumulative (monotonic non-decreasing)')
+  }
+
+  // The per-target series joins to the always-on per-target damage map.
+  const perTargetIds = Object.keys(series.per_target)
+  assert.ok(perTargetIds.length > 0, 'expected at least one per-target series')
+  const damageTargets = slot(withIt.blocks.damage, p0).per_target
+  for (const id of perTargetIds) {
+    assert.ok(id in damageTargets, `per-target series ${id} has no matching damage entry`)
+  }
+  // sum(per_target[*].total) == damage total exactly (internal invariant).
+  const dtSum = sumBy(Object.values(damageTargets), (t) => t.total)
+  assert.equal(dtSum, slot(withIt.blocks.damage, p0).total, 'sum(per_target totals) must equal the damage total exactly')
 
   // opts.timeseries: false must behave the same as omitting opts entirely.
   const explicitlyOff = sdk.parseFile(FIXTURE, { timeseries: false })
-  assert.equal(explicitlyOff.players[0].per_second, undefined)
-  assert.equal(explicitlyOff.players[0].dps_targets, undefined)
+  assert.equal(slot(explicitlyOff.blocks.series, anyPlayer), undefined)
 })
 
 test('parseFile: missiles opt-in -- absent by default, present + shaped when requested', () => {
   const without = sdk.parseFile(FIXTURE)
-  assert.equal(without.missiles, undefined, 'missiles must be absent by default')
+  assert.equal(without.blocks.missiles, undefined, 'missiles must be absent by default')
+  assert.equal(without.coverage.missiles, 'not_computed')
 
   const withIt = sdk.parseFile(FIXTURE, { missiles: true })
-  assert.ok(withIt.missiles, 'expected a missiles block when { missiles: true }')
-  assert.ok(Array.isArray(withIt.missiles.players))
-  assert.ok(withIt.missiles.squad, 'expected a squad missiles rollup')
-  assert.equal(typeof withIt.missiles.squad.fired, 'number')
-  assert.equal(typeof withIt.missiles.squad.hit, 'number')
-  assert.equal(typeof withIt.missiles.squad.denied, 'number')
-  assert.equal(typeof withIt.missiles.squad.incoming_fired, 'number')
-  assert.equal(typeof withIt.missiles.squad.incoming_denied, 'number')
+  const missiles = withIt.blocks.missiles
+  assert.ok(missiles, 'expected a missiles block when { missiles: true }')
+  assert.equal(withIt.coverage.missiles, 'present')
+  assert.ok(missiles.squad, 'expected a squad missiles rollup')
+  for (const k of ['fired', 'hit', 'denied', 'incoming_fired', 'incoming_denied']) {
+    assert.equal(typeof missiles.squad[k], 'number', `squad.${k} must be a number`)
+  }
+  const perEntity = Object.values(missiles.by_entity)
+  assert.ok(perEntity.length > 0, 'expected at least one per-entity missile row')
+  for (const k of ['fired', 'hit', 'denied', 'reflected_at_self']) {
+    assert.equal(typeof perEntity[0][k], 'number', `by_entity rows carry a numeric ${k}`)
+  }
 
   // opts.missiles: false must behave the same as omitting opts entirely.
   const explicitlyOff = sdk.parseFile(FIXTURE, { missiles: false })
-  assert.equal(explicitlyOff.missiles, undefined)
+  assert.equal(explicitlyOff.blocks.missiles, undefined)
 })
 
-test('parseFile: modifiers opt-in (M16) -- damage_mods + damage_mod_map absent by default, present + shaped when requested', () => {
+test('parseFile: modifiers opt-in (M16) -- damage_mods block + catalog absent by default, present + shaped when requested', () => {
   const without = sdk.parseFile(FIXTURE)
-  assert.equal(without.damage_mod_map, undefined, 'damage_mod_map must be absent by default')
-  assert.equal(without.players[0].damage_mods, undefined, 'players[].damage_mods must be absent by default')
+  assert.equal(without.catalogs.damage_mods, undefined, 'the modifier catalog must be absent by default')
+  assert.equal(without.blocks.damage_mods, undefined, 'the damage_mods block must be absent by default')
+  assert.equal(without.coverage.damage_mods, 'not_computed')
 
   const withIt = sdk.parseFile(FIXTURE, { modifiers: true })
-  assert.ok(withIt.damage_mod_map, 'expected a damage_mod_map when { modifiers: true }')
-  const mapIds = Object.keys(withIt.damage_mod_map)
+  const catalog = withIt.catalogs.damage_mods
+  assert.ok(catalog, 'expected a modifier catalog when { modifiers: true }')
+  assert.equal(withIt.coverage.damage_mods, 'present')
+  const mapIds = Object.keys(catalog)
   assert.ok(mapIds.length > 0, 'expected at least one referenced modifier id')
 
-  const withRows = withIt.players.filter((p) => p.damage_mods.outgoing.length + p.damage_mods.incoming.length > 0)
-  assert.ok(withRows.length > 0, 'expected at least one player with modifier rows')
-  for (const p of withIt.players) {
-    assert.ok(Array.isArray(p.damage_mods.outgoing))
-    assert.ok(Array.isArray(p.damage_mods.incoming))
-    for (const [rows, incoming] of [[p.damage_mods.outgoing, false], [p.damage_mods.incoming, true]]) {
-      for (const r of rows) {
-        // The SIGN of the id is the direction, and every referenced id
-        // must be described by damage_mod_map (native keys carry no "d").
-        assert.equal(r.id < 0, incoming, `d${r.id} is on the wrong side`)
-        assert.ok(String(r.id) in withIt.damage_mod_map, `d${r.id} missing from damage_mod_map`)
-        assert.equal(typeof r.hit_count, 'number')
-        assert.equal(typeof r.total_hit_count, 'number')
-        assert.equal(typeof r.damage_gain, 'number')
-        assert.equal(typeof r.total_damage, 'number')
-        assert.ok(r.hit_count >= 1 && r.hit_count <= r.total_hit_count)
+  // One flat map per entity: the direction that used to be an
+  // outgoing/incoming array split is now carried by the id's SIGN.
+  const rowSets = Object.values(withIt.blocks.damage_mods.by_entity)
+  assert.ok(rowSets.length > 0, 'expected at least one entity with modifier rows')
+  let sawIncoming = false
+  let sawOutgoing = false
+  for (const rows of rowSets) {
+    for (const [id, r] of Object.entries(rows)) {
+      if (Number(id) < 0) sawIncoming = true
+      else sawOutgoing = true
+      // Native keys carry no "d" prefix -- that is an ei-json-ism.
+      assert.ok(!id.startsWith('d'), `native modifier keys carry no "d" prefix, got ${id}`)
+      assert.ok(id in catalog, `modifier ${id} missing from catalogs.damage_mods`)
+      for (const k of ['hit_count', 'total_hit_count', 'damage_gain', 'total_damage']) {
+        assert.equal(typeof r[k], 'number', `${k} must be a number`)
       }
+      assert.ok(r.hit_count >= 1 && r.hit_count <= r.total_hit_count)
     }
   }
-  const desc = withIt.damage_mod_map[mapIds[0]]
-  for (const k of ['name', 'icon', 'description']) assert.equal(typeof desc[k], 'string')
-  for (const k of ['non_multiplier', 'is_counter', 'skill_based', 'approximate', 'incoming']) {
+  assert.ok(sawOutgoing, 'expected at least one outgoing (positive-id) modifier row')
+  assert.ok(sawIncoming, 'expected at least one incoming (negative-id) modifier row')
+
+  const desc = catalog[mapIds[0]]
+  for (const k of ['name', 'description']) assert.equal(typeof desc[k], 'string')
+  for (const k of ['non_multiplier', 'is_counter', 'skill_based', 'approximate']) {
     assert.equal(typeof desc[k], 'boolean')
   }
 
   // opts.modifiers: false must behave the same as omitting opts entirely.
   const explicitlyOff = sdk.parseFile(FIXTURE, { modifiers: false })
-  assert.equal(explicitlyOff.damage_mod_map, undefined)
+  assert.equal(explicitlyOff.catalogs.damage_mods, undefined)
+  assert.equal(explicitlyOff.blocks.damage_mods, undefined)
 })
 
 test('parseFileEi: { modifiers: true } adds EI damageModifiers + damageModMap (M16)', () => {
@@ -397,14 +502,14 @@ test('anonymizeFile: round-trip parses identically to the source fixture', () =>
     const original = sdk.parseFile(FIXTURE)
     const roundTripped = sdk.parseFile(outPath)
 
-    assert.equal(roundTripped.players.length, original.players.length)
+    assert.equal(players(roundTripped).length, players(original).length)
+    assert.equal(roundTripped.entities.length, original.entities.length)
 
-    const originalDamage = sumBy(original.players, (p) => p.damage.total)
-    const roundTrippedDamage = sumBy(roundTripped.players, (p) => p.damage.total)
-    assert.equal(roundTrippedDamage, originalDamage)
+    const damageOf = (r) => sumBy(players(r), (p) => slot(r.blocks.damage, p)?.total ?? 0)
+    assert.equal(damageOf(roundTripped), damageOf(original))
 
     assert.equal(roundTripped.encounter.duration_ms, original.encounter.duration_ms)
-    assert.equal(roundTripped.enemies.length, original.enemies.length)
+    assert.equal(roundTripped.blocks.damage.squad.total, original.blocks.damage.squad.total)
   } finally {
     rmSync(tmpDir, { recursive: true, force: true })
   }
