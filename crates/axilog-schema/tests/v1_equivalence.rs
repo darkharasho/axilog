@@ -616,7 +616,7 @@ fn every_legacy_skill_damage_row_survives_the_reshape() {
         let row = damage.by_entity.get(e.id).expect("damage row for every player entity");
 
         assert_outcome_superset(
-            &row.by_skill,
+            row.by_skill.as_ref().expect("--skill-damage was on"),
             skill_damage.outgoing.iter().map(|e| e.skill_id),
             &format!("{account} by_skill"),
         );
@@ -624,7 +624,8 @@ fn every_legacy_skill_damage_row_survives_the_reshape() {
         for legacy_skill in &skill_damage.outgoing {
             let got = row
                 .by_skill
-                .get(&legacy_skill.skill_id)
+                .as_ref()
+                .and_then(|m| m.get(&legacy_skill.skill_id))
                 .unwrap_or_else(|| panic!("{account} by_skill missing entry for skill {}", legacy_skill.skill_id));
             assert_eq!(got.total, legacy_skill.total, "{account} by_skill[{}].total", legacy_skill.skill_id);
             assert_eq!(got.hits, Some(legacy_skill.hits), "{account} by_skill[{}].hits", legacy_skill.skill_id);
@@ -767,12 +768,12 @@ fn every_legacy_incoming_and_per_target_skill_row_survives_the_reshape() {
         let row = damage.by_entity.get(e.id).expect("damage row for every player entity");
 
         assert_outcome_superset(
-            &row.by_skill_taken,
+            row.by_skill_taken.as_ref().expect("--skill-damage was on"),
             sd.taken.iter().map(|e| e.skill_id),
             &format!("{account} by_skill_taken"),
         );
         for legacy_skill in &sd.taken {
-            let got = row.by_skill_taken.get(&legacy_skill.skill_id).unwrap_or_else(|| {
+            let got = row.by_skill_taken.as_ref().and_then(|m| m.get(&legacy_skill.skill_id)).unwrap_or_else(|| {
                 panic!("{account} by_skill_taken missing skill {}", legacy_skill.skill_id)
             });
             assert_eq!(got.total, legacy_skill.total, "{account} taken total");
@@ -1146,11 +1147,13 @@ fn every_legacy_player_field_has_a_one_point_oh_destination() {
         // and is populated; `assert_outcome_superset` above is what pins
         // what those extra rows are allowed to be.
         assert!(
-            d.by_skill.len() >= skill_damage.as_ref().map(|s| s.outgoing.len()).unwrap_or(0),
+            d.by_skill.as_ref().map_or(0, |m| m.len())
+                >= skill_damage.as_ref().map(|s| s.outgoing.len()).unwrap_or(0),
             "skill_damage.outgoing -> damage.by_skill"
         );
         assert!(
-            d.by_skill_taken.len() >= skill_damage.as_ref().map(|s| s.taken.len()).unwrap_or(0),
+            d.by_skill_taken.as_ref().map_or(0, |m| m.len())
+                >= skill_damage.as_ref().map(|s| s.taken.len()).unwrap_or(0),
             "skill_damage.taken -> damage.by_skill_taken"
         );
         assert_eq!(
@@ -1222,7 +1225,7 @@ fn every_legacy_player_field_has_a_one_point_oh_destination() {
             "aftercast -> rotation.aftercast"
         );
         assert_eq!(
-            damage_mods_block.by_entity.get(id).map(|m| m.len()),
+            damage_mods_block.by_entity.get(id).map(|m| m.overall.len()),
             damage_mods.as_ref().map(|m| m.outgoing.len() + m.incoming.len()),
             "damage_mods -> damage_mods block"
         );

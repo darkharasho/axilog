@@ -240,7 +240,6 @@ fn build_report_and_ei_inputs_from_bytes(
     axilog_schema::Report,
     axilog_schema::v1::ReportV1,
     Option<axilog_core::analysis::ei_replay::EiReplay>,
-    Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
 )> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -366,7 +365,6 @@ fn build_report_and_ei_inputs_from_bytes(
         report,
         report_v1,
         ei_replay,
-        damage_mods,
     ))
 }
 
@@ -458,7 +456,7 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
     let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let (report, report_v1, ei_replay, damage_mods) = build_report_and_ei_inputs_from_bytes(
+    let (report, report_v1, ei_replay) = build_report_and_ei_inputs_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
         want_modifiers,
     )?;
@@ -467,7 +465,6 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
         &report,
         &axilog_ei::EiInputs {
             replay: ei_replay.as_ref(),
-            modifiers: damage_mods.as_ref(),
         },
     ))
 }

@@ -22,7 +22,7 @@ fn enemy_damage_rows_land_on_the_same_block_as_players() {
         .iter()
         .filter(|e| matches!(e.role, Role::Npc | Role::EnemyPlayer))
         .filter_map(|e| damage.by_entity.get(e.id))
-        .filter(|row| !row.by_skill.is_empty())
+        .filter(|row| !row.by_skill.as_ref().map_or(true, |m| m.is_empty()))
         .count();
     assert!(enemy_with_skills > 0, "enemy skill distributions did not land");
 
@@ -31,7 +31,7 @@ fn enemy_damage_rows_land_on_the_same_block_as_players() {
         .iter()
         .filter(|e| matches!(e.role, Role::Squad | Role::FriendlyPlayer))
         .filter_map(|e| damage.by_entity.get(e.id))
-        .filter(|row| !row.by_skill.is_empty())
+        .filter(|row| !row.by_skill.as_ref().map_or(true, |m| m.is_empty()))
         .count();
     assert!(
         player_with_skills > 0,
@@ -55,7 +55,7 @@ fn each_skill_row_carries_the_hit_count_its_pass_actually_measured() {
     for entity in &v1.entities {
         let Some(row) = damage.by_entity.get(entity.id) else { continue };
         let is_enemy = matches!(entity.role, Role::Npc | Role::EnemyPlayer);
-        for (skill_id, skill) in &row.by_skill {
+        for (skill_id, skill) in row.by_skill.iter().flatten() {
             if is_enemy {
                 assert!(
                     skill.hits.is_none(),
@@ -95,7 +95,7 @@ fn every_enemy_skill_resolves_in_the_catalog() {
         .filter(|e| matches!(e.role, Role::Npc | Role::EnemyPlayer))
     {
         let Some(row) = damage.by_entity.get(entity.id) else { continue };
-        for skill_id in row.by_skill.keys() {
+        for skill_id in row.by_skill.iter().flatten().map(|(id, _)| id) {
             assert!(
                 v1.catalogs.skills.contains_key(skill_id),
                 "enemy skill {skill_id} is a dangling reference"
@@ -117,7 +117,7 @@ fn enemy_skill_rows_are_absent_when_the_gate_is_off() {
         .filter(|e| matches!(e.role, Role::Npc | Role::EnemyPlayer))
     {
         let Some(row) = damage.by_entity.get(entity.id) else { continue };
-        assert!(row.by_skill.is_empty(), "no --skill-damage means no enemy breakdown");
+        assert!(row.by_skill.as_ref().map_or(true, |m| m.is_empty()), "no --skill-damage means no enemy breakdown");
         enemy_rows += 1;
     }
     assert!(enemy_rows > 0, "premise: enemy rows survive the flagless build");
@@ -156,7 +156,7 @@ fn enemy_rows_are_rekeyed_from_agent_id_to_entity_id() {
             .get(entity.id)
             .unwrap_or_else(|| panic!("enemy {} lost its damage row entirely", entity.id));
         assert_eq!(
-            row.by_skill.len(),
+            row.by_skill.as_ref().map_or(0, |m| m.len()),
             skills.len(),
             "enemy {} lost skill rows in the rekey",
             entity.id
@@ -164,7 +164,8 @@ fn enemy_rows_are_rekeyed_from_agent_id_to_entity_id() {
         for s in skills {
             let got = row
                 .by_skill
-                .get(&s.skill_id)
+                .as_ref()
+                .and_then(|m| m.get(&s.skill_id))
                 .unwrap_or_else(|| panic!("enemy {} skill {} missing", entity.id, s.skill_id));
             assert_eq!(got.total, s.total, "no number may change in this spec");
             assert_eq!(got.connected_hits, Some(s.hits));

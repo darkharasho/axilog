@@ -415,7 +415,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if format == Format::EiJson {
                 let ei_inputs = axilog_ei::EiInputs {
                     replay: ei_replay_data.as_ref(),
-                    modifiers: damage_mods.as_ref(),
                 };
                 // One `dyn Write` so the two destinations share the emit
                 // code; the `BufWriter` (not the trait object) is what makes

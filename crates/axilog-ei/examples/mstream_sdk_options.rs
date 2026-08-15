@@ -56,7 +56,6 @@ fn main() {
 
     let inputs = EiInputs {
         replay: None,
-        modifiers: None,
     };
 
     let t0 = std::time::Instant::now();

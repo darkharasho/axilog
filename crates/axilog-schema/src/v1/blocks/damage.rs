@@ -63,20 +63,31 @@ pub struct DamageEntity {
     /// entity's own row. Sparse; omitted when empty.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub per_target: BTreeMap<u32, PerTarget>,
-    /// OUTGOING per-skill damage, keyed by skill id. Present only when the
-    /// per-skill compute gate (`--skill-damage` / SDK `skill_damage: true`,
-    /// `PlayerOut::skill_damage`) was on; omitted otherwise, since the
-    /// legacy field itself is `Option` and absent when the gate is off.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub by_skill: BTreeMap<u32, SkillRow>,
+    /// OUTGOING per-skill damage, keyed by skill id. `Some` exactly when
+    /// the per-skill compute gate (`--skill-damage` / SDK
+    /// `skill_damage: true`) was on, `None` otherwise.
+    ///
+    /// **This `Option` is the format's `--skill-damage` GATE RECORD, and
+    /// `Some({})` is a meaningful value.** Side-channel absorption Task 7
+    /// found that an empty map cannot distinguish "the pass never ran" from
+    /// "this entity landed nothing", which left the ei-json adapter reading
+    /// the legacy `PlayerOut::skill_damage`'s presence -- private data no
+    /// consumer of this document could see. An entity that dealt no damage
+    /// under a gate that WAS on gets `Some({})`; one whose gate was off
+    /// gets no key at all. `coverage.damage` cannot answer this, because
+    /// this block's other halves are always-on: `damage` is the third
+    /// two-gate block, after `replay` and `boons`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by_skill: Option<BTreeMap<u32, SkillRow>>,
     /// INCOMING per-skill damage, keyed by skill id -- the legacy
     /// `SkillDamageOut::taken`, which had no 1.0 destination at all before
     /// the final review. Named to mirror this row's own `total`/`taken`
     /// pair, so the outgoing/incoming split reads the same way at both
-    /// levels. Same gate as `by_skill`; `sum(by_skill_taken[*].total) ==
-    /// taken` holds by construction (see `SkillDamageOut`'s doc comment).
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub by_skill_taken: BTreeMap<u32, SkillRow>,
+    /// levels. Same gate as `by_skill`, and the same `Option` reading of
+    /// it; `sum(by_skill_taken[*].total) == taken` holds by construction
+    /// (see `SkillDamageOut`'s doc comment).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by_skill_taken: Option<BTreeMap<u32, SkillRow>>,
 }
 
 /// One `(entity, target)` pair.
@@ -370,9 +381,13 @@ pub fn build_damage(
             }
         }
 
-        let mut by_skill = BTreeMap::new();
-        let mut by_skill_taken = BTreeMap::new();
-        if let Some(skill_damage) = p.skill_damage.as_ref() {
+        // `Some` exactly when the gate was on, EVEN IF the maps come out
+        // empty -- that is the whole point (see `DamageEntity::by_skill`).
+        let mut by_skill = p.skill_damage.as_ref().map(|_| BTreeMap::new());
+        let mut by_skill_taken = p.skill_damage.as_ref().map(|_| BTreeMap::new());
+        if let (Some(skill_damage), Some(by_skill), Some(by_skill_taken)) =
+            (p.skill_damage.as_ref(), by_skill.as_mut(), by_skill_taken.as_mut())
+        {
             for e in &skill_damage.outgoing {
                 cats.reference_skill(e.skill_id);
                 by_skill.insert(e.skill_id, skill_row(e));
@@ -405,8 +420,8 @@ pub fn build_damage(
             // exactly two distributions, whole-fight outgoing and taken,
             // with no per-target split to join to.
             if let Some(o) = dist_outcomes.and_then(|m| m.get(&p.agent_addr)) {
-                merge_outcomes(&mut by_skill, &o.outgoing, cats);
-                merge_outcomes(&mut by_skill_taken, &o.taken, cats);
+                merge_outcomes(by_skill, &o.outgoing, cats);
+                merge_outcomes(by_skill_taken, &o.taken, cats);
             }
         }
 
@@ -455,9 +470,14 @@ pub fn build_damage(
         // The pass is keyed by the enemy's REPRESENTATIVE agent id, which is
         // `Enemy::id` -- the same key `index.by_enemy_id` takes, so this is
         // a direct join rather than a positional one.
-        let by_skill: BTreeMap<u32, SkillRow> = enemy_dist
-            .and_then(|d| d.get(&e.id))
-            .map(|skills| {
+        //
+        // `Some` whenever the pass RAN, so an enemy it found nothing for
+        // reports `Some({})` rather than looking gated-off -- the fill Task
+        // 8 introduced for `blocks.series`, applied here to the field that
+        // is now this format's `--skill-damage` gate record (see
+        // `DamageEntity::by_skill`).
+        let by_skill: Option<BTreeMap<u32, SkillRow>> = enemy_dist.map(|d| {
+            d.get(&e.id).map_or_else(BTreeMap::new, |skills| {
                 skills
                     .iter()
                     .map(|s| {
@@ -466,7 +486,7 @@ pub fn build_damage(
                     })
                     .collect()
             })
-            .unwrap_or_default();
+        });
         by_entity.insert(
             entity_id,
             DamageEntity {
@@ -498,13 +518,15 @@ pub fn build_damage(
             if by_entity.get(entity_id).is_some() {
                 continue;
             }
-            let by_skill = skills
-                .iter()
-                .map(|s| {
-                    cats.reference_skill(s.skill_id);
-                    (s.skill_id, enemy_skill_row(s))
-                })
-                .collect();
+            let by_skill = Some(
+                skills
+                    .iter()
+                    .map(|s| {
+                        cats.reference_skill(s.skill_id);
+                        (s.skill_id, enemy_skill_row(s))
+                    })
+                    .collect(),
+            );
             by_entity.insert(entity_id, DamageEntity { by_skill, ..DamageEntity::default() });
         }
     }
@@ -579,14 +601,16 @@ mod tests {
         // Same real fixture id as the test above (see its comment).
         let squad_entity = index.by_agent_addr(4575).expect("squad player resolves");
         let row = block.by_entity.get(squad_entity).expect("row");
-        for skill_id in row.by_skill.keys() {
+        let by_skill = row.by_skill.as_ref().expect("the fixture is built with --skill-damage on");
+        for (skill_id, skill_row) in by_skill {
             // No name anywhere in the block -- names live in catalogs only.
-            let v = serde_json::to_value(&row.by_skill[skill_id]).expect("serializable");
+            let v = serde_json::to_value(skill_row).expect("serializable");
             assert!(v.get("name").is_none(), "a block must never inline a skill name");
+            let _ = skill_id;
         }
 
         let built = cats.finish(&Default::default(), None);
-        for skill_id in row.by_skill.keys() {
+        for skill_id in by_skill.keys() {
             assert!(
                 built.skills.contains_key(skill_id),
                 "every referenced skill id must resolve in the catalog"

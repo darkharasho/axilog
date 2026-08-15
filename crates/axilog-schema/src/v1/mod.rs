@@ -343,7 +343,7 @@ pub fn build_report_v1(
         block
     });
     let damage_mods_block = legacy.damage_mod_map.is_some().then(|| {
-        let block = activity::build_damage_mods(legacy, &index, &mut cats);
+        let block = activity::build_damage_mods(legacy, &index, &mut cats, damage_mods);
         coverage.set(BlockName::DamageMods, computed(block.is_empty()));
         block
     });

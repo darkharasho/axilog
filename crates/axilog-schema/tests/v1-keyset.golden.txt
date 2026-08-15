@@ -120,11 +120,12 @@ blocks.damage.squad.total
 blocks.damage_mods
 blocks.damage_mods.by_entity
 blocks.damage_mods.by_entity.<id>
-blocks.damage_mods.by_entity.<id>.<id>
-blocks.damage_mods.by_entity.<id>.<id>.damage_gain
-blocks.damage_mods.by_entity.<id>.<id>.hit_count
-blocks.damage_mods.by_entity.<id>.<id>.total_damage
-blocks.damage_mods.by_entity.<id>.<id>.total_hit_count
+blocks.damage_mods.by_entity.<id>.overall
+blocks.damage_mods.by_entity.<id>.overall.<id>
+blocks.damage_mods.by_entity.<id>.overall.<id>.damage_gain
+blocks.damage_mods.by_entity.<id>.overall.<id>.hit_count
+blocks.damage_mods.by_entity.<id>.overall.<id>.total_damage
+blocks.damage_mods.by_entity.<id>.overall.<id>.total_hit_count
 blocks.defenses
 blocks.defenses.by_entity
 blocks.defenses.by_entity.<id>

@@ -37,10 +37,10 @@ fn outcome_columns_land_on_the_rows_the_distributions_already_use() {
     let mut annotated = 0usize;
     for e in v1.entities.iter().filter(|e| !is_enemy(e.role)) {
         let Some(row) = damage.by_entity.get(e.id) else { continue };
-        if row.by_skill.is_empty() {
+        if row.by_skill.as_ref().map_or(true, |m| m.is_empty()) {
             continue;
         }
-        for (skill_id, skill) in &row.by_skill {
+        for (skill_id, skill) in row.by_skill.iter().flatten() {
             assert!(
                 skill.outcomes.is_some(),
                 "entity {} skill {skill_id}: a player row in a gated-on document has no outcome \
@@ -89,7 +89,7 @@ fn the_row_set_is_a_union_not_an_intersection() {
         let Some(sd) = p.skill_damage.as_ref() else { continue };
         let contributing: std::collections::BTreeSet<u32> =
             sd.outgoing.iter().map(|s| s.skill_id).collect();
-        for (skill_id, skill) in &row.by_skill {
+        for (skill_id, skill) in row.by_skill.iter().flatten() {
             if contributing.contains(skill_id) {
                 continue;
             }
@@ -137,9 +137,10 @@ fn the_three_hit_counts_nest_in_the_documented_order() {
     let mut checked = 0usize;
     for e in v1.entities.iter().filter(|e| !is_enemy(e.role)) {
         let Some(row) = damage.by_entity.get(e.id) else { continue };
-        for (label, rows) in [("by_skill", &row.by_skill), ("by_skill_taken", &row.by_skill_taken)]
+        for (label, rows) in
+            [("by_skill", &row.by_skill), ("by_skill_taken", &row.by_skill_taken)]
         {
-            for (skill_id, skill) in rows {
+            for (skill_id, skill) in rows.iter().flatten() {
                 let (Some(o), Some(connected), Some(hits)) =
                     (skill.outcomes.as_ref(), skill.connected_hits, skill.hits)
                 else {
@@ -195,7 +196,7 @@ fn a_condition_skill_reports_no_direct_hit_outcomes() {
     let mut indirect_rows = 0usize;
     for e in v1.entities.iter().filter(|e| !is_enemy(e.role)) {
         let Some(row) = damage.by_entity.get(e.id) else { continue };
-        for (skill_id, skill) in row.by_skill.iter().chain(row.by_skill_taken.iter()) {
+        for (skill_id, skill) in row.by_skill.iter().flatten().chain(row.by_skill_taken.iter().flatten()) {
             let Some(o) = skill.outcomes.as_ref().filter(|o| o.indirect) else { continue };
             assert_eq!(
                 (o.glance, o.missed, o.evaded, o.blocked, o.interrupted),
@@ -225,7 +226,7 @@ fn enemy_rows_carry_no_outcome_columns() {
     let mut enemy_rows = 0usize;
     for e in v1.entities.iter().filter(|e| is_enemy(e.role)) {
         let Some(row) = damage.by_entity.get(e.id) else { continue };
-        for (skill_id, skill) in &row.by_skill {
+        for (skill_id, skill) in row.by_skill.iter().flatten() {
             assert!(
                 skill.outcomes.is_none(),
                 "entity {} skill {skill_id}: an enemy row picked up outcome columns from a pass \
@@ -254,7 +255,7 @@ fn every_annotated_skill_id_is_catalogued() {
 
     for e in &v1.entities {
         let Some(row) = damage.by_entity.get(e.id) else { continue };
-        for (skill_id, _) in row.by_skill.iter().chain(row.by_skill_taken.iter()) {
+        for (skill_id, _) in row.by_skill.iter().flatten().chain(row.by_skill_taken.iter().flatten()) {
             assert!(
                 v1.catalogs.skills.contains_key(skill_id),
                 "entity {} references skill {skill_id}, which has no catalog entry",
@@ -280,7 +281,7 @@ fn outcome_columns_are_absent_entirely_when_the_gate_is_off() {
     for e in &v1.entities {
         let Some(row) = damage.by_entity.get(e.id) else { continue };
         assert!(
-            row.by_skill.is_empty() && row.by_skill_taken.is_empty(),
+            row.by_skill.as_ref().map_or(true, |m| m.is_empty()) && row.by_skill_taken.as_ref().map_or(true, |m| m.is_empty()),
             "entity {}: skill rows exist with the gate off",
             e.id
         );

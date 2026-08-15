@@ -83,7 +83,7 @@ pub struct CastRow {
 
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct DamageModsBlock {
-    pub by_entity: ByEntity<BTreeMap<i32, DamageModRow>>,
+    pub by_entity: ByEntity<DamageModEntity>,
 }
 
 impl DamageModsBlock {
@@ -91,6 +91,43 @@ impl DamageModsBlock {
     pub fn is_empty(&self) -> bool {
         self.by_entity.is_empty()
     }
+}
+
+/// One entity's damage modifiers, in the two scopes GW2EI evaluates them
+/// at: over the whole fight, and restricted to one foe.
+///
+/// The two are not derivable from each other in either direction. `overall`
+/// counts every qualifying hit, including hits on agents that are not
+/// targets at all (enemy MINIONS, whose damage GW2EI attributes to the
+/// minion's own agent and never to its owner -- see
+/// `DamageModifierResults::per_target`'s doc comment), so summing
+/// `per_target` does not reconstruct it.
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
+pub struct DamageModEntity {
+    /// Whole-fight rows, keyed by the SIGNED modifier id -- see
+    /// [`DamageModRow`] for why one map holds both directions.
+    pub overall: BTreeMap<i32, DamageModRow>,
+    /// Keyed by the TARGET's entity id, then by signed modifier id --
+    /// joining directly to that entity's own row, the same convention
+    /// `DamageEntity::per_target` uses.
+    ///
+    /// Sparse in BOTH dimensions, and deliberately so: a target this entity
+    /// never landed a qualifying hit on has no key at all. EI's own shape
+    /// is a dense `[targetIndex][]` array, one slot per `targets[]` entry
+    /// whether or not anything happened there, which is what made this the
+    /// single largest structure in the legacy document (854,077 bytes
+    /// against the whole-fight arrays' 76,611 -- an 11x multiplier). The
+    /// density is a property of EI's positional encoding, not of the data;
+    /// the adapter re-inflates it when it renders
+    /// `damageModifiersTarget`.
+    ///
+    /// Empty unless the caller asked the engine for the per-target split
+    /// (`--modifiers` on the ei-json path). An empty map on a present block
+    /// therefore means "the split was not computed", not "no qualifying
+    /// hits" -- the whole-fight half of this block is what answers the
+    /// latter.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub per_target: BTreeMap<u32, BTreeMap<i32, DamageModRow>>,
 }
 
 /// One damage-modifier row. Mirrors the real `DamageModEntryOut`: `id` is
@@ -612,18 +649,19 @@ pub fn build_damage_mods(
     report: &crate::Report,
     index: &EntityIndex,
     cats: &mut CatalogBuilder,
+    per_target: Option<&axilog_core::analysis::damage_mods::DamageModifierResults>,
 ) -> DamageModsBlock {
     let mut by_entity = ByEntity::default();
     for p in &report.players {
         let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
         let Some(mods) = p.damage_mods.as_ref() else { continue };
-        let mut rows = BTreeMap::new();
+        let mut overall = BTreeMap::new();
         // `id` is signed and already distinguishes outgoing (positive) from
         // incoming (negative) -- see `DamageModEntryOut::id`'s doc comment
         // -- so both directions share one map without collision.
         for m in mods.outgoing.iter().chain(mods.incoming.iter()) {
             cats.reference_damage_mod(m.id);
-            rows.insert(
+            overall.insert(
                 m.id,
                 DamageModRow {
                     hit_count: m.hit_count,
@@ -633,7 +671,32 @@ pub fn build_damage_mods(
                 },
             );
         }
-        by_entity.insert(id, rows);
+        // The per-target split, re-keyed from the engine's
+        // `(player addr, ENEMY addr, mod id)` onto entity ids. A foe that
+        // does not resolve to an entity is skipped rather than bucketed:
+        // unlike a buff applier (Task 12), a damage-modifier row already
+        // exists in full inside `overall`, so there is nothing to lose --
+        // only a join to decline.
+        let mut targets: BTreeMap<u32, BTreeMap<i32, DamageModRow>> = BTreeMap::new();
+        if let Some(results) = per_target {
+            for (&(_, foe, mod_id), s) in results
+                .per_target
+                .range((p.agent_addr, u64::MIN, i32::MIN)..=(p.agent_addr, u64::MAX, i32::MAX))
+            {
+                let Some(foe_id) = index.by_enemy_id(foe) else { continue };
+                cats.reference_damage_mod(mod_id);
+                targets.entry(foe_id).or_default().insert(
+                    mod_id,
+                    DamageModRow {
+                        hit_count: s.hit_count,
+                        total_hit_count: s.total_hit_count,
+                        damage_gain: s.damage_gain,
+                        total_damage: s.total_damage,
+                    },
+                );
+            }
+        }
+        by_entity.insert(id, DamageModEntity { overall, per_target: targets });
     }
     DamageModsBlock { by_entity }
 }

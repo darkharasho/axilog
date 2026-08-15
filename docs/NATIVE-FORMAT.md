@@ -643,6 +643,9 @@ bisecting:
 - The replay split moved `blocks.replay.{poll_ms,bounds,by_entity}` down
   under `blocks.replay.tracks` and gave `blocks.replay.by_entity` a new
   meaning — nine keys removed at the old paths.
+- The damage-modifier split moved `blocks.damage_mods.by_entity.<id>.<mod>`
+  down under a `.overall` key, to make room for the per-target scope beside
+  it — five keys removed at the old paths.
 
 ## The ei-json layer is permanent
 

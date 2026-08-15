@@ -68,6 +68,14 @@ fn render_both(flags: Flags) -> (String, String) {
     let ei_replay_data = flags
         .replay
         .then(|| axilog_core::analysis::ei_replay::build_ei_replay_auto(&raw, &enc));
+    let damage_mods = flags.modifiers.then(|| {
+        axilog_core::analysis::damage_mods::evaluate_catalog_full(
+            &raw,
+            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+            &enc,
+            true,
+        )
+    });
     let report = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -77,7 +85,7 @@ fn render_both(flags: Flags) -> (String, String) {
         flags.skill_damage,
         flags.timeseries,
         false,
-        None,
+        damage_mods.as_ref(),
     );
     let minion_rollups =
         flags.skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
@@ -119,6 +127,7 @@ fn render_both(flags: Flags) -> (String, String) {
         &enc, &metrics, &report, "0.0.0-test", None,
         &axilog_schema::v1::Passes {
             activity: Some(&activity),
+            damage_mods: damage_mods.as_ref(),
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
             minions: minion_rollups.as_ref(),
@@ -128,23 +137,13 @@ fn render_both(flags: Flags) -> (String, String) {
             dist_outcomes: dist_outcomes.as_ref(),
             healing_detail: healing_detail.as_ref().filter(|_| flags.skill_damage),
             healing_series: healing_detail.as_ref().filter(|_| flags.timeseries),
-            ..Default::default()
         },
     );
-    let damage_mods = flags.modifiers.then(|| {
-        axilog_core::analysis::damage_mods::evaluate_catalog_full(
-            &raw,
-            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
-            &enc,
-            true,
-        )
-    });
 
     // Rebuilt per render: `EiInputs` is `Copy`, but each `write_ei_json`/
     // `to_ei_json` call builds its own single-use document.
     let inputs = || EiInputs {
         replay: ei_replay_data.as_ref(),
-        modifiers: damage_mods.as_ref(),
     };
 
     let mut streamed: Vec<u8> = Vec::new();

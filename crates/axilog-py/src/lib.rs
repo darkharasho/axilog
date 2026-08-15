@@ -178,7 +178,6 @@ type EiPipelineOutputs = (
     axilog_schema::Report,
     axilog_schema::v1::ReportV1,
     Option<axilog_core::analysis::ei_replay::EiReplay>,
-    Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
 );
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
@@ -330,7 +329,6 @@ fn build_report_and_ei_inputs_from_bytes(
         report,
         report_v1,
         ei_replay,
-        damage_mods,
     ))
 }
 
@@ -430,14 +428,13 @@ fn parse_file_ei(
     modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let (report, report_v1, ei_replay, damage_mods) =
+    let (report, report_v1, ei_replay) =
         build_report_and_ei_inputs_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     let ei = axilog_ei::to_ei_json(
         &report_v1,
         &report,
         &axilog_ei::EiInputs {
             replay: ei_replay.as_ref(),
-            modifiers: damage_mods.as_ref(),
         },
     );
     value_to_py(py, &ei)
