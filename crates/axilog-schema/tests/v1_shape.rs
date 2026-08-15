@@ -201,7 +201,13 @@ fn the_full_key_set_matches_the_committed_golden() {
         std::fs::write(golden_path, &actual).expect("write golden");
         return;
     }
-    let expected = std::fs::read_to_string(golden_path).unwrap_or_default();
+    // Compare line ENDINGS out of the picture. `.gitattributes` pins the
+    // golden to LF, but a checkout made before that rule landed (or with
+    // a global `core.autocrlf=true`) still has CRLF on disk, and this
+    // test would then fail on Windows over nothing but `\r`.
+    let expected = std::fs::read_to_string(golden_path)
+        .unwrap_or_default()
+        .replace("\r\n", "\n");
     assert_eq!(
         actual, expected,
         "the 1.0 key set changed. Adding keys is additive and fine -- re-run with \

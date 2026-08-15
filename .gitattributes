@@ -1,0 +1,5 @@
+# Golden files are compared byte-for-byte against LF-joined strings built
+# in-process, so they must check out with LF on every platform. Without
+# this, a Windows checkout rewrites them to CRLF and the comparison fails
+# over line endings alone (see crates/axilog-schema/tests/v1_shape.rs).
+*.golden.txt text eol=lf
