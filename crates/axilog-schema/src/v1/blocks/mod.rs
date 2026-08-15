@@ -4,9 +4,51 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 pub mod activity;
+pub mod conditions;
 pub mod damage;
 pub mod defense;
+pub mod minions;
 pub mod support;
+
+/// One `[[time_ms_from_log_start, stacks], ...]` step timeline, in the
+/// shared shape `blocks.boons` and `blocks.conditions` both use.
+///
+/// Times are relative to log start, and the list carries the leading
+/// `[0, 0]` pair and the no-two-pairs-at-one-timestamp property that
+/// `axilog_core::analysis::buffs::states::to_ei_states` establishes -- this
+/// is a carry of that pass's output, not a re-derivation of it.
+pub type StateTimeline = Vec<(u64, u32)>;
+
+/// A buff's stack timeline split by who applied it, keyed by SOURCE ENTITY
+/// ID.
+///
+/// Both source passes key this by source character NAME, which has two
+/// defects native does not carry: a name is identity data that spec #1
+/// confined to `entities[]`, and two players sharing a character name
+/// collide onto one key. An entity id has neither problem.
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
+pub struct PerSourceStates {
+    /// Keyed by the applying entity's id.
+    pub by_source: BTreeMap<u32, StateTimeline>,
+    /// Every applier that resolves to no `entities[]` row at all, merged
+    /// into one timeline.
+    ///
+    /// This bucket exists rather than a sentinel entity id, which would put
+    /// a non-existent entity in a map keyed by `entities[]`, and rather than
+    /// dropping the rows, which would silently lose real applications. It is
+    /// the honest native spelling of the `UNKNOWN` key GW2EI writes for an
+    /// actor it cannot name -- with the difference that native resolves
+    /// every applier it CAN, so this is a genuine remainder rather than
+    /// EI's much larger "not a squad player" bucket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unresolved: Option<StateTimeline>,
+}
+
+impl PerSourceStates {
+    pub fn is_empty(&self) -> bool {
+        self.by_source.is_empty() && self.unresolved.is_none()
+    }
+}
 
 /// The uniform entity-keyed map every block uses.
 ///

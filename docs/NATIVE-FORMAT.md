@@ -367,7 +367,7 @@ Real example (default flags — no `--replay`/`--rotation`/`--modifiers`):
   "boons": "present", "cc": "present", "conditions": "not_computed",
   "contribution": "present", "damage": "present", "damage_mods": "not_computed",
   "defenses": "present", "healing": "present", "hit_stats": "present",
-  "minions": "not_computed", "missiles": "not_computed", "replay": "not_computed",
+  "minions": "not_computed", "missiles": "not_computed", "replay": "present",
   "rotation": "not_computed", "series": "present", "support": "present"
 }
 ```
@@ -377,31 +377,57 @@ Real example (default flags — no `--replay`/`--rotation`/`--modifiers`):
 | `present` | Computed, and `blocks` carries it, with at least one row | Read `blocks.<name>` directly |
 | `not_computed` | The compute gate for it was off (e.g. `--replay` wasn't passed) | Do not treat this as "empty" — it is a missing flag, not a fact about the log. Re-parse with the flag on if you need it |
 | `empty` | Computed, and there was genuinely nothing to report | Safe to treat as "zero rows", not an error. The block **is still carried** in `blocks` when `empty` — only `not_computed` and `unsupported` omit it |
-| `unsupported` | This log's era or encounter kind cannot produce this block | Do not retry with a flag — the log itself cannot answer this. See `docs/EI-PARITY.md` for era-gated surfaces (pre/post `ResultEnumRework`, pre/post `AnimationAsStateChanges`) |
+| `unsupported` | This log cannot produce this block at all — its era, its encounter kind, or (today's only live case) the recorder that wrote it | Do not retry with a flag — the log itself cannot answer this. See `docs/EI-PARITY.md` for era-gated surfaces (pre/post `ResultEnumRework`, pre/post `AnimationAsStateChanges`) |
 
 `not_computed` vs `empty` is the whole point of this map: without it, a
 consumer parsing without `--rotation` and one parsing a log with zero casts
 would both see an absent `rotation` block, with no way to tell "you forgot
 a flag" from "this log really had nothing".
 
-**Which values today's binary can actually emit.** Three of the four are
-live: `present`, `not_computed`, and `empty`. The example above shows none
-`empty` only because this fixture happens to populate every block it
-computes; the everyday case that produces `empty` is a log recorded without
-the arcdps healing addon, where `healing` is computed, carried, and has
-zero rows. Each block decides what "nothing to report" means for its own
-shape — `series` and `missiles` carry squad-level aggregates that are
-computed independently of any per-entity row, so they are not `empty`
-merely for having an empty `by_entity`.
+**Which values today's binary can actually emit.** All four. The example
+above shows no `empty` only because this fixture happens to populate every
+block it computes; `empty` is what a block reports when it ran over a roster
+that produced no rows. Each block decides what "nothing to report" means for
+its own shape — `series` and `missiles` carry squad-level aggregates that are
+computed independently of any per-entity row, so they are not `empty` merely
+for having an empty `by_entity`.
 
-`unsupported` is **reserved vocabulary, not currently emitted by any code
-path**. Nothing this container computes is era- or encounter-kind-gated, so
-there is no honest way to produce it yet; it is named now so that spec #2's
-era-gated surfaces can fill the slot without renegotiating the vocabulary
-(adding a value later would be additive, but consumers would have to learn
-it late). Handle it anyway — a decoder should treat `unsupported` exactly as
-the table says rather than as an unknown value — but do not expect to see it
-from this version.
+`unsupported` has exactly one live producer today: **`healing` on a log
+recorded without the arcdps healing addon.** That extension is written by a
+separate plugin, and a log whose recorder did not run it carries no healing
+events at all — so no flag, and no pass this project could add later, can
+ever produce those numbers. Earlier versions reported that case as `empty`,
+which told you the squad healed for zero; it is the difference between an
+unanswered question and an answer of nothing, and it is the whole reason
+this map exists. Every other block is era- and encounter-kind-agnostic, so
+`unsupported` stays reserved vocabulary for the rest of them until the
+era-gated surfaces land.
+
+All four states are pinned as REACHABLE by
+`crates/axilog-schema/tests/v1_coverage_states.rs`, deliberately by
+reachability rather than by pinning particular blocks to particular values:
+a block moving between `present` and `empty` as the analysis improves is
+not a regression, but a state that no longer occurs anywhere is — an
+unreachable state is one a consumer cannot rely on.
+
+### Getting a complete document: `--all`
+
+Rather than enumerating the gates, pass `--all` (CLI) or `everything: true`
+/ `everything=True` (Node/Python SDKs). It is defined as **"every analysis
+pass this version knows about"**, not as a fixed list, so a consumer that
+sets it keeps getting complete documents as later versions add passes.
+
+That definition is the point. The first axibridge cutover audit found 30
+blank fields caused by exactly the opposite: a consumer's hand-maintained
+option list drifting from the parser's. With `--all`, the only blocks left
+reporting anything other than `present`/`empty` are the ones the LOG cannot
+answer — which is the `unsupported` case above, and no flag can change it.
+
+It is a UNION with the individual flags, never an override, so `--all` and
+`--all --replay` mean the same thing. The cost is the sum of each gate's own
+cost; `--replay` and `--modifiers` dominate. See `docs/BENCHMARKS.md` for
+measured timings, peak memory, and per-block payload on the committed
+fixture.
 
 ## The series envelope
 
@@ -477,26 +503,136 @@ Both decoders were executed against `/tmp/v1.json` (default flags) and
 real RLE row) as part of writing this document; both round-tripped `len`
 correctly and matched the raw/RLE encoding the binary actually chose.
 
-## Combat replay — NOT series-encoded
+## Buff stack timelines — `boons`' second gate, and `conditions`
 
-`blocks.replay` (present only with `--replay`) is the one exception to the
-series envelope. Each entity's track is raw `(t_ms, x, y)` triples:
+Two blocks carry per-buff **stack timelines**: when a buff was up, and at
+what stack count. Both ride `--timeseries` (`timeseries: true` in the SDKs).
+
+`blocks.boons` rows gain two fields under that flag — `states`, the fused
+timeline, and `per_source`, the same split by applier. This makes `boons`
+the second two-gate block after `replay`: its uptime/generation numbers are
+computed on every parse, its timelines are not, so **`coverage.boons` is
+about the uptime half only** and says nothing about whether timelines are
+present. Check for the fields.
+
+`blocks.conditions` is the enemy-side counterpart, and is wholly gated —
+`coverage.conditions` does settle the question there. Its rows carry
+`per_source` and no fused `states`: summing appliers would not reconstruct
+one, because two players holding the same duration condition overlap rather
+than stack.
+
+Real excerpt (`--timeseries`), showing only the fields this section adds —
+entity `22`'s Might (`740`), and a condition on enemy entity `42`:
 
 ```json
 {
-  "poll_ms": 300,
-  "bounds": { "min_x": -23880.6, "min_y": -31541.4, "max_x": -197.0, "max_y": 15974.8 },
-  "by_entity": {
-    "0": {
-      "samples": [[300, -11097.6, -23619.4], [600, -11156.3, -23711.1], "..."],
-      "down_intervals": [],
-      "dead_intervals": []
+  "boons": {
+    "by_entity": {
+      "22": {
+        "740": {
+          "states": [[0, 0], [14, 6], [15, 12], [2211, 16], "..."],
+          "per_source": {
+            "by_source": { "18": [[0, 0], [14, 1], [15, 3], [6385, 0]] }
+          }
+        }
+      }
+    }
+  },
+  "conditions": {
+    "by_entity": {
+      "42": {
+        "19426": { "per_source": { "by_source": { "12": [[0, 0], [24654, 1], [26654, 0]] } } }
+      }
     }
   }
 }
 ```
 
-This is deliberate, not an oversight: `SeriesOut` assumes a dense array
+The two halves read together: entity `22` held 16 stacks of Might at
+`2211 ms` in total, of which entity `18` was holding 3. The fused `states`
+counts stacks from every applier; each `by_source` entry counts only that
+one applier's.
+
+A timeline is `[[time_ms_from_log_start, stacks], ...]`, always opens with a
+`[0, 0]` pair, and never carries two pairs at one timestamp. Duration buffs
+report `0`/`1`; only intensity buffs (Might, Stability, most damaging
+conditions) exceed 1.
+
+Three things worth knowing:
+
+- **`per_source.by_source` is keyed by the APPLIER's entity id**, joining
+  back into `entities[]` like every other key here. The upstream analysis
+  keys these by the applier's character *name*; native does not, both
+  because a name is identity data this format confines to `entities[]` and
+  because two players sharing a character name collide onto one key.
+- **`per_source.unresolved`** is an optional sibling: one merged timeline
+  for appliers that resolve to no `entities[]` row at all. It exists so
+  those applications are neither dropped nor given a fabricated entity id.
+  It is normally absent, and always absent on `conditions`, whose appliers
+  are narrowed to the squad.
+- **`states` may be `[]`** — meaning the timeline pass ran and this entity
+  never held the buff. A real timeline always has at least its leading
+  `[0, 0]`, so `[]` is unambiguous, and `states` being present at all is
+  the honest signal that `--timeseries` was on.
+
+## Combat replay — two halves, two gates
+
+`blocks.replay` is the other block whose halves are gated differently. Along
+with `boons` above, it is where `coverage` does not settle the whole
+question.
+
+`by_entity` — down/dead intervals plus each squad player's own first/last-
+aware bounds — is **always present**. Computing it is a min/max scan plus a
+status-event walk with no position decode, so every parse pays for it
+whether or not you asked for a replay.
+
+`tracks` — the downsampled position samples, and the `poll_ms`/`bounds`
+metadata that only describes them — rides `--replay`, because that is the
+expensive half.
+
+```json
+{
+  "by_entity": {
+    "0": {
+      "start_ms": 3,
+      "end_ms": 49266,
+      "active_ms": 49263,
+      "down": [[12642, 15512]],
+      "dead": []
+    }
+  },
+  "tracks": {
+    "poll_ms": 300,
+    "bounds": { "min_x": -23880.6, "min_y": -31541.4, "max_x": -197.0, "max_y": 15974.8 },
+    "by_entity": {
+      "0": {
+        "samples": [[300, -11097.6, -23619.4], [600, -11156.3, -23711.1], "..."],
+        "down_intervals": [[12642, 15512]],
+        "dead_intervals": []
+      }
+    }
+  }
+}
+```
+
+Three things a consumer needs to know about that shape:
+
+- **`coverage.replay == "present"` does not mean positions are available.**
+  It answers the intervals question, which this block can always answer.
+  Check for `tracks` yourself.
+- **`active_ms` subtracts dead time but NOT down time.** That is GW2EI's own
+  definition, verified against a real export; it is carried as a field
+  precisely so nobody re-derives it under the more intuitive reading and
+  quietly under-reports every player who went down.
+- **`by_entity` covers the squad only; `tracks.by_entity` also covers enemy
+  players.** That is why a track keeps its own copy of the intervals: the
+  always-on pass never walks the enemy roster, so dropping them from the
+  track would take every enemy player's down/dead history with it. For a
+  squad entity the two copies come from the same computation and cannot
+  disagree.
+
+The position track itself is the one exception to the series envelope —
+raw `(t_ms, x, y)` triples rather than a `SeriesOut`. This is deliberate, not an oversight: `SeriesOut` assumes a dense array
 starting at `t=0` on a fixed step, but a replay track starts at that
 agent's own first-aware time rounded up to the polling grid — usually not
 zero. Encoding it through `SeriesOut` would silently drop that start offset
@@ -518,6 +654,38 @@ Enforced by test (`crates/axilog-schema/tests/v1_shape.rs`,
 - Absent optional fields are omitted entirely, never serialized as `null`.
   A consumer should treat "key absent" and "key null" as the same signal,
   but should not expect to see the latter.
+
+**The rules above are not yet in force.** 1.0 is explicitly still malleable:
+until it is declared frozen here, a shape that turns out wrong gets fixed
+rather than carried, and breaking changes land without a major bump. The
+licence is narrow — it exists because 1.0 has no external consumer reading
+it yet (the ei-json adapter is its only reader, and it is in-tree), and it
+ends the moment one does.
+
+Breaking changes made under it are recorded here rather than passed over,
+because the key-set golden diff shows them as bare removals to anyone
+bisecting:
+
+- The replay split moved `blocks.replay.{poll_ms,bounds,by_entity}` down
+  under `blocks.replay.tracks` and gave `blocks.replay.by_entity` a new
+  meaning — nine keys removed at the old paths.
+- The damage-modifier split moved `blocks.damage_mods.by_entity.<id>.<mod>`
+  down under a `.overall` key, to make room for the per-target scope beside
+  it — five keys removed at the old paths.
+- `blocks.rotation.by_entity.<id>.casts` became optional, as the format's
+  `--rotation` gate record, and `cast_count` went with it — one key removed.
+  The count was exactly `casts.len()`, so keeping it would have meant two
+  fields encoding one gate, free to disagree.
+
+## The ei-json layer is permanent
+
+The side-channel absorption work moves data *into* this format and makes
+the Elite Insights-compatible output read from it — it does **not** work
+toward deleting that output. `to_ei_json` stays, indefinitely, as the
+compatibility path for downstream consumers that have not moved to the
+native format and for those that never will. The goal is for it to be
+thin: a translation over this document, with no analysis of its own and no
+private data it alone can see. "Thin and lean," not "eventually gone."
 
 ## Joining across reports
 

@@ -21,7 +21,6 @@
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
-use axilog_ei::EiInputs;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -72,11 +71,10 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let activity = build_activity_intervals(&raw, &enc);
     let report =
         axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, true, false, None);
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
     let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &axilog_schema::v1::Passes { boon_states: Some(&boon_states), activity: Some(&activity), ..Default::default() });
     let ours = axilog_ei::to_ei_json(
-        &report_v1, &report,
-        &EiInputs { activity: &activity, boon_states: Some(&boon_states), ..Default::default() },
+        &report_v1, None,
     );
     Some(Calibration { ours, golden, raw, enc })
 }

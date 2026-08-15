@@ -40,7 +40,6 @@
 
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::{anon_account, decode_raw};
-use axilog_ei::EiInputs;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -82,19 +81,21 @@ fn rendered_and_golden() -> (Value, Vec<Value>, HashMap<String, usize>) {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
-    let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
     let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
     let health_percents = axilog_core::analysis::health::ei_health_percents(&raw, &enc);
-    let ei = axilog_ei::to_ei_json(
-        &report_v1, &report,
-        &EiInputs {
-            activity: &activity,
-            boon_states: Some(&boon_states),
-            dist_outcomes: Some(&dist_outcomes),
+    let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-test", None,
+        &axilog_schema::v1::Passes { boon_states: Some(&boon_states), activity: Some(&activity),
             health_percents: Some(&health_percents),
+            // Task 9: the outcome columns enter through the native damage
+            // block now, not through `EiInputs`.
+            dist_outcomes: Some(&dist_outcomes),
             ..Default::default()
         },
+    );
+    let ei = axilog_ei::to_ei_json(
+        &report_v1, None,
     );
 
     // `fixtures/wvw-small.ei.json`'s players are index-order with the

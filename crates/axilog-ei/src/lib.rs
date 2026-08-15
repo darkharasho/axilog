@@ -1,18 +1,10 @@
 use std::collections::BTreeMap;
 use serde_json::{json, Value};
-use axilog_core::analysis::buffs::{BoonStates, BOON_IDS};
-use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
-use axilog_core::analysis::dist_outcomes::{DistOutcomes, SkillOutcomes};
 use axilog_core::analysis::ei_replay::EiReplay;
-use axilog_core::analysis::replay::{ActivityIntervals, Interval};
-use axilog_core::analysis::healing_detail::{HealDistEntry, HealingDetail};
-use axilog_core::analysis::minions::MinionRollups;
-use axilog_core::analysis::skill_damage::SkillEntry;
-use axilog_core::analysis::target_conditions::TargetConditionStates;
-use axilog_core::analysis::timeseries::EnemySeries;
 use axilog_core::icons::prof_icon_url;
+use axilog_schema::v1::blocks::activity::DamageModRow;
+use axilog_schema::v1::blocks::support::{BoonRow, GenerationRow};
 use axilog_schema::v1::ReportV1;
-use axilog_schema::Report;
 
 mod join;
 
@@ -57,8 +49,8 @@ fn detected_team_ids(teams: &[axilog_schema::TeamOut]) -> BTreeMap<&str, u64> {
 
 /// Render one interval as EI's own `[start_ms, end_ms]` two-element array
 /// shape (`combatReplayData.down`/`.dead`).
-fn interval_json(iv: &Interval) -> Value {
-    json!([iv.start_ms, iv.end_ms])
+fn interval_json(&(start_ms, end_ms): &(u64, u64)) -> Value {
+    json!([start_ms, end_ms])
 }
 
 /// One GW2EI-serialized floating point number (M15, Task 3).
@@ -153,37 +145,6 @@ fn ei_intervals_json(intervals: &[[i64; 2]]) -> Value {
     Value::Array(intervals.iter().map(|iv| json!([iv[0], iv[1]])).collect())
 }
 
-/// One skill entry's EI-shaped JSON row (M12, Task 3) -- mirrors real EI's
-/// `totalDamageDist`/`targetDamageDist`/`totalDamageTaken` entry shape
-/// (verified against axibridge's `test-fixtures/boon/20260117-181030.json`,
-/// `players[0].totalDamageDist[0][0]`), emitting ONLY the fields this
-/// project actually computes (`axilog_schema::SkillEntryOut`'s own fields):
-/// `id`, `totalDamage`, `min`, `max`, `hits`, `crit`, `flank`. Real EI's
-/// sibling fields on the same entry (`totalBreakbarDamage`, `connectedHits`,
-/// `glance`, `againstMoving`, `missed`, `invulned`, `interrupted`, `evaded`,
-/// `blocked`, `shieldDamage`, `critDamage`, `downContribution`,
-/// `indirectDamage`) aren't computed anywhere in this project's damage
-/// predicate (see `axilog_core::analysis::skill_damage`'s module doc: only
-/// CONTRIBUTING, `dmg > 0` events are tracked at all, with no missed/
-/// blocked/evaded/etc. outcome tracking anywhere else in this schema
-/// either) -- omitted rather than faked, same "don't fake absent data"
-/// convention `statsTargets`/`support`/`extHealingStats` above already
-/// follow. `crit`/`flank` map directly to `SkillEntryOut::crit_hits`/
-/// `flank_hits` (hit COUNTS, matching real EI's own `crit`/`flank`
-/// semantics exactly -- both are cleanly available, unlike the omitted
-/// fields above, so they're included here even though the Task 3 brief's
-/// minimal-field list only named `id`/`totalDamage`/`min`/`max`/`hits`).
-fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
-    json!({
-        "id": e.skill_id,
-        "totalDamage": e.total,
-        "min": e.min,
-        "max": e.max,
-        "hits": e.hits,
-        "crit": e.crit_hits,
-        "flank": e.flank_hits,
-    })
-}
 
 /// One player-side distribution's rows, with MEIGAP2 row 1's outcome
 /// columns merged in -- GW2EI's full `JsonDamageDist` shape for the fields
@@ -191,22 +152,24 @@ fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
 ///
 /// ## The union
 ///
-/// The two inputs are keyed the same way (skill id) but do NOT have the
-/// same row set. `entries` comes from
-/// `axilog_core::analysis::skill_damage`, which counts CONTRIBUTING rows
-/// only, so a skill whose every attempt was blocked has no entry there at
-/// all; `outcomes` (`axilog_core::analysis::dist_outcomes`) counts exactly
-/// those rows. GW2EI emits both kinds (its dist is keyed off the whole
-/// `HealthDamageEvent` list), and the blocked-only rows are precisely what
-/// axibridge's damage-mitigation table exists to read -- so this emits the
-/// UNION, with the missing side's fields defaulted to zero.
+/// Side-channel absorption Task 9: the rows arrive already unioned, off
+/// `blocks.damage.by_entity[player].by_skill`/`by_skill_taken`. Two passes
+/// feed that map and they do NOT agree on which skills exist --
+/// `skill_damage` counts CONTRIBUTING rows only, so a skill whose every
+/// attempt was blocked has no entry there, while `dist_outcomes` counts
+/// exactly those rows and GW2EI emits them. Merging the two used to happen
+/// right here, which meant the native container carried only half the row
+/// set and this adapter was the only place the whole one existed; it now
+/// happens in `v1::blocks::damage::merge_outcomes`, so both readers see
+/// the same rows.
 ///
 /// ## `hits`
 ///
 /// When outcome data is present, `hits` is GW2EI's own attempt count
 /// (`dmgEvt.IsNotADamageEvent ? 0 : 1`, `JsonDamageDistBuilder.cs:52`),
-/// which is what the key means in every real EI export. Without it the
-/// long-standing M12 fallback stands (the CONTRIBUTING count -- see
+/// which is what the key means in every real EI export -- carried on
+/// `SkillOutcomeCols::attempt_hits`. Without it the long-standing M12
+/// fallback stands (`SkillRow::hits`, the CONTRIBUTING count -- see
 /// [`skill_entry_ei_json`]), so a caller that asks for the distributions
 /// but not their outcome columns still gets the pre-MEIGAP2 numbers rather
 /// than a hole. Every first-party caller passes both together.
@@ -224,36 +187,37 @@ fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
 /// pass `None`, exactly as GW2EI does (`JsonActorBuilder.cs:135` hands the
 /// damage-taken builder a null dictionary).
 fn dist_rows_ei_json(
-    entries: &[axilog_schema::SkillEntryOut],
-    outcomes: Option<&[SkillOutcomes]>,
+    entries: &BTreeMap<u32, axilog_schema::v1::blocks::damage::SkillRow>,
     down_contribution: Option<&BTreeMap<u32, u64>>,
 ) -> Value {
-    let by_outcome: BTreeMap<u32, &SkillOutcomes> =
-        outcomes.into_iter().flatten().map(|o| (o.skill_id, o)).collect();
-    let by_entry: BTreeMap<u32, &axilog_schema::SkillEntryOut> =
-        entries.iter().map(|e| (e.skill_id, e)).collect();
-    let ids: std::collections::BTreeSet<u32> =
-        by_entry.keys().chain(by_outcome.keys()).copied().collect();
-    let rows: Vec<Value> = ids
-        .into_iter()
-        .map(|id| {
-            let e = by_entry.get(&id);
-            let o = by_outcome.get(&id);
+    let rows: Vec<Value> = entries
+        .iter()
+        .map(|(&id, r)| {
             let mut row = serde_json::Map::new();
             row.insert("id".into(), Value::from(id));
-            row.insert("totalDamage".into(), Value::from(e.map(|e| e.total).unwrap_or(0)));
-            row.insert("min".into(), Value::from(e.map(|e| e.min).unwrap_or(0)));
-            row.insert("max".into(), Value::from(e.map(|e| e.max).unwrap_or(0)));
-            let hits = match (o, e) {
-                (Some(o), _) => o.hits,
-                (None, Some(e)) => e.hits,
-                (None, None) => 0,
-            };
-            row.insert("hits".into(), Value::from(hits));
-            row.insert("crit".into(), Value::from(e.map(|e| e.crit_hits).unwrap_or(0)));
-            row.insert("flank".into(), Value::from(e.map(|e| e.flank_hits).unwrap_or(0)));
-            if let Some(o) = o {
-                row.insert("connectedHits".into(), Value::from(o.connected_hits));
+            row.insert("totalDamage".into(), Value::from(r.total));
+            row.insert("min".into(), Value::from(r.min));
+            row.insert("max".into(), Value::from(r.max));
+            // `attempt_hits` when the outcome pass ran, else the
+            // contributing count -- see this fn's `hits` section. A player
+            // row always has `SkillRow::hits`; the `unwrap_or(0)` is for
+            // the shape's sake, not a case this reaches.
+            row.insert(
+                "hits".into(),
+                Value::from(
+                    r.outcomes.as_ref().map_or_else(|| r.hits.unwrap_or(0), |o| o.attempt_hits),
+                ),
+            );
+            row.insert("crit".into(), Value::from(r.crit_hits));
+            row.insert("flank".into(), Value::from(r.flank_hits));
+            if let Some(o) = r.outcomes.as_ref() {
+                // `connected_hits` rides the OUTCOMES presence check, not
+                // its own: it lives on `SkillRow` (shared with the enemy
+                // pass, Task 7) but on a player row it is filled by the
+                // very same pass as the eight below, so splitting the two
+                // checks would let a future refactor emit seven keys and
+                // silently drop the eighth.
+                row.insert("connectedHits".into(), Value::from(r.connected_hits.unwrap_or(0)));
                 row.insert("glance".into(), Value::from(o.glance));
                 row.insert("missed".into(), Value::from(o.missed));
                 row.insert("evaded".into(), Value::from(o.evaded));
@@ -270,28 +234,6 @@ fn dist_rows_ei_json(
         .collect();
     Value::Array(rows)
 }
-
-/// [`skill_entry_ei_json`]'s enemy-side twin: one
-/// `targets[].totalDamageDist[0][]` entry (MEIGAP Task 2c).
-///
-/// Same fields, ONE addition: `connectedHits`. On the player side that key
-/// is deliberately omitted (see [`skill_entry_ei_json`]'s doc comment --
-/// this project tracks no missed/blocked/evaded outcomes, so it cannot
-/// distinguish EI's `hits` from its `connectedHits`). On the ENEMY side the
-/// distinction is forced, because axibridge's damage-mitigation math
-/// divides by `connectedHits` specifically
-/// (`computePlayerAggregation.ts:277-286`, `avg = totalDamage /
-/// connectedHits`) and would otherwise get a `0` denominator and drop the
-/// skill entirely (`if (!enemy.hasSkill || enemy.hits <= 0) return;`).
-///
-/// So the CONTRIBUTING-hit count this project tracks is emitted under the
-/// key whose EI meaning it actually reproduces -- `connectedHits` is
-/// `dmgEvt.HasHit ? 1 : 0` (`JsonDamageDistBuilder.cs:72`), and a
-/// blocked/evaded/missed/invulned row (the `HasHit == false` cases) carries
-/// `dmg == 0` and is skipped by this project's damage predicate. `hits`
-/// (EI's attempt count) stays absent rather than being filled with a number
-/// that means something else; the exact residual is stated in
-/// `skill_damage::build_enemy_dist`'s doc comment.
 /// `extHealingStats.totalHealingDist[0]` / `extBarrierStats
 /// .totalBarrierDist[0]` (MEIGAP Task 3a) -- GW2EI's `EXTJsonHealingDist`
 /// / `EXTJsonBarrierDist` shape, field-for-field.
@@ -300,12 +242,16 @@ fn dist_rows_ei_json(
 /// follows it (`"indirectHealing"` / `"indirectBarrier"`).
 /// `with_downed` adds `totalDownedHealing`, which exists only on the
 /// healing side (`EXTJsonBarrierDist` has no downed field at all).
-fn heal_dist_json(rows: &[HealDistEntry], total_key: &str, with_downed: bool) -> Value {
+fn heal_dist_json(
+    rows: &BTreeMap<u32, axilog_schema::v1::blocks::support::HealSkillRow>,
+    total_key: &str,
+    with_downed: bool,
+) -> Value {
     Value::Array(
         rows.iter()
-            .map(|r| {
+            .map(|(&id, r)| {
                 let mut o = serde_json::Map::new();
-                o.insert("id".into(), Value::from(r.skill_id));
+                o.insert("id".into(), Value::from(id));
                 o.insert(total_key.into(), Value::from(r.total));
                 if with_downed {
                     o.insert("totalDownedHealing".into(), Value::from(r.total_downed));
@@ -321,18 +267,6 @@ fn heal_dist_json(rows: &[HealDistEntry], total_key: &str, with_downed: bool) ->
             })
             .collect(),
     )
-}
-
-fn enemy_skill_entry_ei_json(e: &SkillEntry) -> Value {
-    json!({
-        "id": e.skill_id,
-        "totalDamage": e.total,
-        "min": e.min,
-        "max": e.max,
-        "connectedHits": e.hits,
-        "crit": e.crit_hits,
-        "flank": e.flank_hits,
-    })
 }
 
 /// `damageModifiers[].damageModifiers[].damageGain` (M16, Task 3).
@@ -473,6 +407,68 @@ fn ei_states_json(states: &[(u64, u32)]) -> Value {
     Value::Array(states.iter().map(|&(t, v)| json!([t, v])).collect())
 }
 
+/// GW2EI's placeholder for an actor it cannot name -- what its reference
+/// export shows for every applier that is not a recorded squad player (e.g.
+/// `"statesPerSource": {"UNKNOWN": [...]}`).
+///
+/// This const lived in `axilog_core` until Task 12. It belongs here: it is
+/// an EI PRESENTATION choice, not a fact about the log, and the analysis
+/// pass that used to apply it now reports the applier's real address and
+/// lets each consumer decide (the native document keys by entity id and
+/// never needs a placeholder at all).
+const UNKNOWN_SOURCE: &str = "UNKNOWN";
+
+/// Project a native `PerSourceStates` back onto EI's name-keyed
+/// `statesPerSource` object.
+///
+/// This is the lossy direction, and deliberately so. Native keys appliers by
+/// entity id, which EI's shape cannot express, so three separate collapses
+/// happen here -- all of them reinstating a conflation EI already had:
+///
+/// 1. An applier who is not in EI's `players[]` becomes `UNKNOWN`. The
+///    membership test is the EI player roster itself, so this reproduces the
+///    old `enc.players` name lookup exactly rather than approximating it
+///    with "is this entity a player" (an ENEMY player would pass that test
+///    and wrongly get named).
+/// 2. The `unresolved` bucket joins them under the same key.
+/// 3. Two squad players sharing a character name collapse onto one key.
+///
+/// Every collapse merges rather than overwrites: dropping the loser would
+/// under-report a boon that really was applied.
+fn ei_states_per_source(
+    join: &crate::join::EiJoin<'_>,
+    squad_ids: &std::collections::BTreeSet<u32>,
+    per_source: Option<&axilog_schema::v1::blocks::PerSourceStates>,
+) -> Value {
+    use axilog_core::analysis::buffs::states::merge_step_timelines;
+    let Some(per_source) = per_source else { return json!({}) };
+    let mut merged: BTreeMap<String, Vec<(u64, u32)>> = BTreeMap::new();
+    let mut fold = |name: String, timeline: &Vec<(u64, u32)>| match merged.entry(name) {
+        std::collections::btree_map::Entry::Vacant(v) => {
+            v.insert(timeline.clone());
+        }
+        std::collections::btree_map::Entry::Occupied(mut o) => {
+            let m = merge_step_timelines(o.get(), timeline);
+            o.insert(m);
+        }
+    };
+    for (&source_id, timeline) in &per_source.by_source {
+        let name = if squad_ids.contains(&source_id) {
+            join.display_name(source_id).to_string()
+        } else {
+            UNKNOWN_SOURCE.to_string()
+        };
+        fold(name, timeline);
+    }
+    if let Some(timeline) = &per_source.unresolved {
+        fold(UNKNOWN_SOURCE.to_string(), timeline);
+    }
+    json!(merged
+        .iter()
+        .map(|(name, timeline)| (name.as_str(), ei_states_json(timeline)))
+        .collect::<BTreeMap<_, _>>())
+}
+
 /// One of the three boon-generation attribution arrays
 /// (`selfBuffs`/`groupBuffs`/`squadBuffs`), `pick` selecting which scope of
 /// [`axilog_schema::GenerationOut`] to read -- see the call sites' doc
@@ -507,20 +503,20 @@ fn ei_states_json(states: &[(u64, u32)]) -> Value {
 /// is still missed here -- unavoidable while those channels are unmodelled,
 /// and unchanged by this fix.
 fn buff_generation_json(
-    boons: &[axilog_schema::BoonOut],
-    pick: fn(&axilog_schema::GenerationOut) -> f64,
-    pick_wasted: fn(&axilog_schema::GenerationOut) -> f64,
+    boons: &[(u32, &BoonRow)],
+    pick: fn(&GenerationRow) -> f64,
+    pick_wasted: fn(&GenerationRow) -> f64,
     keep_zero: bool,
 ) -> Value {
     Value::Array(
         boons
             .iter()
-            .filter(|b| {
+            .filter(|(_, b)| {
                 keep_zero || pick(&b.generation) > 0.0 || pick_wasted(&b.generation) > 0.0
             })
-            .map(|b| {
+            .map(|(id, b)| {
                 json!({
-                    "id": b.id,
+                    "id": id,
                     "buffData": [ {
                         "generation": ei_buff_pct(pick(&b.generation)),
                         // MSMALL item 2: `BuffStatistics.Wasted`, the same
@@ -544,7 +540,7 @@ fn buff_generation_json(
 /// "Length == # of phases"). This project does not model phases, so it is
 /// always a single element -- the same "one array standing in for phase 0
 /// == the whole fight" convention `statsAll`/`totalDamageDist` already use.
-fn ei_damage_mod_rows(rows: &[(i32, &DamageModifierStat)]) -> Vec<Value> {
+fn ei_damage_mod_rows(rows: &[(i32, &DamageModRow)]) -> Vec<Value> {
     rows.iter()
         .map(|(id, s)| {
             json!({
@@ -563,251 +559,63 @@ fn ei_damage_mod_rows(rows: &[(i32, &DamageModifierStat)]) -> Vec<Value> {
 /// Splits one actor's `(id, stat)` rows into EI's outgoing/incoming pair.
 /// The sign of the id IS the direction (`DamageModifier.cs:26`), so no
 /// definition lookup is needed.
-fn ei_damage_mod_split(rows: Vec<(i32, &DamageModifierStat)>) -> (Vec<Value>, Vec<Value>) {
+fn ei_damage_mod_split(rows: Vec<(i32, &DamageModRow)>) -> (Vec<Value>, Vec<Value>) {
     let (incoming, outgoing): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(id, _)| *id < 0);
     (ei_damage_mod_rows(&outgoing), ei_damage_mod_rows(&incoming))
 }
 
-/// The side-channel inputs [`to_ei_json`] needs on top of the native
-/// [`Report`] (M16 Task 1).
+/// The one input [`to_ei_json`] still takes beside the native document: the
+/// GW2EI-shape fixed-rate combat replay from
+/// `axilog_core::analysis::ei_replay::build_ei_replay_auto`, or `None`.
 ///
-/// Everything here is EI-SHAPE data that the native schema deliberately does
-/// not carry (see each field), computed by the caller and handed in
-/// alongside the report. It is an options struct rather than a positional
-/// argument list because this surface only grows: M11 added `activity`, M15
-/// added `replay`, and further EI-only inputs are expected. Adding a field
-/// is then a source-compatible change for in-workspace callers that build it
-/// with `..Default::default()`, and a one-line change for the rest.
+/// This is the OPT-IN gate for `combatReplayData.{positions, orientations,
+/// dc, iconURL}` and the top-level `combatReplayMetaData`: every caller
+/// (CLI/Node/Python) computes it exactly when `--replay`/SDK `replay: true`
+/// was requested -- the same request that fills `blocks.replay.tracks` --
+/// so the presence of this input is the "was replay requested" signal,
+/// mirroring how every other gate in this adapter keys off presence rather
+/// than a flag.
 ///
-/// [`Default`] is the "nothing available" case (`activity: &[]`,
-/// `replay: None`), which every field's own default behaviour treats as a
-/// harmless zero/empty, never a panic — so
-/// `to_ei_json(&report_v1, &report, &EiInputs::default())` is always valid.
+/// # Why this one input is not absorbed
 ///
-/// It is `Copy` and holds only borrows, so passing it costs nothing and it
-/// never takes ownership of the caller's buffers.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct EiInputs<'a> {
-    /// `activity` (M11 Task 3): per-player down/dead intervals + first/last-
-    /// aware bounds from
-    /// `axilog_core::analysis::replay::build_activity_intervals`
-    /// — ALWAYS computed by every caller (CLI/Node/Python), unlike
-    /// `--replay`'s position track, since intervals are cheap (see that
-    /// function's module doc). Positionally joined to `report.players` (both
-    /// built by iterating `enc.players` in the same order — see
-    /// `build_activity_intervals`'s doc comment); leave it empty if
-    /// unavailable (every field this powers is then a harmless zero/empty
-    /// default, not a panic).
-    pub activity: &'a [ActivityIntervals],
-    /// `replay` (M15 Task 3): the GW2EI-shape fixed-rate combat replay from
-    /// `axilog_core::analysis::ei_replay::build_ei_replay_auto`, or `None`.
-    /// This is the OPT-IN gate for `combatReplayData.{positions,
-    /// orientations, dc, iconURL}` and the top-level
-    /// `combatReplayMetaData`: every caller (CLI/Node/Python) computes it
-    /// exactly when `--replay`/SDK `replay: true` was requested — i.e. the
-    /// same request that populates `axilog_schema::Report::replay` — so the
-    /// presence of this input is the "was replay requested" signal,
-    /// mirroring how the `skill_damage`/`timeseries`/`rotation` blocks key
-    /// off `PlayerOut`'s own `Option` presence rather than a separate flag.
-    ///
-    /// It arrives as a side-channel input rather than a `Report` field for
-    /// the same reason `activity` does: it is EI-shape data (map PIXELS on
-    /// GW2EI's own 300ms grid, GW2EI's sentinel-bracketed `dc`), which the
-    /// native schema deliberately does not carry — `Report::replay` is this
-    /// project's own narrower world-unit shape, computed by a different
-    /// engine (`axilog_core::analysis::replay`), and widening it would
-    /// change the native `--replay` JSON.
-    ///
-    /// Positionally joined to `report.players` (GW2EI-shape tracks are built
-    /// by iterating `enc.players` then the `is_player` entries of
-    /// `enc.enemies`, exactly the orders `report.players`/
-    /// `report.ei_targets` use), and ignored entirely if that length
-    /// invariant does not hold.
-    ///
-    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`: 41 players, 32
-    /// enemy-player targets, 49s):** `axilog parse --format ei-json` grows
-    /// 544,372 -> 1,548,945 bytes pretty-printed (+184%), 216,173 -> 524,056
-    /// bytes compact (+142%), for 6,894 player + 4,662 enemy position
-    /// samples (and as many orientations). It scales with `players x
-    /// fight_seconds / 0.3`, so a 6-minute 50-player fight is an order of
-    /// magnitude bigger — which is why it stays opt-in.
-    pub replay: Option<&'a EiReplay>,
-    /// `modifiers` (M16 Task 3): the damage-modifier engine's output from
-    /// `axilog_core::analysis::damage_mods::evaluate_catalog_full`, or
-    /// `None`. This is the OPT-IN gate for the four per-player arrays
-    /// (`damageModifiers`, `incomingDamageModifiers`,
-    /// `damageModifiersTarget`, `incomingDamageModifiersTarget`) and the
-    /// top-level `damageModMap`; every caller computes it exactly when
-    /// `--modifiers`/SDK `modifiers: true` was requested, i.e. the same
-    /// request that populates `axilog_schema::PlayerOut::damage_mods`.
-    ///
-    /// It arrives here as the RAW engine output rather than being read back
-    /// off `PlayerOut::damage_mods` because the native block is deliberately
-    /// whole-fight only: `DamageModifierResults::per_target` has no native
-    /// counterpart (measured on the committed fixture it is 854,077 bytes
-    /// against the whole-fight arrays' 76,611 -- an 11x multiplier, and
-    /// the same ratio the reference export shows: 1.34 MB vs 108 KB), and
-    /// EI needs it in a positional `[targetIndex]` shape keyed to
-    /// `targets[]`. Rendering both surfaces from the one core result keeps
-    /// them from drifting.
-    ///
-    /// Joined to `report.players` by `PlayerOut::agent_addr` and to
-    /// `report.ei_targets` by `EnemyOut::id` -- both real keys, not
-    /// positions, so a mismatch yields empty arrays rather than
-    /// mis-attributed rows.
-    ///
-    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, compact):**
-    /// `--format ei-json` grows 216,173 -> 1,170,570 bytes (+441.5%) --
-    /// `damageModifiers` 32,121, `incomingDamageModifiers` 44,490,
-    /// `damageModifiersTarget` 497,702, `incomingDamageModifiersTarget`
-    /// 356,375, `damageModMap` 19,325.
-    pub modifiers: Option<&'a DamageModifierResults>,
-    /// `boon_states` (MEIGAP Task 1b): the GW2EI-shape boon stack timelines
-    /// from `axilog_core::analysis::buffs::states::build`, or `None`. This
-    /// is the OPT-IN gate for `buffUptimes[].states` and
-    /// `buffUptimes[].statesPerSource`.
-    ///
-    /// GW2EI puts those same two arrays behind its own
-    /// `RawFormatTimelineArrays` setting
-    /// (`GW2EIBuilders/JsonModels/JsonActorUtilities/JsonBuffsUptimeBuilder.cs:52`)
-    /// -- the setting axibridge already maps onto axilog's `--timeseries`
-    /// -- so every caller computes this exactly when `--timeseries`/SDK
-    /// `timeseries: true` was requested, i.e. the same request that
-    /// populates `axilog_schema::PlayerOut::per_second`. Reproducing EI's
-    /// own gate rather than inventing one is what keeps the two payloads
-    /// shaped alike under the same settings.
-    ///
-    /// It arrives as a side-channel input rather than a `Report` field for
-    /// the same reason `activity`/`replay` do: it is EI-SHAPE data
-    /// (LOG-RELATIVE ms with GW2EI's mandatory leading `[0, 0]` pair,
-    /// keyed by source CHARACTER NAME), which the native schema
-    /// deliberately does not carry -- `Metrics::boons` is this project's
-    /// own absolute-time, addr-keyed shape.
-    ///
-    /// Joined to `report.players` by `PlayerOut::agent_addr` -- a real key,
-    /// not a position, so a mismatch yields an absent entry rather than a
-    /// mis-attributed timeline.
-    ///
-    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, pretty-printed,
-    /// 41 players x 12 boons over a 49s fight):** `--format ei-json
-    /// --timeseries` grows 3,878,210 -> 4,855,657 bytes (**+25.2%**). The
-    /// flagless payload is byte-identical to before (763,450 both sides).
-    /// It scales with transitions, i.e. roughly `players x boons x
-    /// applications`, which is why it stays behind the flag GW2EI itself
-    /// puts it behind.
-    pub boon_states: Option<&'a BoonStates>,
-    /// `enemy_series` (MEIGAP Task 2b): per-enemy cumulative outgoing-damage
-    /// series from `axilog_core::analysis::timeseries::build_enemy_series`,
-    /// or `None`. The OPT-IN gate for `targets[].damage1S` and
-    /// `targets[].powerDamage1S`.
-    ///
-    /// GW2EI gates the same two arrays on `RawFormatTimelineArrays`
-    /// (`GW2EIBuilders/JsonModels/JsonActors/JsonActorBuilder.cs:63-80`,
-    /// the shared actor builder `JsonNPCBuilder` runs first), so every
-    /// caller computes this exactly when `--timeseries`/SDK
-    /// `timeseries: true` was requested -- the same request that populates
-    /// `PlayerOut::per_second`.
-    ///
-    /// Side-channel rather than a `Report` field because it is keyed by
-    /// enemy, and the native schema carries no per-enemy block at all
-    /// (`Report::ei_targets` is identity-only, and is itself
-    /// `#[serde(skip)]`).
-    ///
-    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, pretty-printed):**
-    /// see this crate's `targets[]` block comment.
-    pub enemy_series: Option<&'a BTreeMap<u64, EnemySeries>>,
-    /// `enemy_dist` (MEIGAP Task 2c): per-enemy outgoing per-skill damage
-    /// distribution from `axilog_core::analysis::skill_damage::
-    /// build_enemy_dist`, or `None`. The OPT-IN gate for
-    /// `targets[].totalDamageDist`.
-    ///
-    /// Unlike its two siblings here, GW2EI emits this UNCONDITIONALLY
-    /// (`JsonActorBuilder.cs:87` sits outside every
-    /// `RawFormatTimelineArrays` block). It rides `--skill-damage` here for
-    /// the same reason the player-side `totalDamageDist` already does --
-    /// payload -- and axibridge hardcodes that flag to `true`, so the read
-    /// surface is unchanged (see the cutover report's flag table).
-    pub enemy_dist: Option<&'a BTreeMap<u64, Vec<SkillEntry>>>,
-    /// `target_conditions` (MEIGAP Task 2d): per-(enemy, condition)
-    /// source-split stack timelines from
-    /// `axilog_core::analysis::target_conditions::build`, or `None`. The
-    /// OPT-IN gate for `targets[].buffs[].id`/`.statesPerSource` -- and for
-    /// the fourteen CONDITION entries this adapter then adds to `buffMap`,
-    /// without which axibridge's `resolveBuffMetaById` returns nothing and
-    /// the whole array is skipped (`conditionsMetrics.ts:311-314`).
-    ///
-    /// Gated on `--timeseries`: `statesPerSource` sits inside GW2EI's own
-    /// `RawFormatTimelineArrays` block
-    /// (`JsonBuffsUptimeBuilder.cs:52`), the same gate the player-side
-    /// [`Self::boon_states`] rides.
-    pub target_conditions: Option<&'a TargetConditionStates>,
-    /// `healing_detail` (MEIGAP Task 3a): per-ally / per-skill / per-second
-    /// healing and barrier from
-    /// `axilog_core::analysis::healing_detail::build`, or `None` (which is
-    /// also what that function returns on a log with no healing
-    /// extension). Positionally joined to `report.players`, in both the
-    /// outer index and the inner ally index.
-    ///
-    /// The OPT-IN gate for `extHealingStats.outgoingHealingAllies` /
-    /// `.totalHealingDist` / `.healing1S` and
-    /// `extBarrierStats.outgoingBarrierAllies` / `.totalBarrierDist`. The
-    /// three families are gated SEPARATELY once this input is present --
-    /// see [`Self::healing_series`] and [`Self::healing_dist`], which are
-    /// the two flag bits the caller sets alongside it.
-    ///
-    /// Side-channel rather than a `Report` field for the same reason
-    /// [`Self::enemy_dist`] is: it is a per-(player, ally) matrix and a
-    /// per-skill map that the native schema deliberately reduces to the
-    /// five `HealingOut` scalars.
-    pub healing_detail: Option<&'a HealingDetail>,
-    /// Emit `extHealingStats.healing1S` -- set by the caller exactly when
-    /// `--timeseries`/SDK `timeseries: true` was requested, GW2EI's own
-    /// gate on that field
-    /// (`EXTJsonPlayerHealingStatsBuilder.cs:30`, inside
-    /// `if (settings.RawFormatTimelineArrays)`). Ignored when
-    /// [`Self::healing_detail`] is `None`.
-    pub healing_series: bool,
-    /// Emit `extHealingStats.outgoingHealingAllies` / `.totalHealingDist`
-    /// and `extBarrierStats.outgoingBarrierAllies` / `.totalBarrierDist` --
-    /// set by the caller exactly when `--skill-damage`/SDK
-    /// `skill_damage: true` was requested. GW2EI emits all four
-    /// unconditionally; they ride the per-skill flag here for PAYLOAD (the
-    /// ally matrices alone are +36.0% on the flagless committed fixture and
-    /// grow quadratically in squad size), the same treatment
-    /// `totalDamageDist` already gets, and axibridge hardcodes that flag to
-    /// `true`. Ignored when [`Self::healing_detail`] is `None`.
-    pub healing_dist: bool,
-    /// `minions` (MEIGAP Task 3b): per-player minion damage-taken rollups
-    /// from `axilog_core::analysis::minions::build`, or `None`. The OPT-IN
-    /// gate for `players[].minions[]`, positionally joined to
-    /// `report.players`.
-    ///
-    /// Gated by the caller on `--skill-damage` -- it is a per-skill
-    /// distribution like every other `*Dist` block. See
-    /// `axilog_core::analysis::minions`' module doc for the (very small)
-    /// read surface this reproduces.
-    pub minions: Option<&'a MinionRollups>,
-    /// `dist_outcomes` (MEIGAP2 row 1): per-skill hit-OUTCOME columns for
-    /// the two player-side distributions, from
-    /// `axilog_core::analysis::dist_outcomes::build`, or `None`. Keyed by
-    /// player representative addr (`PlayerOut::agent_addr`).
-    ///
-    /// The OPT-IN gate for `totalDamageDist[][]`/`totalDamageTaken[][]`'s
-    /// `connectedHits`/`glance`/`missed`/`evaded`/`blocked`/`invulned`/
-    /// `interrupted`/`indirectDamage` columns -- set by the caller on
-    /// `--skill-damage`, the flag that already gates the distributions
-    /// themselves, so this can never annotate rows that are not emitted.
-    pub dist_outcomes: Option<&'a BTreeMap<u64, DistOutcomes>>,
-    /// `health_percents` (MEIGAP2 row 2): per-player health-percent step
-    /// series from `axilog_core::analysis::health::ei_health_percents`, or
-    /// `None`. Keyed by player representative addr.
-    ///
-    /// The OPT-IN gate for `players[].healthPercents` -- set by the caller
-    /// on `--timeseries`, which is this project's mapping of GW2EI's own
-    /// `RawFormatTimelineArrays` gate on that field
-    /// (`JsonActorBuilder.cs:90-100`).
-    pub health_percents: Option<&'a BTreeMap<u64, Vec<(u64, f64)>>>,
-}
+/// It is the escape hatch spec #1 decision 6 wrote for exactly this data,
+/// and side-channel absorption Task 13 confirmed it is load-bearing rather
+/// than merely convenient. `blocks.replay.tracks` carries the same actors'
+/// positions in WORLD units on this project's own polling grid; what the
+/// EI surface needs on top of that is
+///
+/// - `orientations`, which the native block does not carry at all,
+/// - `dc`, GW2EI's sentinel-bracketed disconnect intervals, likewise
+///   absent, and
+/// - positions resampled by a DIFFERENT engine:
+///   `analysis::ei_replay::build_world_track` (GW2EI's `grid_window`,
+///   `forcePolling` and `[start, end]` trimming) rather than
+///   `analysis::replay::build_track`.
+///
+/// So deriving the EI surface from `blocks.replay` is not a re-point but a
+/// widening of the native `--replay` shape into GW2EI's -- which is the
+/// thing decision 6 declined to do. Absorbing it would change the native
+/// `--replay` JSON to serve a consumer that already has its own rendering.
+///
+/// Every other side-channel input this adapter once took (`EiInputs`'
+/// eight fields) HAS been absorbed; this is a named parameter rather than
+/// the last surviving field of an options struct so that the exception
+/// reads as an exception.
+///
+/// Positionally joined to `source_order`: GW2EI-shape tracks are built by
+/// iterating `enc.players` then the `is_player` entries of `enc.enemies`,
+/// exactly the order `source_order.players()` then the enemy-player entries
+/// of `source_order.targets()` use. Ignored entirely if that length
+/// invariant does not hold.
+///
+/// **Size (measured, `fixtures/wvw-small.anon.zevtc`: 41 players, 32
+/// enemy-player targets, 49s):** `axilog parse --format ei-json` grows
+/// 544,372 -> 1,548,945 bytes pretty-printed (+184%), 216,173 -> 524,056
+/// bytes compact (+142%), for 6,894 player + 4,662 enemy position
+/// samples (and as many orientations). It scales with `players x
+/// fight_seconds / 0.3`, so a 6-minute 50-player fight is an order of
+/// magnitude bigger -- which is why it stays opt-in.
+pub type EiReplayInput<'a> = Option<&'a EiReplay>;
 
 /// A lazily-serialized JSON array (MSTREAM).
 ///
@@ -955,49 +763,45 @@ impl serde::Serialize for EiDoc<'_> {
 /// * [`to_ei_json`] serializes it into a `serde_json::Value` for the SDKs,
 ///   which need a tree regardless (napi/pythonize walk one).
 ///
-/// See [`EiInputs`] for what each input gates; `EiInputs::default()` renders
-/// everything that is derivable from the `Report` alone.
-fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
-    let EiInputs {
-        activity,
-        replay,
-        modifiers,
-        boon_states,
-        enemy_series,
-        enemy_dist,
-        target_conditions,
-        healing_detail,
-        healing_series,
-        healing_dist,
-        minions,
-        dist_outcomes,
-        health_percents,
-    } = *inputs;
-    // Positional-join guards, same convention `replay` uses just below: a
-    // hand-built `Report` (every unit test) can violate them, and dropping
-    // the whole surface beats mis-attributing one player's healing to
-    // another.
-    let healing_detail = healing_detail.filter(|d| d.len() == legacy.players.len());
-    let minions = minions.filter(|m| m.len() == legacy.players.len());
-    // Positional join guard: the tracks must be `legacy.players` followed by
-    // the enemy-PLAYER subset of `legacy.ei_targets`, in those orders. A
-    // caller that hand-builds a `Report` (every unit test below) can violate
+/// See [`EiReplayInput`] for what the one remaining input gates; `None`
+/// renders everything the native document can answer on its own, which
+/// after side-channel absorption Task 13 is the whole document bar the
+/// combat-replay position surface.
+fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
+    // Positional join guard: the tracks must be the player roster followed
+    // by the enemy-PLAYER subset of the target roster, in those orders. A
+    // caller that hand-builds a document (every unit test below) can violate
     // it; rather than mis-attribute one player's movement to another, drop
     // the whole replay surface.
-    let enemy_player_count = legacy.ei_targets.iter().filter(|e| e.is_player).count();
-    let replay = replay.filter(|r| r.tracks.len() == legacy.players.len() + enemy_player_count);
+    //
+    // Task 13: both rosters are read natively, through the same
+    // `source_order` the arrays themselves are built from -- so the guard
+    // now checks the orders it actually protects rather than a parallel
+    // legacy pair that merely happened to agree.
+    let player_count = report.source_order.players().len();
+    let enemy_player_count = report
+        .source_order
+        .targets()
+        .iter()
+        .filter(|&&id| {
+            report.entities.get(id as usize).is_some_and(|e| {
+                e.role == axilog_schema::v1::entities::Role::EnemyPlayer
+            })
+        })
+        .count();
+    let replay = replay.filter(|r| r.tracks.len() == player_count + enemy_player_count);
     // `detected` feeds the player-row and target-row closures below (each
     // clones it and builds its own locally-shadowed `team_id_for` -- see
     // `detected_players`/`detected_targets`); `wvWMapData`'s own team-id
     // lookup is a separate computation off `report` now (Task 3), not this
     // one, so there is no single shared `team_id_for` left at this scope.
-    let detected = detected_team_ids(&legacy.encounter.teams);
+    let detected = detected_team_ids(&report.encounter.teams);
 
     // M10 Task 1: whole-fight seconds for the healing-extension `hps`/`bps`
     // fields below -- same `(duration_ms / 1000.0).max(1.0)` convention
     // `axilog_core::analysis::analyze` itself uses for `dps` (avoids a
     // divide-by-zero on a degenerate zero-duration log).
-    let duration_secs = (legacy.encounter.duration_ms as f64 / 1000.0).max(1.0);
+    let duration_secs = (report.encounter.duration_ms as f64 / 1000.0).max(1.0);
 
     // MSTREAM: one player row, built on demand. Previously the body of a
     // `report.players.iter().enumerate().map(..).collect::<Vec<Value>>()`;
@@ -1005,12 +809,70 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // cloned in (a <=3-entry `BTreeMap<&str, u64>`) so the outer
     // `team_id_for` and the `targets` builder can each keep their own.
     let detected_players = detected.clone();
+    // Task 4: `players[]` is indexed by EI position, and `source_order`
+    // is what maps that position back to a native entity id. Resolved
+    // once per row here so every block lookup below shares one join --
+    // the whole reason `EiJoin` exists (see `join.rs`'s module doc).
+    let player_ids: Vec<u32> = report.source_order.players().to_vec();
+    // Task 12: the two things `statesPerSource` needs to project entity ids
+    // back onto EI's names. `squad_ids` is EI's own `players[]` roster,
+    // which is the exact membership test the old name lookup applied -- see
+    // `ei_states_per_source`.
+    // Cloned per closure, like `detected_players`/`detected_targets` above:
+    // both the player rows and the target rows project `statesPerSource`,
+    // and each `Box<dyn FnMut>` owns what it captures.
+    let squad_ids: std::collections::BTreeSet<u32> = player_ids.iter().copied().collect();
+    let squad_ids_targets = squad_ids.clone();
+    let join = crate::join::EiJoin::new(report);
     let player_json: Box<dyn FnMut(usize) -> Value + 'a> = Box::new(move |player_idx: usize| {
-        let p = &legacy.players[player_idx];
+        // The native rows backing this player. Blocks are `Option` (the
+        // compute gates) and `by_entity` is sparse, so each is an
+        // `Option<&Row>` and every read below carries its own zero
+        // default -- an absent row means "this entity did nothing of that
+        // kind", which is genuinely zero, not unknown.
+        let entity_id = player_ids.get(player_idx).copied();
+        // This slot's `entities[]` row -- the one place identity lives.
+        let entity = entity_id.and_then(|id| join.entity(id));
+        let profession = entity.and_then(|e| e.profession.as_deref()).unwrap_or("");
+        let elite_spec = entity.and_then(|e| e.elite_spec.as_deref()).unwrap_or("");
+        let character = entity.and_then(|e| e.character.as_deref()).unwrap_or("");
+        let n_damage = entity_id
+            .and_then(|id| report.blocks.damage.as_ref()?.by_entity.get(id));
+        let n_hit_stats = entity_id
+            .and_then(|id| report.blocks.hit_stats.as_ref()?.by_entity.get(id));
+        let n_defenses = entity_id
+            .and_then(|id| report.blocks.defenses.as_ref()?.by_entity.get(id));
+        let n_cc = entity_id.and_then(|id| report.blocks.cc.as_ref()?.by_entity.get(id));
+        let n_support = entity_id
+            .and_then(|id| report.blocks.support.as_ref()?.by_entity.get(id));
+        let n_contribution = entity_id
+            .and_then(|id| report.blocks.contribution.as_ref()?.by_entity.get(id));
+        let n_rotation = entity_id
+            .and_then(|id| report.blocks.rotation.as_ref()?.by_entity.get(id));
+        let n_series = entity_id
+            .and_then(|id| report.blocks.series.as_ref()?.by_entity.get(id));
+        let n_minions = entity_id
+            .and_then(|id| report.blocks.minions.as_ref()?.by_entity.get(id));
+        let n_boons = entity_id
+            .and_then(|id| report.blocks.boons.as_ref()?.by_entity.get(id));
+        // The tracked boons in EI-ARRAY order (Task 13). The native block
+        // keys its rows by buff id, so iterating it yields ascending ids --
+        // but every `buffUptimes`/`*Buffs` array in this document is in
+        // `BOON_IDS` order (Might first, Fury second, ...), which is not
+        // the ascending one and which the goldens pin. Walking the table
+        // and looking each id up restores that order without the native
+        // block having to carry a redundant sequence, the same way
+        // `EiJoin` restores EI's positional entity orders.
+        let boon_rows: Vec<(u32, &BoonRow)> = axilog_core::analysis::buffs::BOON_IDS
+            .iter()
+            .filter_map(|&(id, _, _)| n_boons.and_then(|rows| rows.get(&id)).map(|r| (id, r)))
+            .collect();
+        let n_healing = entity_id
+            .and_then(|id| report.blocks.healing.as_ref()?.by_entity.get(id));
         let team_id_for = |color: &str| -> u64 {
             detected_players.get(color).copied().unwrap_or_else(|| representative_team_id(color))
         };
-        let act = activity.get(player_idx);
+        let act = entity_id.and_then(|id| report.blocks.replay.as_ref()?.by_entity.get(id));
         // Real EI shape (verified against a real dps.report export,
         // axibridge's `test-fixtures/boon/20260117-181030.json`,
         // `players[0].statsAll[0]`): whole-fight/whole-phase aggregates —
@@ -1041,11 +903,11 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // not a parity claim — a consumer wanting EI's OWN algorithm's
         // number has no equivalent field in this adapter's output at all.
         let stats_all = json!([ {
-            "downContribution": p.downs_contribution.damage,
-            "killed": p.kills_dealt,
-            "downed": p.downs_dealt,
-            "appliedCrowdControl": p.cc.applied_total,
-            "appliedCrowdControlDuration": p.cc.applied_duration_ms,
+            "downContribution": n_contribution.map_or(0, |c| c.downs_contribution.damage),
+            "killed": n_damage.map_or(0, |d| d.kills_dealt),
+            "downed": n_damage.map_or(0, |d| d.downs_dealt),
+            "appliedCrowdControl": n_cc.map_or(0, |c| c.applied_total),
+            "appliedCrowdControlDuration": n_cc.map_or(0, |c| c.applied_duration_ms),
             // M13 Task 3: outgoing hit-quality fields, mapped from
             // `p.hit_stats` (`HitStatsOut`, mirrors `axilog_core::
             // analysis::hit_stats::HitStats` field-for-field -- see that
@@ -1059,26 +921,26 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // present (not gated) -- `hit_stats` is unconditionally
             // computed by `analyze()`, same "always-on" convention as the
             // down-contribution/CC fields above.
-            "criticalRate": p.hit_stats.crit_count,
-            "criticalDmg": p.hit_stats.crit_damage,
-            "flankingRate": p.hit_stats.flank_count,
-            "glanceRate": p.hit_stats.glance_count,
-            "againstMovingRate": p.hit_stats.moving_count,
-            "connectedDamageCount": p.hit_stats.connected_count,
-            "connectedDmg": p.hit_stats.connected_damage,
-            "connectedDirectDamageCount": p.hit_stats.direct_count,
-            "connectedDirectDmg": p.hit_stats.direct_damage,
-            "connectedConditionCount": p.hit_stats.condition_count,
-            "connectedConditionDamage": p.hit_stats.condition_damage,
-            "critableDirectDamageCount": p.hit_stats.critable_direct_count,
-            "againstDownedCount": p.hit_stats.against_downed_count,
-            "againstDownedDamage": p.hit_stats.against_downed_damage,
-            "connectedLifeLeechCount": p.hit_stats.life_leech_count,
-            "connectedLifeLeechDamage": p.hit_stats.life_leech_damage,
-            "connectedPowerAbove90HPCount": p.hit_stats.above90_power_count,
-            "connectedPowerAbove90HPDamage": p.hit_stats.above90_power_damage,
-            "connectedConditionAbove90HPCount": p.hit_stats.above90_condition_count,
-            "connectedConditionAbove90HPDamage": p.hit_stats.above90_condition_damage,
+            "criticalRate": n_hit_stats.map_or(0, |h| h.crit_count),
+            "criticalDmg": n_hit_stats.map_or(0, |h| h.crit_damage),
+            "flankingRate": n_hit_stats.map_or(0, |h| h.flank_count),
+            "glanceRate": n_hit_stats.map_or(0, |h| h.glance_count),
+            "againstMovingRate": n_hit_stats.map_or(0, |h| h.moving_count),
+            "connectedDamageCount": n_hit_stats.map_or(0, |h| h.connected_count),
+            "connectedDmg": n_hit_stats.map_or(0, |h| h.connected_damage),
+            "connectedDirectDamageCount": n_hit_stats.map_or(0, |h| h.direct_count),
+            "connectedDirectDmg": n_hit_stats.map_or(0, |h| h.direct_damage),
+            "connectedConditionCount": n_hit_stats.map_or(0, |h| h.condition_count),
+            "connectedConditionDamage": n_hit_stats.map_or(0, |h| h.condition_damage),
+            "critableDirectDamageCount": n_hit_stats.map_or(0, |h| h.critable_direct_count),
+            "againstDownedCount": n_hit_stats.map_or(0, |h| h.against_downed_count),
+            "againstDownedDamage": n_hit_stats.map_or(0, |h| h.against_downed_damage),
+            "connectedLifeLeechCount": n_hit_stats.map_or(0, |h| h.life_leech_count),
+            "connectedLifeLeechDamage": n_hit_stats.map_or(0, |h| h.life_leech_damage),
+            "connectedPowerAbove90HPCount": n_hit_stats.map_or(0, |h| h.above90_power_count),
+            "connectedPowerAbove90HPDamage": n_hit_stats.map_or(0, |h| h.above90_power_damage),
+            "connectedConditionAbove90HPCount": n_hit_stats.map_or(0, |h| h.above90_condition_count),
+            "connectedConditionAbove90HPDamage": n_hit_stats.map_or(0, |h| h.above90_condition_damage),
             // MSMALL item 3: the `JsonGameplayStatsAll` aftercast/interrupt
             // family, from `p.aftercast` (`AftercastOut`, mirroring
             // `axilog_core::analysis::rotation::AftercastStats` -- see that
@@ -1104,10 +966,10 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // Calibrated on `fixtures/local/wvw-postrework.zevtc` against
             // that log's own EI export: all FOUR fields exact for all 44
             // players.
-            "saved": p.aftercast.saved_count,
-            "timeSaved": ei_time_secs(p.aftercast.saved_ms.max(0) as u64),
-            "wasted": p.aftercast.wasted_count,
-            "timeWasted": ei_time_secs(p.aftercast.wasted_ms.max(0) as u64)
+            "saved": n_rotation.map_or(0, |r| r.aftercast.saved_count),
+            "timeSaved": ei_time_secs(n_rotation.map_or(0, |r| r.aftercast.saved_ms).max(0) as u64),
+            "wasted": n_rotation.map_or(0, |r| r.aftercast.wasted_count),
+            "timeWasted": ei_time_secs(n_rotation.map_or(0, |r| r.aftercast.wasted_ms).max(0) as u64)
         } ]);
         // Real EI's `statsTargets[targetIndex][phaseIndex]` carries a large
         // per-target breakdown (including its own per-target
@@ -1172,12 +1034,20 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // miss/evade/block/invuln outcomes, the per-target
         // appliedCrowdControl* split, `againstDownedDamage`) is still not
         // computed per-target here, and stays omitted rather than faked.
-        let stats_targets: Vec<Value> = legacy.ei_targets.iter().map(|e| {
-            let dmg = p.damage.per_enemy.iter().find(|pe| pe.enemy_id == e.id)
-                .map(|pe| pe.total).unwrap_or(0);
-            let mut row = json!({ "totalDmg": dmg });
-            if let Some(split) = &p.per_target {
-                let t = split.iter().find(|t| t.enemy_id == e.id);
+        //
+        // Task 13: entirely native. `totalDmg` is the ungated
+        // `PerTarget::total`; the seven gated columns are
+        // `PerTarget::detail`, whose own `Option` is per-ROW. The BRANCH
+        // still has to be per-RUN -- EI emits the seven keys on every
+        // target slot or on none -- so it reads the gate record
+        // (`by_skill`'s presence) and then zero-fills the target rows the
+        // pass produced no detail for, exactly as the legacy path did.
+        let gated = n_damage.is_some_and(|d| d.by_skill.is_some());
+        let stats_targets: Vec<Value> = join.targets().map(|(_, target_id, _)| {
+            let pt = n_damage.and_then(|d| d.per_target.get(&target_id));
+            let mut row = json!({ "totalDmg": pt.map_or(0, |t| t.total) });
+            if gated {
+                let t = pt.and_then(|t| t.detail.as_ref());
                 let obj = row.as_object_mut().expect("statsTargets row is an object");
                 for (k, v) in [
                     ("killed", t.map(|t| t.killed).unwrap_or(0) as u64),
@@ -1193,18 +1063,24 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             }
             json!([row])
         }).collect();
+        // Task 13: identity comes from this slot's `entities[]` row, the
+        // format's single place for it. The legacy row carried the same
+        // strings as bare `String`s where native uses `Option` -- a blank
+        // account and an absent one were indistinguishable there, so
+        // `unwrap_or("")` reproduces the old wire value exactly rather than
+        // introducing a `null`.
         let mut v = json!({
-            "account": p.account,
-            "character_name": p.character,
+            "account": entity.and_then(|e| e.account.as_deref()).unwrap_or(""),
+            "character_name": entity.and_then(|e| e.character.as_deref()).unwrap_or(""),
             // EI convention: `profession` is the elite-spec name when the
             // player has one active, else the base profession. `elite_spec` is
             // kept alongside for consumers that want the native split.
-            "profession": if p.elite_spec.is_empty() { &p.profession } else { &p.elite_spec },
-            "elite_spec": p.elite_spec,
-            "teamID": team_id_for(&p.team),
-            "group": p.subgroup,
-            "notInSquad": !p.in_squad,
-            "hasCommanderTag": p.commander,
+            "profession": if elite_spec.is_empty() { profession } else { elite_spec },
+            "elite_spec": elite_spec,
+            "teamID": team_id_for(entity.map_or("", |e| e.team.as_str())),
+            "group": entity.and_then(|e| e.subgroup).unwrap_or(0),
+            "notInSquad": entity.map_or(true, |e| e.role != axilog_schema::v1::entities::Role::Squad),
+            "hasCommanderTag": entity.is_some_and(|e| e.commander.is_some()),
             // `breakbarDamage` (MEIGAP2 row 6): GW2EI's `dpsAll[0].
             // breakbarDamage` -- the defiance-bar damage this player DEALT,
             // minion-inclusive, in GW2EI's own units (`BreakbarDamageEvent`
@@ -1218,16 +1094,16 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // minion fold) is not computed separately and is omitted
             // rather than faked with the folded number.
             "dpsAll": [ {
-                "dps": p.damage.dps.round() as i64,
-                "damage": p.damage.total,
-                "breakbarDamage": ei_breakbar(p.breakbar_damage_dealt),
+                "dps": n_damage.map_or(0.0, |d| d.dps).round() as i64,
+                "damage": n_damage.map_or(0, |d| d.total),
+                "breakbarDamage": ei_breakbar(n_damage.map_or(0, |d| d.breakbar_damage_dealt)),
             } ],
             "statsAll": stats_all,
             "statsTargets": stats_targets,
             "defenses": [ {
-                "downCount": p.downs_taken,
-                "deadCount": p.deaths,
-                "damageTaken": p.damage_taken,
+                "downCount": n_defenses.map_or(0, |d| d.downs_taken),
+                "deadCount": n_defenses.map_or(0, |d| d.deaths),
+                "damageTaken": n_damage.map_or(0, |d| d.taken),
                 // M13 Task 3: hit-outcome + damage-taken breakdown fields,
                 // mapped from `p.defenses` (`DefensesOut`, mirrors
                 // `axilog_core::analysis::defenses::DefenseStats`
@@ -1242,7 +1118,7 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 //
                 // IMPORTANT -- `lifeLeechDamageTakenCount` intentionally
                 // diverges from real EI: this emits OUR correct derived
-                // value (`p.defenses.life_leech_count`), NOT a
+                // value (`n_defenses.map_or(0, |d| d.life_leech_count)`), NOT a
                 // reproduction of GW2EI's own real, verified counting bug
                 // (`DefensePerTargetStatistics.cs`'s life-leech branch
                 // increments the SUM field a second time instead of the
@@ -1258,22 +1134,22 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 // derived TRUE reference instead of the fixture's raw
                 // (buggy) value, mirroring `defenses_golden.rs`'s own
                 // native-layer calibration.
-                "blockedCount": p.defenses.blocked_count,
-                "evadedCount": p.defenses.evaded_count,
-                "dodgeCount": p.defenses.dodge_count,
-                "missedCount": p.defenses.missed_count,
-                "interruptedCount": p.defenses.interrupted_count,
-                "invulnedCount": p.defenses.invulned_count,
-                "strikeDamageTaken": p.defenses.strike_damage,
-                "strikeDamageTakenCount": p.defenses.strike_count,
-                "powerDamageTaken": p.defenses.power_damage,
-                "powerDamageTakenCount": p.defenses.power_count,
-                "conditionDamageTaken": p.defenses.condition_damage,
-                "conditionDamageTakenCount": p.defenses.condition_count,
-                "lifeLeechDamageTaken": p.defenses.life_leech_damage,
-                "lifeLeechDamageTakenCount": p.defenses.life_leech_count,
-                "damageBarrier": p.defenses.barrier_damage,
-                "damageBarrierCount": p.defenses.barrier_count,
+                "blockedCount": n_defenses.map_or(0, |d| d.blocked_count),
+                "evadedCount": n_defenses.map_or(0, |d| d.evaded_count),
+                "dodgeCount": n_defenses.map_or(0, |d| d.dodge_count),
+                "missedCount": n_defenses.map_or(0, |d| d.missed_count),
+                "interruptedCount": n_defenses.map_or(0, |d| d.interrupted_count),
+                "invulnedCount": n_defenses.map_or(0, |d| d.invulned_count),
+                "strikeDamageTaken": n_defenses.map_or(0, |d| d.strike_damage),
+                "strikeDamageTakenCount": n_defenses.map_or(0, |d| d.strike_count),
+                "powerDamageTaken": n_defenses.map_or(0, |d| d.power_damage),
+                "powerDamageTakenCount": n_defenses.map_or(0, |d| d.power_count),
+                "conditionDamageTaken": n_defenses.map_or(0, |d| d.condition_damage),
+                "conditionDamageTakenCount": n_defenses.map_or(0, |d| d.condition_count),
+                "lifeLeechDamageTaken": n_defenses.map_or(0, |d| d.life_leech_damage),
+                "lifeLeechDamageTakenCount": n_defenses.map_or(0, |d| d.life_leech_count),
+                "damageBarrier": n_defenses.map_or(0, |d| d.barrier_damage),
+                "damageBarrierCount": n_defenses.map_or(0, |d| d.barrier_count),
                 // MEIGAP2 review: this was emitting RAW arcdps units, ten
                 // times GW2EI's own number, and the milestone that added
                 // the DEALT twin would otherwise have shipped the two
@@ -1295,8 +1171,8 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 // changes the rendered document only on a log that has
                 // squad-directed breakbar damage. `breakbarDamageTakenCount`
                 // is a count and is untouched.
-                "breakbarDamageTaken": ei_breakbar(p.defenses.breakbar_damage),
-                "breakbarDamageTakenCount": p.defenses.breakbar_count,
+                "breakbarDamageTaken": ei_breakbar(n_defenses.map_or(0, |d| d.breakbar_damage)),
+                "breakbarDamageTakenCount": n_defenses.map_or(0, |d| d.breakbar_count),
                 // MEIGAP Task 1c: incoming CC + incoming boon strips, the
                 // last four always-on `defenses[0]` fields axibridge reads.
                 // Mapped from `p.defenses` like every field above -- see
@@ -1332,10 +1208,10 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 // per-boon removal count and every removal after the first;
                 // EI's `Max` swallows the first one's duration).
                 // `TimeDigit` is 3, matching the export's own precision.
-                "receivedCrowdControl": p.defenses.received_cc_count,
-                "receivedCrowdControlDuration": p.defenses.received_cc_duration_ms,
-                "boonStrips": p.defenses.boon_strips_taken,
-                "boonStripsTime": ei_time_secs(p.defenses.boon_strips_taken_duration_ms)
+                "receivedCrowdControl": n_defenses.map_or(0, |d| d.received_cc_count),
+                "receivedCrowdControlDuration": n_defenses.map_or(0, |d| d.received_cc_duration_ms),
+                "boonStrips": n_defenses.map_or(0, |d| d.boon_strips_taken),
+                "boonStripsTime": ei_time_secs(n_defenses.map_or(0, |d| d.boon_strips_taken_duration_ms))
             } ],
             // EI places stun-break stats under `support`, not `defenses` — verified
             // against GW2EI's `SupportAllStatistics` (StunBreakCount /
@@ -1351,11 +1227,11 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // sibling fields real EI also carries aren't computed here, so they're
             // omitted rather than faked (same convention as `statsTargets` above).
             "support": [ {
-                "stunBreak": p.cc.stun_breaks,
-                "removedStunDuration": p.cc.removed_stun_duration_ms as f64 / 1000.0,
-                "condiCleanse": p.support.cleanses,
-                "condiCleanseSelf": p.support.cleanses_self,
-                "boonStrips": p.support.strips,
+                "stunBreak": n_cc.map_or(0, |c| c.stun_breaks),
+                "removedStunDuration": n_cc.map_or(0, |c| c.removed_stun_duration_ms) as f64 / 1000.0,
+                "condiCleanse": n_support.map_or(0, |s| s.cleanses),
+                "condiCleanseSelf": n_support.map_or(0, |s| s.cleanses_self),
+                "boonStrips": n_support.map_or(0, |s| s.strips),
                 // MEIGAP Task 3e: the outgoing twin of
                 // `defenses[0].boonStripsTime`, and the same deliberate,
                 // calibrated divergence -- axilog emits the TRUE sum in
@@ -1366,8 +1242,8 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 // `axilog_core::analysis::support::SupportMetrics::
                 // strips_duration_ms` for the full transcription and what
                 // the calibration's reconstruction pins.
-                "boonStripsTime": ei_time_secs(p.support.strips_duration_ms),
-                "resurrects": p.support.resurrects
+                "boonStripsTime": ei_time_secs(n_support.map_or(0, |s| s.strips_duration_ms)),
+                "resurrects": n_support.map_or(0, |s| s.resurrects)
             } ],
             // `buffUptimes[]` (M3 Task 5): one entry per tracked boon (the 12 in
             // `BOON_IDS`), in that table's order. Field meanings verified against
@@ -1384,44 +1260,45 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // player's own self-generation — emitted as `{ <own character>:
             // self_pct }` rather than fabricating group/squad members' names.
             //
-            // MEIGAP Task 1b: `states` and `statesPerSource` join each
-            // entry exactly when `EiInputs::boon_states` was supplied (see
-            // that field's doc comment for GW2EI's own
-            // `RawFormatTimelineArrays` gate, which it mirrors). Both are
-            // `[[time_ms_from_log_start, stackCount], ...]`;
-            // `statesPerSource` keys by source CHARACTER name, with
-            // GW2EI's own `"UNKNOWN"` placeholder for an unresolved source
-            // -- see `axilog_core::analysis::buffs::states`'s module doc
-            // for the full shape/citation trail, including why a leading
-            // `[0, 0]` pair is always present.
-            "buffUptimes": p.boons.iter().map(|b| {
+            // MEIGAP Task 1b, re-pointed onto the native block in Task 12:
+            // `states` and `statesPerSource` join each entry exactly when
+            // `blocks.boons`' rows carry them, which is `--timeseries`
+            // (GW2EI's own `RawFormatTimelineArrays` gate). Both are
+            // `[[time_ms_from_log_start, stackCount], ...]` -- see
+            // `axilog_core::analysis::buffs::states`'s module doc for the
+            // shape/citation trail, including why a leading `[0, 0]` pair
+            // is always present, and `ei_states_per_source` for the
+            // id-back-to-name projection.
+            "buffUptimes": boon_rows.iter().map(|&(id, b)| {
                 let (uptime, presence) = match b.avg_stacks {
-                    Some(avg) => (avg, b.presence_pct), // intensity boon
-                    None => (b.presence_pct, 0.0),      // duration boon
+                    Some(avg) => (avg, b.uptime_pct), // intensity boon
+                    None => (b.uptime_pct, 0.0),      // duration boon
                 };
                 let mut entry = json!({
-                    "id": b.id,
+                    "id": id,
                     "buffData": [ {
                         "uptime": uptime,
                         "presence": presence,
-                        "generated": { &p.character: b.generation.self_pct }
+                        "generated": { character: b.generation.self_pct }
                     } ]
                 });
-                if let Some(bs) = boon_states {
+                // The native row's presence IS the gate: `attach_boon_states`
+                // only fills `states` when the pass ran, so an absent
+                // `states` means `--timeseries` was off. A row that ran but
+                // held the boon never still carries `Some([])`, which is
+                // why this tests the field rather than the block.
+                if let Some(n_states) = Some(b).filter(|row| row.states.is_some()) {
                     let obj = entry.as_object_mut().expect("buffUptimes entry is an object");
-                    let key = (p.agent_addr, b.id);
                     obj.insert(
                         "states".to_string(),
-                        ei_states_json(bs.total.get(&key).map(|v| v.as_slice()).unwrap_or(&[])),
+                        ei_states_json(
+                            n_states.states.as_deref().unwrap_or(&[]),
+                        ),
                     );
-                    let per_source: BTreeMap<&str, Value> = bs
-                        .per_source
-                        .get(&key)
-                        .into_iter()
-                        .flatten()
-                        .map(|(name, states)| (name.as_str(), ei_states_json(states)))
-                        .collect();
-                    obj.insert("statesPerSource".to_string(), json!(per_source));
+                    obj.insert(
+                        "statesPerSource".to_string(),
+                        ei_states_per_source(&join, &squad_ids, n_states.per_source.as_ref()),
+                    );
                 }
                 entry
             }).collect::<Vec<_>>(),
@@ -1495,9 +1372,9 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // rejected: the zero rows carry no information and cost 39.4%
             // of these arrays' bytes (see the MEIGAP Task 1 report's
             // always-on size decision).
-            "selfBuffs": buff_generation_json(&p.boons, |g| g.self_pct, |g| g.self_wasted, true),
-            "groupBuffs": buff_generation_json(&p.boons, |g| g.group_pct, |g| g.group_wasted, false),
-            "squadBuffs": buff_generation_json(&p.boons, |g| g.squad_pct, |g| g.squad_wasted, false)
+            "selfBuffs": buff_generation_json(&boon_rows, |g| g.self_pct, |g| g.self_wasted, true),
+            "groupBuffs": buff_generation_json(&boon_rows, |g| g.group_pct, |g| g.group_wasted, false),
+            "squadBuffs": buff_generation_json(&boon_rows, |g| g.squad_pct, |g| g.squad_wasted, false)
         });
         // `activeTimes`/`combatReplayData` (M11 Task 3): unlike every other
         // block on this player, these are ALWAYS present -- not gated on
@@ -1523,8 +1400,10 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // M15 Task 3: `.positions`/`.orientations`/`.dc`/`.iconURL` join
         // this object when -- and only when -- `replay` was requested (see
         // `to_ei_json`'s `replay` argument). The four M11 fields above stay
-        // ALWAYS-ON and are still sourced from `activity`, unchanged, in
-        // both modes: `ei_golden.rs`'s
+        // ALWAYS-ON and are now read from the native
+        // `blocks.replay.by_entity` row -- whose own always-on/gated split
+        // (see `ReplayBlock`) is the native mirror of exactly this
+        // distinction -- unchanged in both modes: `ei_golden.rs`'s
         // `ei_json_replay_fields_do_not_disturb_the_always_on_surface`
         // asserts the two objects are byte-identical apart from the four
         // added keys.
@@ -1532,11 +1411,11 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             let (active_ms, start_ms, end_ms, down, dead) = match act {
                 Some(a) => (
-                    a.active_ms(),
+                    a.active_ms,
                     a.start_ms,
                     a.end_ms,
-                    a.down_intervals.iter().map(interval_json).collect::<Vec<_>>(),
-                    a.dead_intervals.iter().map(interval_json).collect::<Vec<_>>(),
+                    a.down.iter().map(interval_json).collect::<Vec<_>>(),
+                    a.dead.iter().map(interval_json).collect::<Vec<_>>(),
                 ),
                 None => (0, 0, 0, Vec::new(), Vec::new()),
             };
@@ -1560,7 +1439,7 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 // 16-spec exact calibration against the local reference.
                 crd.insert(
                     "iconURL".to_string(),
-                    json!(prof_icon_url(&p.profession, &p.elite_spec)),
+                    json!(prof_icon_url(profession, elite_spec)),
                 );
             }
             obj.insert("combatReplayData".to_string(), crd);
@@ -1586,37 +1465,61 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // player never damaged gets an empty skill list (`[[]]`), not an
         // absent entry, matching real EI's own always-present-per-target
         // shape.
-        if let Some(sd) = &p.skill_damage {
+        //
+        // Task 13: the gate is now NATIVE. `DamageEntity::by_skill` is
+        // `Some` exactly when `--skill-damage` ran and `None` otherwise --
+        // the format's gate record, added by this task precisely so this
+        // branch stops reading the legacy `PlayerOut::skill_damage` (see
+        // that field's doc comment for why an empty map could not stand in
+        // for it).
+        if let Some(n_by_skill) = n_damage.and_then(|d| d.by_skill.as_ref()) {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
-            // MEIGAP2 row 1: the outcome columns ride the same
-            // `--skill-damage` gate the distributions themselves do, and
-            // are joined per player by representative addr. See
-            // `dist_rows_ei_json` for the union/`hits`/`downContribution`
-            // rules.
-            let po = dist_outcomes.and_then(|m| m.get(&p.agent_addr));
+            // Side-channel absorption Task 9: both whole-fight
+            // distributions now read off this player's own `blocks.damage`
+            // row -- the SAME `by_skill`/`by_skill_taken` maps that carry
+            // the MEIGAP2 outcome columns, already unioned and already
+            // annotated. The `--skill-damage` gate is unchanged: it is
+            // still `p.skill_damage`'s presence, the signal Task 7 pinned,
+            // because these rows and the outcome columns on them ride one
+            // flag. See `dist_rows_ei_json` for the `hits`/
+            // `downContribution` rules.
+            //
+            // `targetDamageDist` below stays on `sd.per_target`: the
+            // outcome pass produces no per-target split to absorb, so
+            // re-pointing it would buy nothing and would drop the enemy-id
+            // ordering this array is positionally keyed to.
+            let empty = BTreeMap::new();
             obj.insert(
                 "totalDamageDist".to_string(),
                 json!([dist_rows_ei_json(
-                    &sd.outgoing,
-                    po.map(|o| o.outgoing.as_slice()),
-                    Some(&p.downs_contribution_per_skill),
+                    n_by_skill,
+                    n_contribution.map(|c| &c.downs_contribution_by_skill),
                 )]),
             );
             obj.insert(
                 "totalDamageTaken".to_string(),
-                json!([dist_rows_ei_json(&sd.taken, po.map(|o| o.taken.as_slice()), None)]),
+                json!([dist_rows_ei_json(
+                    n_damage.and_then(|d| d.by_skill_taken.as_ref()).unwrap_or(&empty),
+                    None,
+                )]),
             );
-            let target_dist: Vec<Value> = legacy
-                .ei_targets
-                .iter()
-                .map(|e| {
-                    let skills = sd
-                        .per_target
-                        .iter()
-                        .find(|t| t.enemy_id == e.id)
-                        .map(|t| t.skills.iter().map(skill_entry_ei_json).collect::<Vec<_>>())
-                        .unwrap_or_default();
-                    json!([skills])
+            // Task 13: `targetDamageDist` reads the native per-target
+            // split too (`blocks.damage.by_entity[p].per_target[t]
+            // .by_skill`), through `join.targets()` -- the one place the
+            // positional order of this array is defined. `dist_rows_ei_json`
+            // with no outcome columns and no down-contribution map emits
+            // exactly the seven keys the old per-target emitter did, in the
+            // same order, so this is a re-point and not a reshape: the
+            // per-target rows carry no outcome columns (the outcome pass
+            // produces no per-target split) and no down contribution (EI
+            // puts that on the whole-fight distribution only).
+            let target_dist: Vec<Value> = join
+                .targets()
+                .map(|(_, target_id, _)| {
+                    let skills = n_damage
+                        .and_then(|d| d.per_target.get(&target_id))
+                        .map_or(&empty, |t| &t.by_skill);
+                    json!([dist_rows_ei_json(skills, None)])
                 })
                 .collect();
             obj.insert("targetDamageDist".to_string(), json!(target_dist));
@@ -1652,10 +1555,23 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // `dpsTargets[][]` fields (`condiDps`, `powerDps`, `breakbarDamage`,
         // the `actor*` duplicates, ...) aren't computed here, omitted
         // rather than faked.
-        if let Some(ps) = &p.per_second {
+        //
+        // Task 13: read from `blocks.series` rather than the legacy
+        // `PlayerOut::per_second`. The gate moves with it, and the native
+        // signal is `damage.len > 0` rather than the row's mere presence:
+        // `build_series` also emits a row for a player who has only
+        // `health_percents`/`healing_1s`, built on `empty_series` with
+        // zero-length arrays. Both of those ride `--timeseries` too, so the
+        // case is unreachable today -- but keying off row presence would
+        // make this branch emit `damage1S: [[]]` if the gates ever diverge,
+        // and every real per-second grid is at least one bucket long
+        // (`timeseries::ei_grid` never returns 0), so the length is an
+        // unambiguous discriminator.
+        if let Some(ps) = n_series.filter(|s| s.damage.len > 0) {
+            let damage = ps.damage.decode_u64();
             let obj = v.as_object_mut().expect("player value is always a JSON object");
-            obj.insert("damage1S".to_string(), json!([ps.damage]));
-            obj.insert("damageTaken1S".to_string(), json!([ps.damage_taken]));
+            obj.insert("damage1S".to_string(), json!([damage]));
+            obj.insert("damageTaken1S".to_string(), json!([ps.damage_taken.decode_u64()]));
             // MEIGAP Task 2a: the POWER half of the same two families.
             // GW2EI emits `powerDamageTaken1S` beside `damageTaken1S` from
             // the identical `GetDamageTakenGraph` call with
@@ -1668,45 +1584,43 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // timeseries`'s POWER-split section. `conditionDamageTaken1S`/
             // `targetConditionDamage1S` (the complements EI also emits) are
             // deliberately omitted: no axibridge reader touches them.
-            obj.insert("powerDamageTaken1S".to_string(), json!([ps.power_damage_taken]));
-            let buckets = ps.damage.len();
-            let target_damage_1s: Vec<Value> = legacy
-                .ei_targets
-                .iter()
-                .map(|e| {
-                    let series = ps
-                        .per_target
-                        .iter()
-                        .find(|t| t.enemy_id == e.id)
-                        .map(|t| t.damage.clone())
-                        .unwrap_or_else(|| vec![0u64; buckets]);
-                    json!([series])
-                })
-                .collect();
+            obj.insert(
+                "powerDamageTaken1S".to_string(),
+                json!([ps.power_damage_taken.decode_u64()]),
+            );
+            // The zero fill for a target this player never damaged: native
+            // `per_target` is sparse (a target with no damage has no entry),
+            // while these arrays are positional and fixed-length. Same
+            // re-inflation `targetDamageDist` above does, with the grid
+            // length taken off this player's own `damage` series rather
+            // than recomputed, so the fill can never be a different length
+            // than the real series beside it.
+            let buckets = damage.len();
+            let zeros = vec![0u64; buckets];
+            let mut target_damage_1s: Vec<Value> = Vec::new();
+            let mut target_power_damage_1s: Vec<Value> = Vec::new();
+            // `dpsTargets` is a pure reduction of the same per-target
+            // series: `timeseries.rs`'s own `dps_targets` is built as
+            // `(damage.last(), damage.last() / secs)` over exactly these
+            // arrays, so it needs no native field of its own -- deriving it
+            // here reproduces that construction rather than approximating
+            // it. `secs` is the same `(duration_ms / 1000).max(1.0)` both
+            // sides use.
+            let mut dps_targets: Vec<Value> = Vec::new();
+            for (_, target_id, _) in join.targets() {
+                let row = ps.per_target.get(&target_id);
+                let dmg = row.map_or_else(|| zeros.clone(), |t| t.damage.decode_u64());
+                let total = dmg.last().copied().unwrap_or(0);
+                target_damage_1s.push(json!([dmg]));
+                target_power_damage_1s.push(json!([row
+                    .map_or_else(|| zeros.clone(), |t| t.power_damage.decode_u64())]));
+                dps_targets.push(json!([ {
+                    "dps": (total as f64 / duration_secs).round() as i64,
+                    "damage": total,
+                } ]));
+            }
             obj.insert("targetDamage1S".to_string(), json!(target_damage_1s));
-            let target_power_damage_1s: Vec<Value> = legacy
-                .ei_targets
-                .iter()
-                .map(|e| {
-                    let series = ps
-                        .per_target
-                        .iter()
-                        .find(|t| t.enemy_id == e.id)
-                        .map(|t| t.power_damage.clone())
-                        .unwrap_or_else(|| vec![0u64; buckets]);
-                    json!([series])
-                })
-                .collect();
             obj.insert("targetPowerDamage1S".to_string(), json!(target_power_damage_1s));
-
-            let dps_targets: Vec<Value> = legacy
-                .ei_targets
-                .iter()
-                .map(|e| match p.dps_targets.iter().find(|d| d.enemy_id == e.id) {
-                    Some(d) => json!([ { "dps": d.dps.round() as i64, "damage": d.damage } ]),
-                    None => json!([ { "dps": 0, "damage": 0 } ]),
-                })
-                .collect();
             obj.insert("dpsTargets".to_string(), json!(dps_targets));
         }
         // `guildID` (MEIGAP Task 3c): GW2EI's own field, decoded from the
@@ -1739,14 +1653,37 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // then drops the array (`axibridge src/main/detailsProcessing.ts:
         // 128-142,167-170`), which is why the array itself is fine to keep
         // behind the timeline gate.
-        if let Some(bs) = boon_states {
-            let states = axilog_core::analysis::buffs::states::boon_count_states(bs, p.agent_addr);
-            if !states.is_empty() {
+        //
+        // Task 12: folded from `blocks.boons`' own `states` rather than from
+        // the side channel. `boon_count_states` did this fold in
+        // axilog-core against a map that no longer exists in that shape;
+        // the fold itself is unchanged, including its two subtleties -- the
+        // per-boon clamp to PRESENCE (an intensity boon at 25 stacks counts
+        // once), and folding even the first boon through the merge, since
+        // clamping can leave two consecutive pairs at the same value.
+        if let Some(rows) = n_boons {
+            let mut states: Vec<(u64, u32)> = vec![(0, 0)];
+            let mut any = false;
+            for row in rows.values() {
+                // `Some([])` means the timeline pass ran and this player
+                // never held the boon -- skipped, not folded, so a player
+                // with no boons at all still yields no `boonsStates` key
+                // rather than a lone `[[0, 0]]`.
+                let Some(timeline) = row.states.as_ref().filter(|t| !t.is_empty()) else {
+                    continue;
+                };
+                let presence: Vec<(u64, u32)> =
+                    timeline.iter().map(|&(t, v)| (t, v.min(1))).collect();
+                states =
+                    axilog_core::analysis::buffs::states::merge_step_timelines(&states, &presence);
+                any = true;
+            }
+            if any {
                 let obj = v.as_object_mut().expect("player value is always a JSON object");
                 obj.insert("boonsStates".to_string(), ei_states_json(&states));
             }
         }
-        if let Some(instid) = p.instid {
+        if let Some(instid) = entity.and_then(|e| e.instid) {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert("instanceID".to_string(), Value::from(instid));
         }
@@ -1756,7 +1693,14 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // See `axilog_core::analysis::health::ei_health_percents` for the
         // `ListFromStates` transcription. Emitted even when empty, matching
         // GW2EI's own always-a-list shape for a tracked actor.
-        if let Some(series) = health_percents.and_then(|m| m.get(&p.agent_addr)) {
+        //
+        // Task 6: read from `blocks.series`, whose per-entity rows exist
+        // exactly when `--timeseries` was requested -- the same condition
+        // that used to make `EiInputs::health_percents` `Some`. The field
+        // is itself an `Option` (see its doc comment): a player who never
+        // emitted a `HEALTH_UPDATE` is absent from the pass's map and gets
+        // no key here, exactly as when this read the side channel.
+        if let Some(series) = n_series.and_then(|s| s.health_percents.as_ref()) {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert(
                 "healthPercents".to_string(),
@@ -1768,9 +1712,9 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 ),
             );
         }
-        if let Some(g) = &p.guild_id {
+        if let Some(g) = entity.and_then(|e| e.guild_id.as_deref()) {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
-            obj.insert("guildID".to_string(), Value::from(g.clone()));
+            obj.insert("guildID".to_string(), Value::from(g.to_string()));
         }
         // `extHealingStats`/`extBarrierStats` (M10 Task 1): only when this
         // log carries the healing extension at all (`p.healing` is `None`
@@ -1797,16 +1741,29 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         //
         // MEIGAP Task 3a fills in three of those gaps --
         // `outgoingHealingAllies`, `totalHealingDist`, `healing1S` (and
-        // the two barrier twins) -- from `EiInputs::healing_detail`. The
-        // rest of the sentence above still stands: the skill-type
-        // breakdown, `incomingHealing` and every `allied*`/`*Received1S`
-        // array remain uncomputed and unemitted.
-        if let Some(h) = &p.healing {
-            let detail = healing_detail.and_then(|d| d.get(player_idx));
+        // the two barrier twins). Side-channel absorption Task 10 moved
+        // their source off `EiInputs` and onto the native container:
+        // `blocks.healing.by_entity[].detail` for the matrices and dists,
+        // `blocks.series.by_entity[].healing_1s` for the graph. The two
+        // `bool`s that used to gate them here are gone with it -- each
+        // field's own presence in the native document now answers the flag
+        // question the `bool` used to mirror. The rest of the sentence
+        // above still stands: the skill-type breakdown, `incomingHealing`
+        // and every `allied*`/`*Received1S` array remain uncomputed and
+        // unemitted.
+        //
+        // Task 13: the three scalars come from the native row too, not just
+        // the detail hanging off it. The gate is unchanged in meaning --
+        // `build_healing` inserts a row exactly when the legacy
+        // `PlayerOut::healing` is `Some`, i.e. when the log carries the
+        // arcdps healing extension for this player -- so an extension-less
+        // log still emits neither `extHealingStats` nor `extBarrierStats`.
+        if let Some(h) = n_healing {
+            let detail = h.detail.as_ref();
             let mut healing = json!({
                 "outgoingHealing": [ {
-                    "healing": h.healing_out_total,
-                    "hps": (h.healing_out_total as f64 / duration_secs).round() as i64,
+                    "healing": h.outgoing_total,
+                    "hps": (h.outgoing_total as f64 / duration_secs).round() as i64,
                     "downedHealing": h.downed_healing_out,
                     "downedHps": (h.downed_healing_out as f64 / duration_secs).round() as i64,
                 } ]
@@ -1839,12 +1796,20 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 // which GW2EI also emits unconditionally; axibridge
                 // hardcodes the flag to `true`, so the read surface is
                 // unchanged.
-                if healing_dist {
+                {
+                    // Native `by_ally` is keyed by the ally's entity id and
+                    // omits all-zero cells; EI's arrays are dense and
+                    // positional over `players[]`. `player_ids` is that
+                    // position -> id map, so walking it in order re-densifies
+                    // the matrix, and a missing key is the measured zero the
+                    // native block means it to be.
+                    let ally_cells = || {
+                        player_ids.iter().map(|id| d.by_ally.get(id).copied().unwrap_or_default())
+                    };
                     ho.insert(
                         "outgoingHealingAllies".to_string(),
                         Value::Array(
-                            d.ally_healing
-                                .iter()
+                            ally_cells()
                                 .map(|c| {
                                     json!([ { "healing": c.healing, "downedHealing": c.downed_healing } ])
                                 })
@@ -1854,7 +1819,7 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                     bo.insert(
                         "outgoingBarrierAllies".to_string(),
                         Value::Array(
-                            d.ally_barrier.iter().map(|&b| json!([ { "barrier": b } ])).collect(),
+                            ally_cells().map(|c| json!([ { "barrier": c.barrier } ])).collect(),
                         ),
                     );
                     // Two shape divergences from GW2EI, both deliberate and
@@ -1883,16 +1848,17 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                     //    whose name this project cannot resolve.
                     ho.insert(
                         "totalHealingDist".to_string(),
-                        json!([ heal_dist_json(&d.healing_dist, "totalHealing", true) ]),
+                        json!([ heal_dist_json(&d.by_skill, "totalHealing", true) ]),
                     );
                     bo.insert(
                         "totalBarrierDist".to_string(),
-                        json!([ heal_dist_json(&d.barrier_dist, "totalBarrier", false) ]),
+                        json!([ heal_dist_json(&d.barrier_by_skill, "totalBarrier", false) ]),
                     );
                 }
-                if healing_series {
-                    ho.insert("healing1S".to_string(), json!([ d.healing_1s ]));
-                }
+            }
+            if let Some(s) = n_series.and_then(|s| s.healing_1s.as_ref()) {
+                let ho = healing.as_object_mut().expect("object literal");
+                ho.insert("healing1S".to_string(), json!([s.decode_u64()]));
             }
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert("extHealingStats".to_string(), healing);
@@ -1905,7 +1871,12 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // readers both start with an `Array.isArray(...) ? ... : []` guard,
         // so an empty array and an absent key are equivalent to it. Absent
         // is the smaller and the more faithful of the two.
-        if let Some(groups) = minions.and_then(|m| m.get(player_idx)).filter(|g| !g.is_empty()) {
+        //
+        // Task 6: read from `blocks.minions`. The block omits a player
+        // with no minions rather than storing an empty vec, so the row's
+        // mere presence is the condition the `filter(|g| !g.is_empty())`
+        // used to express.
+        if let Some(groups) = n_minions {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert(
                 "minions".to_string(),
@@ -1913,11 +1884,20 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                     groups
                         .iter()
                         .map(|g| {
+                            // Identity comes back through `catalogs.
+                            // minions` -- no block in the native format
+                            // inlines a name, so the block carries only
+                            // the join key.
+                            let ident = report.catalogs.minions.get(&g.minion_id);
                             json!({
-                                "id": g.species_id,
-                                "name": g.name,
-                                "totalDamageTakenDist": [ g.taken.iter().map(|r| json!({
-                                    "id": r.skill_id,
+                                "id": ident.map_or(0, |m| m.species_id),
+                                "name": ident.map_or("", |m| m.name.as_str()),
+                                // `taken` is a `BTreeMap` keyed by skill
+                                // id, which iterates in the same ascending
+                                // order the pass's sorted vec had, so this
+                                // array's order is unchanged.
+                                "totalDamageTakenDist": [ g.taken.iter().map(|(skill_id, r)| json!({
+                                    "id": skill_id,
                                     "totalDamage": r.total,
                                     "hits": r.hits,
                                     "connectedHits": r.connected_hits,
@@ -1958,29 +1938,43 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // documented `InstantCastEvent`-pipeline scope gap, which applies
         // here identically since this is a direct copy of the same
         // already-computed data).
-        if let Some(rotation) = &p.rotation {
-            let obj = v.as_object_mut().expect("player value is always a JSON object");
-            let rotation_json: Vec<Value> = rotation
-                .iter()
-                .map(|sr| {
-                    json!({
-                        "id": sr.skill_id,
-                        "skills": sr.casts.iter().map(|c| json!({
-                            "castTime": c.cast_time_ms,
-                            "duration": c.duration_ms,
-                            "timeGained": c.time_gained_ms,
-                            "quickness": c.quickness,
-                        })).collect::<Vec<_>>(),
-                    })
-                })
+        //
+        // Task 13: read from `blocks.rotation`, whose `casts` is the
+        // `--rotation` gate record (see its doc) -- so `Some([])` still
+        // emits `rotation: []` for a player who cast nothing, exactly as
+        // the legacy `Some(vec![])` did, and an absent field still emits no
+        // key at all.
+        //
+        // The native list is FLAT and cast-ordered while EI's is grouped by
+        // skill id, so the grouping is rebuilt here. Both orderings come out
+        // identical to the legacy shape without a sort: the groups land in
+        // skill-id order because the `BTreeMap` puts them there (which is
+        // what `rotation::RotationMetrics` documents as its own ordering),
+        // and the casts inside each group stay in time order because the
+        // native list is already sorted by `(cast_time_ms, skill_id)`.
+        if let Some(casts) = n_rotation.and_then(|r| r.casts.as_ref()) {
+            let mut by_skill: std::collections::BTreeMap<u32, Vec<Value>> =
+                std::collections::BTreeMap::new();
+            for c in casts {
+                by_skill.entry(c.skill_id).or_default().push(json!({
+                    "castTime": c.cast_time_ms,
+                    "duration": c.duration_ms,
+                    "timeGained": c.time_gained_ms,
+                    "quickness": c.quickness,
+                }));
+            }
+            let rotation_json: Vec<Value> = by_skill
+                .into_iter()
+                .map(|(skill_id, skills)| json!({ "id": skill_id, "skills": skills }))
                 .collect();
+            let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert("rotation".to_string(), json!(rotation_json));
         }
         // `damageModifiers` / `incomingDamageModifiers` /
         // `damageModifiersTarget` / `incomingDamageModifiersTarget` (M16,
-        // Task 3): all four, together, exactly when `EiInputs::modifiers`
-        // is present -- same "presence, not a flag" convention as
-        // `rotation`/`totalDamageDist` above.
+        // Task 3): all four, together, exactly when the native
+        // `blocks.damage_mods` is present -- same "presence, not a flag"
+        // convention as `rotation`/`totalDamageDist` above.
         //
         // Real EI shape (`JsonDamageModifierDataBuilder.cs:38-160`,
         // cross-checked field-for-field against the reference WvW export):
@@ -1997,30 +1991,38 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         //   emitting the empty shape everywhere would be a real data loss,
         //   not a cosmetic one.
         //
-        // The Target arrays are emitted whenever `modifiers` is present;
+        // The Target arrays are emitted whenever the block is present;
         // when the caller ran the engine WITHOUT the per-target split (the
-        // native `--format json` path, which has no use for it) every slot
-        // is simply `[]`, which is the shape EI emits for a target with no
-        // rows anyway.
-        if let Some(mods) = modifiers {
+        // native `--format json` path, which has no use for it) the block's
+        // `per_target` maps are empty and every slot is simply `[]`, which
+        // is the shape EI emits for a target with no rows anyway.
+        //
+        // Task 13: read from `blocks.damage_mods`, whose PRESENCE is the
+        // gate -- the block is built exactly when the engine ran (see
+        // `build_report_v1`), so no `EiInputs` flag is needed. An entity
+        // with no row inside a present block genuinely landed no
+        // qualifying hit, which is the empty pair EI emits anyway.
+        if let Some(n_mods) = report.blocks.damage_mods.as_ref() {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
+            let row = entity_id.and_then(|id| n_mods.by_entity.get(id));
+            let empty = std::collections::BTreeMap::new();
             let (outgoing, incoming) = ei_damage_mod_split(
-                mods.overall
-                    .range((p.agent_addr, i32::MIN)..=(p.agent_addr, i32::MAX))
-                    .map(|(&(_, id), s)| (id, s))
-                    .collect(),
+                row.map_or(&empty, |r| &r.overall).iter().map(|(&id, s)| (id, s)).collect(),
             );
             obj.insert("damageModifiers".to_string(), json!(outgoing));
             obj.insert("incomingDamageModifiers".to_string(), json!(incoming));
 
-            let mut out_t: Vec<Value> = Vec::with_capacity(legacy.ei_targets.len());
-            let mut in_t: Vec<Value> = Vec::with_capacity(legacy.ei_targets.len());
-            for e in &legacy.ei_targets {
+            // Native keys the split by target ENTITY id and omits the
+            // targets with nothing to report; EI's shape is one slot per
+            // `targets[]` entry regardless. Re-inflating that density is
+            // this adapter's job, and `join.targets()` is the one place
+            // that order is defined.
+            let mut out_t: Vec<Value> = Vec::new();
+            let mut in_t: Vec<Value> = Vec::new();
+            for (_, target_id, _) in join.targets() {
+                let rows = row.and_then(|r| r.per_target.get(&target_id));
                 let (o, i) = ei_damage_mod_split(
-                    mods.per_target
-                        .range((p.agent_addr, e.id, i32::MIN)..=(p.agent_addr, e.id, i32::MAX))
-                        .map(|(&(_, _, id), s)| (id, s))
-                        .collect(),
+                    rows.map_or(&empty, |m| m).iter().map(|(&id, s)| (id, s)).collect(),
                 );
                 out_t.push(json!(o));
                 in_t.push(json!(i));
@@ -2149,31 +2151,64 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // `targets[]` carries `profession: null` on all 57 rows. This crate
     // emits that key anyway as a deliberate superset; see the `profession`
     // comment on the target object below for why.
-    // Bucket count for an enemy that never dealt damage (MEIGAP Task 2b):
-    // read off any enemy that did, since every series in the map is built
-    // to the one length `axilog_core::analysis::timeseries::ei_grid`
-    // computes (GW2EI's own `InterpolatedGraph` allocation). Falling back to
-    // a player's own `per_second.damage` length keeps the arrays aligned
-    // even on the degenerate log where no enemy dealt any damage at all.
-    let enemy_buckets = enemy_series
-        .and_then(|m| m.values().next().map(|s| s.damage.len()))
-        .or_else(|| legacy.players.iter().find_map(|p| p.per_second.as_ref()).map(|ps| ps.damage.len()))
-        .unwrap_or(0);
     // MSTREAM: one target row, built on demand — same treatment as
     // `player_json` above, body unchanged. This builder is genuinely
     // stateful: `enemy_track` is walked forward by the enemy-PLAYER rows
     // only, so the rows MUST be produced in ascending index order exactly
     // once. `LazySeq` does precisely that (`for i in 0..len`), which is the
     // same order the old `.map(..).collect()` produced.
-    let mut enemy_track = replay.map(|r| r.tracks[legacy.players.len()..].iter());
+    let mut enemy_track = replay.map(|r| r.tracks[player_count..].iter());
     let detected_targets = detected.clone();
+    // The `targets[]` re-point. Everything identity-shaped now comes from
+    // the native `entities[]` row this slot resolves to, through the one
+    // ordering helper; `dpsAll` comes from that entity's `blocks.damage`
+    // row. Task 13 drained the last of the side channel: `combatReplayData`'s
+    // position surface is the only thing still arriving from outside the
+    // document, and it is never absorbed at all -- see [`EiReplayInput`].
+    let join = crate::join::EiJoin::new(report);
+    // The `--skill-damage` presence signal for `targets[].totalDamageDist`.
+    //
+    // Task 7 absorbed the DATA onto `blocks.damage` but not the gate: an
+    // empty `by_skill` on an enemy row could not distinguish "the flag was
+    // off" from "this enemy landed nothing", and the flagless render must
+    // omit the key rather than emit `[[]]`. Task 13 fixed that at the
+    // source instead of here -- `DamageEntity::by_skill` is now `Option`,
+    // `Some({})` for an enemy the pass found nothing for -- so this is a
+    // native read, and the player-side branch a few hundred lines above
+    // moved to the SAME record at the same time. Any row answers it, since
+    // the gate is a property of the run and not of the row.
+    let skill_damage_requested = report
+        .blocks
+        .damage
+        .as_ref()
+        .is_some_and(|d| d.by_entity.0.values().any(|r| r.by_skill.is_some()));
     let target_json: Box<dyn FnMut(usize) -> Value + 'a> = Box::new(move |target_idx: usize| {
-        let e = &legacy.ei_targets[target_idx];
+        let entity_id = report.source_order.targets().get(target_idx).copied();
+        let entity = entity_id.and_then(|id| join.entity(id));
+        // EI's `targets[].id` is the enemy's agent address. Native keeps
+        // that on `EntityOut::agent_addr` for every role -- for an enemy
+        // it IS `EnemyOut::id`, which is what `EntityIndex::by_enemy_id`
+        // joins on -- so this is the same integer the legacy row carried,
+        // not a re-derivation. It also stays the key for the three
+        // side-channel maps read further down, which are still keyed by
+        // enemy id until their own tasks move them.
+        let enemy_id = entity.map_or(0, |e| e.agent_addr);
+        // `enemyPlayer` was `EnemyOut::is_player`; natively that IS the
+        // role, and `build_entities` assigns the two from each other.
+        let is_player = entity.is_some_and(|e| e.role == axilog_schema::v1::entities::Role::EnemyPlayer);
+        let profession = entity.and_then(|e| e.profession.as_deref()).unwrap_or("");
+        let elite_spec = entity.and_then(|e| e.elite_spec.as_deref()).unwrap_or("");
+        let team = entity.map_or("", |e| e.team.as_str());
+        let damage_out = entity_id
+            .and_then(|id| report.blocks.damage.as_ref()?.by_entity.get(id))
+            .map_or(0, |d| d.total);
         let team_id_for = |color: &str| -> u64 {
             detected_targets.get(color).copied().unwrap_or_else(|| representative_team_id(color))
         };
         let mut t = json!({
-            "id": e.id, "name": e.name, "enemyPlayer": e.is_player,
+            "id": enemy_id,
+            "name": entity_id.map_or("", |id| join.display_name(id)),
+            "enemyPlayer": is_player,
             // `profession` (MENEMYPROF) -- a DELIBERATE SUPERSET of EI's
             // shape, and the only field on this object that real EI does
             // not also emit. GW2EI's `JsonNPC` has no profession member at
@@ -2193,9 +2228,9 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // `null` for an NPC/gadget target, matching EI's own value
             // there, so nothing that already tolerates the reference
             // export's all-null column regresses.
-            "profession": e.elite_spec.as_deref()
+            "profession": Some(elite_spec)
                 .filter(|s| !s.is_empty())
-                .or(e.profession.as_deref())
+                .or(Some(profession))
                 .filter(|s| !s.is_empty()),
             // `dpsAll` (MEIGAP2 row 5): the enemy's OUTGOING damage total,
             // GW2EI's `JsonActor.DpsAll[0]` over `GetDamageStats(log,
@@ -2212,21 +2247,21 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // `breakbarDamage`) are not computed per enemy and are omitted
             // rather than faked.
             "dpsAll": [ {
-                "dps": (e.damage_out as f64 / duration_secs).round() as i64,
-                "damage": e.damage_out,
+                "dps": (damage_out as f64 / duration_secs).round() as i64,
+                "damage": damage_out,
             } ],
-            "teamID": team_id_for(&e.team), "isFake": false
+            "teamID": team_id_for(team), "isFake": false
         });
         // `instanceID` (MEIGAP2 row 3), the target twin of the player field
         // above -- same `JsonActor.InstanceID` source, same absent-means-
         // unknown encoding. axibridge de-duplicates enemy targets on it
         // (`ExpandableLogCard.tsx:420,477`, `src/main/discord.ts:173,452`:
         // `t?.instanceID ?? t?.instid ?? t?.id ?? rawName`).
-        if let Some(instid) = e.instid {
+        if let Some(instid) = entity.and_then(|e| e.instid) {
             let obj = t.as_object_mut().expect("target value is always a JSON object");
             obj.insert("instanceID".to_string(), Value::from(instid));
         }
-        if e.is_player {
+        if is_player {
             if let Some(track) = enemy_track.as_mut().and_then(|it| it.next()) {
                 // Correction to the earlier audit fix: `combatReplayData` is
                 // NOT gated on the actor having any polled positions.
@@ -2265,10 +2300,7 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                         // unrecognized-spec icon. An NPC/gadget target
                         // still gets the fallback, which is correct -- it
                         // has no spec to resolve.
-                        "iconURL": prof_icon_url(
-                            e.profession.as_deref().unwrap_or(""),
-                            e.elite_spec.as_deref().unwrap_or(""),
-                        ),
+                        "iconURL": prof_icon_url(profession, elite_spec),
                         "positions": ei_positions_json(&track.positions),
                         "orientations": ei_orientations_json(&track.orientations),
                         "dead": ei_intervals_json(&track.dead),
@@ -2283,48 +2315,88 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // `skill_damage`/`per_second` already use on the player side), so a
         // flagless render emits none of them and stays byte-identical.
         let obj = t.as_object_mut().expect("target is a JSON object");
-        if let Some(series) = enemy_series {
-            // `targets[].damage1S`/`.powerDamage1S` are this enemy's OUTGOING
-            // damage, `[phase][second]`-shaped exactly like the player-side
-            // `damage1S` -- built by the SHARED `JsonActorBuilder.
-            // FillJsonActor` (`JsonActorBuilder.cs:72-73`) over an NPC actor
-            // (`JsonNPCBuilder.cs:20` calls it first). An enemy that never
-            // dealt damage gets a full-length zero series, not an absent
-            // key, matching EI's always-present arrays.
-            let (damage, power) = match series.get(&e.id) {
-                Some(s) => (s.damage.clone(), s.power_damage.clone()),
-                None => (vec![0u64; enemy_buckets], vec![0u64; enemy_buckets]),
-            };
-            obj.insert("damage1S".to_string(), json!([damage]));
-            obj.insert("powerDamage1S".to_string(), json!([power]));
+        // `targets[].damage1S`/`.powerDamage1S` are this enemy's OUTGOING
+        // damage, `[phase][second]`-shaped exactly like the player-side
+        // `damage1S` -- built by the SHARED `JsonActorBuilder.
+        // FillJsonActor` (`JsonActorBuilder.cs:72-73`) over an NPC actor
+        // (`JsonNPCBuilder.cs:20` calls it first). An enemy that never dealt
+        // damage still gets a full-length zero series rather than an absent
+        // key, matching EI's always-present arrays -- but that zero-fill now
+        // happens in `build_series`, so an absent native row here means the
+        // `--timeseries` gate was off, which is the whole reason this branch
+        // can key off the native block instead of a side-channel `Option`.
+        if let Some(row) = entity_id
+            .and_then(|id| report.blocks.series.as_ref()?.by_entity.get(id))
+        {
+            obj.insert("damage1S".to_string(), json!([row.damage.decode_u64()]));
+            // An enemy row always carries the outgoing power split; the
+            // `unwrap_or_default` is for the type, not for a case that
+            // happens. A missing one would be a builder bug, and an empty
+            // array is a visibly wrong answer rather than a plausible one.
+            obj.insert(
+                "powerDamage1S".to_string(),
+                json!([row.power_damage.as_ref().map(|s| s.decode_u64()).unwrap_or_default()]),
+            );
         }
-        if let Some(dist) = enemy_dist {
+        if skill_damage_requested {
             // `targets[].totalDamageDist[0]`: this enemy's OUTGOING damage
             // by skill, ACTOR-ONLY (`GetJustActorDamageEvents`) -- see
             // `skill_damage::build_enemy_dist`'s doc comment, including why
-            // the contributing-hit count is emitted as `connectedHits`
+            // the connecting-hit count is emitted as `connectedHits`
             // (the key axibridge's mitigation math divides by) rather than
             // as EI's attempt-count `hits`.
-            let skills: Vec<Value> = dist
-                .get(&e.id)
-                .map(|v| v.iter().map(enemy_skill_entry_ei_json).collect())
+            //
+            // Side-channel absorption Task 7: read off the enemy's own
+            // `blocks.damage` row, the SAME `by_skill` map the player rows
+            // use. `SkillRow::connected_hits` is the field the enemy pass
+            // fills (`SkillRow::hits` is the friendly side's
+            // contributing-row count and is absent here) -- so this maps
+            // one field to one key rather than reinterpreting `hits` by the
+            // row's role, which is what putting both counts in one field
+            // would have forced.
+            let skills: Vec<Value> = entity_id
+                .and_then(|id| report.blocks.damage.as_ref()?.by_entity.get(id))
+                .and_then(|d| d.by_skill.as_ref())
+                .map(|by_skill| {
+                    by_skill
+                        .iter()
+                        .map(|(skill_id, r)| {
+                            json!({
+                                "id": skill_id,
+                                "totalDamage": r.total,
+                                "min": r.min,
+                                "max": r.max,
+                                "connectedHits": r.connected_hits.unwrap_or(0),
+                                "crit": r.crit_hits,
+                                "flank": r.flank_hits,
+                            })
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
             obj.insert("totalDamageDist".to_string(), json!([skills]));
         }
-        if let Some(tc) = target_conditions {
+        if let Some(n_conditions) = report.blocks.conditions.as_ref() {
             // `targets[].buffs[]`: `{id, statesPerSource}` per condition
             // this enemy carried, source-split by squad-player character
             // name -- see `axilog_core::analysis::target_conditions`'s
             // module doc for the direction citation and the deliberate
             // conditions-only / `statesPerSource`-only narrowing.
-            let buffs: Vec<Value> = tc
-                .range((e.id, 0u32)..=(e.id, u32::MAX))
-                .map(|(&(_, buff_id), per_source)| {
-                    let states: BTreeMap<&str, Value> = per_source
-                        .iter()
-                        .map(|(name, tl)| (name.as_str(), ei_states_json(tl)))
-                        .collect();
-                    json!({ "id": buff_id, "statesPerSource": states })
+            //
+            // Task 12: read off `blocks.conditions` rather than a side
+            // channel. The block's own presence is the gate, and the row
+            // key is this enemy's ENTITY id -- the same id `targets[]` was
+            // built from just above, so no second join is needed.
+            let buffs: Vec<Value> = entity_id
+                .and_then(|id| n_conditions.by_entity.get(id))
+                .into_iter()
+                .flatten()
+                .map(|(&buff_id, row)| {
+                    json!({
+                        "id": buff_id,
+                        "statesPerSource":
+                            ei_states_per_source(&join, &squad_ids_targets, Some(&row.per_source)),
+                    })
                 })
                 .collect();
             obj.insert("buffs".to_string(), json!(buffs));
@@ -2350,30 +2422,30 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // (`conditionsMetrics.ts:311-314`), so without these rows the whole
     // `targets[].buffs` array would be dead payload. Gated on the same
     // input so the flagless `buffMap` stays byte-identical.
-    // NOT yet re-pointed onto `report.catalogs.buffs`, though it looks
-    // ready: the 12 flagless boon ids match exactly, and native's
-    // `stacking: "intensity"|"duration"` maps onto EI's boolean with no
-    // residue. The blocker is the CONDITION half. Native's catalog is
-    // referenced-scoped, and nothing references the 14 condition ids until
-    // the conditions block exists (Task 12), so re-pointing now empties
-    // the condition rows out of `buffMap` while `targets[].buffs` still
-    // emits those ids -- which axibridge answers by DROPPING each entry
-    // whose id misses `resolveBuffMetaById`. `ei_json_meigap2_target_
-    // mirrors_are_gated_and_internally_consistent` catches exactly this.
-    // Re-point this map in Task 12, once conditions register natively.
-    let mut buff_map: BTreeMap<String, Value> = BOON_IDS.iter().map(|&(id, name, is_intensity)| {
-        (ei_catalog_key('b', i64::from(id)), json!({ "name": name, "stacking": is_intensity }))
-    }).collect();
-    if target_conditions.is_some() {
-        for (id, name, is_intensity) in
-            axilog_core::analysis::target_conditions::condition_buff_map()
-        {
-            buff_map.insert(
+    // Task 12 re-points this onto `report.catalogs.buffs`, which the
+    // previous note here said was blocked only by the condition half: the
+    // native catalog is REFERENCE-scoped, and nothing referenced the 14
+    // condition ids until `blocks.conditions` existed. It does now, and
+    // `build_conditions` registers each id it emits a row for, so the
+    // catalog gains exactly the ids `targets[].buffs` emits -- which is the
+    // invariant `ei_json_meigap2_target_mirrors_are_gated_and_internally_
+    // consistent` checks, and which axibridge's `resolveBuffMetaById`
+    // depends on (it DROPS any target-buff entry whose id misses).
+    //
+    // `stacking` narrows from native's `"intensity"|"duration"` to EI's
+    // boolean. That is the direction that loses nothing: the native string
+    // is the richer spelling of the same two-valued fact.
+    let buff_map: BTreeMap<String, Value> = report
+        .catalogs
+        .buffs
+        .iter()
+        .map(|(&id, entry)| {
+            (
                 ei_catalog_key('b', i64::from(id)),
-                json!({ "name": name, "stacking": is_intensity }),
-            );
-        }
-    }
+                json!({ "name": entry.name, "stacking": entry.stacking == "intensity" }),
+            )
+        })
+        .collect();
     // `skillMap` (M14, Task 3): keyed `"s<id>"` per real EI's convention
     // (verified against axibridge's `test-fixtures/boon/
     // 20260117-181030.json`, `skillMap.s45534` etc -- same `"s"`-prefix
@@ -2456,7 +2528,11 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // missing and has been added to the native entry by this task: the
     // adapter emitting a value the native document cannot produce is
     // exactly the superset violation this milestone exists to remove.
-    let damage_mod_map: Option<BTreeMap<String, Value>> = modifiers.map(|_| {
+    //
+    // Task 13: the gate is now `blocks.damage_mods`' presence, the same
+    // signal the per-player rows above read -- so the map and the rows it
+    // describes cannot be emitted off different conditions.
+    let damage_mod_map: Option<BTreeMap<String, Value>> = report.blocks.damage_mods.as_ref().map(|_| {
         report
             .catalogs
             .damage_mods
@@ -2517,9 +2593,9 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         fight_name: format!("Detailed WvW - {}", report.encounter.map),
         duration_ms: report.encounter.duration_ms,
         recorded_by,
-        player_count: legacy.players.len(),
+        player_count,
         player_json: LazyRows::new(player_json),
-        target_count: legacy.ei_targets.len(),
+        target_count: report.source_order.targets().len(),
         target_json: LazyRows::new(target_json),
         buff_map,
         skill_map,
@@ -2542,18 +2618,15 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
 /// carried as a `Value` into the serializer). No trailing newline is written;
 /// the CLI appends its own, exactly as it did when it `format!`-ed one on.
 ///
-/// `report`/`legacy` is the side-channel absorption's TRANSITIONAL
-/// three-argument form (Task 3 of that plan): `report` is the 1.0
-/// [`ReportV1`], `legacy` the pre-absorption [`Report`]. Each later task in
-/// that plan drains one more surface off `legacy` onto `report`; the final
-/// task deletes both this parameter split and `EiInputs`.
+/// `report` is the native 1.0 [`ReportV1`] and, since side-channel
+/// absorption Task 13, the only source this document is rendered from --
+/// apart from [`EiReplayInput`], whose doc explains why that one stays.
 pub fn write_ei_json<W: std::io::Write>(
     report: &ReportV1,
-    legacy: &Report,
-    inputs: &EiInputs<'_>,
+    replay: EiReplayInput<'_>,
     w: W,
 ) -> serde_json::Result<()> {
-    let doc = ei_doc(report, legacy, inputs);
+    let doc = ei_doc(report, replay);
     let mut ser = serde_json::Serializer::with_formatter(
         w,
         serde_json::ser::PrettyFormatter::new(),
@@ -2561,22 +2634,22 @@ pub fn write_ei_json<W: std::io::Write>(
     serde::Serialize::serialize(&doc, &mut ser)
 }
 
-/// Render a [`Report`] plus its EI-only side inputs as an Elite-Insights-
-/// compatible `serde_json::Value`.
+/// Render a [`ReportV1`] as an Elite-Insights-compatible
+/// `serde_json::Value`.
 ///
 /// The SDK-facing entry point: `axilog-node` hands the tree to napi and
 /// `axilog-py` hands it to pythonize, both of which need a materialized
 /// `Value` anyway, so there is nothing to stream away for them. It shares
-/// [`ei_doc`] with [`write_ei_json`] — one definition of the format, no
+/// its document builder with [`write_ei_json`] — one definition of the format, no
 /// second tree-builder to drift.
 ///
 /// Prefer [`write_ei_json`] whenever the destination is a file, a socket, or
 /// stdout: this function's peak memory is the whole document.
 ///
-/// See [`EiInputs`] for what each input gates; `EiInputs::default()` renders
-/// everything that is derivable from the `Report` alone.
-pub fn to_ei_json(report: &ReportV1, legacy: &Report, inputs: &EiInputs<'_>) -> Value {
-    let doc = ei_doc(report, legacy, inputs);
+/// See [`EiReplayInput`] for what the one remaining input gates; `None`
+/// renders everything the native document can answer on its own.
+pub fn to_ei_json(report: &ReportV1, replay: EiReplayInput<'_>) -> Value {
+    let doc = ei_doc(report, replay);
     serde_json::to_value(&doc).expect("ei-json document is infallibly serializable")
 }
 
@@ -2587,13 +2660,15 @@ mod tests {
     /// The cheapest valid `ReportV1` for the unit tests below, which
     /// predate the native container and hand-build a legacy `Report`
     /// directly -- often with no `Encounter`/`Metrics` in scope to run
-    /// `axilog_schema::v1::build_report_v1` against. RULING T3-3 (side-
-    /// channel absorption plan, Task 3): these tests stay on the legacy
-    /// path and are not migrated to build a real `ReportV1` here -- they
-    /// exercise rendering off `legacy`, not the four scalars this task
-    /// moved onto `report` (`fightName`/`durationMS`/`recordedBy`/
-    /// `wvWMapData`), so an empty shell is sufficient. They migrate for
-    /// real in Task 13, when `EiInputs`/the two-`Report` split are deleted.
+    /// `axilog_schema::v1::build_report_v1` against.
+    ///
+    /// Task 13 ended the era where that was enough for most of them: with
+    /// nothing rendered off `legacy` any more, a test that asserts on a
+    /// player row needs a document that HAS one. Those went to
+    /// [`shell_v1_for`], which projects the rosters (and the three blocks
+    /// whose contents moved) from the same hand-built report. This bare
+    /// shell remains for the tests that assert on the document's
+    /// top-level scalars alone.
     fn empty_report_v1() -> axilog_schema::v1::ReportV1 {
         axilog_schema::v1::ReportV1 {
             axilog: axilog_schema::v1::envelope::AxilogMeta {
@@ -2621,7 +2696,12 @@ mod tests {
         }
     }
 
-    fn sample_report() -> axilog_schema::Report {
+    /// The one `Encounter`/`Metrics` pair behind both `sample_report()`
+    /// and `sample_report_v1()`. They used to carry a copy each, which is
+    /// a real hazard now that the adapter reads BOTH documents for the
+    /// same row: the moment the copies drift, a test asserts against a
+    /// pair no pipeline could ever produce, and it passes.
+    fn sample_inputs() -> (axilog_core::model::Encounter, axilog_core::analysis::Metrics) {
         // Construct via axilog_schema public API by round-tripping from core types.
         use axilog_core::model::{Encounter, Player};
         use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
@@ -2630,7 +2710,15 @@ mod tests {
             duration_ms:1000,build:"".into(),revision:1,recorded_by:Some(":A.1".into()),
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"Daredevil".into(),
-            team:"red".into(),subgroup:2,in_squad:true,commander:true,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
+            team:"red".into(),subgroup:2,in_squad:true,commander:true,marker:None,
+            // A real log never has one without the other: `wvw::apply`'s
+            // last write is `p.commander = p.commander_tag.is_some()`. This
+            // fixture used to set only the bool, which the adapter read
+            // directly; since Task 13 reads `EntityOut::commander` (derived
+            // from the TAG alone), the fixture has to be as consistent as
+            // the pipeline it stands in for.
+            commander_tag:Some(axilog_core::model::CommanderTag{variant:"blue".into(),guid:"g".into()}),
+            guild_id:None,agent_addrs:vec![1]},
             Player{agent_addr:2,account:":B.2".into(),
             character:"B".into(),profession:"Guardian".into(),elite_spec:"".into(),
             team:"red".into(),subgroup:2,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![2]}],
@@ -2662,61 +2750,49 @@ mod tests {
             // filters happen to agree on this fixture, but they are
             // independent; see `maps_core_ei_fields` below.
             combat_participant_enemies: [9u64].into_iter().collect(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default()};
+        (enc, m)
+    }
+
+    fn sample_report() -> axilog_schema::Report {
+        let (enc, m) = sample_inputs();
         axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false, None)
     }
 
-    /// `sample_report()`'s `ReportV1` counterpart, for the one test below
-    /// (`maps_core_ei_fields`) that actually asserts on `durationMS`/
-    /// `recordedBy` -- the two scalars this task moved onto `report`. Every
-    /// other unit test in this module uses `empty_report_v1()` instead
-    /// (RULING T3-3): they don't touch those two fields, so the shell is
-    /// enough. This one needs the real thing, and `sample_report()` already
-    /// builds a real `Encounter`/`Metrics` pair to build a real `ReportV1`
-    /// from -- unlike the hand-built-`Report`-literal tests further down,
-    /// which have no `Encounter`/`Metrics` to give `build_report_v1` at
-    /// all. Duplicated rather than refactored into a shared tuple-
-    /// returning helper, to keep this fix scoped to the one assertion that
-    /// needs it.
+    /// `sample_report()`'s `ReportV1` counterpart, built from the SAME
+    /// `sample_inputs()`.
+    ///
+    /// The rule for choosing between this and `empty_report_v1()` moved
+    /// with the `targets[]` re-point, and is now: **any test whose legacy
+    /// report is `sample_report()` must pair it with this one.** The old
+    /// rule ("the shell is enough unless you assert on `durationMS`/
+    /// `recordedBy`") held only while the re-pointed fields were all
+    /// numeric -- an empty `report` then merely zeroed them, which no
+    /// assertion happened to read. It stops holding the moment a
+    /// re-pointed field is STRUCTURAL: `enemyPlayer` comes from the
+    /// entity's role, so an empty `report` does not zero it, it makes
+    /// every target an NPC and deletes the enemy roster the test is about.
+    ///
+    /// `empty_report_v1()` remains correct for the hand-built-`Report`-
+    /// literal tests further down, which have no `Encounter`/`Metrics` to
+    /// give `build_report_v1` at all and assert only on surfaces still
+    /// read from `legacy`.
     fn sample_report_v1() -> axilog_schema::v1::ReportV1 {
-        use axilog_core::model::{Encounter, Player};
-        use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
-        use axilog_core::model::Enemy;
-        use axilog_core::analysis::contribution::ContributionMetrics;
-        let enc = Encounter{kind:"wvw".into(),map:"Eternal Battlegrounds".into(),
-            duration_ms:1000,build:"".into(),revision:1,recorded_by:Some(":A.1".into()),
-            teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
-            character:"A".into(),profession:"Thief".into(),elite_spec:"Daredevil".into(),
-            team:"red".into(),subgroup:2,in_squad:true,commander:true,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
-            Player{agent_addr:2,account:":B.2".into(),
-            character:"B".into(),profession:"Guardian".into(),elite_spec:"".into(),
-            team:"red".into(),subgroup:2,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![2]}],
-            enemies:vec![Enemy{id:9,instid:9,name:"Foe".into(),team:"blue".into(),
-            is_player:true,marker:None,
-            profession:Some("Necromancer".into()),elite_spec:Some("Reaper".into()),
-            agent_addrs:vec![9]},
-            Enemy{id:10,instid:10,name:"Gadget".into(),team:"blue".into(),
-            is_player:false,marker:None,profession:None,elite_spec:None,
-            agent_addrs:vec![10]}],
-            markers:vec![],tick_rate:None};
-        let m = Metrics{players:vec![
-            PlayerMetrics{agent_addr:1,damage_total:500,dps:500.0,per_enemy:vec![(9,500)],
-            downs_dealt:1,kills_dealt:1,
-            downs_contribution: ContributionMetrics{damage:400,..Default::default()},deaths:0,
-            cc_applied:3,cc_duration_ms:1200,..Default::default()},
-            PlayerMetrics{agent_addr:2,damage_total:300,dps:300.0,
-            downs_dealt:0,kills_dealt:0,deaths:1,..Default::default()}],
-            timeline:Timeline{resolution_ms:1000,squad_damage:vec![800],cc_applied:vec![0],downs:vec![0]},
-            boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(),
-            combat_participant_enemies: [9u64].into_iter().collect(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default()};
+        sample_report_v1_with(&Default::default())
+    }
+
+    /// [`sample_report_v1`] with the caller's own optional passes -- Task 11
+    /// moved `activeTimes`/`combatReplayData` onto `blocks.replay`, so a
+    /// test about those fields now has to put the data in the DOCUMENT
+    /// rather than hand it to `to_ei_json` on the side.
+    fn sample_report_v1_with(passes: &axilog_schema::v1::Passes<'_>) -> axilog_schema::v1::ReportV1 {
+        let (enc, m) = sample_inputs();
         let legacy = axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false, None);
-        axilog_schema::v1::build_report_v1(&enc, &m, &legacy, "0.1.0", None, None)
+        axilog_schema::v1::build_report_v1(&enc, &m, &legacy, "0.1.0", None, passes)
     }
 
     #[test]
     fn maps_core_ei_fields() {
-        let v = to_ei_json(&sample_report_v1(), &sample_report(), &EiInputs::default());
+        let v = to_ei_json(&sample_report_v1(), None);
         assert_eq!(v["durationMS"], 1000);
         assert_eq!(v["recordedBy"], ":A.1");
         assert_eq!(v["players"][0]["account"], ":A.1");
@@ -2774,7 +2850,7 @@ mod tests {
     #[test]
     fn every_target_joined_array_has_one_slot_per_target() {
         let report = sample_report();
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs::default());
+        let v = to_ei_json(&sample_report_v1(), None);
         let n = v["targets"].as_array().expect("targets").len();
         assert_eq!(n, report.ei_targets.len(), "targets[] length is ei_targets' length");
         for p in v["players"].as_array().expect("players") {
@@ -2812,7 +2888,7 @@ mod tests {
     -> (axilog_schema::v1::ReportV1, axilog_schema::Report) {
         let legacy = sample_report_with_boons();
         let (enc, m) = sample_boon_inputs();
-        let v1 = axilog_schema::v1::build_report_v1(&enc, &m, &legacy, "0.1.0", None, None);
+        let v1 = axilog_schema::v1::build_report_v1(&enc, &m, &legacy, "0.1.0", None, &Default::default());
         (v1, legacy)
     }
 
@@ -2856,8 +2932,8 @@ mod tests {
 
     #[test]
     fn buff_map_covers_the_12_tracked_boons_with_computed_fields_only() {
-        let (v1, legacy) = sample_v1_and_report_with_boons();
-        let v = to_ei_json(&v1, &legacy, &EiInputs::default());
+        let (v1, _) = sample_v1_and_report_with_boons();
+        let v = to_ei_json(&v1, None);
         let buff_map = v["buffMap"].as_object().expect("buffMap must be an object");
         assert_eq!(buff_map.len(), 12, "exactly the 12 tracked boons");
         // Known value: Might (740) is Intensity-type -> stacking: true.
@@ -2870,8 +2946,8 @@ mod tests {
 
     #[test]
     fn buff_uptimes_map_intensity_and_duration_boons_to_ei_field_meanings() {
-        let (v1, legacy) = sample_v1_and_report_with_boons();
-        let v = to_ei_json(&v1, &legacy, &EiInputs::default());
+        let (v1, _) = sample_v1_and_report_with_boons();
+        let v = to_ei_json(&v1, None);
         let entries = v["players"][0]["buffUptimes"].as_array().expect("buffUptimes must be an array");
         assert_eq!(entries.len(), 12, "one entry per tracked boon");
         let might = entries.iter().find(|e| e["id"] == 740).expect("Might entry present");
@@ -2891,8 +2967,8 @@ mod tests {
 
     #[test]
     fn support_block_carries_the_four_new_computed_fields() {
-        let (v1, legacy) = sample_v1_and_report_with_boons();
-        let v = to_ei_json(&v1, &legacy, &EiInputs::default());
+        let (v1, _) = sample_v1_and_report_with_boons();
+        let v = to_ei_json(&v1, None);
         let support = &v["players"][0]["support"][0];
         assert_eq!(support["condiCleanse"], 5);
         assert_eq!(support["condiCleanseSelf"], 2);
@@ -2960,7 +3036,7 @@ mod tests {
             skill_map: Default::default(),
             damage_mod_map: None,
         };
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs::default());
+        let v = to_ei_json(&shell_v1_for(&report), None);
         let healing = &v["players"][0]["extHealingStats"]["outgoingHealing"][0];
         assert_eq!(healing["healing"], 5000);
         assert_eq!(healing["downedHealing"], 500);
@@ -2987,7 +3063,7 @@ mod tests {
     /// ei_golden.rs`) asserts the same against a real multi-target log.
     #[test]
     fn every_target_is_marked_not_fake() {
-        let v = to_ei_json(&empty_report_v1(), &sample_report(), &EiInputs::default());
+        let v = to_ei_json(&sample_report_v1(), None);
         let targets = v["targets"].as_array().expect("targets must be an array");
         assert_eq!(targets.len(), 1, "sample_report has 1 enemy PLAYER (see ei_targets above)");
         for t in targets {
@@ -2997,10 +3073,10 @@ mod tests {
 
     /// M11 Task 3: `activeTimes`/`combatReplayData` are ALWAYS present (not
     /// gated on `--replay`), with harmless zero/empty defaults when the
-    /// caller passes no `activity` data at all (`&[]`).
+    /// document carries no `blocks.replay` row for this player at all.
     #[test]
     fn active_times_and_combat_replay_data_default_to_zero_when_no_activity_supplied() {
-        let v = to_ei_json(&empty_report_v1(), &sample_report(), &EiInputs::default());
+        let v = to_ei_json(&sample_report_v1(), None);
         assert_eq!(v["players"][0]["activeTimes"], json!([0]));
         assert_eq!(v["players"][0]["combatReplayData"]["start"], 0);
         assert_eq!(v["players"][0]["combatReplayData"]["end"], 0);
@@ -3008,13 +3084,13 @@ mod tests {
         assert_eq!(v["players"][0]["combatReplayData"]["dead"], json!([]));
     }
 
-    /// M11 Task 3: real (non-empty) `activity` data flows through to
-    /// `activeTimes`/`combatReplayData`, positionally joined to
-    /// `report.players` by index -- `sample_report()` has 2 players (agent
-    /// addrs 1 and 2, in that order), matching `activity`'s own order here.
+    /// M11 Task 3: real (non-empty) activity data flows through to
+    /// `activeTimes`/`combatReplayData`. Task 11 changed the ROUTE, not the
+    /// numbers: the intervals now travel in `blocks.replay.by_entity`, and
+    /// the adapter joins them by entity id rather than by player index.
     #[test]
     fn active_times_and_combat_replay_data_map_real_activity_intervals() {
-        use axilog_core::analysis::replay::Interval;
+        use axilog_core::analysis::replay::{ActivityIntervals, Interval};
         let activity = vec![
             ActivityIntervals {
                 agent_addr: 1,
@@ -3028,7 +3104,11 @@ mod tests {
                 down_intervals: vec![], dead_intervals: vec![],
             },
         ];
-        let v = to_ei_json(&empty_report_v1(), &sample_report(), &EiInputs { activity: &activity, ..Default::default() });
+        let v1 = sample_report_v1_with(&axilog_schema::v1::Passes {
+            activity: Some(&activity),
+            ..Default::default()
+        });
+        let v = to_ei_json(&v1, None);
         assert_eq!(v["players"][0]["combatReplayData"]["start"], 100);
         assert_eq!(v["players"][0]["combatReplayData"]["end"], 10_100);
         assert_eq!(v["players"][0]["combatReplayData"]["down"], json!([[2_000, 3_000]]));
@@ -3095,6 +3175,181 @@ mod tests {
         }
     }
 
+    /// The minimal native document whose ROSTERS match a hand-built legacy
+    /// [`axilog_schema::Report`].
+    ///
+    /// RULING T3-3 let the hand-built-`Report`-literal tests below keep
+    /// pairing their report with `empty_report_v1()` for as long as the
+    /// fields they assert on were still read from `legacy`. Task 13 ends
+    /// that: `players[]`/`targets[]` are now sized and ordered from
+    /// `source_order`, so an empty document emits no rows at all and those
+    /// tests would assert against nothing rather than against zero.
+    ///
+    /// This reprojects only what the rosters need -- identity and order.
+    /// A test that also asserts on a BLOCK still has to put that block in
+    /// the document itself, which is the point: there is no longer a way to
+    /// assert on ei-json output that the native document could not produce.
+    fn shell_v1_for(report: &axilog_schema::Report) -> axilog_schema::v1::ReportV1 {
+        use axilog_schema::v1::entities::{EntityOut, Role};
+        let mut v1 = empty_report_v1();
+        v1.encounter.duration_ms = report.encounter.duration_ms;
+        v1.encounter.teams = report.encounter.teams.clone();
+        let mut entities: Vec<EntityOut> = Vec::new();
+        let mut players: Vec<u32> = Vec::new();
+        let mut targets: Vec<u32> = Vec::new();
+        for p in &report.players {
+            let id = entities.len() as u32;
+            entities.push(EntityOut {
+                id,
+                role: if p.in_squad { Role::Squad } else { Role::FriendlyPlayer },
+                account: Some(p.account.clone()),
+                character: Some(p.character.clone()),
+                name: None,
+                profession: Some(p.profession.clone()),
+                elite_spec: Some(p.elite_spec.clone()),
+                team: p.team.clone(),
+                subgroup: Some(p.subgroup),
+                commander: None,
+                guild_id: p.guild_id.clone(),
+                marker: p.marker.clone(),
+                agent_addr: p.agent_addr,
+                instid: p.instid,
+                combat_participant: true,
+            });
+            players.push(id);
+        }
+        for e in &report.ei_targets {
+            let id = entities.len() as u32;
+            entities.push(EntityOut {
+                id,
+                role: if e.is_player { Role::EnemyPlayer } else { Role::Npc },
+                account: None,
+                character: None,
+                name: Some(e.name.clone()),
+                profession: e.profession.clone(),
+                elite_spec: e.elite_spec.clone(),
+                team: e.team.clone(),
+                subgroup: None,
+                commander: None,
+                guild_id: None,
+                marker: e.marker.clone(),
+                agent_addr: e.id,
+                instid: e.instid,
+                combat_participant: true,
+            });
+            targets.push(id);
+        }
+        v1.entities = entities;
+        v1.source_order = axilog_schema::v1::SourceOrder::new(players.clone(), targets.clone());
+
+        // The three blocks whose contents Task 13 moved out of `legacy`,
+        // projected from the same hand-built rows the tests below set up.
+        //
+        // This is a REPROJECTION, not a call into the real builders: those
+        // take an `EntityIndex`, which only `build_entities` can produce and
+        // which needs an `Encounter`/`Metrics` pair no hand-built
+        // `axilog_schema::Report` has. The mappings duplicated here are the
+        // trivial ones (rename, encode, flatten); that the real builders
+        // agree with the legacy fields is `axilog-schema`'s
+        // `v1_equivalence.rs`'s job, and asserting it again here would only
+        // pin this reprojection to itself.
+        let res = report.timeline.resolution_ms;
+        let mut healing = axilog_schema::v1::blocks::support::HealingBlock::default();
+        let mut series = axilog_schema::v1::blocks::activity::SeriesBlock {
+            squad: axilog_schema::v1::blocks::activity::SquadSeries {
+                damage: axilog_schema::v1::series::SeriesOut::encode_u64(res, &[]),
+                cc_applied: axilog_schema::v1::series::SeriesOut::encode_u64(res, &[]),
+                downs: axilog_schema::v1::series::SeriesOut::encode_u64(res, &[]),
+            },
+            by_entity: Default::default(),
+        };
+        let mut rotation = axilog_schema::v1::blocks::activity::RotationBlock::default();
+        let enemy_entity = |enemy_id: u64| -> Option<u32> {
+            report.ei_targets.iter().position(|e| e.id == enemy_id).map(|i| targets[i])
+        };
+        for (i, p) in report.players.iter().enumerate() {
+            let id = players[i];
+            if let Some(h) = p.healing.as_ref() {
+                healing.by_entity.insert(
+                    id,
+                    axilog_schema::v1::blocks::support::HealingEntity {
+                        outgoing_total: h.healing_out_total,
+                        outgoing_allies: h.healing_out_allies,
+                        outgoing_self: h.healing_out_self,
+                        barrier_out: h.barrier_out,
+                        downed_healing_out: h.downed_healing_out,
+                        detail: None,
+                    },
+                );
+            }
+            if let Some(ps) = p.per_second.as_ref() {
+                use axilog_schema::v1::series::SeriesOut;
+                series.by_entity.insert(
+                    id,
+                    axilog_schema::v1::blocks::activity::EntitySeries {
+                        damage: SeriesOut::encode_u64(res, &ps.damage),
+                        power_damage: None,
+                        damage_taken: SeriesOut::encode_u64(res, &ps.damage_taken),
+                        power_damage_taken: SeriesOut::encode_u64(res, &ps.power_damage_taken),
+                        per_target: ps
+                            .per_target
+                            .iter()
+                            .filter_map(|t| {
+                                enemy_entity(t.enemy_id).map(|tid| {
+                                    (
+                                        tid,
+                                        axilog_schema::v1::blocks::activity::TargetSeries {
+                                            damage: SeriesOut::encode_u64(res, &t.damage),
+                                            power_damage: SeriesOut::encode_u64(
+                                                res,
+                                                &t.power_damage,
+                                            ),
+                                        },
+                                    )
+                                })
+                            })
+                            .collect(),
+                        health_percents: None,
+                        healing_1s: None,
+                    },
+                );
+            }
+            let casts = p.rotation.as_ref().map(|r| {
+                let mut casts: Vec<axilog_schema::v1::blocks::activity::CastRow> = r
+                    .iter()
+                    .flat_map(|s| {
+                        s.casts.iter().map(move |c| {
+                            axilog_schema::v1::blocks::activity::CastRow {
+                                skill_id: s.skill_id,
+                                cast_time_ms: c.cast_time_ms,
+                                duration_ms: c.duration_ms,
+                                time_gained_ms: c.time_gained_ms,
+                                quickness: c.quickness,
+                            }
+                        })
+                    })
+                    .collect();
+                casts.sort_by_key(|c| (c.cast_time_ms, c.skill_id));
+                casts
+            });
+            rotation.by_entity.insert(
+                id,
+                axilog_schema::v1::blocks::activity::RotationEntity {
+                    casts,
+                    aftercast: Default::default(),
+                },
+            );
+        }
+        if !healing.by_entity.is_empty() {
+            v1.blocks.healing = Some(healing);
+        }
+        if !series.by_entity.is_empty() {
+            v1.blocks.series = Some(series);
+        }
+        v1.blocks.rotation = Some(rotation);
+        v1
+    }
+
     /// M12 Task 3: `totalDamageDist`/`totalDamageTaken`/`targetDamageDist`
     /// are present, correctly shaped (`[phase][skillEntry]` /
     /// `[targetIndex][phase][skillEntry]`), and carry the exact computed
@@ -3106,10 +3361,12 @@ mod tests {
         fn entry() -> SkillEntryOut {
             SkillEntryOut { skill_id: 42009, total: 32503, hits: 5, min: 100, max: 20000, crit_hits: 2, flank_hits: 1 }
         }
-        let taken_entry = SkillEntryOut { skill_id: 700, total: 275, hits: 2, min: 75, max: 200, crit_hits: 0, flank_hits: 0 };
+        fn taken_entry() -> SkillEntryOut {
+            SkillEntryOut { skill_id: 700, total: 275, hits: 2, min: 75, max: 200, crit_hits: 0, flank_hits: 0 }
+        }
         let sd = SkillDamageOut {
             outgoing: vec![entry()],
-            taken: vec![taken_entry],
+            taken: vec![taken_entry()],
             per_target: vec![PerTargetSkillsOut { enemy_id: 9, skills: vec![entry()] }],
         };
         let enemies = vec![
@@ -3117,9 +3374,63 @@ mod tests {
             EnemyOut { id: 10, name: "Untouched".into(), team: "blue".into(), is_player: false, marker: None, profession: None, elite_spec: None, instid: None, damage_out: 0 },
         ];
         let player = skill_and_timeseries_player(Some(sd), None, vec![]);
-        let report = report_with_players(enemies, vec![player]);
+        let _report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs::default());
+        // Side-channel absorption Task 9: the two WHOLE-FIGHT distributions
+        // are now rendered off `blocks.damage`, so an `empty_report_v1()`
+        // shell would make them empty and this test would assert nothing.
+        // It gets the minimum native container that can carry them -- one
+        // player entity, its two skill maps -- rather than being narrowed
+        // to `targetDamageDist` (still legacy-sourced) and losing the
+        // known-value coverage that is the point of the test. RULING T3-3
+        // stands for the other legacy-path tests here; this one had to move
+        // because its SOURCE moved.
+        use axilog_schema::v1::blocks::damage::{DamageBlock, DamageEntity, PerTarget, SkillRow};
+        use axilog_schema::v1::entities::{EntityOut, Role};
+        let native_row = |e: &SkillEntryOut| SkillRow {
+            total: e.total, hits: Some(e.hits), connected_hits: None,
+            min: e.min, max: e.max, crit_hits: e.crit_hits, flank_hits: e.flank_hits,
+            outcomes: None,
+        };
+        let ent = |id: u32, role: Role, addr: u64| EntityOut {
+            id, role, account: None, character: None, name: None, profession: None,
+            elite_spec: None, team: String::new(), subgroup: None, commander: None,
+            guild_id: None, marker: None, agent_addr: addr, instid: None,
+            combat_participant: true,
+        };
+        let mut v1 = empty_report_v1();
+        // Task 13 moved `targetDamageDist` onto the native per-target split
+        // too, so the shell now needs the target ROSTER as well: the
+        // positional array is built from `source_order.targets()`, which is
+        // what makes enemy 10's empty slot an emitted `[]` rather than a
+        // missing row.
+        v1.entities = vec![
+            ent(0, Role::Squad, 1),
+            ent(1, Role::EnemyPlayer, 9),
+            ent(2, Role::Npc, 10),
+        ];
+        v1.source_order = axilog_schema::v1::SourceOrder::new(vec![0], vec![1, 2]);
+        let mut dmg = DamageBlock::default();
+        dmg.by_entity.insert(
+            0,
+            DamageEntity {
+                by_skill: Some([(42009, native_row(&entry()))].into_iter().collect()),
+                by_skill_taken: Some([(700, native_row(&taken_entry()))].into_iter().collect()),
+                per_target: [(
+                    1,
+                    PerTarget {
+                        by_skill: [(42009, native_row(&entry()))].into_iter().collect(),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            },
+        );
+        v1.blocks.damage = Some(dmg);
+
+        let v = to_ei_json(&v1, None);
         let p = &v["players"][0];
 
         // totalDamageDist: [phase][skillEntry], only the computed fields.
@@ -3157,7 +3468,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs::default());
+        let v = to_ei_json(&shell_v1_for(&report), None);
         let p = &v["players"][0];
         assert!(p.get("totalDamageDist").is_none(), "totalDamageDist must be omitted, not emitted empty");
         assert!(p.get("totalDamageTaken").is_none());
@@ -3189,7 +3500,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, Some(ps), dps_targets);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs::default());
+        let v = to_ei_json(&shell_v1_for(&report), None);
         let p = &v["players"][0];
 
         // damage1S/damageTaken1S: [phase][second], cumulative, final ==
@@ -3231,7 +3542,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs::default());
+        let v = to_ei_json(&shell_v1_for(&report), None);
         let p = &v["players"][0];
         assert!(p.get("damage1S").is_none(), "damage1S must be omitted, not emitted empty");
         assert!(p.get("damageTaken1S").is_none());
@@ -3258,7 +3569,7 @@ mod tests {
         }]);
         let report = report_with_players(vec![], vec![player]);
 
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs::default());
+        let v = to_ei_json(&shell_v1_for(&report), None);
         let rotation = &v["players"][0]["rotation"];
         assert_eq!(rotation.as_array().unwrap().len(), 1, "one entry per cast skill id, no phase wrapper");
         assert_eq!(rotation[0]["id"], 5008);
@@ -3282,7 +3593,7 @@ mod tests {
         let player = skill_and_timeseries_player(None, None, vec![]); // rotation: None inside the builder
         let report = report_with_players(vec![], vec![player]);
 
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs::default());
+        let v = to_ei_json(&shell_v1_for(&report), None);
         assert!(v["players"][0].get("rotation").is_none(), "rotation must be omitted, not emitted empty");
     }
 
@@ -3327,7 +3638,7 @@ mod tests {
             });
         }
 
-        let v = to_ei_json(&v1, &report, &EiInputs::default());
+        let v = to_ei_json(&v1, None);
         let skill_map = v["skillMap"].as_object().expect("skillMap must be an object");
         assert_eq!(skill_map.len(), 2);
         assert_eq!(v["skillMap"]["s5492"]["name"], "Fire Attunement");
@@ -3348,7 +3659,7 @@ mod tests {
     /// matching `buffMap`'s own unconditional presence above.
     #[test]
     fn skill_map_ei_json_present_and_empty_when_report_skill_map_empty() {
-        let v = to_ei_json(&empty_report_v1(), &sample_report(), &EiInputs::default());
+        let v = to_ei_json(&sample_report_v1(), None);
         assert!(v.get("skillMap").is_some(), "skillMap key must always be present");
         assert_eq!(v["skillMap"].as_object().unwrap().len(), 0, "sample_report's Metrics::skill_map is Default::default() (empty)");
     }
@@ -3399,7 +3710,7 @@ mod tests {
     /// requirement, keyed off the `replay` argument's `Option` presence.
     #[test]
     fn combat_replay_surface_omitted_when_replay_absent() {
-        let v = to_ei_json(&empty_report_v1(), &sample_report(), &EiInputs::default());
+        let v = to_ei_json(&sample_report_v1(), None);
         assert!(v.get("combatReplayMetaData").is_none());
         let crd = &v["players"][0]["combatReplayData"];
         for k in ["positions", "orientations", "dc", "iconURL"] {
@@ -3420,7 +3731,6 @@ mod tests {
     #[test]
     fn combat_replay_meta_omitted_but_positions_kept_on_an_unmapped_log() {
         use axilog_core::analysis::ei_replay::{EiReplay, EiTrack};
-        let report = sample_report();
         let track = |name: &str, is_squad: bool| EiTrack {
             agent_addr: 1,
             name: name.to_string(),
@@ -3440,7 +3750,7 @@ mod tests {
             map_id: Some(899), // Obsidian Sanctum: named by GW2EI, no image
             meta: None,
         };
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs { replay: Some(&replay), ..Default::default() });
+        let v = to_ei_json(&sample_report_v1(), Some(&replay));
         assert!(
             v.get("combatReplayMetaData").is_none(),
             "no arena image => no metadata, even with replay on"
@@ -3491,7 +3801,6 @@ mod tests {
     #[test]
     fn enemy_target_with_no_polled_positions_still_gets_combat_replay_data() {
         use axilog_core::analysis::ei_replay::{EiReplay, EiTrack};
-        let report = sample_report();
         let squad_track = |name: &str| EiTrack {
             agent_addr: 1, name: name.to_string(), is_squad: true, start: 0, end: 600,
             positions: vec![[1.5, 2.5]], orientations: vec![90.0], dc: vec![], down: vec![], dead: vec![],
@@ -3513,7 +3822,7 @@ mod tests {
             map_id: Some(38),
             meta: None,
         };
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs { replay: Some(&replay), ..Default::default() });
+        let v = to_ei_json(&sample_report_v1(), Some(&replay));
         let enemy = v["targets"].as_array().unwrap().iter().find(|t| t["enemyPlayer"] == true).unwrap();
         let crd = enemy.get("combatReplayData").expect("combatReplayData must always be present when replay is on");
         assert_eq!(crd["positions"], json!([]), "empty, not omitted");
@@ -3549,7 +3858,7 @@ mod tests {
             map_id: Some(38),
             meta: None,
         };
-        let v = to_ei_json(&empty_report_v1(), &sample_report(), &EiInputs { replay: Some(&replay), ..Default::default() });
+        let v = to_ei_json(&sample_report_v1(), Some(&replay));
         assert!(v["players"][0]["combatReplayData"].get("positions").is_none());
     }
 }

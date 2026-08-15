@@ -38,7 +38,6 @@
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
-use axilog_ei::EiInputs;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -82,24 +81,23 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
-
     let registry = axilog_core::analysis::damage::InstidRegistry::build(&raw);
     let healing_detail =
         axilog_core::analysis::healing_detail::build_with_registry(&raw, &registry, &enc);
     let minion_rollups =
         axilog_core::analysis::minions::build_with_registry(&raw, &registry, &enc);
-
-    let ours = axilog_ei::to_ei_json(
-        &report_v1, &report,
-        &EiInputs {
-            activity: &activity,
-            healing_detail: healing_detail.as_ref(),
-            healing_series: true,
-            healing_dist: true,
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-test", None,
+        &axilog_schema::v1::Passes { activity: Some(&activity),
             minions: Some(&minion_rollups),
+            healing_detail: healing_detail.as_ref(),
+            healing_series: healing_detail.as_ref(),
             ..Default::default()
         },
+    );
+
+    let ours = axilog_ei::to_ei_json(
+        &report_v1, None,
     );
 
     let our_idx: BTreeMap<String, usize> = ours["players"]

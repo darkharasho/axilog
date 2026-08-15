@@ -721,7 +721,16 @@ regroup means the mapping is not naive.
 |---|---|
 | `id`, `name`, `teamID`, `enemyPlayer`, `isFake`, `instanceID`, `profession` | `entities[id]` |
 | `dpsAll[0].damage` | `blocks.damage.by_entity[id]` |
-| `combatReplayData.{positions,start,down,dead}` | `blocks.replay.by_entity[id]` |
+
+**Two corrections found in execution.** First, `blocks.damage` had no enemy
+rows at all — `build_damage` only walked `report.players`, so `dpsAll[0]` had
+no native source and `EnemyOut::damage_out` had to be absorbed onto the block
+first (same shape as Task 4's `breakbar_damage_dealt`). Second, the row that
+said `combatReplayData ← blocks.replay.by_entity[id]` is struck: it contradicts
+Task 13 Step 9, which derives `ei_replay` inside the adapter and never absorbs
+it. The two are different structures — `blocks.replay` is the NATIVE replay
+pass and carries no `end`/`orientations`/`dc`. `combatReplayData` stays on
+`inputs` until Task 13.
 
 `totalDamageDist`, `damage1S`/`powerDamage1S` and `buffs[]` stay on `inputs`
 for now — they are Tasks 6, 8 and 10.
@@ -733,8 +742,16 @@ Expected: PASS, byte-identical.
 
 - [ ] **Step 3: Run the local calibrations — mandatory for this task**
 
-Run: `AXILOG_LOCAL_FIXTURES=1 cargo test --workspace`
+Run: `AXILOG_LOCAL_FIXTURES=<primary-checkout>/fixtures/local cargo test --workspace`
 Expected: PASS, all 36.
+
+**Not `AXILOG_LOCAL_FIXTURES=1`.** The variable is a PATH, not a boolean
+(`crates/axilog-core/tests/common/mod.rs::local_fixture`) — `=1` resolves every
+capture to `1/<name>`, every calibration skips, and the run goes green having
+checked nothing. A worktree's own `fixtures/local/` is empty (the captures are
+gitignored and never copied, so PII is not duplicated), so the var must point
+at the primary checkout. Confirm it actually ran: the calibrating binaries take
+seconds, not `0.00s`.
 
 This is the task where the committed fixture is *not* sufficient evidence. It
 has 32 enemy targets; the local capture has 56 real enemy instids, and the
@@ -885,6 +902,52 @@ git add crates/axilog-schema/ crates/axilog-ei/ crates/axilog-cli/ crates/axilog
 SSH_AUTH_SOCK="$HOME/.1password/agent.sock" git commit -m "feat(schema): absorb minions and health percents into native blocks"
 ```
 
+**Execution notes (Task 6, done).** Five deviations from the steps above.
+Tasks 7-12 follow this task's spine, so they inherit all five.
+
+1. **`build_report_v1` takes a `Passes<'a>` struct, not more positional
+   parameters.** Step 4 says "add the parameter". `damage_mods` was already
+   a seventh positional parameter and this task adds two more; carried
+   through Task 12 that is a fourteen-argument function whose call sites
+   are a row of bare `None`s, rewritten across ~40 sites seven times. The
+   struct absorbs `damage_mods` too, so those sites moved once, here.
+   **Later tasks add a field and touch no call site.**
+
+2. **Minion identity lives in `catalogs.minions`, not on the block's rows.**
+   The interface sketch puts `species_id`/`name` on `MinionRow`, which trips
+   `v1_shape.rs::no_block_inlines_a_human_readable_name` -- this format
+   keeps names in `catalogs` and `entities[]` only. Minions are not tracked
+   entities, so a new catalog keyed by a synthetic id is the only home that
+   satisfies the invariant. Check any absorbed surface carrying a name
+   against that test BEFORE writing the block.
+
+3. **`series[].health_percents` is `Option<Vec<_>>`, not `Vec<_>`.** The
+   pass keys its map off `HEALTH_UPDATE` events, so a player who emitted
+   none is ABSENT from it, and ei-json omits `healthPercents` for that
+   player rather than writing `[]`. A plain `Vec` collapses those two into
+   an empty list and silently adds the key to every player. Caught by the
+   byte comparison, not by any test.
+
+4. **ei-json output is NOT byte-identical: `skillMap` gains 18 entries on
+   the committed fixture (16 on the local capture).** Every added id was
+   already referenced by `minions[].totalDamageTakenDist` and did NOT
+   resolve in `skillMap` before, so this fixes dangling references rather
+   than changing data -- verified additive, zero changed or removed values,
+   across five gate combinations on both fixtures. It follows from the
+   block registering its skill ids in the catalog, which the native format
+   requires; **expect the same from any later task whose block references
+   catalog ids.**
+
+5. **The `v1_size.rs` ratio test now excludes `Passes`-supplied data.** It
+   is a ratio against the legacy document, which has nowhere to put an
+   absorbed pass, so including one compares a document carrying data
+   against one that structurally cannot -- the ratio moved 0.800 -> 0.885
+   with no encoding regression whatsoever. Excluding them keeps it honest.
+   The measured ratio is nonetheless 0.837 against a 0.85 bound, because
+   Tasks 4/5 absorbed onto ALWAYS-ON blocks and cannot be excluded. **When
+   a later task trips this, do not widen the bound** -- see the comment
+   there.
+
 ---
 
 ### Task 7: `enemy_dist` — enemy rows on `blocks.damage`
@@ -925,6 +988,50 @@ fn enemy_damage_rows_land_on_the_same_block_as_players() {
 
 **Adapter:** `targets[].totalDamageDist[0][]` now reads
 `report.blocks.damage.by_entity[id].by_skill`. Delete `EiInputs::enemy_dist`.
+
+**Execution notes (Task 7, done).** Four things Tasks 8-12 inherit.
+
+1. **`SkillRow` needed a SECOND hit-count field, not a shared one.** The
+   sketch says the enemy rows go in the same `by_skill` map, which is right,
+   but `hits` does not mean the same thing on both sides: the player pass
+   counts CONTRIBUTING (`dmg > 0`) rows, and `build_enemy_dist` counts
+   `HasHit` rows -- a superset including zero-damage connecting hits. The
+   ei-json adapter already emits them under different keys (`hits` vs
+   `connectedHits`), so folding both into one field would have forced the
+   adapter to reinterpret it by the row's ROLE, which is exactly the
+   coupling this container exists to remove. `SkillRow::hits` became
+   `Option<u32>` (absent on enemy rows -- a `0` there is a denominator a
+   consumer would divide `total` by) and `connected_hits: Option<u32>` was
+   added. **Task 9 fills `connected_hits` for player rows** from
+   `dist_outcomes`; it does not need to add the field.
+
+2. **The DATA absorbed; the GATE did not.** An empty `by_skill` cannot
+   distinguish "the flag was off" from "this enemy landed nothing", and the
+   flagless render must omit `totalDamageDist` rather than emit `[[]]`. The
+   adapter therefore reads the same `PlayerOut::skill_damage` presence its
+   own player-side branch already uses -- deliberately the SAME signal, so
+   the two sides cannot diverge. **Every remaining task hits this**: absorbed
+   data does not carry its own gate, and the document has no native gate
+   record. Task 13 has to add one (or accept that `legacy` outlives the
+   other reads) -- do not solve it per-task.
+
+3. **The enemy row set is a UNION of two sources.** `report.enemies` is the
+   combat-participant roster ("dealt nonzero damage"); `enemy_dist` keys off
+   any actor that produced a `HealthDamageEvent` and deliberately keeps
+   legitimate all-zero rows. Iterating only the former drops a dist key's
+   whole breakdown. The adapter's own `ei_targets` is a third, differently
+   filtered roster -- so a block built from one list and read through
+   another loses rows silently.
+
+4. **ei-json: `skillMap` gains 12 entries on the committed fixture, zero
+   other diffs.** Same mechanism as Task 6's note 4, with one new wrinkle:
+   only 6 of the 12 are referenced by `targets[].totalDamageDist`. The other
+   6 belong to enemies present in the NATIVE enemy roster but absent from
+   the curated `ei_targets` the adapter renders -- so they are required
+   references natively (the container's own orphan test proves it) and
+   merely unreferenced in the narrower ei-json view. Verified: every target
+   distribution is byte-identical, and the flagless and `--timeseries`-only
+   renders are byte-identical outright.
 
 ---
 
@@ -986,6 +1093,77 @@ read from the enriched skill rows. Delete `EiInputs::dist_outcomes`.
 
 ---
 
+**Execution notes (Task 9, done).** Five things, one of which corrects
+this task's own sketch.
+
+1. **The sketch's assertion is FALSE, and the merge is a UNION.**
+   `every_outcome_row_joins_an_existing_skill_row` cannot hold: a skill
+   whose every attempt was blocked deals no damage, so it never reaches
+   `skill_damage`'s `dmg > 0` accumulator, while `dist_outcomes` counts
+   exactly those rows and GW2EI emits them (`totalDamage: 0, hits: n`).
+   Those pure-mitigation rows ARE the payload — axibridge's damage-
+   mitigation table is what the pass exists to feed. Asserting the row
+   sets match would have failed on the first real log; intersecting them
+   would have deleted the data silently. The ei-json adapter had emitted
+   this union since MEIGAP2, inside `dist_rows_ei_json`; Task 9 moved the
+   union down into `merge_outcomes` so both readers see the same rows
+   instead of the native container carrying half the set. The committed
+   fixture has real mitigation-only rows, so
+   `the_row_set_is_a_union_not_an_intersection` proves it rather than
+   asserting into a vacuum.
+
+2. **There are THREE hit counts, not two.** Task 7 split `hits`
+   (contributing, `dmg > 0`) from `connected_hits` (`HasHit`). The outcome
+   pass brings a third, GW2EI's own attempt count — every non-marker row,
+   a superset of both — which is what real EI exports mean by `hits`. It
+   landed as `SkillOutcomeCols::attempt_hits` rather than being folded
+   into either existing field, for exactly Task 7's reason: one field
+   reinterpreted by context is how a consumer divides by the wrong
+   denominator. The nesting `hits <= connected_hits <= attempt_hits`
+   holds and is pinned. **`interrupted` is NOT bounded by `attempt_hits`**
+   — GW2EI excludes its Interrupt/KillingBlow/Downed markers from the
+   attempt count while still counting the interrupt as an outcome, so an
+   interrupt-heavy skill legitimately reports more interrupts than
+   attempts (fixture: skill 77357, 2 attempts, 3 interrupts). The first
+   draft of that test asserted the tidier invariant and caught only its
+   own wrong assumption.
+
+3. **Eight columns behind ONE `Option`, not eight `Option`s.** The
+   counters come from a single pass over a single event list, so no
+   "this one measured, that one didn't" combination can arise.
+   `outcomes: Option<SkillOutcomeCols>` states that in the type and gives
+   the adapter one presence check for the branch that emits all eight
+   keys together. `connected_hits` deliberately stays on `SkillRow`: the
+   enemy pass (Task 7) measures the same quantity, and duplicating it
+   would leave two fields for one number with nothing forcing agreement.
+
+4. **The GATE absorbed for free — no Task 13 dependency.** Unlike Task
+   7's, this gate needs no native gate record, because the outcome pass
+   and the distributions it annotates ride the same `--skill-damage`
+   flag: `by_skill`'s presence already answers both questions. The merge
+   runs INSIDE the `p.skill_damage` guard so the two can never be built
+   off different conditions, and
+   `outcome_columns_are_absent_entirely_when_the_gate_is_off` pins it.
+   Task 8's zero-fill rule decided the one genuinely ambiguous field: a
+   union row gets `hits: Some(0)`, because absence from the damage pass
+   is a measurement (zero contributing events), not a gap.
+
+5. **ei-json: 15 `skillMap` entries added, and nothing else changes.**
+   Verified byte-for-byte across all four gate combos — the flagless and
+   `--timeseries`-only renders are identical outright, and both
+   `--skill-damage` renders differ in `skillMap` alone (`players[]` and
+   `targets[]` are byte-identical, existing `skillMap` values unchanged).
+   All 15 were **already referenced by the OLD document's own
+   distributions**, so this is a dangling-reference fix, not new data:
+   `merge_outcomes` calls `reference_skill` for the union rows it
+   creates, which the adapter's private union never could. The CLI also
+   dropped its `&& format == Format::EiJson` condition (Task 6's
+   precedent) — these columns are a native surface now, so gating them
+   on the output format would make the native JSON depend on which
+   writer was asked for; both SDKs' native paths run the pass too.
+
+---
+
 ### Task 10: `healing_detail` — detail arrays on `blocks.healing`
 
 Follow Task 6's spine. What differs:
@@ -1017,6 +1195,54 @@ and `extBarrierStats.{outgoingBarrierAllies,totalBarrierDist}` read from
 `report.blocks.healing`. Delete `EiInputs::healing_detail`, and delete
 `healing_series` and `healing_dist` outright — they only mirror flag state,
 which block presence and coverage now carry.
+
+**Execution notes (Task 10, done).**
+
+1. **`healing1S` did NOT go on `blocks.healing`.** The sketch above put all
+   five families there. It landed on
+   `blocks.series.by_entity[].healing_1s` instead, because what a field
+   belongs to in this format is its GRID and its GATE, not its subject
+   matter. `healing_detail` buckets on `timeseries::ei_grid` — the CEILING
+   grid, one bucket longer than `timeline.resolution_ms`'s floor grid on a
+   partial-second log — which is exactly the grid the per-entity `damage`
+   series beside it uses, and it rides `--timeseries` like every other
+   per-second array. On `blocks.healing` it would have been the one field
+   answering a different flag than its siblings, `coverage.healing` could
+   not have described it, and nothing would have forced it onto either
+   grid. `the_1s_graph_shares_the_grid_of_the_series_it_sits_beside` pins
+   the length equality that now does.
+2. **The split gate cost `Passes` two fields, not two `bool`s.**
+   `healing_detail` and `healing_series` are both
+   `Option<&HealingDetail>`, set from the same pass output by whichever
+   flag the caller actually has. A borrow cannot be set without the data,
+   which is the property the deleted `EiInputs` `bool`s lacked. This is
+   the first pass in the program feeding two families under two flags, so
+   it is also the first whose gate could NOT be answered by a single
+   presence check — `each_family_rides_only_its_own_flag` walks all four
+   combinations.
+3. **`CoverageState::Unsupported` became reachable, but not the way the
+   sketch derived it.** The sketch read it off `healing_detail.is_none()`
+   on a gate-on run, which is correct but only available when a gate ran.
+   `metrics.has_healing_extension` answers the same question on EVERY run,
+   so the coverage line uses that and needs no gate branch at all. The
+   `Empty` arm lost its only witness in the process (that WAS the
+   no-extension case, per Finding 4), so `v1_equivalence.rs` gained a
+   second witness — a zero-roster log — rather than letting `Empty` go
+   back to being dead code.
+4. **The ally matrix is keyed and sparse.** EI's `outgoingHealingAllies`
+   is a dense N×N array of objects; `by_ally` is keyed by the ally's
+   entity id, folds the barrier twin into the same row, and omits cells
+   that are zero in all three quantities. The adapter re-densifies against
+   `source_order.players()`. `the_ally_matrix_is_sparse_and_never_exceeds_
+   the_scalar` fails if it ever stops being sparse, because that is when
+   the payload argument behind the `--skill-damage` gate would evaporate.
+5. **ei-json: 43 new `skillMap` entries, nothing else.** Flagless and
+   `--timeseries`-only render byte-identical; both `--skill-damage` combos
+   differ in `skillMap` alone — 43 added, 0 removed, 0 values changed, and
+   all 43 were already referenced by the OLD document's own healing
+   dists. Same dangling-reference fix Task 9 produced, same cause: the
+   adapter's private side channel could not reach the catalog.
+   `EiInputs` is now **5 fields, from the original 13**.
 
 ---
 
@@ -1065,6 +1291,45 @@ read from `report.blocks.replay.by_entity`. Delete `EiInputs::activity`.
 
 ---
 
+**Execution notes (Task 11, done):**
+
+1. **`by_entity` is squad-only, and that is a roster fact, not a
+   simplification.** `replay::build_replay` walks squad players AND
+   enemy-player representatives; `build_activity_intervals` walks
+   `enc.players` alone. So the sketch's `ReplayTrackRow` could not simply
+   shed its intervals -- doing so would delete every enemy player's
+   down/dead history. `ReplayTrack` keeps them; for a squad entity the two
+   copies come from the same `build_intervals` call over the same folded
+   addr set and a test asserts they agree. Extending the always-on pass
+   over the enemy roster was the alternative and was rejected: it puts a
+   per-enemy event scan on the path of every parse, for data nothing reads.
+
+2. **`poll_ms`/`bounds` moved down into `tracks` with the samples.** Left at
+   the block's top level they would serialize as a zero polling interval on
+   every parse without `--replay` -- metadata describing tracks that are not
+   there.
+
+3. **`active_ms` is carried, not derived.** GW2EI subtracts dead time and
+   NOT down time. A consumer deriving "active" from the other four fields
+   under the intuitive reading under-reports every player who went down, so
+   the field is emitted and `active_ms_subtracts_dead_time_but_not_down_time`
+   pins it against a fixture that actually contains downs.
+
+4. **This is the program's first key REMOVAL.** Nine keys moved under
+   `tracks`; five new intervals keys appeared. The 1.x rules call a
+   relocation breaking, so it is recorded explicitly in
+   `docs/NATIVE-FORMAT.md`'s compatibility section rather than absorbed
+   silently -- 1.0 has no external reader yet, which is what makes it
+   payable now and not later.
+
+5. **ei-json is byte-identical in all five gate combos** (none, `--replay`,
+   `--skill-damage`, `--timeseries`, all three) -- the first task in the
+   program with no ei-json delta at all. The native document, meanwhile,
+   gains 42 interval rows and `coverage.replay: "present"` on a default
+   parse that previously carried no replay block whatsoever.
+
+---
+
 ### Task 12: `boon_states` and `target_conditions` — the name→id redesign
 
 Follow Task 6's spine. This is the task the spec's PII section is about.
@@ -1099,7 +1364,7 @@ entity id. If it genuinely does not resolve, drop the row and record a
 structured warning — do **not** invent a sentinel entity id, which would put a
 non-existent entity in a block keyed by `entities[]`.
 
-- [ ] **PII assertion — the enforcement for this whole redesign**
+- [x] **PII assertion — the enforcement for this whole redesign**
 
 Add to `crates/axilog-schema/tests/` (alongside spec #1's existing identity
 tests):
@@ -1349,3 +1614,44 @@ on structures too large to transcribe here (`crates/axilog-ei/src/lib.rs` is
 - The exact `SkillOutcomes` → `by_skill` field names in Task 9 depend on what
   spec #1's `SkillRow` already carries; check `blocks/damage.rs` before
   writing.
+
+### Execution notes (Task 8, done)
+
+Four notes Tasks 9–12 inherit.
+
+1. **The gate CAN absorb — when the block zero-fills.** Task 7 had to leave the
+   gate behind because an empty `by_skill` could not distinguish "flag off"
+   from "this enemy landed nothing". Task 8 does not have that problem,
+   because `build_series` gives EVERY `Enemy` a row — zero-filling the ones
+   the pass skipped, which is the fill the ei-json adapter used to do itself.
+   With every enemy filled, "no row" can only mean the flag was off, so the
+   adapter branches on the native row's presence and reads no `EiInputs`
+   `Option` at all. The general rule for the remaining tasks: **if a block
+   can be made total over its roster, its gate absorbs with it; if absence is
+   also a legitimate data value, the gate has to wait for Task 13.**
+
+2. **The entity roster is broader than `report.enemies`.** 80 enemy-role
+   entities against 49 `Enemy` records on the committed fixture — the extra
+   rows are minions and gadgets promoted to entities. Zero-filling all 80
+   would invent measurements for entities no pass ever considered, so the
+   fill runs over `report.enemies` (which is also where `blocks.damage` draws
+   the line). The adapter's gate inference stays sound because every rendered
+   `source_order.targets()` entry is backed by an `Enemy` record — that is a
+   stronger claim than "enemies are a superset", so it is pinned by its own
+   test rather than left as reasoning.
+
+3. **`EntitySeries` needed a field only one side populates**, exactly like
+   Task 7's `SkillRow`. Enemies carry an outgoing power split
+   (`powerDamage1S`); no pass computes one for players — `PlayerPerSecondOut`
+   has `power_damage_taken` but no outgoing equivalent. So `power_damage` is
+   `Option<SeriesOut>`, absent on player rows. Expect this shape again: the
+   two sides of this format are measured by different passes, and a shared
+   field with a zero default silently reports "measured zero" for "never
+   measured".
+
+4. **ei-json is byte-identical across all four gate combos** (flagless,
+   `--timeseries`, `--skill-damage`, both) — unlike Tasks 6 and 7, which grew
+   `skillMap`. Nothing grew here because a series references no catalog
+   entry. A task whose absorbed data carries skill or buff ids should still
+   expect additive catalog growth; one carrying only numbers should expect
+   none, and a diff is then a real regression rather than a known effect.

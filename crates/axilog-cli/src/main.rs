@@ -144,10 +144,25 @@ enum Cmd {
         /// (+441.5%). The gap is EI's per-target arrays, which have no
         /// native counterpart and are 854,077 of those bytes on their own
         /// (`damageModifiersTarget` 497,702 + its incoming twin 356,375)
-        /// -- see `axilog_ei::EiInputs::modifiers`. Wall clock on that
+        /// -- the split now lands on `blocks.damage_mods`'s `per_target`. Wall clock on that
         /// fixture (release build, `--format ei-json`): 0.074s -> 0.155s.
         #[arg(long)]
         modifiers: bool,
+        /// Compute every analysis pass this binary knows about.
+        ///
+        /// Deliberately defined as "everything that exists in this
+        /// version", not as an enumerated flag list: a consumer that sets
+        /// this keeps getting complete documents as later milestones add
+        /// passes. The first axibridge cutover audit found 30 blank fields
+        /// caused by exactly the opposite -- a consumer's option list
+        /// drifting from the parser's.
+        ///
+        /// It is a UNION with the individual flags, never an override, so
+        /// `--all` alone and `--all --replay` mean the same thing. Cost is
+        /// the sum of every gate's own documented cost -- see each flag
+        /// above; the expensive ones are `--replay` and `--modifiers`.
+        #[arg(long)]
+        all: bool,
     },
     /// Rewrite every player's character/account name in a .zevtc to a
     /// deterministic `Anon<N>` placeholder and write the result as a new
@@ -203,7 +218,18 @@ enum View {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage, timeseries, rotation, modifiers } => {
+        Cmd::Parse { path, format, view, output, replay, missiles, skill_damage, timeseries, rotation, modifiers, all } => {
+            // `--all` is folded in HERE, once, rather than at each gate's
+            // own read site: every gate below then sees a single already-
+            // resolved bool, so a new pass cannot be added and silently
+            // left out of `--all` by forgetting one `|| all`. Union, not
+            // override -- see the flag's doc.
+            let replay = replay || all;
+            let missiles = missiles || all;
+            let skill_damage = skill_damage || all;
+            let timeseries = timeseries || all;
+            let rotation = rotation || all;
+            let modifiers = modifiers || all;
             let bytes = std::fs::read(&path)?;
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
@@ -239,13 +265,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // MEIGAP Task 1b: GW2EI-shape boon stack timelines
             // (`buffUptimes[].states`/`.statesPerSource`) -- gated on
             // `--timeseries`, mirroring GW2EI's own `RawFormatTimelineArrays`
-            // gate on the same two arrays, and computed only for the format
-            // that can emit them (same "only for the format with a shape for
-            // it" reasoning as `ei_replay_data` above). It re-runs the boon
-            // simulation to recover per-SOURCE stack ownership, which
-            // `analyze()` keeps only in summed form -- see
+            // gate on the same two arrays. It re-runs the boon simulation to
+            // recover per-SOURCE stack ownership, which `analyze()` keeps
+            // only in summed form -- see
             // `axilog_core::analysis::buffs::states`'s module doc.
-            let boon_states = (timeseries && format == Format::EiJson).then(|| {
+            //
+            // Task 12: no longer restricted to `Format::EiJson`. It lands on
+            // `blocks.boons`' rows now, so `--format json --timeseries` is
+            // entitled to it too -- the flag alone decides, exactly as
+            // Tasks 7 and 8 did for the enemy passes below.
+            let boon_states = timeseries.then(|| {
                 axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons)
             });
             // MEIGAP Task 2b/2d: the two `--timeseries`-gated `targets[]`
@@ -258,7 +287,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // The enemy addr set + representative fold both enemy-side
             // passes need -- built at most once, and only when one of them
             // will actually run (a flagless parse pays nothing).
-            let enemy_sets = ((timeseries || skill_damage) && format == Format::EiJson).then(|| {
+            // Side-channel absorption Tasks 7 and 8: both enemy passes now
+            // land on native blocks (`blocks.damage` and `blocks.series`),
+            // so neither half of this gate depends on the output format any
+            // more -- the flags alone decide.
+            let enemy_sets = (skill_damage || timeseries).then(|| {
                 let enemies: std::collections::BTreeSet<u64> =
                     enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
                 let enemy_addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
@@ -277,8 +310,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     rep,
                 )
             });
-            let target_conditions = (timeseries && format == Format::EiJson)
-                .then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+            // Task 12: lands on `blocks.conditions`, so likewise no longer
+            // format-restricted.
+            let target_conditions =
+                timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
             // MEIGAP Task 2c: `targets[].totalDamageDist` rides
             // `--skill-damage`, the flag that already gates every other
             // per-skill block (GW2EI itself emits it unconditionally; this
@@ -289,30 +324,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // MEIGAP Task 3a/3b. Every healing-detail family is
             // flag-gated -- `healing1S` on `--timeseries`, the ally
             // matrices and the two `*Dist` arrays on `--skill-damage` (see
-            // `EiInputs::healing_dist` for the measured payload reason) --
+            // `Passes::healing_series` for the measured payload reason) --
             // so the PASS itself only runs when at least one of them will
             // be serialized, and it self-gates to `None` on a log with no
             // healing extension before it even builds a registry.
             // `minions[]` is a per-skill distribution and rides
             // `--skill-damage` outright.
-            let healing_detail = ((skill_damage || timeseries) && format == Format::EiJson)
+            //
+            // Side-channel absorption Task 10 dropped the `&& format ==
+            // Format::EiJson`, for the same reason Tasks 6 and 9 dropped
+            // it: both halves are native surfaces now
+            // (`blocks.healing.by_entity[].detail` and
+            // `blocks.series.by_entity[].healing_1s`), so the flags mean
+            // the same thing whichever format is being written. The two
+            // `Passes` fields below are what re-split it: one pass, two
+            // families, two flags.
+            let healing_detail = (skill_damage || timeseries)
                 .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
                 .flatten();
-            let minion_rollups = (skill_damage && format == Format::EiJson)
-                .then(|| axilog_core::analysis::minions::build(&raw, &enc));
+            // Side-channel absorption Task 6: no longer `&& format ==
+            // Format::EiJson`. `minions` is now a native block, so the
+            // pass runs for whatever `--skill-damage` was asked for,
+            // regardless of which format is being written.
+            let minion_rollups =
+                skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
             // MEIGAP2 row 1: the player-side distributions' outcome columns
             // ride `--skill-damage`, the same gate as the distributions they
             // annotate -- so this pass cannot run for output that would not
             // carry it. See `axilog_core::analysis::dist_outcomes`'s module
             // doc for why it is a standalone pass rather than more work
             // inside `analyze()`.
-            let dist_outcomes = (skill_damage && format == Format::EiJson)
-                .then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
+            // Side-channel absorption Task 9: no longer `&& format ==
+            // Format::EiJson`, for the same reason `minion_rollups` above
+            // dropped it in Task 6 -- these columns are now a native
+            // surface (`blocks.damage.by_entity[].by_skill[].outcomes`),
+            // so gating them on the output format would make the native
+            // JSON's contents depend on which writer was asked for.
+            let dist_outcomes =
+                skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
             // MEIGAP2 row 2: `players[].healthPercents` rides
             // `--timeseries`, GW2EI's own `RawFormatTimelineArrays` gate on
             // that field.
-            let health_percents = (timeseries && format == Format::EiJson)
-                .then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
+            // Task 6, as above: `blocks.series` carries these natively now.
+            let health_percents =
+                timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
             // M16: the damage-modifier engine runs ONLY on `--modifiers`
             // (see the flag's doc comment -- it is a separate full event
             // pass, not a copy of something `analyze()` already computed).
@@ -348,7 +403,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &report,
                 env!("CARGO_PKG_VERSION"),
                 path.file_name().and_then(|s| s.to_str()),
-                damage_mods.as_ref(),
+                &axilog_schema::v1::Passes {
+                    damage_mods: damage_mods.as_ref(),
+                    minions: minion_rollups.as_ref(),
+                    health_percents: health_percents.as_ref(),
+                    enemy_dist: enemy_dist.as_ref(),
+                    enemy_series: enemy_series.as_ref(),
+                    dist_outcomes: dist_outcomes.as_ref(),
+                    healing_detail: healing_detail.as_ref().filter(|_| skill_damage),
+                    healing_series: healing_detail.as_ref().filter(|_| timeseries),
+                    activity: Some(&activity),
+                    boon_states: boon_states.as_ref(),
+                    target_conditions: target_conditions.as_ref(),
+                },
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
             // post-2026-05-01 buff-statechange-rework build producing
@@ -372,21 +439,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // included (see that function's doc comment, and axilog-ei's
             // `streaming_matches_value_tree_byte_for_byte` test).
             if format == Format::EiJson {
-                let ei_inputs = axilog_ei::EiInputs {
-                    activity: &activity,
-                    replay: ei_replay_data.as_ref(),
-                    modifiers: damage_mods.as_ref(),
-                    boon_states: boon_states.as_ref(),
-                    enemy_series: enemy_series.as_ref(),
-                    enemy_dist: enemy_dist.as_ref(),
-                    target_conditions: target_conditions.as_ref(),
-                    healing_detail: healing_detail.as_ref(),
-                    healing_series: timeseries,
-                    healing_dist: skill_damage,
-                    minions: minion_rollups.as_ref(),
-                    dist_outcomes: dist_outcomes.as_ref(),
-                    health_percents: health_percents.as_ref(),
-                };
                 // One `dyn Write` so the two destinations share the emit
                 // code; the `BufWriter` (not the trait object) is what makes
                 // the per-token writes cheap.
@@ -396,10 +448,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 use std::io::Write as _;
                 let mut w = std::io::BufWriter::with_capacity(1 << 20, sink);
-                axilog_ei::write_ei_json(&report_v1, &report, &ei_inputs, &mut w)?;
+                axilog_ei::write_ei_json(&report_v1, ei_replay_data.as_ref(), &mut w)?;
                 w.write_all(b"\n")?;
                 // Explicit flush: a `BufWriter`'s `Drop` swallows write
                 // errors (a full disk would otherwise truncate silently).
+                w.flush()?;
+                drop(w);
+                if let Some(path) = &output {
+                    eprintln!("wrote {}", path.display());
+                }
+                return Ok(());
+            }
+            // `--format json` streams, for the same reason `--format
+            // ei-json` above does (MSTREAM): `to_string_pretty` holds the
+            // whole pretty-printed document in a `String` ALONGSIDE the
+            // document it was rendered from, so peak memory was the sum of
+            // the two. Measured on the committed fixture with `--all`
+            // (Task 14 Step 3), that second copy was 7.4 MB of a 45 MB
+            // peak. Byte-identical output: same `PrettyFormatter`, same
+            // trailing newline.
+            //
+            // The document itself is still fully resident here -- it is
+            // built before anything is written, unlike ei-json's row-at-a-
+            // time `LazyRows`. Removing THAT is a reprojection-direction
+            // change, not a serializer change, and is out of this task's
+            // scope.
+            if format == Format::Json {
+                let sink: Box<dyn std::io::Write> = match &output {
+                    Some(path) => Box::new(std::fs::File::create(path)?),
+                    None => Box::new(std::io::stdout().lock()),
+                };
+                use std::io::Write as _;
+                let mut w = std::io::BufWriter::with_capacity(1 << 20, sink);
+                serde_json::to_writer_pretty(&mut w, &report_v1)?;
+                w.write_all(b"\n")?;
+                // Explicit flush: a `BufWriter`'s `Drop` swallows write
+                // errors, which on a full disk would silently truncate.
                 w.flush()?;
                 drop(w);
                 if let Some(path) = &output {
@@ -411,9 +495,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // trailing newline where appropriate) so `-o/--output` (M7,
             // Task 1) can apply uniformly regardless of `--format`.
             let rendered = match format {
-                Format::Json => {
-                    format!("{}\n", serde_json::to_string_pretty(&report_v1)?)
-                }
+                Format::Json => unreachable!("handled by the streaming path above"),
                 Format::EiJson => unreachable!("handled by the streaming path above"),
                 Format::Table => axilog_cli_table(&report, view, &metrics, &activity),
                 Format::Csv => axilog_cli_csv(&report),

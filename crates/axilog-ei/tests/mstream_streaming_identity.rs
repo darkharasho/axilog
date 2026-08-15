@@ -24,14 +24,13 @@
 
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::decode_raw;
-use axilog_ei::EiInputs;
 
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
 
 /// The three `ei-json`-relevant CLI opt-in flags, as
 /// `(replay, skill_damage, timeseries, modifiers, rotation)` is overkill —
-/// `rotation` does not reach `EiInputs` — so the matrix is over the four
+/// `rotation` does not reach the adapter's replay input — so the matrix is over the four
 /// that do.
 #[derive(Clone, Copy)]
 struct Flags {
@@ -68,6 +67,14 @@ fn render_both(flags: Flags) -> (String, String) {
     let ei_replay_data = flags
         .replay
         .then(|| axilog_core::analysis::ei_replay::build_ei_replay_auto(&raw, &enc));
+    let damage_mods = flags.modifiers.then(|| {
+        axilog_core::analysis::damage_mods::evaluate_catalog_full(
+            &raw,
+            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+            &enc,
+            true,
+        )
+    });
     let report = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -77,13 +84,12 @@ fn render_both(flags: Flags) -> (String, String) {
         flags.skill_damage,
         flags.timeseries,
         false,
-        None,
+        damage_mods.as_ref(),
     );
-    let report_v1 =
-        axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
-    let boon_states = flags
-        .timeseries
-        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
+    let minion_rollups =
+        flags.skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
+    let health_percents =
+        flags.timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
     let enemy_sets = (flags.timeseries || flags.skill_damage).then(|| {
         let enemies: std::collections::BTreeSet<u64> =
             enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
@@ -94,6 +100,9 @@ fn render_both(flags: Flags) -> (String, String) {
             .collect();
         (enemies, rep)
     });
+    let enemy_dist = enemy_sets.as_ref().filter(|_| flags.skill_damage).map(|(en, rep)| {
+        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep)
+    });
     let enemy_series = enemy_sets.as_ref().filter(|_| flags.timeseries).map(|(en, rep)| {
         axilog_core::analysis::timeseries::build_enemy_series(
             &enc,
@@ -103,53 +112,39 @@ fn render_both(flags: Flags) -> (String, String) {
             rep,
         )
     });
-    let target_conditions = flags
-        .timeseries
-        .then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
-    let enemy_dist = enemy_sets.as_ref().filter(|_| flags.skill_damage).map(|(en, rep)| {
-        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep)
-    });
+    let dist_outcomes =
+        flags.skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
     let healing_detail = (flags.skill_damage || flags.timeseries)
         .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
         .flatten();
-    let minion_rollups =
-        flags.skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
-    let dist_outcomes =
-        flags.skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
-    let health_percents =
-        flags.timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
-    let damage_mods = flags.modifiers.then(|| {
-        axilog_core::analysis::damage_mods::evaluate_catalog_full(
-            &raw,
-            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
-            &enc,
-            true,
-        )
-    });
+    let boon_states = flags
+        .timeseries
+        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
+    let target_conditions =
+        flags.timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-test", None,
+        &axilog_schema::v1::Passes {
+            activity: Some(&activity),
+            damage_mods: damage_mods.as_ref(),
+            boon_states: boon_states.as_ref(),
+            target_conditions: target_conditions.as_ref(),
+            minions: minion_rollups.as_ref(),
+            health_percents: health_percents.as_ref(),
+            enemy_dist: enemy_dist.as_ref(),
+            enemy_series: enemy_series.as_ref(),
+            dist_outcomes: dist_outcomes.as_ref(),
+            healing_detail: healing_detail.as_ref().filter(|_| flags.skill_damage),
+            healing_series: healing_detail.as_ref().filter(|_| flags.timeseries),
+        },
+    );
 
-    // Rebuilt per render: `EiInputs` is `Copy`, but each `write_ei_json`/
-    // `to_ei_json` call builds its own single-use document.
-    let inputs = || EiInputs {
-        activity: &activity,
-        replay: ei_replay_data.as_ref(),
-        modifiers: damage_mods.as_ref(),
-        boon_states: boon_states.as_ref(),
-        enemy_series: enemy_series.as_ref(),
-        enemy_dist: enemy_dist.as_ref(),
-        target_conditions: target_conditions.as_ref(),
-        healing_detail: healing_detail.as_ref(),
-        healing_series: flags.timeseries,
-        healing_dist: flags.skill_damage,
-        minions: minion_rollups.as_ref(),
-        dist_outcomes: dist_outcomes.as_ref(),
-        health_percents: health_percents.as_ref(),
-    };
-
+    let replay = ei_replay_data.as_ref();
     let mut streamed: Vec<u8> = Vec::new();
-    axilog_ei::write_ei_json(&report_v1, &report, &inputs(), &mut streamed)
+    axilog_ei::write_ei_json(&report_v1, replay, &mut streamed)
         .expect("stream ei-json");
     let streamed = String::from_utf8(streamed).expect("ei-json is UTF-8");
-    let tree = serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report_v1, &report, &inputs()))
+    let tree = serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report_v1, replay))
         .expect("pretty-print ei-json tree");
     (streamed, tree)
 }

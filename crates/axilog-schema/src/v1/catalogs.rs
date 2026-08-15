@@ -17,6 +17,30 @@ pub struct Catalogs {
     pub buffs: BTreeMap<u32, BuffEntry>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub damage_mods: BTreeMap<i32, DamageModEntry>,
+    /// Minion identities, keyed by a synthetic id (see
+    /// [`CatalogBuilder::reference_minion`]).
+    ///
+    /// A catalog rather than fields on `blocks.minions`'s rows because
+    /// this format keeps human-readable names in `catalogs` and
+    /// `entities[]` ONLY -- `v1_shape.rs::no_block_inlines_a_human_
+    /// readable_name` enforces it. A minion is not a tracked entity (it
+    /// has no `entities[]` row and no statistics of its own beyond the
+    /// damage it took), so `entities[]` is not the right home either.
+    /// Deduplicating helps as a side effect: on a squad log the same
+    /// summon name recurs across every player running that build.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub minions: BTreeMap<u32, MinionEntry>,
+}
+
+/// One minion species-and-name pair. Both halves are identity, which is
+/// why they live here rather than on the block's rows.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct MinionEntry {
+    /// The GW2 species id (`RawAgent::prof`) of the first agent folded
+    /// into the group. NOT unique across entries -- the pass groups by
+    /// NAME, so two entries can share a species id.
+    pub species_id: u32,
+    pub name: String,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -112,6 +136,8 @@ pub struct CatalogBuilder {
     skills: BTreeSet<u32>,
     buffs: BTreeSet<u32>,
     damage_mods: BTreeSet<i32>,
+    /// `(species_id, name)` -> synthetic minion id, in first-seen order.
+    minions: std::collections::HashMap<(u32, String), u32>,
 }
 
 impl CatalogBuilder {
@@ -120,6 +146,18 @@ impl CatalogBuilder {
     }
     pub fn reference_buff(&mut self, id: u32) {
         self.buffs.insert(id);
+    }
+    /// Intern a minion identity, returning its synthetic catalog id.
+    ///
+    /// Ids are assigned in first-seen order, which makes them stable for a
+    /// given log but meaningless across logs -- exactly like the entity
+    /// ids this format already uses as join keys, and for the same reason:
+    /// nothing in the source data offers a stable unique key here. The
+    /// species id alone will not do, because the pass groups minions by
+    /// NAME and two differently-named groups can share one species id.
+    pub fn reference_minion(&mut self, species_id: u32, name: &str) -> u32 {
+        let next = self.minions.len() as u32;
+        *self.minions.entry((species_id, name.to_owned())).or_insert(next)
     }
     pub fn reference_damage_mod(&mut self, id: i32) {
         self.damage_mods.insert(id);
@@ -239,7 +277,12 @@ impl CatalogBuilder {
                 .collect(),
         };
 
-        Catalogs { skills, buffs, damage_mods }
+        let minions = self
+            .minions
+            .into_iter()
+            .map(|((species_id, name), id)| (id, MinionEntry { species_id, name }))
+            .collect();
+        Catalogs { skills, buffs, damage_mods, minions }
     }
 }
 

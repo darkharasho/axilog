@@ -42,7 +42,26 @@ fn build() -> (String, String) {
         &legacy,
         "0.0.0-test",
         Some("wvw-small.anon.zevtc"),
-        Some(&damage_mods),
+        // Side-channel absorption Task 6: deliberately WITHOUT `minions`
+        // and `health_percents`, unlike the per-block report below.
+        //
+        // This assertion is a ratio against the legacy document, so it is
+        // only meaningful while both documents describe the same
+        // measurements. Those two passes have no legacy counterpart at all
+        // -- they reached ei-json through the side channel and the legacy
+        // `Report` has nowhere to put them -- so including them here
+        // compares a document carrying them against one that cannot, and
+        // the ratio moves 0.800 -> 0.885 without a single byte of encoding
+        // getting worse. That would be a bound eroded by absorbing data,
+        // which is exactly the growth this program exists to cause, and
+        // widening the bound to absorb it would retire the test one task
+        // at a time.
+        //
+        // Their cost is not going unmeasured: `per_block_sizes_are_
+        // reported_for_the_benchmarks_doc` below builds the FULL document
+        // and prints both (`minions` 63,231 bytes; `series` grows ~75,063
+        // for `health_percents`, on the committed fixture).
+        &axilog_schema::v1::Passes { damage_mods: Some(&damage_mods), ..Default::default() },
     );
     (
         serde_json::to_string(&legacy).expect("legacy serializes"),
@@ -69,15 +88,29 @@ fn the_one_point_oh_document_is_not_larger_than_the_legacy_one() {
     // fix). Closing the gaps moved the ratio 0.552 -> 0.800.
     //
     // The bound is 0.85, down from the pre-fix 0.70 -- which the real,
-    // complete document no longer passes. 0.85 keeps ~6% relative headroom
-    // above the measured 0.800 for per-fixture drift while still asserting
-    // a genuine win: a regression that erodes even a quarter of the
-    // remaining 20% reduction trips it, and dedup or RLE breaking outright
-    // would push the ratio well past 1.0. The headroom is thinner than it
-    // was, and deliberately so -- there is less win left to protect. If
-    // additive 1.x growth eats it, re-measure and re-justify rather than
-    // widening the bound reflexively; a bound loose enough to always pass
-    // is what the pre-measurement 1.20 draft already proved worthless.
+    // complete document no longer passes. 0.85 kept ~6% relative headroom
+    // above the then-measured 0.800 for per-fixture drift while still
+    // asserting a genuine win: a regression that erodes even a quarter of
+    // the remaining 20% reduction trips it, and dedup or RLE breaking
+    // outright would push the ratio well past 1.0. If additive 1.x growth
+    // eats it, re-measure and re-justify rather than widening the bound
+    // reflexively; a bound loose enough to always pass is what the
+    // pre-measurement 1.20 draft already proved worthless.
+    //
+    // MEASURED 0.837 as of side-channel absorption Task 6 -- the headroom
+    // is down to ~1.5%, and this is a WARNING to whoever trips it next.
+    // The drift is not an encoding regression. Tasks 4 and 5 absorbed two
+    // quantities (`breakbar_damage_dealt`, enemy outgoing damage) that the
+    // legacy document carries as `#[serde(skip)]` fields, so 1.0 now
+    // serializes real measurements the baseline structurally omits.
+    // Tasks 7-12 absorb six more passes with no legacy counterpart at all.
+    // The passes that enter through `Passes` can be (and are) excluded
+    // above to keep the comparison honest; the ones that land on always-on
+    // blocks cannot. When this finally trips: verify the growth is
+    // absorbed-data growth rather than encoding regression (the per-block
+    // report below is how), then consider whether a ratio against a
+    // document that no longer describes the same thing is still the right
+    // test -- rather than nudging 0.85 upward one task at a time.
     assert!(
         v1.len() <= legacy.len() * 85 / 100,
         "1.0 is {} bytes vs legacy {} (ratio {:.3}) -- expected the 1.0 document to be meaningfully \
@@ -108,6 +141,35 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
         &enc,
         false,
     );
+    let minion_rollups = axilog_core::analysis::minions::build(&raw, &enc);
+    let health_percents = axilog_core::analysis::health::ei_health_percents(&raw, &enc);
+    let (enemy_dist, enemy_series) = {
+        let enemies: std::collections::BTreeSet<u64> =
+            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+        let rep: std::collections::BTreeMap<u64, u64> = enc
+            .enemies
+            .iter()
+            .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+            .collect();
+        (
+            axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &rep),
+            axilog_core::analysis::timeseries::build_enemy_series(
+                &enc,
+                &raw,
+                &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+                &enemies,
+                &rep,
+            ),
+        )
+    };
+    // Task 9: the outcome columns on both player-side distributions.
+    let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
+    // Task 10: the healing detail feeds two families under two different
+    // flags; with every gate on, both are set from the one pass.
+    let healing_detail = axilog_core::analysis::healing_detail::build(&raw, &enc);
+    // Task 11: ungated, like every real caller -- `blocks.replay.by_entity`
+    // is the always-on half of that block.
+    let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -119,16 +181,34 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
         true,
         Some(&damage_mods),
     );
+    // Task 12: this per-block report is the all-gates one, so both
+    // timeline passes run here (the ratio test above deliberately
+    // excludes every absorbed pass -- see its comment).
+    let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
+    let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
     let v1 = axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
         &legacy,
         "0.0.0-test",
         Some("wvw-small.anon.zevtc"),
-        Some(&damage_mods),
+        &axilog_schema::v1::Passes {
+            damage_mods: Some(&damage_mods),
+            minions: Some(&minion_rollups),
+            health_percents: Some(&health_percents),
+            enemy_dist: Some(&enemy_dist),
+            enemy_series: Some(&enemy_series),
+            dist_outcomes: Some(&dist_outcomes),
+            healing_detail: healing_detail.as_ref(),
+            healing_series: healing_detail.as_ref(),
+            activity: Some(&activity),
+            boon_states: Some(&boon_states),
+            target_conditions: Some(&target_conditions),
+        },
     );
     let v = serde_json::to_value(&v1).expect("serializable");
 
+    // Reported, not asserted -- this is the input to `docs/BENCHMARKS.md`.
     for (name, value) in v["blocks"].as_object().expect("blocks").iter() {
         let size = serde_json::to_string(value).expect("stringify").len();
         println!("BLOCK {name} {size}");

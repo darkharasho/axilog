@@ -32,6 +32,39 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
         &enc,
         false,
     );
+    let minion_rollups = axilog_core::analysis::minions::build(&raw, &enc);
+    let health_percents = axilog_core::analysis::health::ei_health_percents(&raw, &enc);
+    let (enemy_dist, enemy_series) = {
+        let enemies: std::collections::BTreeSet<u64> =
+            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+        let rep: std::collections::BTreeMap<u64, u64> = enc
+            .enemies
+            .iter()
+            .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+            .collect();
+        (
+            axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &rep),
+            axilog_core::analysis::timeseries::build_enemy_series(
+                &enc,
+                &raw,
+                &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+                &enemies,
+                &rep,
+            ),
+        )
+    };
+    // Task 9: the outcome columns on both player-side distributions.
+    let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
+    // Task 10: the healing detail feeds two families under two different
+    // flags; with every gate on, both are set from the one pass.
+    let healing_detail = axilog_core::analysis::healing_detail::build(&raw, &enc);
+    // Task 11: ungated, like every real caller -- `blocks.replay.by_entity`
+    // is the always-on half of that block.
+    let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    // Task 12: the two name-keyed passes, now keyed by source ADDRESS at
+    // the source and by source ENTITY ID once native reprojects them.
+    let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
+    let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -49,7 +82,19 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
         &legacy,
         "0.0.0-test",
         None,
-        Some(&damage_mods),
+        &axilog_schema::v1::Passes {
+            damage_mods: Some(&damage_mods),
+            minions: Some(&minion_rollups),
+            health_percents: Some(&health_percents),
+            enemy_dist: Some(&enemy_dist),
+            enemy_series: Some(&enemy_series),
+            dist_outcomes: Some(&dist_outcomes),
+            healing_detail: healing_detail.as_ref(),
+            healing_series: healing_detail.as_ref(),
+            activity: Some(&activity),
+            boon_states: Some(&boon_states),
+            target_conditions: Some(&target_conditions),
+        },
     );
     (legacy, v1)
 }
@@ -411,8 +456,12 @@ fn every_legacy_rotation_cast_survives_the_reshape() {
 
         let legacy_cast_count: usize = legacy_rotation.iter().map(|s| s.casts.len()).sum();
         let row = rotation.by_entity.get(e.id).expect("rotation row for every player with legacy rotation data");
-        assert_eq!(row.cast_count as usize, legacy_cast_count, "{account} cast_count");
-        assert_eq!(row.casts.len(), legacy_cast_count, "{account} casts.len()");
+        // `casts` is the `--rotation` gate record (Task 13): the legacy
+        // rotation being `Some` is exactly the condition that makes it
+        // `Some` here, which the `expect` pins alongside the count.
+        let v1_casts_vec =
+            row.casts.as_ref().expect("casts is Some wherever the legacy rotation is Some");
+        assert_eq!(v1_casts_vec.len(), legacy_cast_count, "{account} casts.len()");
 
         // Every legacy cast (skill_id, cast_time_ms, duration_ms,
         // time_gained_ms, quickness) must appear exactly once among the
@@ -426,8 +475,7 @@ fn every_legacy_rotation_cast_survives_the_reshape() {
                 })
             })
             .collect();
-        let mut v1_casts: Vec<(u32, i64, i64, i64, u64)> = row
-            .casts
+        let mut v1_casts: Vec<(u32, i64, i64, i64, u64)> = v1_casts_vec
             .iter()
             .map(|c| (c.skill_id, c.cast_time_ms, c.duration_ms, c.time_gained_ms, c.quickness.to_bits()))
             .collect();
@@ -522,6 +570,41 @@ fn every_legacy_per_enemy_damage_row_survives_the_reshape() {
 /// see the fix-round-1 report appendix); the production fix added both
 /// fields to `SkillRow` and this test now asserts on all six, so the same
 /// class of gap cannot silently reopen.
+/// Side-channel absorption Task 9: `by_skill`/`by_skill_taken` are no
+/// longer a one-for-one reshape of the legacy `SkillDamageOut` rows -- the
+/// `dist_outcomes` pass merges into the same maps, and its row set is a
+/// SUPERSET, because a skill whose every attempt was blocked deals no
+/// damage and so never reaches `skill_damage`'s `dmg > 0` accumulator.
+/// Those pure-mitigation rows are the payload, not noise.
+///
+/// So the count assertion becomes a superset assertion -- but not a bare
+/// `>=`, which would pass just as happily if the merge invented rows out
+/// of nowhere. Every EXTRA row has to look exactly like what the outcome
+/// pass alone can produce: no damage, no contributing hits, and outcome
+/// columns present. A merge bug that duplicated or mangled a real damage
+/// row would land a nonzero `total` in the extras and fail here.
+fn assert_outcome_superset(
+    rows: &std::collections::BTreeMap<u32, axilog_schema::v1::blocks::damage::SkillRow>,
+    legacy_ids: impl Iterator<Item = u32>,
+    label: &str,
+) {
+    let legacy: std::collections::BTreeSet<u32> = legacy_ids.collect();
+    assert!(
+        rows.len() >= legacy.len(),
+        "{label}: reshape lost rows ({} native < {} legacy)",
+        rows.len(),
+        legacy.len()
+    );
+    for (id, row) in rows.iter().filter(|(id, _)| !legacy.contains(id)) {
+        assert!(
+            row.outcomes.is_some(),
+            "{label}: extra row for skill {id} has no outcome columns, so nothing produced it"
+        );
+        assert_eq!(row.total, 0, "{label}: extra row for skill {id} carries damage");
+        assert_eq!(row.hits, Some(0), "{label}: extra row for skill {id} carries contributing hits");
+    }
+}
+
 #[test]
 fn every_legacy_skill_damage_row_survives_the_reshape() {
     let (legacy, v1) = build();
@@ -535,19 +618,20 @@ fn every_legacy_skill_damage_row_survives_the_reshape() {
         let Some(skill_damage) = p.skill_damage.as_ref() else { continue };
         let row = damage.by_entity.get(e.id).expect("damage row for every player entity");
 
-        assert_eq!(
-            row.by_skill.len(),
-            skill_damage.outgoing.len(),
-            "{account} by_skill entry count"
+        assert_outcome_superset(
+            row.by_skill.as_ref().expect("--skill-damage was on"),
+            skill_damage.outgoing.iter().map(|e| e.skill_id),
+            &format!("{account} by_skill"),
         );
 
         for legacy_skill in &skill_damage.outgoing {
             let got = row
                 .by_skill
-                .get(&legacy_skill.skill_id)
+                .as_ref()
+                .and_then(|m| m.get(&legacy_skill.skill_id))
                 .unwrap_or_else(|| panic!("{account} by_skill missing entry for skill {}", legacy_skill.skill_id));
             assert_eq!(got.total, legacy_skill.total, "{account} by_skill[{}].total", legacy_skill.skill_id);
-            assert_eq!(got.hits, legacy_skill.hits, "{account} by_skill[{}].hits", legacy_skill.skill_id);
+            assert_eq!(got.hits, Some(legacy_skill.hits), "{account} by_skill[{}].hits", legacy_skill.skill_id);
             assert_eq!(got.min, legacy_skill.min, "{account} by_skill[{}].min", legacy_skill.skill_id);
             assert_eq!(got.max, legacy_skill.max, "{account} by_skill[{}].max", legacy_skill.skill_id);
             assert_eq!(
@@ -686,13 +770,17 @@ fn every_legacy_incoming_and_per_target_skill_row_survives_the_reshape() {
         let Some(sd) = p.skill_damage.as_ref() else { continue };
         let row = damage.by_entity.get(e.id).expect("damage row for every player entity");
 
-        assert_eq!(row.by_skill_taken.len(), sd.taken.len(), "{account} by_skill_taken entry count");
+        assert_outcome_superset(
+            row.by_skill_taken.as_ref().expect("--skill-damage was on"),
+            sd.taken.iter().map(|e| e.skill_id),
+            &format!("{account} by_skill_taken"),
+        );
         for legacy_skill in &sd.taken {
-            let got = row.by_skill_taken.get(&legacy_skill.skill_id).unwrap_or_else(|| {
+            let got = row.by_skill_taken.as_ref().and_then(|m| m.get(&legacy_skill.skill_id)).unwrap_or_else(|| {
                 panic!("{account} by_skill_taken missing skill {}", legacy_skill.skill_id)
             });
             assert_eq!(got.total, legacy_skill.total, "{account} taken total");
-            assert_eq!(got.hits, legacy_skill.hits, "{account} taken hits");
+            assert_eq!(got.hits, Some(legacy_skill.hits), "{account} taken hits");
             assert_eq!(got.min, legacy_skill.min, "{account} taken min");
             assert_eq!(got.max, legacy_skill.max, "{account} taken max");
             assert_eq!(got.crit_hits, legacy_skill.crit_hits, "{account} taken crit_hits");
@@ -715,7 +803,7 @@ fn every_legacy_incoming_and_per_target_skill_row_survives_the_reshape() {
                     panic!("{account}/{tid} per-target by_skill missing {}", legacy_skill.skill_id)
                 });
                 assert_eq!(got.total, legacy_skill.total, "{account}/{tid} per-target total");
-                assert_eq!(got.hits, legacy_skill.hits, "{account}/{tid} per-target hits");
+                assert_eq!(got.hits, Some(legacy_skill.hits), "{account}/{tid} per-target hits");
                 assert_eq!(got.min, legacy_skill.min, "{account}/{tid} per-target min");
                 assert_eq!(got.max, legacy_skill.max, "{account}/{tid} per-target max");
                 assert_eq!(got.crit_hits, legacy_skill.crit_hits, "{account}/{tid} per-target crit_hits");
@@ -754,20 +842,24 @@ fn every_legacy_aftercast_field_survives_the_reshape() {
     assert!(checked >= 30, "expected a substantial join, got {checked}");
 }
 
-/// Final review, Finding 4: `CoverageState::Empty` was unreachable -- every
-/// computed block reported `Present`, so a log with no healing extension
-/// said `healing: "present"` with zero rows, exactly the ambiguity
-/// `coverage` exists to remove.
+/// A log recorded without the arcdps healing addon reports `healing:
+/// "unsupported"` -- not `"empty"`, and certainly not `"present"`.
 ///
-/// The committed fixture cannot witness this: it DOES carry
-/// healing-extension data, and every other always-on block has a row for
-/// every player, so no block on it is legitimately empty. That is exactly
-/// why the gap survived -- a fixture-only test suite has no way to observe
-/// the state. So this builds the minimal encounter that reproduces it: one
-/// player, `has_healing_extension == false`, which is an ordinary log
-/// recorded without the arcdps healing addon.
+/// Two rounds of this program have now argued about this one value. Final
+/// review Finding 4 found it reporting `Present` with zero rows -- the exact
+/// "absent reported as zero" ambiguity `coverage` exists to remove -- and
+/// moved it to `Empty`. Task 10 moved it again, because `Empty` is still the
+/// wrong answer: it says the pass ran and the squad healed for nothing. No
+/// flag and no future pass can produce these numbers from a log whose
+/// recorder never wrote them, which is what `Unsupported` means and the only
+/// condition in this container that reaches it.
+///
+/// The committed fixture cannot witness any of this -- it DOES carry
+/// healing-extension data -- which is exactly why the original gap survived
+/// a fixture-only suite. So this builds the minimal encounter that
+/// reproduces it: one player, `has_healing_extension == false`.
 #[test]
-fn a_computed_block_with_no_rows_reports_empty_not_present() {
+fn a_log_without_the_healing_extension_reports_unsupported_not_empty() {
     use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
     use axilog_core::model::{Encounter, Player};
     use axilog_schema::v1::envelope::CoverageState;
@@ -814,7 +906,7 @@ fn a_computed_block_with_no_rows_reports_empty_not_present() {
     let legacy = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
     );
-    let v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, None);
+    let v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &Default::default());
 
     assert!(
         legacy.players.iter().all(|p| p.healing.is_none()),
@@ -824,8 +916,9 @@ fn a_computed_block_with_no_rows_reports_empty_not_present() {
     assert!(healing.by_entity.is_empty(), "no healing rows on this log");
     assert_eq!(
         v1.coverage.get("healing"),
-        Some(CoverageState::Empty),
-        "a computed block with no rows must report `empty`, never `present`"
+        Some(CoverageState::Unsupported),
+        "a log with no healing extension cannot ANSWER the healing question -- reporting `empty` \
+         claims it answered zero"
     );
 
     // And the distinction is real, not a blanket downgrade: a block that
@@ -833,10 +926,67 @@ fn a_computed_block_with_no_rows_reports_empty_not_present() {
     assert_eq!(v1.coverage.get("damage"), Some(CoverageState::Present));
 
     // The fixture-scale document still reports `present` everywhere it
-    // has rows -- `Empty` did not become the new default.
+    // has rows -- neither `Empty` nor `Unsupported` became the new default.
     let (_, fixture) = build();
     assert_eq!(fixture.coverage.get("healing"), Some(CoverageState::Present));
     assert_eq!(fixture.coverage.get("damage"), Some(CoverageState::Present));
+}
+
+/// `Empty` is still reachable, and still means what Finding 4 made it mean:
+/// the pass ran, the question was answerable, and the answer was nothing.
+///
+/// Task 10 took `healing`-without-the-extension away as its witness, so this
+/// supplies the other one -- a log whose roster resolved to no squad players
+/// at all, on which every always-on block genuinely has zero rows. Without
+/// this the `Empty` arm of `computed` would go back to being dead code that
+/// no test observes, which is the state Finding 4 found it in.
+#[test]
+fn a_computed_block_with_no_rows_still_reports_empty() {
+    use axilog_core::analysis::{Metrics, Timeline};
+    use axilog_core::model::Encounter;
+    use axilog_schema::v1::envelope::CoverageState;
+
+    let enc = Encounter {
+        kind: "wvw".into(),
+        map: String::new(),
+        duration_ms: 1000,
+        build: String::new(),
+        revision: 1,
+        recorded_by: None,
+        teams: vec![],
+        players: vec![],
+        enemies: vec![],
+        markers: vec![],
+        tick_rate: None,
+    };
+    let metrics = Metrics {
+        // The extension IS present -- so `healing` is answerable here, and
+        // its emptiness is a measurement rather than an absence. That is the
+        // whole difference between this witness and the one above.
+        has_healing_extension: true,
+        timeline: Timeline {
+            resolution_ms: 1000,
+            squad_damage: vec![0],
+            cc_applied: vec![0],
+            downs: vec![0],
+        },
+        ..Default::default()
+    };
+    let legacy = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
+    );
+    let v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &Default::default());
+
+    assert_eq!(
+        v1.coverage.get("healing"),
+        Some(CoverageState::Empty),
+        "extension present and no rows is `empty`, not `unsupported`"
+    );
+    assert_eq!(
+        v1.coverage.get("damage"),
+        Some(CoverageState::Empty),
+        "a block that ran over an empty roster is `empty` too"
+    );
 }
 
 /// Final review, Finding 9 -- the test that would have caught the other
@@ -995,14 +1145,18 @@ fn every_legacy_player_field_has_a_one_point_oh_destination() {
             d.per_target.values().filter(|pt| pt.detail.is_some()).count(),
             "per_target -> damage.per_target[].detail"
         );
-        assert_eq!(
-            skill_damage.as_ref().map(|s| s.outgoing.len()).unwrap_or(0),
-            d.by_skill.len(),
+        // `>=`, not `==`: Task 9's outcome merge adds mitigation-only
+        // rows to both maps. This test only asserts the destination exists
+        // and is populated; `assert_outcome_superset` above is what pins
+        // what those extra rows are allowed to be.
+        assert!(
+            d.by_skill.as_ref().map_or(0, |m| m.len())
+                >= skill_damage.as_ref().map(|s| s.outgoing.len()).unwrap_or(0),
             "skill_damage.outgoing -> damage.by_skill"
         );
-        assert_eq!(
-            skill_damage.as_ref().map(|s| s.taken.len()).unwrap_or(0),
-            d.by_skill_taken.len(),
+        assert!(
+            d.by_skill_taken.as_ref().map_or(0, |m| m.len())
+                >= skill_damage.as_ref().map(|s| s.taken.len()).unwrap_or(0),
             "skill_damage.taken -> damage.by_skill_taken"
         );
         assert_eq!(
@@ -1064,7 +1218,7 @@ fn every_legacy_player_field_has_a_one_point_oh_destination() {
         // --- rotation / damage_mods / series --------------------------------
         let r = rotation_block.by_entity.get(id);
         assert_eq!(
-            r.map(|r| r.casts.len()),
+            r.and_then(|r| r.casts.as_ref()).map(|c| c.len()),
             rotation.as_ref().map(|v| v.iter().map(|s| s.casts.len()).sum::<usize>()),
             "rotation -> rotation block"
         );
@@ -1074,7 +1228,7 @@ fn every_legacy_player_field_has_a_one_point_oh_destination() {
             "aftercast -> rotation.aftercast"
         );
         assert_eq!(
-            damage_mods_block.by_entity.get(id).map(|m| m.len()),
+            damage_mods_block.by_entity.get(id).map(|m| m.overall.len()),
             damage_mods.as_ref().map(|m| m.outgoing.len() + m.incoming.len()),
             "damage_mods -> damage_mods block"
         );
@@ -1084,16 +1238,38 @@ fn every_legacy_player_field_has_a_one_point_oh_destination() {
             "per_second -> series block"
         );
 
-        // INTENTIONALLY ABSENT: `breakbar_damage_dealt` and
-        // `downs_contribution_per_skill`. Both are `#[serde(skip)]` on
-        // `PlayerOut` -- they have never been part of the native JSON at
-        // all, existing solely as side data `axilog_ei::to_ei_json` reads
-        // in-process (see their doc comments). Reprojecting them into 1.0
-        // would be NEW public surface, not equivalence, and this milestone's
-        // claim is only that nothing the legacy format PUBLISHED was lost.
-        // Asserted as skipped rather than asserted equal, so that flipping
-        // either to a serialized field breaks this test and forces the
-        // decision to be made deliberately:
+        // `breakbar_damage_dealt` and `downs_contribution_per_skill` are
+        // both `#[serde(skip)]` on `PlayerOut` -- they were never part of
+        // the LEGACY JSON at all, existing solely as side data
+        // `axilog_ei::to_ei_json` read in-process. This block used to record
+        // them as intentionally absent from 1.0 on the grounds that
+        // publishing them would be new surface rather than equivalence.
+        //
+        // Side-channel absorption ended that: 1.0 is now the ONLY thing the
+        // ei-json adapter reads, so side data with no native home is data no
+        // consumer of this format can see. Both have homes now --
+        // `blocks.damage.by_entity[].breakbar_damage_dealt` and
+        // `blocks.contribution.by_entity[].downs_contribution_by_skill`
+        // (Task 13) -- and the per-skill slice is asserted equal against
+        // its legacy source below.
+        //
+        // The two assertions here still stand and still mean something: they
+        // pin that neither field became part of the LEGACY format, which
+        // would make it a second, competing publication of the same number.
+        let credits = contribution_block
+            .by_entity
+            .get(id)
+            .map(|c| c.downs_contribution_by_skill.clone())
+            .unwrap_or_default();
+        let expected: std::collections::BTreeMap<u32, u64> = downs_contribution_per_skill
+            .iter()
+            .filter(|(_, &v)| v > 0)
+            .map(|(&k, &v)| (k, v))
+            .collect();
+        assert_eq!(
+            credits, expected,
+            "downs_contribution_per_skill -> contribution.downs_contribution_by_skill"
+        );
         let legacy_json = serde_json::to_value(p).expect("serializable");
         assert!(
             legacy_json.get("breakbar_damage_dealt").is_none(),

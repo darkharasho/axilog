@@ -936,10 +936,11 @@ pub struct PlayerOut { pub account: String, pub character: String, pub professio
     pub damage_mods: Option<DamageModsOut>,
     /// The player's representative agent addr. `#[serde(skip)]`: never part
     /// of the native JSON -- it exists purely so `axilog_ei::to_ei_json`
-    /// can key `EiInputs::modifiers`'s
-    /// `axilog_core::analysis::damage_mods::DamageModifierResults` (which
-    /// is addr-keyed, being a core analysis output) back onto `players[]`
-    /// positionally. Same "side data the EI adapter needs, invisible to the
+    /// could key the addr-keyed
+    /// `axilog_core::analysis::damage_mods::DamageModifierResults` back onto
+    /// `players[]` positionally. Absorption Task 13 moved that join into
+    /// `blocks.damage_mods`' own builder, so nothing on the ei-json path
+    /// reads this any more. Same "side data the EI adapter needs, invisible to the
     /// native output" role `Report::ei_targets` already plays -- see that
     /// field's doc comment.
     #[serde(skip)]
@@ -1112,10 +1113,11 @@ fn damage_mod_entry_out(id: i32, s: &DamageModifierStat) -> DamageModEntryOut {
 /// `DamageModifierDef::validate` rejects a non-positive base id), so no
 /// second lookup is needed.
 ///
-/// The native block is whole-fight only: `DamageModifierResults::per_target`
-/// has no native counterpart and is consumed exclusively by the ei-json
-/// adapter (`axilog_ei::EiInputs::modifiers`), which needs it in EI's
-/// positional `[targetIndex]` shape.
+/// This LEGACY block is whole-fight only. The per-target split now has a
+/// native home of its own -- `v1::blocks::activity::DamageModEntity::
+/// per_target`, added in absorption Task 13 -- which is where the ei-json
+/// adapter reads it from before re-densifying it into EI's positional
+/// `[targetIndex]` shape.
 fn damage_mods_out(results: &DamageModifierResults, addr: u64) -> DamageModsOut {
     let split = |rows: Vec<(i32, &DamageModifierStat)>| {
         let (incoming, outgoing): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(id, _)| *id < 0);

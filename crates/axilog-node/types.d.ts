@@ -883,9 +883,13 @@ export type CoverageState = 'present' | 'not_computed' | 'empty' | 'unsupported'
  * (`"damage"`, `"defenses"`, `"hit_stats"`, `"cc"`, `"boons"`, `"support"`,
  * `"contribution"`, `"healing"`, `"rotation"`, `"damage_mods"`,
  * `"missiles"`, `"replay"`, `"series"`, `"conditions"`, `"minions"`).
- * Always names every known block, even ones this schema version never
- * computes (`"conditions"`/`"minions"`, reserved for spec #2, always
- * `"not_computed"`).
+ * Always names every known block, including ones a given parse did not
+ * compute -- those read `"not_computed"`.
+ *
+ * One entry is narrower than it looks: `"boons"` reports on that block's
+ * always-on uptime half only, NOT on its `{ timeseries: true }` stack
+ * timelines (see `BoonsBlock`). `"replay"` is the same shape of exception
+ * (see `ReplayBlock`).
  */
 export type Coverage = Record<string, CoverageState>
 
@@ -1107,16 +1111,91 @@ export interface GenerationRow {
   squad_wasted?: number
 }
 
-/** Mirrors the legacy `BoonOut` field-for-field, minus `id` (the map key) and `name` (resolve via `catalogs.buffs`). */
+/**
+ * One `[[time_ms_from_log_start, stacks], ...]` step timeline.
+ *
+ * Always opens with a `[0, 0]` pair and never carries two pairs at one
+ * timestamp. Duration buffs report 0/1; only intensity buffs (Might,
+ * Stability, most damaging conditions) exceed 1.
+ */
+export type StateTimeline = [number, number][]
+
+/**
+ * A buff's stack timeline split by who applied it, keyed by SOURCE ENTITY
+ * ID -- joining back into `entities[]` like every other key in this format.
+ *
+ * The upstream analysis keys these by the applier's character NAME; native
+ * does not, both because a name is identity data this format confines to
+ * `entities[]` and because two players sharing a character name collide
+ * onto one key.
+ */
+export interface PerSourceStates {
+  /** Keyed by the applying entity's id. */
+  by_source: Record<string, StateTimeline>
+  /**
+   * Every applier that resolves to no `entities[]` row at all, merged into
+   * one timeline -- so those applications are neither dropped nor given a
+   * fabricated entity id. Normally absent.
+   */
+  unresolved?: StateTimeline
+}
+
+/**
+ * Mirrors the legacy `BoonOut` field-for-field, minus `id` (the map key) and
+ * `name` (resolve via `catalogs.buffs`) -- plus the two timeline fields,
+ * which need `{ timeseries: true }`.
+ */
 export interface BoonRow {
   uptime_pct: number
   avg_stacks?: number
   generation: GenerationRow
+  /**
+   * The fused stack timeline. `{ timeseries: true }` only.
+   *
+   * May be `[]`, meaning the pass ran and this entity never held the buff
+   * -- a real timeline always has at least its leading `[0, 0]`, so `[]` is
+   * unambiguous, and the field's presence is the signal the gate was on.
+   */
+  states?: StateTimeline
+  /** The same timeline split by applier. `{ timeseries: true }` only. */
+  per_source?: PerSourceStates
 }
 
-/** entity id -> buff id -> row. Two levels of real ids, no positional joins. */
+/**
+ * entity id -> buff id -> row. Two levels of real ids, no positional joins.
+ *
+ * Two gates, like `ReplayBlock`: the uptime/generation numbers are computed
+ * on every parse, `BoonRow.states`/`per_source` need `{ timeseries: true }`.
+ * So `coverage.boons === "present"` is about the uptime half ONLY and says
+ * nothing about whether timelines are here -- check the fields.
+ */
 export interface BoonsBlock {
   by_entity: ByEntity<Record<string, BoonRow>>
+}
+
+/**
+ * One enemy's condition timeline, split by the squad member who applied it.
+ *
+ * There is no sibling fused `states` here, unlike `BoonRow`: the enemy-side
+ * pass computes only the source split, and summing sources would not
+ * reconstruct a total (two appliers holding the same duration condition
+ * overlap rather than stack).
+ */
+export interface ConditionRow {
+  per_source: PerSourceStates
+}
+
+/**
+ * enemy entity id -> condition buff id -> row. Wholly gated on
+ * `{ timeseries: true }`, so unlike `boons` its `coverage` entry does settle
+ * the question.
+ *
+ * Appliers are narrowed to the SQUAD -- an enemy-applied condition on
+ * another enemy is real but has no consumer -- so
+ * `PerSourceStates.unresolved` is always absent here.
+ */
+export interface ConditionsBlock {
+  by_entity: ByEntity<Record<string, ConditionRow>>
 }
 
 /** Mirrors the legacy `SupportOut` field-for-field. */
@@ -1144,6 +1223,14 @@ export interface ContributionRow {
 export interface ContributionEntity {
   downs_contribution: ContributionRow
   downed_by: ContributionRow
+  /**
+   * `downs_contribution.damage` sliced by the skill that dealt it, keyed by
+   * skill id as a decimal string. Sparse -- only skills with a nonzero
+   * credit appear -- and omitted entirely when there are none. Ungated:
+   * the contribution pass is always-on, unlike the per-skill DAMAGE rows on
+   * `blocks.damage`, which is why it lives here rather than beside them.
+   */
+  downs_contribution_by_skill?: Record<string, number>
 }
 
 export interface ContributionBlock {
@@ -1198,12 +1285,15 @@ export interface Aftercast {
 }
 
 export interface RotationEntity {
-  cast_count: number
-  casts: CastRow[]
   /**
-   * Cast counters, computed unconditionally but published only when this
-   * block is (gated on `rotation: true`).
+   * This entity's casts, in cast-start order. Present exactly when the cast
+   * gate (`rotation: true`) was on -- an EMPTY array means the pass ran and
+   * this entity cast nothing, while an absent field means it never ran.
+   * `aftercast` below is always-on, so the block's `coverage` cannot answer
+   * that question and this field's presence is the gate record.
    */
+  casts?: CastRow[]
+  /** Cast counters, computed unconditionally. */
   aftercast: Aftercast
 }
 
@@ -1222,9 +1312,27 @@ export interface DamageModRow {
   total_damage: number
 }
 
+/**
+ * One entity's damage modifiers, in the two scopes GW2EI evaluates them at.
+ * Neither is derivable from the other: `overall` counts every qualifying
+ * hit, including hits on agents that are not targets at all (enemy minions),
+ * while `per_target` restricts to one foe.
+ */
+export interface DamageModEntity {
+  /** Whole fight. Keyed by the signed damage-modifier id as a decimal string. */
+  overall: Record<string, DamageModRow>
+  /**
+   * Restricted to one foe, keyed by the TARGET's entity id then by the
+   * signed modifier id. Sparse in both dimensions. The per-target split is
+   * the expensive half and the native path does not compute it, so an
+   * absent `per_target` on a present block means "the split was not
+   * computed", not "there was none".
+   */
+  per_target?: Record<string, Record<string, DamageModRow>>
+}
+
 export interface DamageModsBlock {
-  /** Keyed by the signed damage-modifier id as a decimal string. */
-  by_entity: ByEntity<Record<string, DamageModRow>>
+  by_entity: ByEntity<DamageModEntity>
 }
 
 export interface MissilesSquad {
@@ -1265,6 +1373,11 @@ export interface ReplayBounds {
  * `down_intervals`/`dead_intervals` are `[start_ms, end_ms]` pairs.
  * `name`/`team`/`commander`/`is_squad` are dropped versus the legacy
  * `ReplayTrackOut` -- they live on this entity's own `entities[]` row.
+ *
+ * The intervals are ALSO on `ReplayIntervals`, and that is deliberate: the
+ * track roster covers enemy players too, whom the always-on intervals pass
+ * never walks, so dropping them here would lose that history entirely. For
+ * an entity present in both, the two copies are the same values.
  */
 export interface ReplayTrack {
   samples: [number, number, number][]
@@ -1272,12 +1385,42 @@ export interface ReplayTrack {
   dead_intervals: [number, number][]
 }
 
-export interface ReplayBlock {
+/**
+ * One SQUAD entity's activity window. `down`/`dead` are `[start_ms, end_ms]`
+ * pairs.
+ *
+ * `active_ms` is carried rather than derivable: matching GW2EI, it subtracts
+ * dead time and NOT down time. Recomputing it as "neither downed nor dead"
+ * under-reports every player who went down.
+ */
+export interface ReplayIntervals {
+  start_ms: number
+  end_ms: number
+  active_ms: number
+  down: [number, number][]
+  dead: [number, number][]
+}
+
+/** The gated half of `ReplayBlock` -- present only under `{ replay: true }`. */
+export interface ReplayTracks {
   /** Shared polling interval for every track. */
   poll_ms: number
   bounds?: ReplayBounds
-  /** Keyed by entity id. */
+  /** Keyed by entity id. Wider than `ReplayBlock.by_entity`: enemy players appear here too. */
   by_entity: ByEntity<ReplayTrack>
+}
+
+/**
+ * Two halves on two different gates -- the only block in the format shaped
+ * this way. `by_entity` (down/dead intervals, squad only) is computed on
+ * every parse; `tracks` (positions) needs `{ replay: true }`. So
+ * `coverage.replay === "present"` does NOT mean positions are available --
+ * check `tracks` for that.
+ */
+export interface ReplayBlock {
+  /** Keyed by entity id. Squad players only. */
+  by_entity: ByEntity<ReplayIntervals>
+  tracks?: ReplayTracks
 }
 
 export interface SquadSeries {
@@ -1328,6 +1471,11 @@ export interface Blocks {
   missiles?: MissilesBlock
   replay?: ReplayBlock
   series?: SeriesBlock
+  conditions?: ConditionsBlock
+  // NOTE: `minions` (a real block since absorption Task 6) has no entry
+  // here yet -- `MinionsBlock`/`MinionRow`/`MinionSkillTakenRow` are not
+  // transcribed in this file. Pre-existing gap, not introduced by the
+  // conditions work above.
 }
 
 /**

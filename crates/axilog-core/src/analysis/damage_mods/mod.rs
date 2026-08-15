@@ -14,10 +14,11 @@
 //! touches this module. On CLI `--modifiers` / SDK `modifiers: true` the
 //! caller runs `evaluate_catalog_full` itself and hands the result to
 //! `axilog_schema::build_report` (which fills `players[].damage_mods` and
-//! the top-level `damage_mod_map`) and to `axilog_ei::EiInputs::modifiers`
-//! (which fills EI's `damageModifiers`/`incomingDamageModifiers`/
-//! `damageModifiersTarget`/`incomingDamageModifiersTarget` +
-//! `damageModMap`). Without the flag every output is byte-identical to a
+//! the top-level `damage_mod_map`) and to
+//! `axilog_schema::v1::Passes::damage_mods` (which fills
+//! `blocks.damage_mods`, both scopes, from which the ei-json adapter renders
+//! `damageModifiers`/`incomingDamageModifiers`/`damageModifiersTarget`/
+//! `incomingDamageModifiersTarget` + `damageModMap`). Without the flag every output is byte-identical to a
 //! build without this module at all. The per-target split is a second,
 //! internal gate -- see `evaluate_full`. (Plain backticks, not intra-doc
 //! links: this `//!` block is merged with the outer `/// ` comment on

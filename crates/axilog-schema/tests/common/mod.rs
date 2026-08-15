@@ -46,6 +46,54 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
         )
     });
 
+    // Side-channel absorption Task 6: the two passes behind `blocks.
+    // minions` and `series[].health_percents`. Gated with everything else
+    // so `build(false)` still exercises the not-computed path.
+    let minion_rollups = all_gates.then(|| axilog_core::analysis::minions::build(&raw, &enc));
+    let health_percents =
+        all_gates.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
+    // Tasks 7 and 8: the two passes behind the enemy rows' `by_skill` and
+    // the enemy rows on `blocks.series`.
+    let enemy_sets = all_gates.then(|| {
+        let enemies: std::collections::BTreeSet<u64> =
+            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+        let rep: std::collections::BTreeMap<u64, u64> = enc
+            .enemies
+            .iter()
+            .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+            .collect();
+        (enemies, rep)
+    });
+    let enemy_dist = enemy_sets
+        .as_ref()
+        .map(|(en, rep)| axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep));
+    let enemy_series = enemy_sets.as_ref().map(|(en, rep)| {
+        axilog_core::analysis::timeseries::build_enemy_series(
+            &enc,
+            &raw,
+            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+            en,
+            rep,
+        )
+    });
+
+    // Task 9: the outcome columns on both player-side distributions.
+    let dist_outcomes =
+        all_gates.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
+    // Task 10: ONE pass feeding two families under two different flags.
+    // `build` self-gates to `None` on a log with no healing extension, so
+    // the `.flatten()` here is the "unsupported", not the "gate off", case
+    // -- and both `Passes` fields get it, since `build(true)` means every
+    // flag is on.
+    let healing_detail =
+        all_gates.then(|| axilog_core::analysis::healing_detail::build(&raw, &enc)).flatten();
+
+    // Task 11: the activity pass is NOT gated -- every caller runs it
+    // unconditionally, so it is supplied in BOTH modes here and
+    // `build(false)` still yields a populated `blocks.replay.by_entity`
+    // with no `tracks`.
+    let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -57,13 +105,29 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
         all_gates,
         damage_mods.as_ref(),
     );
+    let boon_states =
+        all_gates.then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
+    let target_conditions =
+        all_gates.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     let v1 = axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
         &legacy,
         "0.0.0-test",
         None,
-        damage_mods.as_ref(),
+        &axilog_schema::v1::Passes {
+            damage_mods: damage_mods.as_ref(),
+            minions: minion_rollups.as_ref(),
+            health_percents: health_percents.as_ref(),
+            enemy_dist: enemy_dist.as_ref(),
+            enemy_series: enemy_series.as_ref(),
+            dist_outcomes: dist_outcomes.as_ref(),
+            healing_detail: healing_detail.as_ref(),
+            healing_series: healing_detail.as_ref(),
+            activity: Some(&activity),
+            boon_states: boon_states.as_ref(),
+            target_conditions: target_conditions.as_ref(),
+        },
     );
     (enc, metrics, legacy, v1)
 }

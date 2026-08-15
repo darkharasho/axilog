@@ -9,7 +9,7 @@ pub mod envelope;
 pub mod order;
 pub mod series;
 
-use crate::v1::blocks::{activity, damage, defense, support};
+use crate::v1::blocks::{activity, conditions, damage, defense, minions, support};
 use crate::v1::catalogs::{CatalogBuilder, Catalogs};
 use crate::v1::entities::build_entities;
 use crate::v1::envelope::{AxilogMeta, BlockName, Coverage, CoverageState, Severity, WarningOut};
@@ -114,6 +114,10 @@ pub struct Blocks {
     pub replay: Option<activity::ReplayBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub series: Option<activity::SeriesBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minions: Option<minions::MinionsBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<conditions::ConditionsBlock>,
 }
 
 /// The coverage state for a block that DID run: [`CoverageState::Empty`]
@@ -128,11 +132,12 @@ pub struct Blocks {
 /// computed aggregate -- `missiles`, `series` -- is not empty just because
 /// it has no per-entity rows.
 ///
-/// [`CoverageState::Unsupported`] stays unreachable from this container:
-/// nothing here is era- or encounter-kind-gated, so no code path can
-/// honestly produce it. It is RESERVED vocabulary for spec #2's era-gated
-/// surfaces, and `docs/NATIVE-FORMAT.md` tells consumers so explicitly
-/// rather than implying today's binary can emit it.
+/// [`CoverageState::Unsupported`] is NOT one of this function's two
+/// answers, because it is not a property of the output -- it says the
+/// question is unanswerable for this log, which only the caller knows.
+/// Exactly one block reaches it today: `healing`, on a log written without
+/// the arcdps healing extension (Task 10). Until then it was reserved
+/// vocabulary, and `docs/NATIVE-FORMAT.md` said so.
 fn computed(is_empty: bool) -> CoverageState {
     if is_empty {
         CoverageState::Empty
@@ -141,21 +146,122 @@ fn computed(is_empty: bool) -> CoverageState {
     }
 }
 
+/// The optional analysis passes this container is built from.
+///
+/// Every field is a pass that `analyze()` does NOT run -- an opt-in gated
+/// on a CLI flag or SDK option -- borrowed from whichever caller ran it.
+/// `None` means "that pass did not run", which is exactly what the
+/// corresponding block's `coverage` reports as `not_computed`.
+///
+/// This exists because of what the absorption program does to this
+/// function's arity. `damage_mods` arrived as a seventh positional
+/// parameter, and Tasks 6-12 each move one or two more passes in here:
+/// following that pattern ends at a fourteen-argument function whose call
+/// sites are a row of bare `None`s, and rewrites all ~40 of them seven
+/// times over. A `Default`-able borrow struct costs those call sites one
+/// edit total (this task's), after which a new pass is a new field and no
+/// call site moves at all.
+///
+/// It was emphatically NOT a second `EiInputs` (the ei-json adapter's own
+/// side-channel struct, deleted in Task 13). The distinction that made
+/// the program work is *who reads it*: this is consumed HERE, by the
+/// native builder, and every value in it lands in a block on the native
+/// wire. `EiInputs` was read by the ei-json adapter, which is precisely the
+/// data path spec #2 exists to delete -- data that reached ei-json without
+/// ever existing natively. A pass entering through this struct has already
+/// been absorbed.
+#[derive(Default, Clone, Copy)]
+pub struct Passes<'a> {
+    /// M16 `--modifiers`. Was the seventh positional parameter.
+    pub damage_mods: Option<&'a DamageModifierResults>,
+    /// MEIGAP Task 3b `--skill-damage`: per-player minion damage-taken
+    /// rollups, positionally joined to `enc.players`.
+    pub minions: Option<&'a axilog_core::analysis::minions::MinionRollups>,
+    /// MEIGAP2 row 2 `--timeseries`: per-player health-percent step series,
+    /// keyed by the account's representative agent address.
+    pub health_percents: Option<&'a std::collections::BTreeMap<u64, Vec<(u64, f64)>>>,
+    /// MEIGAP Task 2c `--skill-damage`: per-enemy outgoing per-skill damage,
+    /// keyed by the enemy's representative agent id (`Enemy::id`). Lands on
+    /// `blocks.damage.by_entity[enemy].by_skill` -- the same field the
+    /// player rows use, not a parallel enemy structure.
+    pub enemy_dist: Option<
+        &'a std::collections::BTreeMap<u64, Vec<axilog_core::analysis::skill_damage::SkillEntry>>,
+    >,
+    /// MEIGAP Task 2b `--timeseries`: per-enemy cumulative outgoing damage
+    /// and its power half, keyed by the enemy's representative agent id
+    /// (`Enemy::id`). Lands on `blocks.series.by_entity[enemy]` -- the same
+    /// rows the players use, with the outgoing power split in
+    /// `EntitySeries::power_damage`.
+    pub enemy_series: Option<
+        &'a std::collections::BTreeMap<u64, axilog_core::analysis::timeseries::EnemySeries>,
+    >,
+    /// MEIGAP2 row 1 `--skill-damage`: per-player hit-OUTCOME columns for
+    /// both player-side distributions, keyed by the account's
+    /// representative agent address. Lands on
+    /// `blocks.damage.by_entity[player].by_skill[_taken][].outcomes` --
+    /// enriching the rows `skill_damage` already built, and ADDING the
+    /// mitigation-only rows it has no entry for (see `merge_outcomes`).
+    pub dist_outcomes: Option<
+        &'a std::collections::BTreeMap<u64, axilog_core::analysis::dist_outcomes::DistOutcomes>,
+    >,
+    /// MEIGAP Task 3a `--skill-damage`: the per-ally and per-skill halves of
+    /// `healing_detail::build`'s output, positionally joined to
+    /// `enc.players`. Lands on `blocks.healing.by_entity[].detail`.
+    pub healing_detail: Option<&'a axilog_core::analysis::healing_detail::HealingDetail>,
+    /// MEIGAP Task 3a `--timeseries`: the 1S half of that SAME pass's
+    /// output. Lands on `blocks.series.by_entity[].healing_1s`.
+    ///
+    /// Two fields for one pass, deliberately. `healing_detail::build` is the
+    /// only pass in this struct that feeds two families under two DIFFERENT
+    /// flags -- the ally matrix and dists ride `--skill-damage` for payload
+    /// reasons (they grow quadratically in squad size), the graph rides
+    /// `--timeseries` with every other per-second array. A single field
+    /// could not express "ran, but you were told to emit only the graph", so
+    /// the caller sets whichever of the two its own flags justify, and both
+    /// point at the same `Vec` when both are on.
+    ///
+    /// They are borrows rather than the `bool` pair this replaces in
+    /// `EiInputs` precisely because a borrow cannot be set without the data:
+    /// a flag can claim a pass ran when it did not, a `&HealingDetail`
+    /// cannot.
+    pub healing_series: Option<&'a axilog_core::analysis::healing_detail::HealingDetail>,
+    /// M11 Task 3's activity pass, positionally joined to `enc.players`.
+    /// Lands on `blocks.replay.by_entity` -- the ALWAYS-ON half of that
+    /// block, which is why this field is unlike every other one here: the
+    /// rest name an optional pass, so `None` means "the flag was off", while
+    /// this one names a pass every caller already runs unconditionally
+    /// (`build_activity_intervals` is cheap by construction -- see its doc
+    /// comment). `None` here therefore means a caller that has no log to
+    /// scan at all, not a gate.
+    pub activity: Option<&'a [axilog_core::analysis::replay::ActivityIntervals]>,
+    /// MEIGAP Task 1b `--timeseries`: per-(player, boon) stack timelines,
+    /// total and split by applier. Lands on `blocks.boons`'
+    /// `states`/`per_source` row fields -- enriching the rows the always-on
+    /// uptime pass already built, which is why `blocks.boons` is a two-gate
+    /// block and `coverage.boons` says nothing about these.
+    pub boon_states: Option<&'a axilog_core::analysis::buffs::BoonStates>,
+    /// MEIGAP Task 2d `--timeseries`: per-(enemy, condition) stack
+    /// timelines split by squad applier. Lands on `blocks.conditions`, the
+    /// block spec #1 reserved the name for.
+    pub target_conditions:
+        Option<&'a axilog_core::analysis::target_conditions::TargetConditionStates>,
+}
+
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
 /// [`crate::Report`], which keeps this a pure reprojection instead of a
 /// second, divergent computation from `Metrics`.
 ///
 /// `enc` is used only for [`build_entities`] -- every block routes through
-/// `legacy`/`metrics` instead, since those are what Tasks 5-8's builders
-/// already take.
+/// `legacy`/`metrics`/[`Passes`] instead.
 pub fn build_report_v1(
     enc: &Encounter,
     metrics: &Metrics,
     legacy: &crate::Report,
     axilog_version: &str,
     generated_from: Option<&str>,
-    damage_mods: Option<&DamageModifierResults>,
+    passes: &Passes<'_>,
 ) -> ReportV1 {
+    let damage_mods = passes.damage_mods;
     let (entities, index, source_order) = build_entities(enc, metrics);
     let mut cats = CatalogBuilder::default();
     let mut coverage = Coverage::new();
@@ -163,7 +269,8 @@ pub fn build_report_v1(
     // Always-on blocks. `computed` distinguishes `Present` from `Empty` --
     // see its doc comment for why that distinction has to be made HERE, at
     // the only layer that knows a block both ran and produced nothing.
-    let damage_block = damage::build_damage(legacy, &index, &mut cats);
+    let damage_block =
+        damage::build_damage(legacy, &index, &mut cats, passes.enemy_dist, passes.dist_outcomes);
     coverage.set(BlockName::Damage, computed(damage_block.is_empty()));
     let defenses = defense::build_defenses(legacy, &index);
     coverage.set(BlockName::Defenses, computed(defenses.is_empty()));
@@ -171,28 +278,76 @@ pub fn build_report_v1(
     coverage.set(BlockName::HitStats, computed(hit_stats.is_empty()));
     let cc = defense::build_cc(legacy, &index);
     coverage.set(BlockName::Cc, computed(cc.is_empty()));
-    let boons = support::build_boons(legacy, &index, &mut cats);
-    coverage.set(BlockName::Boons, computed(boons.is_empty()));
+    let boons = {
+        let mut block = support::build_boons(legacy, &index, &mut cats);
+        // `coverage.boons` is set from the UPTIME rows, before the gated
+        // timelines are attached -- deliberately. The uptime half is
+        // always-on, so `Empty` here means "this log had no boon rows",
+        // which stays true whether or not `--timeseries` ran. Setting it
+        // after the attach would make the same log report differently
+        // depending on a flag that cannot change the answer.
+        coverage.set(BlockName::Boons, computed(block.is_empty()));
+        if let Some(states) = passes.boon_states {
+            support::attach_boon_states(&mut block, &index, states);
+        }
+        block
+    };
     let support_block = support::build_support(legacy, &index);
     coverage.set(BlockName::Support, computed(support_block.is_empty()));
-    let contribution = support::build_contribution(legacy, &index);
+    let contribution = support::build_contribution(legacy, &index, &mut cats);
     coverage.set(BlockName::Contribution, computed(contribution.is_empty()));
-    let healing = support::build_healing(legacy, &index);
-    coverage.set(BlockName::Healing, computed(healing.is_empty()));
-    let series = activity::build_series(legacy, &index);
+    let healing = support::build_healing(legacy, &index, passes.healing_detail, &mut cats);
+    // The one block whose absence has a THIRD cause, and the reason
+    // `Unsupported` stops being reserved vocabulary (Task 10).
+    //
+    // `has_healing_extension` is a property of the LOG, not of any gate:
+    // arcdps only writes the healing extension when the user runs the plugin
+    // that produces it, and on a log without it no flag and no future pass
+    // can ever produce these numbers. That is exactly `Unsupported` -- and
+    // reporting it as `Empty`, which this line did until now, told a
+    // consumer the squad healed for zero. `computed`'s own doc comment cites
+    // this very case as the reason `Empty` exists, which was right about the
+    // ambiguity and wrong about the answer.
+    coverage.set(
+        BlockName::Healing,
+        if metrics.has_healing_extension {
+            computed(healing.is_empty())
+        } else {
+            CoverageState::Unsupported
+        },
+    );
+    let series = activity::build_series(
+        legacy,
+        &index,
+        passes.health_percents,
+        passes.enemy_series,
+        passes.healing_series,
+    );
     coverage.set(BlockName::Series, computed(series.is_empty()));
 
     // Gated blocks: presence of the legacy `Option` IS the gate signal, the
     // same rule the legacy shape already uses. A gate that was ON but
     // produced no rows is `Empty`, not `Present` -- the gate answers
     // "did it run", the row count answers "was there anything".
-    let rotation = legacy.players.iter().any(|p| p.rotation.is_some()).then(|| {
+    // `rotation` is the one exception to the rule above, because it carries
+    // TWO quantities with different gates: `casts` is gated on `--rotation`,
+    // but `aftercast` is computed unconditionally. Gating the whole block on
+    // the casts meant an ungated legacy field silently vanished whenever
+    // `--rotation` was off -- which the ei-json adapter then read as four
+    // zeroes rather than the real counters. So the block is always built,
+    // and `coverage` keeps its exact meaning by answering the casts question
+    // it always answered: `Present` only when some row actually has casts.
+    // Which case a `not present` is -- gate off, or gate on and nobody cast
+    // -- is answered by `RotationEntity::casts` itself (Task 13), not here.
+    let rotation = Some({
         let block = activity::build_rotation(legacy, &index, &mut cats);
-        coverage.set(BlockName::Rotation, computed(block.is_empty()));
+        let no_casts =
+            block.by_entity.0.values().all(|r| r.casts.as_ref().map_or(true, |c| c.is_empty()));
+        coverage.set(BlockName::Rotation, computed(no_casts));
         block
     });
     let damage_mods_block = legacy.damage_mod_map.is_some().then(|| {
-        let block = activity::build_damage_mods(legacy, &index, &mut cats);
+        let block = activity::build_damage_mods(legacy, &index, &mut cats, damage_mods);
         coverage.set(BlockName::DamageMods, computed(block.is_empty()));
         block
     });
@@ -201,15 +356,39 @@ pub fn build_report_v1(
         coverage.set(BlockName::Missiles, computed(block.is_empty()));
         block
     });
-    let replay = legacy.replay.is_some().then(|| {
-        let block = activity::build_replay(legacy, &index);
+    // Two gates, one block: the intervals half is always computed, the
+    // position half rides `--replay` (see `ReplayBlock`'s doc comment). So
+    // the block exists when EITHER input does, and `coverage.replay`
+    // answers the intervals question -- `Present` on a log parsed with no
+    // `--replay` at all, because the down/dead history really is there.
+    let replay = (passes.activity.is_some() || legacy.replay.is_some()).then(|| {
+        let block = activity::build_replay(legacy, &index, passes.activity);
         coverage.set(BlockName::Replay, computed(block.is_empty()));
         block
     });
 
-    // Reserved for spec #2. Named here so the vocabulary is fixed.
-    coverage.set(BlockName::Conditions, CoverageState::NotComputed);
-    coverage.set(BlockName::Minions, CoverageState::NotComputed);
+    // The pass runs only under `--skill-damage`, so its presence IS the
+    // gate signal -- the same "presence, not a flag" rule the legacy
+    // `Option` blocks above follow.
+    let minions_block = passes.minions.map(|rollups| {
+        let block = minions::build_minions(rollups, &source_order, &mut cats);
+        coverage.set(BlockName::Minions, computed(block.is_empty()));
+        block
+    });
+    if minions_block.is_none() {
+        coverage.set(BlockName::Minions, CoverageState::NotComputed);
+    }
+
+    // The name spec #1 reserved, filled by Task 12. The pass runs only
+    // under `--timeseries`, so its presence IS the gate signal.
+    let conditions_block = passes.target_conditions.map(|states| {
+        let block = conditions::build_conditions(states, &index, &mut cats);
+        coverage.set(BlockName::Conditions, computed(block.is_empty()));
+        block
+    });
+    if conditions_block.is_none() {
+        coverage.set(BlockName::Conditions, CoverageState::NotComputed);
+    }
 
     // `Metrics::warnings` carries a code at the source as of this task --
     // see `axilog_core::analysis::Warning`. A catch-all code would defeat
@@ -323,6 +502,8 @@ pub fn build_report_v1(
             missiles,
             replay,
             series: Some(series),
+            minions: minions_block,
+            conditions: conditions_block,
         },
         coverage,
         warnings,
@@ -400,7 +581,7 @@ mod tests {
         };
         let legacy =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, None);
+        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &Default::default());
 
         assert_eq!(v1.encounter.markers.len(), 2, "both markers must survive, not just the resolvable one");
 
@@ -466,7 +647,7 @@ mod tests {
         };
         let legacy =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, None);
+        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &Default::default());
 
         assert_eq!(v1.encounter.recorded_by, None, "an unresolvable recorder must not fabricate an entity id");
 
@@ -533,7 +714,7 @@ mod tests {
         };
         let legacy =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
-        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, None);
+        let v1 = build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &Default::default());
 
         assert_eq!(v1.encounter.recorded_by, None);
         assert!(

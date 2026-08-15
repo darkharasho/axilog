@@ -93,10 +93,15 @@ use crate::model::Encounter;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Per-(enemy representative id, condition id) source-split step timelines.
-/// The inner key is the SOURCE's character name, exactly as GW2EI keys
-/// `statesPerSource` (GW2EI would use its `UNKNOWN` placeholder for a source that is not a
-/// recorded squad player).
-pub type TargetConditionStates = BTreeMap<(u64, u32), BTreeMap<String, StateTimeline>>;
+/// The inner key is the applier's representative AGENT ADDRESS.
+///
+/// It used to be the applier's character name (Task 12 moved the naming out
+/// of this crate -- see
+/// [`crate::analysis::buffs::states::PerSourceTimelines`] for why). Unlike
+/// the boon side, this map is still narrowed to SQUAD appliers only, so
+/// every address in it resolves; the narrowing is a payload decision
+/// documented on [`build_with_registry`], not a naming one, so it stays.
+pub type TargetConditionStates = BTreeMap<(u64, u32), BTreeMap<u64, StateTimeline>>;
 
 /// `(arcdps-reported-or-ctor-table capacity, is_intensity)` for one
 /// condition id. Same preference order `generation::capacity_and_kind` uses
@@ -140,11 +145,9 @@ pub fn build_with_registry(
     let all = events::extract_buff_events_with_registry(raw, registry, &ids);
     let capacities = events::extract_buff_capacities(raw, &ids);
 
-    // Enemy addr -> representative id, and squad addr -> character name.
-    // The source side folds onto the squad ACCOUNT representative first
-    // (so a relogged applier stays one `statesPerSource` key), then onto
-    // that account's character name -- the same two-step
-    // `buffs::states::build` applies for boons.
+    // Enemy addr -> representative id, and squad addr -> representative
+    // addr. The source side folds onto the squad ACCOUNT representative so
+    // that a relogged applier stays one `statesPerSource` key.
     let enemy_rep: BTreeMap<u64, u64> =
         enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id))).collect();
     let player_rep: BTreeMap<u64, u64> = enc
@@ -152,8 +155,10 @@ pub fn build_with_registry(
         .iter()
         .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
         .collect();
-    let name_of: BTreeMap<u64, &str> =
-        enc.players.iter().map(|p| (p.agent_addr, p.character.as_str())).collect();
+    // The squad roster's representative addresses -- the membership test the
+    // narrowing below applies. This was a name lookup until Task 12; only
+    // the value it produced changed, not which sources pass it.
+    let squad_reps: BTreeSet<u64> = enc.players.iter().map(|p| p.agent_addr).collect();
 
     let mut grouped: BTreeMap<(u64, u32), Vec<BuffEvent>> = BTreeMap::new();
     for &(mut e) in &all {
@@ -173,7 +178,7 @@ pub fn build_with_registry(
         for s in segments {
             by_source.entry(s.source).or_default().push(s);
         }
-        let mut named: BTreeMap<String, StateTimeline> = BTreeMap::new();
+        let mut by_addr: BTreeMap<u64, StateTimeline> = BTreeMap::new();
         for (source, segs) in by_source {
             // Only SQUAD-sourced conditions are emitted. axibridge resolves
             // every `statesPerSource` key through `nameToKey`, a map built
@@ -184,7 +189,9 @@ pub fn build_with_registry(
             // name, or `UNKNOWN`); this is a deliberate, documented
             // narrowing, not a semantic difference in what the emitted rows
             // MEAN.
-            let Some(name) = name_of.get(&source) else { continue };
+            if !squad_reps.contains(&source) {
+                continue;
+            }
             let steps = states::overlap_steps(&segs);
             if steps.is_empty() {
                 continue;
@@ -197,10 +204,10 @@ pub fn build_with_registry(
             if timeline.len() < 2 {
                 continue;
             }
-            named.insert((*name).to_string(), timeline);
+            by_addr.insert(source, timeline);
         }
-        if !named.is_empty() {
-            out.insert(key, named);
+        if !by_addr.is_empty() {
+            out.insert(key, by_addr);
         }
     }
     out

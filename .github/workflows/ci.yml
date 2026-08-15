@@ -24,10 +24,14 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            debug: '2'
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            # See the `env:` block below -- Windows builds without debuginfo.
+            debug: none
           - os: macos-latest
             target: aarch64-apple-darwin
+            debug: '2'
           # x86_64-apple-darwin is cross-compiled on the same macos-latest
           # (Apple Silicon / aarch64 host) runner as the leg above, rather
           # than on a native Intel (macos-13) runner. GitHub is retiring
@@ -44,6 +48,46 @@ jobs:
           # binary, just built on arm64 hardware instead of x86_64 hardware.
           - os: macos-latest
             target: x86_64-apple-darwin
+            debug: '2'
+
+    # Windows-only: build without debuginfo, so `link.exe` emits no .pdb.
+    #
+    # The Windows leg has failed intermittently for months -- across branches
+    # and on main -- always the same way: `LINK : fatal error LNK1201: error
+    # writing to program database ...\axilog.pdb`. It is not caused by any
+    # one change; it is the debug build's PDB writes losing against the
+    # hosted runner. LNK1201's own message lists the candidates (disk space,
+    # path, privilege) and a Defender scan holding the file mid-write is a
+    # fourth. Rather than guess between them, remove the write: with
+    # `debug = 0` rustc stops passing `/DEBUG`, no PDB is opened at all, and
+    # every one of those causes is moot. It also cuts link time and a large
+    # amount of disk on the leg that has the least of both -- the debug
+    # workspace is built TWICE here (`--target` below, then an untargeted
+    # `cargo test`), so PDBs were being written for two full copies.
+    #
+    # The cost is Windows-only and confined to CI: a panicking test there
+    # gets an unsymbolized backtrace. Linux and macOS keep `debug = 2`
+    # (cargo's dev default, spelled explicitly so this reads as a per-OS
+    # choice rather than a global downgrade), and they are where a failure
+    # is diagnosed anyway. Both keys are set because `profile.test` inherits
+    # `profile.dev` -- setting `dev` alone should suffice, but the test step
+    # links far more binaries than the build step, so it is worth not
+    # depending on that inheritance detail.
+    #
+    # The level is carried as a MATRIX KEY rather than computed here with
+    # `${{ matrix.os == 'windows-latest' && '0' || '2' }}`, which is how
+    # this was first written and why it silently did nothing. GitHub casts
+    # a string operand to a number when it can, so `'0'` becomes `0` and is
+    # FALSY -- the `&&` fell through to `'2'` and Windows kept full
+    # debuginfo. The failing link line proved it, still carrying `/DEBUG`
+    # and `/PDBALTPATH` after the "fix" had shipped. `none` (cargo's own
+    # spelling for no debuginfo) would dodge that particular cast, but a
+    # matrix key dodges the whole class of expression-truthiness bug and
+    # reads as data instead of as a conditional.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: ${{ matrix.debug }}
+      CARGO_PROFILE_TEST_DEBUG: ${{ matrix.debug }}
+
     steps:
       - uses: actions/checkout@v4
 

@@ -1181,3 +1181,132 @@ eats it, re-measure and re-justify rather than widening the bound
 reflexively.
 
 Run: `cargo test -p axilog-schema --test v1_size -- --nocapture`
+
+## Side-channel absorption — `--all`, and the native JSON memory trap
+
+Measured 2026-08-15 on `fixtures/wvw-small.anon.zevtc` (41 squad players, 32
+enemy-player targets, 49s), release build, after the absorption program
+(spec #2, Tasks 1–14) made the native 1.0 document the sole source ei-json
+renders from.
+
+### Peak RSS — `--all` against the ei-json ceiling
+
+The spec set a ceiling for `--all`: peak resident memory must stay within
+**+10%** of what `--format ei-json` already costs at full flags. The first
+measurement blew it, by a lot:
+
+| Command | Peak RSS | Wall |
+|---|---|---|
+| `--format json` (no gates) | 21,088 KB | 0.06s |
+| `--format json --all` (before) | **44,972 KB** | 0.15s |
+| `--format ei-json` + every flag | 27,876 KB | 0.25s |
+
+`--all` was **+61%** over the ceiling. The cause was not the reprojection —
+it was the serializer. `--format json` rendered through
+`serde_json::to_string_pretty`, holding the whole pretty-printed document in
+a `String` *alongside* the document it came from, and the `Vec<u8>` behind
+that `String` doubles as it grows: a 7.4 MB output cost far more than 7.4 MB
+of peak. `--format ei-json` had already been fixed this way by MSTREAM and
+was, ironically, the cheaper path.
+
+Switching `--format json` to `serde_json::to_writer_pretty` into a
+`BufWriter` (byte-identical output — same `PrettyFormatter`, verified with
+`cmp` against the pre-change binary):
+
+| Command | Peak RSS | Wall |
+|---|---|---|
+| `--format json` (no gates) | 21,080 KB | 0.06s |
+| `--format json --all` (after) | **24,320 KB** | 0.14s |
+| `--format ei-json` + every flag | 28,012 KB | 0.25s |
+
+`--all` now peaks **13% BELOW** the ei-json ceiling rather than 61% above
+it, and is 46% cheaper than before. The gate passes.
+
+What remains resident is the document itself: `build_report_v1` completes
+before a byte is written, unlike ei-json's row-at-a-time `LazyRows`.
+Removing that would be a reprojection-direction change, not a serializer
+change, and is deliberately out of scope here.
+
+**Caveat, stated rather than glossed:** these are committed-fixture numbers.
+The spec's ceiling was written against the 583k-event local capture, which
+is gitignored and whose path this measurement run could not resolve. The
+large-log figure is still outstanding; set `AXILOG_BENCH_LOG` and re-run to
+close it.
+
+### Analysis-stage timings — unchanged
+
+`cargo bench -p axilog-cli`, against the previous saved baseline:
+
+```
+fixture/wvw-small/evtc::decode_raw     no change (p = 0.68)
+fixture/wvw-small/model::resolve       1.3097 ms   no change (p = 0.22)
+fixture/wvw-small/analysis::analyze   22.334 ms    no change (p = 0.83)
+fixture/wvw-small/full_pipeline       33.564 ms    no change (p = 0.17)
+```
+
+Expected: absorption moved where data is *carried*, not what is *computed*.
+The real-log arm was skipped (`AXILOG_BENCH_LOG` unset).
+
+### Document size, and where it goes
+
+| | pretty | compact |
+|---|---|---|
+| no gates | 458,660 | 256,563 |
+| `--all` | 7,392,020 | 2,101,163 |
+
+Per-block, compact bytes at `--all`:
+
+| Block | Bytes | | Block | Bytes |
+|---|---:|---|---|---:|
+| `damage` | 793,096 | | `minions` | 63,231 |
+| `replay` | 297,273 | | `healing` | 48,576 |
+| `series` | 229,734 | | `defenses` | 20,931 |
+| `boons` | 216,363 | | `hit_stats` | 19,283 |
+| `rotation` | 120,468 | | `contribution` | 9,675 |
+| `conditions` | 90,903 | | `cc` | 4,102 |
+| `damage_mods` | 64,011 | | `support` | 3,768 |
+| | | | `missiles` | 2,567 |
+
+Envelope, `entities[]`, `catalogs` and `coverage` together are 116,999
+compact bytes — under 6% of the document at `--all`, and the reason the
+id-keyed design pays: every name appears exactly once.
+
+Two things worth noting for anyone sizing a transport:
+
+- **Pretty-printing is 3.5× the payload at `--all`** (7.39 MB vs 2.10 MB).
+  It is the single largest lever on the wire and costs nothing to pull —
+  the CLI pretty-prints because a human reads its default output.
+- **gzip -9 of the pretty form is 412,829 bytes**, 17.9× smaller. Transfer
+  size is close to a solved problem already; what is *not* solved is
+  in-memory and parse cost at the consumer, which compression does nothing
+  for. Any future size work should be specified against those, not against
+  bytes on the wire.
+
+### Consumer-side parse cost — the measurement that should drive size work
+
+Transfer bytes are close to a solved problem (gzip is 17.9×). What is not
+solved is what a CONSUMER pays to turn the document back into objects, which
+is what the size work was asked to be specified against. Measured in Node 
+(`JSON.parse`, best of 5, heap delta with the result retained):
+
+| Form | Bytes | `JSON.parse` | Retained heap |
+|---|---:|---:|---:|
+| pretty (what `--format json` emits) | 7.05 MB | 19.3 ms | +5.3 MB |
+| compact (identical content) | 2.00 MB | **9.0 ms** | +5.2 MB |
+
+**Pretty-printing costs 10.3 ms — 53% of parse time — for zero content.**
+The retained heap is identical, because the object graph is the same; the
+difference is entirely whitespace the parser must walk and discard.
+
+That reorders the obvious size levers. Structural dedup, f64→f32 narrowing
+and a binary encoding (`rmp-serde`/CBOR) all attack the 5.2 MB retained heap
+and the remaining 9 ms, and each is a format change with a compatibility
+cost. Emitting compact JSON for machine consumers is neither, and it is the
+larger win of the two. Any spec for the format-level work should start from
+the 9.0 ms / 5.2 MB baseline, not the 19.3 ms one, or it will credit itself
+with a saving that a serializer flag already delivers.
+
+Method: `node -e` over the `--all` document, both forms byte-for-byte the
+same content (`json.dumps(..., separators=(',',':'))` of the pretty form).
+
+Run: `/usr/bin/time -v axilog parse <log> --all --format json -o /dev/null`

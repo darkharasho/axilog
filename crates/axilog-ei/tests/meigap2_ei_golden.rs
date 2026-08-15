@@ -41,7 +41,6 @@
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
-use axilog_ei::EiInputs;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -83,16 +82,20 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let enc = resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
+    // Task 9: the outcome columns on both player-side distributions.
+    let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, None);
-
     let registry = axilog_core::analysis::damage::InstidRegistry::build(&raw);
     let enemies: BTreeSet<u64> =
         enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
     let enemy_addr_to_rep: BTreeMap<u64, u64> =
         enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id))).collect();
+    // Task 7: hoisted above the `ReportV1` build, which now carries the
+    // enemy per-skill rows on `blocks.damage`.
+    let enemy_dist =
+        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &enemy_addr_to_rep);
     let enemy_series = axilog_core::analysis::timeseries::build_enemy_series(
         &enc,
         &raw,
@@ -100,20 +103,22 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
         &enemies,
         &enemy_addr_to_rep,
     );
-    let enemy_dist =
-        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &enemy_addr_to_rep);
     let target_conditions =
         axilog_core::analysis::target_conditions::build_with_registry(&raw, &registry, &enc);
 
-    let ours = axilog_ei::to_ei_json(
-        &report_v1, &report,
-        &EiInputs {
-            activity: &activity,
-            enemy_series: Some(&enemy_series),
-            enemy_dist: Some(&enemy_dist),
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-test", None,
+        &axilog_schema::v1::Passes { activity: Some(&activity),
             target_conditions: Some(&target_conditions),
+            enemy_dist: Some(&enemy_dist),
+            enemy_series: Some(&enemy_series),
+            dist_outcomes: Some(&dist_outcomes),
             ..Default::default()
         },
+    );
+
+    let ours = axilog_ei::to_ei_json(
+        &report_v1, None,
     );
 
     // --- the instid-based targets join (see this file's module doc) ---
