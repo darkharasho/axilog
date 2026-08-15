@@ -377,31 +377,31 @@ Real example (default flags — no `--replay`/`--rotation`/`--modifiers`):
 | `present` | Computed, and `blocks` carries it, with at least one row | Read `blocks.<name>` directly |
 | `not_computed` | The compute gate for it was off (e.g. `--replay` wasn't passed) | Do not treat this as "empty" — it is a missing flag, not a fact about the log. Re-parse with the flag on if you need it |
 | `empty` | Computed, and there was genuinely nothing to report | Safe to treat as "zero rows", not an error. The block **is still carried** in `blocks` when `empty` — only `not_computed` and `unsupported` omit it |
-| `unsupported` | This log's era or encounter kind cannot produce this block | Do not retry with a flag — the log itself cannot answer this. See `docs/EI-PARITY.md` for era-gated surfaces (pre/post `ResultEnumRework`, pre/post `AnimationAsStateChanges`) |
+| `unsupported` | This log cannot produce this block at all — its era, its encounter kind, or (today's only live case) the recorder that wrote it | Do not retry with a flag — the log itself cannot answer this. See `docs/EI-PARITY.md` for era-gated surfaces (pre/post `ResultEnumRework`, pre/post `AnimationAsStateChanges`) |
 
 `not_computed` vs `empty` is the whole point of this map: without it, a
 consumer parsing without `--rotation` and one parsing a log with zero casts
 would both see an absent `rotation` block, with no way to tell "you forgot
 a flag" from "this log really had nothing".
 
-**Which values today's binary can actually emit.** Three of the four are
-live: `present`, `not_computed`, and `empty`. The example above shows none
-`empty` only because this fixture happens to populate every block it
-computes; the everyday case that produces `empty` is a log recorded without
-the arcdps healing addon, where `healing` is computed, carried, and has
-zero rows. Each block decides what "nothing to report" means for its own
-shape — `series` and `missiles` carry squad-level aggregates that are
-computed independently of any per-entity row, so they are not `empty`
-merely for having an empty `by_entity`.
+**Which values today's binary can actually emit.** All four. The example
+above shows no `empty` only because this fixture happens to populate every
+block it computes; `empty` is what a block reports when it ran over a roster
+that produced no rows. Each block decides what "nothing to report" means for
+its own shape — `series` and `missiles` carry squad-level aggregates that are
+computed independently of any per-entity row, so they are not `empty` merely
+for having an empty `by_entity`.
 
-`unsupported` is **reserved vocabulary, not currently emitted by any code
-path**. Nothing this container computes is era- or encounter-kind-gated, so
-there is no honest way to produce it yet; it is named now so that spec #2's
-era-gated surfaces can fill the slot without renegotiating the vocabulary
-(adding a value later would be additive, but consumers would have to learn
-it late). Handle it anyway — a decoder should treat `unsupported` exactly as
-the table says rather than as an unknown value — but do not expect to see it
-from this version.
+`unsupported` has exactly one live producer today: **`healing` on a log
+recorded without the arcdps healing addon.** That extension is written by a
+separate plugin, and a log whose recorder did not run it carries no healing
+events at all — so no flag, and no pass this project could add later, can
+ever produce those numbers. Earlier versions reported that case as `empty`,
+which told you the squad healed for zero; it is the difference between an
+unanswered question and an answer of nothing, and it is the whole reason
+this map exists. Every other block is era- and encounter-kind-agnostic, so
+`unsupported` stays reserved vocabulary for the rest of them until spec #2's
+era-gated surfaces land.
 
 ## The series envelope
 

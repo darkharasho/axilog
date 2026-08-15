@@ -130,11 +130,12 @@ pub struct Blocks {
 /// computed aggregate -- `missiles`, `series` -- is not empty just because
 /// it has no per-entity rows.
 ///
-/// [`CoverageState::Unsupported`] stays unreachable from this container:
-/// nothing here is era- or encounter-kind-gated, so no code path can
-/// honestly produce it. It is RESERVED vocabulary for spec #2's era-gated
-/// surfaces, and `docs/NATIVE-FORMAT.md` tells consumers so explicitly
-/// rather than implying today's binary can emit it.
+/// [`CoverageState::Unsupported`] is NOT one of this function's two
+/// answers, because it is not a property of the output -- it says the
+/// question is unanswerable for this log, which only the caller knows.
+/// Exactly one block reaches it today: `healing`, on a log written without
+/// the arcdps healing extension (Task 10). Until then it was reserved
+/// vocabulary, and `docs/NATIVE-FORMAT.md` said so.
 fn computed(is_empty: bool) -> CoverageState {
     if is_empty {
         CoverageState::Empty
@@ -200,6 +201,27 @@ pub struct Passes<'a> {
     pub dist_outcomes: Option<
         &'a std::collections::BTreeMap<u64, axilog_core::analysis::dist_outcomes::DistOutcomes>,
     >,
+    /// MEIGAP Task 3a `--skill-damage`: the per-ally and per-skill halves of
+    /// `healing_detail::build`'s output, positionally joined to
+    /// `enc.players`. Lands on `blocks.healing.by_entity[].detail`.
+    pub healing_detail: Option<&'a axilog_core::analysis::healing_detail::HealingDetail>,
+    /// MEIGAP Task 3a `--timeseries`: the 1S half of that SAME pass's
+    /// output. Lands on `blocks.series.by_entity[].healing_1s`.
+    ///
+    /// Two fields for one pass, deliberately. `healing_detail::build` is the
+    /// only pass in this struct that feeds two families under two DIFFERENT
+    /// flags -- the ally matrix and dists ride `--skill-damage` for payload
+    /// reasons (they grow quadratically in squad size), the graph rides
+    /// `--timeseries` with every other per-second array. A single field
+    /// could not express "ran, but you were told to emit only the graph", so
+    /// the caller sets whichever of the two its own flags justify, and both
+    /// point at the same `Vec` when both are on.
+    ///
+    /// They are borrows rather than the `bool` pair this replaces in
+    /// `EiInputs` precisely because a borrow cannot be set without the data:
+    /// a flag can claim a pass ran when it did not, a `&HealingDetail`
+    /// cannot.
+    pub healing_series: Option<&'a axilog_core::analysis::healing_detail::HealingDetail>,
 }
 
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
@@ -239,10 +261,33 @@ pub fn build_report_v1(
     coverage.set(BlockName::Support, computed(support_block.is_empty()));
     let contribution = support::build_contribution(legacy, &index);
     coverage.set(BlockName::Contribution, computed(contribution.is_empty()));
-    let healing = support::build_healing(legacy, &index);
-    coverage.set(BlockName::Healing, computed(healing.is_empty()));
-    let series =
-        activity::build_series(legacy, &index, passes.health_percents, passes.enemy_series);
+    let healing = support::build_healing(legacy, &index, passes.healing_detail, &mut cats);
+    // The one block whose absence has a THIRD cause, and the reason
+    // `Unsupported` stops being reserved vocabulary (Task 10).
+    //
+    // `has_healing_extension` is a property of the LOG, not of any gate:
+    // arcdps only writes the healing extension when the user runs the plugin
+    // that produces it, and on a log without it no flag and no future pass
+    // can ever produce these numbers. That is exactly `Unsupported` -- and
+    // reporting it as `Empty`, which this line did until now, told a
+    // consumer the squad healed for zero. `computed`'s own doc comment cites
+    // this very case as the reason `Empty` exists, which was right about the
+    // ambiguity and wrong about the answer.
+    coverage.set(
+        BlockName::Healing,
+        if metrics.has_healing_extension {
+            computed(healing.is_empty())
+        } else {
+            CoverageState::Unsupported
+        },
+    );
+    let series = activity::build_series(
+        legacy,
+        &index,
+        passes.health_percents,
+        passes.enemy_series,
+        passes.healing_series,
+    );
     coverage.set(BlockName::Series, computed(series.is_empty()));
 
     // Gated blocks: presence of the legacy `Option` IS the gate signal, the

@@ -1504,15 +1504,20 @@ fn ei_json_meigap3_healing_detail_minions_and_guild_are_gated_and_consistent() {
     );
     let full_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &full, "0.0.0-test", None,
-        &axilog_schema::v1::Passes { minions: Some(&minions), ..Default::default() },
+        // Task 10: the healing detail reaches the adapter through the
+        // native container now, and through BOTH `Passes` fields here
+        // because this arm turns both flags on.
+        &axilog_schema::v1::Passes {
+            minions: Some(&minions),
+            healing_detail: Some(&detail),
+            healing_series: Some(&detail),
+            ..Default::default()
+        },
     );
     let on = axilog_ei::to_ei_json(
         &full_v1, &full,
         &EiInputs {
             activity: &activity,
-            healing_detail: Some(&detail),
-            healing_series: true,
-            healing_dist: true,
             ..Default::default()
         },
     );

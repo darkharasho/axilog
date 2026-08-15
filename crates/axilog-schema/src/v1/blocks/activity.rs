@@ -288,6 +288,25 @@ pub struct EntitySeries {
     /// rows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_percents: Option<Vec<(u64, f64)>>,
+    /// CUMULATIVE outgoing healing from the arcdps healing extension --
+    /// GW2EI's `extHealingStats.healing1S`.
+    ///
+    /// This lives on the SERIES block, not beside the rest of the healing
+    /// detail on `blocks.healing`, because what a field belongs to here is
+    /// its grid and its gate, not its subject matter. Its three neighbours
+    /// above and this array are all one value per bucket of
+    /// `timeseries::ei_grid` -- the CEILING grid, which is one bucket longer
+    /// than `timeline.resolution_ms`'s floor grid on a partial-second log --
+    /// and all four ride `--timeseries`. Put on `blocks.healing` it would
+    /// have been the one field there answering a different flag than its
+    /// siblings, and `coverage.healing` could not have described it.
+    ///
+    /// `Option` for [`Self::power_damage`]'s reason, with a second cause: no
+    /// pass computes it for enemies, AND no pass computes it for anyone on a
+    /// log with no healing extension. Absent means "not measured"; a
+    /// zero-filled array would claim a squad healed for nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub healing_1s: Option<SeriesOut>,
 }
 
 /// Mirrors the real `PlayerTargetSeriesOut`, minus `enemy_id` (that's the
@@ -309,6 +328,7 @@ fn empty_series(res: u64) -> EntitySeries {
         power_damage_taken: SeriesOut::encode_u64(res, &[]),
         per_target: BTreeMap::new(),
         health_percents: None,
+        healing_1s: None,
     }
 }
 
@@ -319,7 +339,11 @@ pub fn build_series(
     enemy_series: Option<
         &BTreeMap<u64, axilog_core::analysis::timeseries::EnemySeries>,
     >,
+    healing_1s: Option<&axilog_core::analysis::healing_detail::HealingDetail>,
 ) -> SeriesBlock {
+    // Same positional-join guard `support::build_healing` applies to the
+    // other half of this pass's output, and for the same reason.
+    let healing_1s = healing_1s.filter(|d| d.len() == report.players.len());
     let res = report.timeline.resolution_ms;
     let ps = &report.timeline.per_second;
     let squad = SquadSeries {
@@ -335,8 +359,13 @@ pub fn build_series(
     };
 
     let mut by_entity = ByEntity::default();
-    for p in &report.players {
+    for (i, p) in report.players.iter().enumerate() {
         let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
+        // Positional, not addr-keyed, unlike `health_percents` just below:
+        // `healing_detail` is a `Vec` over `enc.players` with no addr in it,
+        // which is what the length guard above exists to make safe.
+        let healing: Option<SeriesOut> =
+            healing_1s.map(|d| SeriesOut::encode_u64(res, &d[i].healing_1s));
         // Keyed by the account's REPRESENTATIVE agent address, which is
         // what `PlayerOut::agent_addr` already is -- a relogged account is
         // one player here and one folded series there. Looking the map up
@@ -354,8 +383,15 @@ pub fn build_series(
         // result is an honest row with empty series arrays instead of a
         // health series that silently vanishes.
         let Some(series) = p.per_second.as_ref() else {
-            if health.is_some() {
-                by_entity.insert(id, EntitySeries { health_percents: health, ..empty_series(res) });
+            if health.is_some() || healing.is_some() {
+                by_entity.insert(
+                    id,
+                    EntitySeries {
+                        health_percents: health,
+                        healing_1s: healing,
+                        ..empty_series(res)
+                    },
+                );
             }
             continue;
         };
@@ -383,6 +419,7 @@ pub fn build_series(
                 power_damage_taken: SeriesOut::encode_u64(res, &series.power_damage_taken),
                 per_target,
                 health_percents: health,
+                healing_1s: healing,
             },
         );
     }
@@ -592,7 +629,7 @@ mod tests {
     #[test]
     fn squad_series_use_the_shared_envelope_and_decode_to_the_legacy_arrays() {
         let (report, index) = fixture_report();
-        let block = build_series(&report, &index, None, None);
+        let block = build_series(&report, &index, None, None, None);
         let squad = &block.squad;
         assert_eq!(
             squad.damage.decode_u64(),

@@ -1196,6 +1196,54 @@ and `extBarrierStats.{outgoingBarrierAllies,totalBarrierDist}` read from
 `healing_series` and `healing_dist` outright — they only mirror flag state,
 which block presence and coverage now carry.
 
+**Execution notes (Task 10, done).**
+
+1. **`healing1S` did NOT go on `blocks.healing`.** The sketch above put all
+   five families there. It landed on
+   `blocks.series.by_entity[].healing_1s` instead, because what a field
+   belongs to in this format is its GRID and its GATE, not its subject
+   matter. `healing_detail` buckets on `timeseries::ei_grid` — the CEILING
+   grid, one bucket longer than `timeline.resolution_ms`'s floor grid on a
+   partial-second log — which is exactly the grid the per-entity `damage`
+   series beside it uses, and it rides `--timeseries` like every other
+   per-second array. On `blocks.healing` it would have been the one field
+   answering a different flag than its siblings, `coverage.healing` could
+   not have described it, and nothing would have forced it onto either
+   grid. `the_1s_graph_shares_the_grid_of_the_series_it_sits_beside` pins
+   the length equality that now does.
+2. **The split gate cost `Passes` two fields, not two `bool`s.**
+   `healing_detail` and `healing_series` are both
+   `Option<&HealingDetail>`, set from the same pass output by whichever
+   flag the caller actually has. A borrow cannot be set without the data,
+   which is the property the deleted `EiInputs` `bool`s lacked. This is
+   the first pass in the program feeding two families under two flags, so
+   it is also the first whose gate could NOT be answered by a single
+   presence check — `each_family_rides_only_its_own_flag` walks all four
+   combinations.
+3. **`CoverageState::Unsupported` became reachable, but not the way the
+   sketch derived it.** The sketch read it off `healing_detail.is_none()`
+   on a gate-on run, which is correct but only available when a gate ran.
+   `metrics.has_healing_extension` answers the same question on EVERY run,
+   so the coverage line uses that and needs no gate branch at all. The
+   `Empty` arm lost its only witness in the process (that WAS the
+   no-extension case, per Finding 4), so `v1_equivalence.rs` gained a
+   second witness — a zero-roster log — rather than letting `Empty` go
+   back to being dead code.
+4. **The ally matrix is keyed and sparse.** EI's `outgoingHealingAllies`
+   is a dense N×N array of objects; `by_ally` is keyed by the ally's
+   entity id, folds the barrier twin into the same row, and omits cells
+   that are zero in all three quantities. The adapter re-densifies against
+   `source_order.players()`. `the_ally_matrix_is_sparse_and_never_exceeds_
+   the_scalar` fails if it ever stops being sparse, because that is when
+   the payload argument behind the `--skill-damage` gate would evaporate.
+5. **ei-json: 43 new `skillMap` entries, nothing else.** Flagless and
+   `--timeseries`-only render byte-identical; both `--skill-damage` combos
+   differ in `skillMap` alone — 43 added, 0 removed, 0 values changed, and
+   all 43 were already referenced by the OLD document's own healing
+   dists. Same dangling-reference fix Task 9 produced, same cause: the
+   adapter's private side channel could not reach the catalog.
+   `EiInputs` is now **5 fields, from the original 13**.
+
 ---
 
 ### Task 11: `activity` — the always-on/gated split in `blocks.replay`

@@ -164,6 +164,9 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
     };
     // Task 9: the outcome columns on both player-side distributions.
     let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
+    // Task 10: the healing detail feeds two families under two different
+    // flags; with every gate on, both are set from the one pass.
+    let healing_detail = axilog_core::analysis::healing_detail::build(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -188,6 +191,8 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
             enemy_dist: Some(&enemy_dist),
             enemy_series: Some(&enemy_series),
             dist_outcomes: Some(&dist_outcomes),
+            healing_detail: healing_detail.as_ref(),
+            healing_series: healing_detail.as_ref(),
         },
     );
     let v = serde_json::to_value(&v1).expect("serializable");

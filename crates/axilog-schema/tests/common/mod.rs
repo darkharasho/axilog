@@ -80,6 +80,13 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
     // Task 9: the outcome columns on both player-side distributions.
     let dist_outcomes =
         all_gates.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
+    // Task 10: ONE pass feeding two families under two different flags.
+    // `build` self-gates to `None` on a log with no healing extension, so
+    // the `.flatten()` here is the "unsupported", not the "gate off", case
+    // -- and both `Passes` fields get it, since `build(true)` means every
+    // flag is on.
+    let healing_detail =
+        all_gates.then(|| axilog_core::analysis::healing_detail::build(&raw, &enc)).flatten();
 
     let legacy = axilog_schema::build_report(
         &enc,
@@ -105,6 +112,8 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
             enemy_dist: enemy_dist.as_ref(),
             enemy_series: enemy_series.as_ref(),
             dist_outcomes: dist_outcomes.as_ref(),
+            healing_detail: healing_detail.as_ref(),
+            healing_series: healing_detail.as_ref(),
         },
     );
     (enc, metrics, legacy, v1)

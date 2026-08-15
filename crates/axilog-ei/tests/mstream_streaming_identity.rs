@@ -107,6 +107,9 @@ fn render_both(flags: Flags) -> (String, String) {
     });
     let dist_outcomes =
         flags.skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
+    let healing_detail = (flags.skill_damage || flags.timeseries)
+        .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
+        .flatten();
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, "0.0.0-test", None,
         &axilog_schema::v1::Passes {
@@ -115,6 +118,8 @@ fn render_both(flags: Flags) -> (String, String) {
             enemy_dist: enemy_dist.as_ref(),
             enemy_series: enemy_series.as_ref(),
             dist_outcomes: dist_outcomes.as_ref(),
+            healing_detail: healing_detail.as_ref().filter(|_| flags.skill_damage),
+            healing_series: healing_detail.as_ref().filter(|_| flags.timeseries),
             ..Default::default()
         },
     );
@@ -124,9 +129,6 @@ fn render_both(flags: Flags) -> (String, String) {
     let target_conditions = flags
         .timeseries
         .then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
-    let healing_detail = (flags.skill_damage || flags.timeseries)
-        .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
-        .flatten();
     let damage_mods = flags.modifiers.then(|| {
         axilog_core::analysis::damage_mods::evaluate_catalog_full(
             &raw,
@@ -144,9 +146,6 @@ fn render_both(flags: Flags) -> (String, String) {
         modifiers: damage_mods.as_ref(),
         boon_states: boon_states.as_ref(),
         target_conditions: target_conditions.as_ref(),
-        healing_detail: healing_detail.as_ref(),
-        healing_series: flags.timeseries,
-        healing_dist: flags.skill_damage,
     };
 
     let mut streamed: Vec<u8> = Vec::new();

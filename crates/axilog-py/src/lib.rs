@@ -124,6 +124,12 @@ fn build_report_v1_from_bytes(
             rep,
         )
     });
+    // Task 10, the last of the same story: one pass, two families, two
+    // flags -- so it runs on EITHER gate and each `Passes` field is
+    // re-filtered to the flag that family actually rides.
+    let healing_detail = (want_skill_damage || want_timeseries)
+        .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
+        .flatten();
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
@@ -145,6 +151,8 @@ fn build_report_v1_from_bytes(
             enemy_dist: enemy_dist.as_ref(),
             enemy_series: enemy_series.as_ref(),
             dist_outcomes: dist_outcomes.as_ref(),
+            healing_detail: healing_detail.as_ref().filter(|_| want_skill_damage),
+            healing_series: healing_detail.as_ref().filter(|_| want_timeseries),
         },
     ))
 }
@@ -161,7 +169,6 @@ type EiPipelineOutputs = (
     Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
     Option<axilog_core::analysis::buffs::BoonStates>,
     Option<axilog_core::analysis::target_conditions::TargetConditionStates>,
-    Option<axilog_core::analysis::healing_detail::HealingDetail>,
 );
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
@@ -215,6 +222,12 @@ fn build_report_and_activity_from_bytes(
             &raw, &axilog_core::analysis::damage::InstidRegistry::build(&raw), &enc, true,
         )
     });
+    // Task 10, the last of the same story: one pass, two families, two
+    // flags -- so it runs on EITHER gate and each `Passes` field is
+    // re-filtered to the flag that family actually rides.
+    let healing_detail = (want_skill_damage || want_timeseries)
+        .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
+        .flatten();
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
@@ -286,6 +299,8 @@ fn build_report_and_activity_from_bytes(
             enemy_dist: enemy_dist.as_ref(),
             enemy_series: enemy_series.as_ref(),
             dist_outcomes: dist_outcomes.as_ref(),
+            healing_detail: healing_detail.as_ref().filter(|_| want_skill_damage),
+            healing_series: healing_detail.as_ref().filter(|_| want_timeseries),
         },
     );
     // MEIGAP Task 1b: GW2EI-shape boon stack timelines
@@ -297,14 +312,6 @@ fn build_report_and_activity_from_bytes(
         .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
     let target_conditions =
         want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
-    // MEIGAP Task 3a/3b. Every healing-detail family is flag-gated in the
-    // adapter (`healing1S` on timeseries; the ally matrices and the two
-    // `*Dist` arrays on skill-damage -- see `EiInputs::healing_dist`), so
-    // the pass only runs when at least one of them will be serialized. It
-    // self-gates to `None` on a log with no healing extension.
-    let healing_detail = (want_skill_damage || want_timeseries)
-        .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
-        .flatten();
     Ok((
         report,
         report_v1,
@@ -313,7 +320,6 @@ fn build_report_and_activity_from_bytes(
         damage_mods,
         boon_states,
         target_conditions,
-        healing_detail,
     ))
 }
 
@@ -414,7 +420,7 @@ fn parse_file_ei(
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
     let (report, report_v1, activity, ei_replay, damage_mods, boon_states,
-         target_conditions, healing_detail) =
+         target_conditions) =
         build_report_and_activity_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     let ei = axilog_ei::to_ei_json(
         &report_v1,
@@ -425,9 +431,6 @@ fn parse_file_ei(
             modifiers: damage_mods.as_ref(),
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
-            healing_detail: healing_detail.as_ref(),
-            healing_series: timeseries,
-            healing_dist: skill_damage,
         },
     );
     value_to_py(py, &ei)

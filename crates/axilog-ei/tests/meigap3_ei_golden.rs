@@ -89,16 +89,18 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
         axilog_core::analysis::minions::build_with_registry(&raw, &registry, &enc);
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, "0.0.0-test", None,
-        &axilog_schema::v1::Passes { minions: Some(&minion_rollups), ..Default::default() },
+        &axilog_schema::v1::Passes {
+            minions: Some(&minion_rollups),
+            healing_detail: healing_detail.as_ref(),
+            healing_series: healing_detail.as_ref(),
+            ..Default::default()
+        },
     );
 
     let ours = axilog_ei::to_ei_json(
         &report_v1, &report,
         &EiInputs {
             activity: &activity,
-            healing_detail: healing_detail.as_ref(),
-            healing_series: true,
-            healing_dist: true,
             ..Default::default()
         },
     );

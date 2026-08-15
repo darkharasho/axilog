@@ -8,6 +8,10 @@ fn is_zero(v: &f64) -> bool {
     *v == 0.0
 }
 
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct BoonsBlock {
     /// entity id -> buff id -> row. Two levels of real ids, no positional
@@ -133,6 +137,98 @@ pub struct HealingEntity {
     pub outgoing_self: u64,
     pub barrier_out: u64,
     pub downed_healing_out: u64,
+    /// The per-ally and per-skill breakdowns behind the five scalars above
+    /// (`axilog_core::analysis::healing_detail`), when the `--skill-damage`
+    /// gate ran that pass.
+    ///
+    /// One `Option` around all three maps rather than three siblings, for
+    /// [`super::damage::PerTargetDetail`]'s reason: they are filled by a
+    /// single pass over a single event list, so their presence is genuinely
+    /// all-or-nothing and three independent `Option`s would let a
+    /// consumer's type-checker accept a state no builder can produce.
+    ///
+    /// The 1S healing graph is NOT here -- see
+    /// [`super::activity::EntitySeries::healing_1s`] for where it went and
+    /// why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<HealingDetailCols>,
+}
+
+/// The three per-ally / per-skill breakdowns of one player's outgoing
+/// healing and barrier.
+#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+pub struct HealingDetailCols {
+    /// Healing and barrier this player put on each ally, keyed by the
+    /// ALLY's entity id -- GW2EI's `outgoingHealingAllies` /
+    /// `outgoingBarrierAllies`, which are positional arrays over
+    /// `log.Friendlies` (this project's `enc.players`).
+    ///
+    /// Keyed, not positional, for the reason this format keys everything:
+    /// the source array is dense and square, and a reader who miscounts its
+    /// offset silently attributes one player's healing to another rather
+    /// than failing. It also makes the payload sparse -- the two EI arrays
+    /// are N*N cells of which a real squad fills a small fraction, and a
+    /// cell that is zero in all three quantities is omitted here. Within a
+    /// present map, an absent ally is a MEASURED zero (this player healed
+    /// them for nothing); the `Option` one level up is what carries "not
+    /// measured".
+    ///
+    /// The healer appears at its own id -- self-healing is one of these
+    /// cells, exactly as in GW2EI, not a separate scalar.
+    pub by_ally: BTreeMap<u32, AllyHealingRow>,
+    /// `totalHealingDist`, keyed by skill id.
+    pub by_skill: BTreeMap<u32, HealSkillRow>,
+    /// `totalBarrierDist`, keyed by skill id. A separate map rather than a
+    /// column on [`Self::by_skill`]: a skill can appear in one and not the
+    /// other, and merging them would force every healing row to publish a
+    /// zero barrier it never measured.
+    pub barrier_by_skill: BTreeMap<u32, HealSkillRow>,
+}
+
+/// One cell of [`HealingDetailCols::by_ally`].
+#[derive(Serialize, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct AllyHealingRow {
+    pub healing: u64,
+    /// The subset of [`Self::healing`] that landed while the ally was downed
+    /// (`EXTHealingEvent.AgainstDowned`).
+    pub downed_healing: u64,
+    /// EI's `outgoingBarrierAllies[..].barrier`. Folded into this row rather
+    /// than kept as a second parallel map: it is the same pass, the same
+    /// indexing and the same event list, so two maps would be two key sets
+    /// with nothing forcing them to agree.
+    pub barrier: u64,
+}
+
+impl AllyHealingRow {
+    /// A cell with nothing in it at all -- omitted from `by_ally` rather
+    /// than stored, which is what makes the N*N matrix sparse.
+    fn is_empty(&self) -> bool {
+        self.healing == 0 && self.downed_healing == 0 && self.barrier == 0
+    }
+}
+
+/// One skill's row of `totalHealingDist` / `totalBarrierDist`.
+///
+/// `hits`/`min`/`max` count EVERY event in the group. GW2EI's healing dist
+/// has no `HasHit` gate (`BuildHealingDist` accumulates unconditionally),
+/// unlike its damage dist -- which is why this row has none of the three
+/// hit counts [`super::damage::SkillRow`] carries, just the one.
+#[derive(Serialize, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct HealSkillRow {
+    pub total: u64,
+    /// EI's `totalDownedHealing`. Omitted when zero, which is ALWAYS on a
+    /// barrier row: `EXTJsonBarrierDist` has no downed field at all, so
+    /// emitting a zero there would invent a measurement GW2EI does not
+    /// make.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub total_downed: u64,
+    pub hits: u32,
+    pub min: u64,
+    pub max: u64,
+    /// The group contains at least one `EXTNonDirectHealingEvent` (a
+    /// healing-over-time tick) -- EI's `indirectHealing` /
+    /// `indirectBarrier`.
+    pub indirect: bool,
 }
 
 pub fn build_boons(
@@ -212,10 +308,25 @@ pub fn build_contribution(report: &crate::Report, index: &EntityIndex) -> Contri
 /// not "genuinely all zero". A player without healing data gets no row
 /// here, same "absent, not null/zero" convention the legacy field itself
 /// uses.
-pub fn build_healing(report: &crate::Report, index: &EntityIndex) -> HealingBlock {
+/// `detail` is `axilog_core::analysis::healing_detail::build`'s output when
+/// the `--skill-damage` gate ran it -- positionally joined to
+/// `report.players`, and dropped whole (see [`positional`]) if that join
+/// cannot be trusted.
+pub fn build_healing(
+    report: &crate::Report,
+    index: &EntityIndex,
+    detail: Option<&axilog_core::analysis::healing_detail::HealingDetail>,
+    cats: &mut CatalogBuilder,
+) -> HealingBlock {
+    let detail = positional(report, detail);
+    // Entity id per `report.players` position -- the join `detail`'s ally
+    // arrays need, resolved once instead of per cell.
+    let ally_ids: Vec<Option<u32>> =
+        report.players.iter().map(|p| index.by_agent_addr(p.agent_addr)).collect();
+
     let mut by_entity = ByEntity::default();
-    for p in &report.players {
-        let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
+    for (i, p) in report.players.iter().enumerate() {
+        let Some(id) = ally_ids[i] else { continue };
         let Some(h) = p.healing.as_ref() else { continue };
         by_entity.insert(
             id,
@@ -225,10 +336,73 @@ pub fn build_healing(report: &crate::Report, index: &EntityIndex) -> HealingBloc
                 outgoing_self: h.healing_out_self,
                 barrier_out: h.barrier_out,
                 downed_healing_out: h.downed_healing_out,
+                detail: detail.map(|d| build_healing_detail(&d[i], &ally_ids, cats)),
             },
         );
     }
     HealingBlock { by_entity }
+}
+
+/// The positional-join guard the ally matrix needs.
+///
+/// `healing_detail`'s arrays are indexed by `enc.players` position, and
+/// `report.players` is built from that same list in that same order -- but a
+/// hand-built `Report` (every unit test that constructs one) can violate it.
+/// Mis-attributing one player's healing to another is worse than omitting
+/// the breakdown, so a length mismatch drops the whole surface rather than
+/// emitting a shifted one. Same guard, same reason, as the ei-json adapter's
+/// own `replay` filter.
+fn positional<'a>(
+    report: &crate::Report,
+    detail: Option<&'a axilog_core::analysis::healing_detail::HealingDetail>,
+) -> Option<&'a axilog_core::analysis::healing_detail::HealingDetail> {
+    detail.filter(|d| d.len() == report.players.len())
+}
+
+fn build_healing_detail(
+    d: &axilog_core::analysis::healing_detail::PlayerHealingDetail,
+    ally_ids: &[Option<u32>],
+    cats: &mut CatalogBuilder,
+) -> HealingDetailCols {
+    let mut by_ally: BTreeMap<u32, AllyHealingRow> = BTreeMap::new();
+    for (i, &ally) in ally_ids.iter().enumerate() {
+        let Some(ally) = ally else { continue };
+        let row = AllyHealingRow {
+            healing: d.ally_healing[i].healing,
+            downed_healing: d.ally_healing[i].downed_healing,
+            barrier: d.ally_barrier[i],
+        };
+        if !row.is_empty() {
+            by_ally.insert(ally, row);
+        }
+    }
+
+    let mut dist = |src: &[axilog_core::analysis::healing_detail::HealDistEntry]| {
+        src.iter()
+            .map(|e| {
+                // Every id this block joins on has to resolve in the
+                // catalog, or the row is a dangling reference -- the same
+                // hole Task 9 found on the damage side.
+                cats.reference_skill(e.skill_id);
+                (
+                    e.skill_id,
+                    HealSkillRow {
+                        total: e.total,
+                        total_downed: e.total_downed,
+                        hits: e.hits,
+                        min: e.min,
+                        max: e.max,
+                        indirect: e.indirect,
+                    },
+                )
+            })
+            .collect()
+    };
+    HealingDetailCols {
+        by_ally,
+        by_skill: dist(&d.healing_dist),
+        barrier_by_skill: dist(&d.barrier_dist),
+    }
 }
 
 #[cfg(test)]

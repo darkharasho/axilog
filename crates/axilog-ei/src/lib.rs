@@ -4,7 +4,6 @@ use axilog_core::analysis::buffs::{BoonStates, BOON_IDS};
 use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
 use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::analysis::replay::{ActivityIntervals, Interval};
-use axilog_core::analysis::healing_detail::{HealDistEntry, HealingDetail};
 use axilog_core::analysis::target_conditions::TargetConditionStates;
 use axilog_core::icons::prof_icon_url;
 use axilog_schema::v1::ReportV1;
@@ -277,12 +276,16 @@ fn dist_rows_ei_json(
 /// follows it (`"indirectHealing"` / `"indirectBarrier"`).
 /// `with_downed` adds `totalDownedHealing`, which exists only on the
 /// healing side (`EXTJsonBarrierDist` has no downed field at all).
-fn heal_dist_json(rows: &[HealDistEntry], total_key: &str, with_downed: bool) -> Value {
+fn heal_dist_json(
+    rows: &BTreeMap<u32, axilog_schema::v1::blocks::support::HealSkillRow>,
+    total_key: &str,
+    with_downed: bool,
+) -> Value {
     Value::Array(
         rows.iter()
-            .map(|r| {
+            .map(|(&id, r)| {
                 let mut o = serde_json::Map::new();
-                o.insert("id".into(), Value::from(r.skill_id));
+                o.insert("id".into(), Value::from(id));
                 o.insert(total_key.into(), Value::from(r.total));
                 if with_downed {
                     o.insert("totalDownedHealing".into(), Value::from(r.total_downed));
@@ -674,42 +677,6 @@ pub struct EiInputs<'a> {
     /// (`JsonBuffsUptimeBuilder.cs:52`), the same gate the player-side
     /// [`Self::boon_states`] rides.
     pub target_conditions: Option<&'a TargetConditionStates>,
-    /// `healing_detail` (MEIGAP Task 3a): per-ally / per-skill / per-second
-    /// healing and barrier from
-    /// `axilog_core::analysis::healing_detail::build`, or `None` (which is
-    /// also what that function returns on a log with no healing
-    /// extension). Positionally joined to `report.players`, in both the
-    /// outer index and the inner ally index.
-    ///
-    /// The OPT-IN gate for `extHealingStats.outgoingHealingAllies` /
-    /// `.totalHealingDist` / `.healing1S` and
-    /// `extBarrierStats.outgoingBarrierAllies` / `.totalBarrierDist`. The
-    /// three families are gated SEPARATELY once this input is present --
-    /// see [`Self::healing_series`] and [`Self::healing_dist`], which are
-    /// the two flag bits the caller sets alongside it.
-    ///
-    /// Side-channel rather than a `Report` field for the same reason
-    /// `enemy_dist` was until Task 7 absorbed it: it is a per-(player, ally)
-    /// matrix and a per-skill map that the native schema deliberately
-    /// reduces to the five `HealingOut` scalars. Task 10 moves it.
-    pub healing_detail: Option<&'a HealingDetail>,
-    /// Emit `extHealingStats.healing1S` -- set by the caller exactly when
-    /// `--timeseries`/SDK `timeseries: true` was requested, GW2EI's own
-    /// gate on that field
-    /// (`EXTJsonPlayerHealingStatsBuilder.cs:30`, inside
-    /// `if (settings.RawFormatTimelineArrays)`). Ignored when
-    /// [`Self::healing_detail`] is `None`.
-    pub healing_series: bool,
-    /// Emit `extHealingStats.outgoingHealingAllies` / `.totalHealingDist`
-    /// and `extBarrierStats.outgoingBarrierAllies` / `.totalBarrierDist` --
-    /// set by the caller exactly when `--skill-damage`/SDK
-    /// `skill_damage: true` was requested. GW2EI emits all four
-    /// unconditionally; they ride the per-skill flag here for PAYLOAD (the
-    /// ally matrices alone are +36.0% on the flagless committed fixture and
-    /// grow quadratically in squad size), the same treatment
-    /// `totalDamageDist` already gets, and axibridge hardcodes that flag to
-    /// `true`. Ignored when [`Self::healing_detail`] is `None`.
-    pub healing_dist: bool,
 }
 
 /// A lazily-serialized JSON array (MSTREAM).
@@ -867,15 +834,7 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         modifiers,
         boon_states,
         target_conditions,
-        healing_detail,
-        healing_series,
-        healing_dist,
     } = *inputs;
-    // Positional-join guards, same convention `replay` uses just below: a
-    // hand-built `Report` (every unit test) can violate them, and dropping
-    // the whole surface beats mis-attributing one player's healing to
-    // another.
-    let healing_detail = healing_detail.filter(|d| d.len() == legacy.players.len());
     // Positional join guard: the tracks must be `legacy.players` followed by
     // the enemy-PLAYER subset of `legacy.ei_targets`, in those orders. A
     // caller that hand-builds a `Report` (every unit test below) can violate
@@ -932,6 +891,8 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             .and_then(|id| report.blocks.series.as_ref()?.by_entity.get(id));
         let n_minions = entity_id
             .and_then(|id| report.blocks.minions.as_ref()?.by_entity.get(id));
+        let n_healing = entity_id
+            .and_then(|id| report.blocks.healing.as_ref()?.by_entity.get(id));
         let team_id_for = |color: &str| -> u64 {
             detected_players.get(color).copied().unwrap_or_else(|| representative_team_id(color))
         };
@@ -1737,12 +1698,18 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         //
         // MEIGAP Task 3a fills in three of those gaps --
         // `outgoingHealingAllies`, `totalHealingDist`, `healing1S` (and
-        // the two barrier twins) -- from `EiInputs::healing_detail`. The
-        // rest of the sentence above still stands: the skill-type
-        // breakdown, `incomingHealing` and every `allied*`/`*Received1S`
-        // array remain uncomputed and unemitted.
+        // the two barrier twins). Side-channel absorption Task 10 moved
+        // their source off `EiInputs` and onto the native container:
+        // `blocks.healing.by_entity[].detail` for the matrices and dists,
+        // `blocks.series.by_entity[].healing_1s` for the graph. The two
+        // `bool`s that used to gate them here are gone with it -- each
+        // field's own presence in the native document now answers the flag
+        // question the `bool` used to mirror. The rest of the sentence
+        // above still stands: the skill-type breakdown, `incomingHealing`
+        // and every `allied*`/`*Received1S` array remain uncomputed and
+        // unemitted.
         if let Some(h) = &p.healing {
-            let detail = healing_detail.and_then(|d| d.get(player_idx));
+            let detail = n_healing.and_then(|n| n.detail.as_ref());
             let mut healing = json!({
                 "outgoingHealing": [ {
                     "healing": h.healing_out_total,
@@ -1779,12 +1746,20 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 // which GW2EI also emits unconditionally; axibridge
                 // hardcodes the flag to `true`, so the read surface is
                 // unchanged.
-                if healing_dist {
+                {
+                    // Native `by_ally` is keyed by the ally's entity id and
+                    // omits all-zero cells; EI's arrays are dense and
+                    // positional over `players[]`. `player_ids` is that
+                    // position -> id map, so walking it in order re-densifies
+                    // the matrix, and a missing key is the measured zero the
+                    // native block means it to be.
+                    let ally_cells = || {
+                        player_ids.iter().map(|id| d.by_ally.get(id).copied().unwrap_or_default())
+                    };
                     ho.insert(
                         "outgoingHealingAllies".to_string(),
                         Value::Array(
-                            d.ally_healing
-                                .iter()
+                            ally_cells()
                                 .map(|c| {
                                     json!([ { "healing": c.healing, "downedHealing": c.downed_healing } ])
                                 })
@@ -1794,7 +1769,7 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                     bo.insert(
                         "outgoingBarrierAllies".to_string(),
                         Value::Array(
-                            d.ally_barrier.iter().map(|&b| json!([ { "barrier": b } ])).collect(),
+                            ally_cells().map(|c| json!([ { "barrier": c.barrier } ])).collect(),
                         ),
                     );
                     // Two shape divergences from GW2EI, both deliberate and
@@ -1823,16 +1798,17 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                     //    whose name this project cannot resolve.
                     ho.insert(
                         "totalHealingDist".to_string(),
-                        json!([ heal_dist_json(&d.healing_dist, "totalHealing", true) ]),
+                        json!([ heal_dist_json(&d.by_skill, "totalHealing", true) ]),
                     );
                     bo.insert(
                         "totalBarrierDist".to_string(),
-                        json!([ heal_dist_json(&d.barrier_dist, "totalBarrier", false) ]),
+                        json!([ heal_dist_json(&d.barrier_by_skill, "totalBarrier", false) ]),
                     );
                 }
-                if healing_series {
-                    ho.insert("healing1S".to_string(), json!([ d.healing_1s ]));
-                }
+            }
+            if let Some(s) = n_series.and_then(|s| s.healing_1s.as_ref()) {
+                let ho = healing.as_object_mut().expect("object literal");
+                ho.insert("healing1S".to_string(), json!([s.decode_u64()]));
             }
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert("extHealingStats".to_string(), healing);

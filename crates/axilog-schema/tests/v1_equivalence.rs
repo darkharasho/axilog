@@ -55,6 +55,9 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
     };
     // Task 9: the outcome columns on both player-side distributions.
     let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
+    // Task 10: the healing detail feeds two families under two different
+    // flags; with every gate on, both are set from the one pass.
+    let healing_detail = axilog_core::analysis::healing_detail::build(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -79,6 +82,8 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
             enemy_dist: Some(&enemy_dist),
             enemy_series: Some(&enemy_series),
             dist_outcomes: Some(&dist_outcomes),
+            healing_detail: healing_detail.as_ref(),
+            healing_series: healing_detail.as_ref(),
         },
     );
     (legacy, v1)
@@ -823,20 +828,24 @@ fn every_legacy_aftercast_field_survives_the_reshape() {
     assert!(checked >= 30, "expected a substantial join, got {checked}");
 }
 
-/// Final review, Finding 4: `CoverageState::Empty` was unreachable -- every
-/// computed block reported `Present`, so a log with no healing extension
-/// said `healing: "present"` with zero rows, exactly the ambiguity
-/// `coverage` exists to remove.
+/// A log recorded without the arcdps healing addon reports `healing:
+/// "unsupported"` -- not `"empty"`, and certainly not `"present"`.
 ///
-/// The committed fixture cannot witness this: it DOES carry
-/// healing-extension data, and every other always-on block has a row for
-/// every player, so no block on it is legitimately empty. That is exactly
-/// why the gap survived -- a fixture-only test suite has no way to observe
-/// the state. So this builds the minimal encounter that reproduces it: one
-/// player, `has_healing_extension == false`, which is an ordinary log
-/// recorded without the arcdps healing addon.
+/// Two rounds of this program have now argued about this one value. Final
+/// review Finding 4 found it reporting `Present` with zero rows -- the exact
+/// "absent reported as zero" ambiguity `coverage` exists to remove -- and
+/// moved it to `Empty`. Task 10 moved it again, because `Empty` is still the
+/// wrong answer: it says the pass ran and the squad healed for nothing. No
+/// flag and no future pass can produce these numbers from a log whose
+/// recorder never wrote them, which is what `Unsupported` means and the only
+/// condition in this container that reaches it.
+///
+/// The committed fixture cannot witness any of this -- it DOES carry
+/// healing-extension data -- which is exactly why the original gap survived
+/// a fixture-only suite. So this builds the minimal encounter that
+/// reproduces it: one player, `has_healing_extension == false`.
 #[test]
-fn a_computed_block_with_no_rows_reports_empty_not_present() {
+fn a_log_without_the_healing_extension_reports_unsupported_not_empty() {
     use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
     use axilog_core::model::{Encounter, Player};
     use axilog_schema::v1::envelope::CoverageState;
@@ -893,8 +902,9 @@ fn a_computed_block_with_no_rows_reports_empty_not_present() {
     assert!(healing.by_entity.is_empty(), "no healing rows on this log");
     assert_eq!(
         v1.coverage.get("healing"),
-        Some(CoverageState::Empty),
-        "a computed block with no rows must report `empty`, never `present`"
+        Some(CoverageState::Unsupported),
+        "a log with no healing extension cannot ANSWER the healing question -- reporting `empty` \
+         claims it answered zero"
     );
 
     // And the distinction is real, not a blanket downgrade: a block that
@@ -902,10 +912,67 @@ fn a_computed_block_with_no_rows_reports_empty_not_present() {
     assert_eq!(v1.coverage.get("damage"), Some(CoverageState::Present));
 
     // The fixture-scale document still reports `present` everywhere it
-    // has rows -- `Empty` did not become the new default.
+    // has rows -- neither `Empty` nor `Unsupported` became the new default.
     let (_, fixture) = build();
     assert_eq!(fixture.coverage.get("healing"), Some(CoverageState::Present));
     assert_eq!(fixture.coverage.get("damage"), Some(CoverageState::Present));
+}
+
+/// `Empty` is still reachable, and still means what Finding 4 made it mean:
+/// the pass ran, the question was answerable, and the answer was nothing.
+///
+/// Task 10 took `healing`-without-the-extension away as its witness, so this
+/// supplies the other one -- a log whose roster resolved to no squad players
+/// at all, on which every always-on block genuinely has zero rows. Without
+/// this the `Empty` arm of `computed` would go back to being dead code that
+/// no test observes, which is the state Finding 4 found it in.
+#[test]
+fn a_computed_block_with_no_rows_still_reports_empty() {
+    use axilog_core::analysis::{Metrics, Timeline};
+    use axilog_core::model::Encounter;
+    use axilog_schema::v1::envelope::CoverageState;
+
+    let enc = Encounter {
+        kind: "wvw".into(),
+        map: String::new(),
+        duration_ms: 1000,
+        build: String::new(),
+        revision: 1,
+        recorded_by: None,
+        teams: vec![],
+        players: vec![],
+        enemies: vec![],
+        markers: vec![],
+        tick_rate: None,
+    };
+    let metrics = Metrics {
+        // The extension IS present -- so `healing` is answerable here, and
+        // its emptiness is a measurement rather than an absence. That is the
+        // whole difference between this witness and the one above.
+        has_healing_extension: true,
+        timeline: Timeline {
+            resolution_ms: 1000,
+            squad_damage: vec![0],
+            cc_applied: vec![0],
+            downs: vec![0],
+        },
+        ..Default::default()
+    };
+    let legacy = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
+    );
+    let v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &Default::default());
+
+    assert_eq!(
+        v1.coverage.get("healing"),
+        Some(CoverageState::Empty),
+        "extension present and no rows is `empty`, not `unsupported`"
+    );
+    assert_eq!(
+        v1.coverage.get("damage"),
+        Some(CoverageState::Empty),
+        "a block that ran over an empty roster is `empty` too"
+    );
 }
 
 /// Final review, Finding 9 -- the test that would have caught the other
