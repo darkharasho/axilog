@@ -1,4 +1,4 @@
-use super::ByEntity;
+use super::{ByEntity, PerSourceStates, StateTimeline};
 use crate::v1::catalogs::CatalogBuilder;
 use crate::v1::entities::EntityIndex;
 use serde::Serialize;
@@ -39,6 +39,22 @@ pub struct BoonRow {
     /// this stays unconditional too rather than inventing an `Option` the
     /// source data never has.
     pub generation: GenerationRow,
+    /// This buff's fused stack timeline. `--timeseries` only.
+    ///
+    /// The two fields below are the reason `blocks.boons` is a two-gate
+    /// block like `blocks.replay`: the uptime numbers above are computed on
+    /// every parse, these are not. So `coverage.boons` answers the uptime
+    /// question and is NOT a statement about whether the timelines are here
+    /// -- check the fields.
+    ///
+    /// Duration boons are clamped to 0/1 upstream so the graph means what
+    /// GW2EI's means (see `axilog_core::analysis::buffs::states`); intensity
+    /// boons carry their real stack count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub states: Option<StateTimeline>,
+    /// The same timeline split by applier. `--timeseries` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_source: Option<PerSourceStates>,
 }
 
 /// Mirrors `crate::GenerationOut` field-for-field, including the three
@@ -255,12 +271,99 @@ pub fn build_boons(
                         group_wasted: b.generation.group_wasted,
                         squad_wasted: b.generation.squad_wasted,
                     },
+                    // Filled by `attach_boon_states` when `--timeseries`
+                    // supplied the pass; this builder is the always-on half.
+                    states: None,
+                    per_source: None,
                 },
             );
         }
         by_entity.insert(id, rows);
     }
     BoonsBlock { by_entity }
+}
+
+/// Fold one applier's timeline into a [`PerSourceStates`], routing it to
+/// either the resolved side or the `unresolved` bucket.
+///
+/// Both callers need the same merge-don't-overwrite rule, for the same
+/// reason: the map being folded is keyed by AGENT ADDRESS, and several
+/// addresses can land on one destination -- every relog address of a player
+/// folds onto that player's single entity id, and every applier that
+/// resolves to nothing at all folds onto the one `unresolved` bucket.
+pub(super) fn merge_source_timeline(
+    out: &mut PerSourceStates,
+    source_entity: Option<u32>,
+    timeline: &StateTimeline,
+) {
+    use axilog_core::analysis::buffs::states::merge_step_timelines;
+    match source_entity {
+        Some(sid) => match out.by_source.entry(sid) {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(timeline.clone());
+            }
+            std::collections::btree_map::Entry::Occupied(mut o) => {
+                let merged = merge_step_timelines(o.get(), timeline);
+                o.insert(merged);
+            }
+        },
+        None => {
+            out.unresolved = Some(match out.unresolved.take() {
+                Some(prev) => merge_step_timelines(&prev, timeline),
+                None => timeline.clone(),
+            });
+        }
+    }
+}
+
+/// Attach the `--timeseries`-gated stack timelines to the boon rows.
+///
+/// This runs AFTER [`build_boons`] and only enriches rows that pass already
+/// made: the uptime pass enumerates every tracked boon for every roster
+/// player, so a `(player, boon)` with a timeline but no row would mean the
+/// two passes disagreed about the roster. Such a pair is skipped rather than
+/// conjured into a row with fabricated zero uptime and zero generation,
+/// which is what `or_default()` insertion would have written.
+pub fn attach_boon_states(
+    block: &mut BoonsBlock,
+    index: &EntityIndex,
+    states: &axilog_core::analysis::buffs::BoonStates,
+) {
+    // Every row gets a `states`, including `Some([])` for a boon this
+    // player never held. That empty vec is load-bearing in two ways: it is
+    // the only thing distinguishing "the timeline pass ran and found
+    // nothing" from "the pass did not run" (a real timeline always carries
+    // at least the leading `[0, 0]` pair, so `[]` is unambiguous), and it is
+    // what lets a consumer -- the ei-json adapter included -- use
+    // `states.is_some()` as the gate signal instead of needing a separate
+    // flag threaded alongside the data.
+    for rows in block.by_entity.0.values_mut() {
+        for row in rows.values_mut() {
+            row.states = Some(Vec::new());
+        }
+    }
+    for (&(addr, buff_id), timeline) in &states.total {
+        let Some(entity_id) = index.by_agent_addr(addr) else { continue };
+        let Some(row) = block.by_entity.0.get_mut(&entity_id).and_then(|m| m.get_mut(&buff_id))
+        else {
+            continue;
+        };
+        row.states = Some(timeline.clone());
+    }
+    for (&(addr, buff_id), per_source) in &states.per_source {
+        let Some(entity_id) = index.by_agent_addr(addr) else { continue };
+        let Some(row) = block.by_entity.0.get_mut(&entity_id).and_then(|m| m.get_mut(&buff_id))
+        else {
+            continue;
+        };
+        let mut folded = PerSourceStates::default();
+        for (&source_addr, timeline) in per_source {
+            merge_source_timeline(&mut folded, index.by_agent_addr(source_addr), timeline);
+        }
+        if !folded.is_empty() {
+            row.per_source = Some(folded);
+        }
+    }
 }
 
 pub fn build_support(report: &crate::Report, index: &EntityIndex) -> SupportBlock {
@@ -410,6 +513,42 @@ mod tests {
     use super::*;
     use crate::v1::blocks::tests_support::fixture_report;
     use crate::v1::catalogs::CatalogBuilder;
+
+    /// Both collapse paths in `merge_source_timeline`, neither of which the
+    /// committed fixture exercises: it has no relogged applier and no
+    /// applier that fails to resolve, so `blocks.*.per_source.by_source`
+    /// never collides and `unresolved` is never written. Without this test
+    /// those two branches would ship unexercised.
+    #[test]
+    fn appliers_that_land_on_one_destination_merge_rather_than_overwrite() {
+        // Two addresses of one relogged player -> one entity id. Held
+        // 0..1000 in the first session and 2000..3000 in the second; the
+        // merge is a pointwise SUM, so the result must show both windows
+        // rather than only the last one written.
+        let mut resolved = PerSourceStates::default();
+        merge_source_timeline(&mut resolved, Some(7), &vec![(0, 0), (0, 1), (1_000, 0)]);
+        merge_source_timeline(&mut resolved, Some(7), &vec![(0, 0), (2_000, 1), (3_000, 0)]);
+        assert_eq!(
+            resolved.by_source.get(&7).map(Vec::as_slice),
+            Some(&[(0, 1), (1_000, 0), (2_000, 1), (3_000, 0)][..]),
+            "a relogged applier's two sessions must both survive"
+        );
+        assert!(resolved.unresolved.is_none(), "both appliers resolved");
+
+        // Two appliers that resolve to nothing fold onto the one bucket,
+        // and overlapping windows there SUM rather than clamp -- the bucket
+        // is a count of concurrent applications, not a presence flag.
+        let mut unresolved = PerSourceStates::default();
+        merge_source_timeline(&mut unresolved, None, &vec![(0, 0), (0, 1), (2_000, 0)]);
+        merge_source_timeline(&mut unresolved, None, &vec![(0, 0), (1_000, 1), (3_000, 0)]);
+        assert!(unresolved.by_source.is_empty(), "nothing resolved to an entity");
+        assert_eq!(
+            unresolved.unresolved.as_deref(),
+            Some(&[(0, 1), (1_000, 2), (2_000, 1), (3_000, 0)][..]),
+            "the unresolved bucket must accumulate every applier that lands in it"
+        );
+        assert!(!unresolved.is_empty(), "a bucket-only row is not an empty row");
+    }
 
     #[test]
     fn boons_are_keyed_by_buff_id_not_by_position_in_a_fixed_array() {

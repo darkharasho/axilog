@@ -883,9 +883,13 @@ export type CoverageState = 'present' | 'not_computed' | 'empty' | 'unsupported'
  * (`"damage"`, `"defenses"`, `"hit_stats"`, `"cc"`, `"boons"`, `"support"`,
  * `"contribution"`, `"healing"`, `"rotation"`, `"damage_mods"`,
  * `"missiles"`, `"replay"`, `"series"`, `"conditions"`, `"minions"`).
- * Always names every known block, even ones this schema version never
- * computes (`"conditions"`/`"minions"`, reserved for spec #2, always
- * `"not_computed"`).
+ * Always names every known block, including ones a given parse did not
+ * compute -- those read `"not_computed"`.
+ *
+ * One entry is narrower than it looks: `"boons"` reports on that block's
+ * always-on uptime half only, NOT on its `{ timeseries: true }` stack
+ * timelines (see `BoonsBlock`). `"replay"` is the same shape of exception
+ * (see `ReplayBlock`).
  */
 export type Coverage = Record<string, CoverageState>
 
@@ -1107,16 +1111,91 @@ export interface GenerationRow {
   squad_wasted?: number
 }
 
-/** Mirrors the legacy `BoonOut` field-for-field, minus `id` (the map key) and `name` (resolve via `catalogs.buffs`). */
+/**
+ * One `[[time_ms_from_log_start, stacks], ...]` step timeline.
+ *
+ * Always opens with a `[0, 0]` pair and never carries two pairs at one
+ * timestamp. Duration buffs report 0/1; only intensity buffs (Might,
+ * Stability, most damaging conditions) exceed 1.
+ */
+export type StateTimeline = [number, number][]
+
+/**
+ * A buff's stack timeline split by who applied it, keyed by SOURCE ENTITY
+ * ID -- joining back into `entities[]` like every other key in this format.
+ *
+ * The upstream analysis keys these by the applier's character NAME; native
+ * does not, both because a name is identity data this format confines to
+ * `entities[]` and because two players sharing a character name collide
+ * onto one key.
+ */
+export interface PerSourceStates {
+  /** Keyed by the applying entity's id. */
+  by_source: Record<string, StateTimeline>
+  /**
+   * Every applier that resolves to no `entities[]` row at all, merged into
+   * one timeline -- so those applications are neither dropped nor given a
+   * fabricated entity id. Normally absent.
+   */
+  unresolved?: StateTimeline
+}
+
+/**
+ * Mirrors the legacy `BoonOut` field-for-field, minus `id` (the map key) and
+ * `name` (resolve via `catalogs.buffs`) -- plus the two timeline fields,
+ * which need `{ timeseries: true }`.
+ */
 export interface BoonRow {
   uptime_pct: number
   avg_stacks?: number
   generation: GenerationRow
+  /**
+   * The fused stack timeline. `{ timeseries: true }` only.
+   *
+   * May be `[]`, meaning the pass ran and this entity never held the buff
+   * -- a real timeline always has at least its leading `[0, 0]`, so `[]` is
+   * unambiguous, and the field's presence is the signal the gate was on.
+   */
+  states?: StateTimeline
+  /** The same timeline split by applier. `{ timeseries: true }` only. */
+  per_source?: PerSourceStates
 }
 
-/** entity id -> buff id -> row. Two levels of real ids, no positional joins. */
+/**
+ * entity id -> buff id -> row. Two levels of real ids, no positional joins.
+ *
+ * Two gates, like `ReplayBlock`: the uptime/generation numbers are computed
+ * on every parse, `BoonRow.states`/`per_source` need `{ timeseries: true }`.
+ * So `coverage.boons === "present"` is about the uptime half ONLY and says
+ * nothing about whether timelines are here -- check the fields.
+ */
 export interface BoonsBlock {
   by_entity: ByEntity<Record<string, BoonRow>>
+}
+
+/**
+ * One enemy's condition timeline, split by the squad member who applied it.
+ *
+ * There is no sibling fused `states` here, unlike `BoonRow`: the enemy-side
+ * pass computes only the source split, and summing sources would not
+ * reconstruct a total (two appliers holding the same duration condition
+ * overlap rather than stack).
+ */
+export interface ConditionRow {
+  per_source: PerSourceStates
+}
+
+/**
+ * enemy entity id -> condition buff id -> row. Wholly gated on
+ * `{ timeseries: true }`, so unlike `boons` its `coverage` entry does settle
+ * the question.
+ *
+ * Appliers are narrowed to the SQUAD -- an enemy-applied condition on
+ * another enemy is real but has no consumer -- so
+ * `PerSourceStates.unresolved` is always absent here.
+ */
+export interface ConditionsBlock {
+  by_entity: ByEntity<Record<string, ConditionRow>>
 }
 
 /** Mirrors the legacy `SupportOut` field-for-field. */
@@ -1363,6 +1442,11 @@ export interface Blocks {
   missiles?: MissilesBlock
   replay?: ReplayBlock
   series?: SeriesBlock
+  conditions?: ConditionsBlock
+  // NOTE: `minions` (a real block since absorption Task 6) has no entry
+  // here yet -- `MinionsBlock`/`MinionRow`/`MinionSkillTakenRow` are not
+  // transcribed in this file. Pre-existing gap, not introduced by the
+  // conditions work above.
 }
 
 /**

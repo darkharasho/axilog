@@ -36,9 +36,13 @@ fn main() {
         axilog_core::analysis::timeseries::build_enemy_series(&enc, &raw, &reg, &enemies, &rep);
     let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
     let healing_detail = axilog_core::analysis::healing_detail::build(&raw, &enc);
+    let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
+    let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, "0.0.0-bench", None,
-        &axilog_schema::v1::Passes { activity: Some(&activity),
+        &axilog_schema::v1::Passes { boon_states: Some(&boon_states),
+            target_conditions: Some(&target_conditions),
+            activity: Some(&activity),
             minions: Some(&minions),
             health_percents: Some(&health_percents),
             enemy_dist: Some(&enemy_dist),
@@ -49,14 +53,10 @@ fn main() {
             ..Default::default()
         },
     );
-    let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
-    let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
 
     let inputs = EiInputs {
         replay: None,
         modifiers: None,
-        boon_states: Some(&boon_states),
-        target_conditions: Some(&target_conditions),
     };
 
     let t0 = std::time::Instant::now();

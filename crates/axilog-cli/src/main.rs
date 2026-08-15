@@ -239,13 +239,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // MEIGAP Task 1b: GW2EI-shape boon stack timelines
             // (`buffUptimes[].states`/`.statesPerSource`) -- gated on
             // `--timeseries`, mirroring GW2EI's own `RawFormatTimelineArrays`
-            // gate on the same two arrays, and computed only for the format
-            // that can emit them (same "only for the format with a shape for
-            // it" reasoning as `ei_replay_data` above). It re-runs the boon
-            // simulation to recover per-SOURCE stack ownership, which
-            // `analyze()` keeps only in summed form -- see
+            // gate on the same two arrays. It re-runs the boon simulation to
+            // recover per-SOURCE stack ownership, which `analyze()` keeps
+            // only in summed form -- see
             // `axilog_core::analysis::buffs::states`'s module doc.
-            let boon_states = (timeseries && format == Format::EiJson).then(|| {
+            //
+            // Task 12: no longer restricted to `Format::EiJson`. It lands on
+            // `blocks.boons`' rows now, so `--format json --timeseries` is
+            // entitled to it too -- the flag alone decides, exactly as
+            // Tasks 7 and 8 did for the enemy passes below.
+            let boon_states = timeseries.then(|| {
                 axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons)
             });
             // MEIGAP Task 2b/2d: the two `--timeseries`-gated `targets[]`
@@ -281,8 +284,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     rep,
                 )
             });
-            let target_conditions = (timeseries && format == Format::EiJson)
-                .then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+            // Task 12: lands on `blocks.conditions`, so likewise no longer
+            // format-restricted.
+            let target_conditions =
+                timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
             // MEIGAP Task 2c: `targets[].totalDamageDist` rides
             // `--skill-damage`, the flag that already gates every other
             // per-skill block (GW2EI itself emits it unconditionally; this
@@ -382,6 +387,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     healing_detail: healing_detail.as_ref().filter(|_| skill_damage),
                     healing_series: healing_detail.as_ref().filter(|_| timeseries),
                     activity: Some(&activity),
+                    boon_states: boon_states.as_ref(),
+                    target_conditions: target_conditions.as_ref(),
                 },
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
@@ -409,8 +416,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let ei_inputs = axilog_ei::EiInputs {
                     replay: ei_replay_data.as_ref(),
                     modifiers: damage_mods.as_ref(),
-                    boon_states: boon_states.as_ref(),
-                    target_conditions: target_conditions.as_ref(),
                 };
                 // One `dyn Write` so the two destinations share the emit
                 // code; the `BufWriter` (not the trait object) is what makes

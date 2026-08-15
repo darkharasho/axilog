@@ -105,6 +105,10 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
         all_gates,
         damage_mods.as_ref(),
     );
+    let boon_states =
+        all_gates.then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
+    let target_conditions =
+        all_gates.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     let v1 = axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
@@ -121,6 +125,8 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
             activity: Some(&activity),
+            boon_states: boon_states.as_ref(),
+            target_conditions: target_conditions.as_ref(),
         },
     );
     (enc, metrics, legacy, v1)

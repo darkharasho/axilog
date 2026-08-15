@@ -65,6 +65,10 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
     // Task 11: ungated, like every real caller -- `blocks.replay.by_entity`
     // is the always-on half of that block.
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    // Task 12: the two name-keyed passes, now keyed by source ADDRESS at
+    // the source and by source ENTITY ID once native reprojects them.
+    let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
+    let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -92,6 +96,8 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
             activity: Some(&activity),
+            boon_states: Some(&boon_states),
+            target_conditions: Some(&target_conditions),
         },
     );
     (serde_json::to_value(&v1).expect("serializable"), enc)
@@ -440,3 +446,61 @@ fn no_name_from_the_encounter_appears_outside_entities() {
     );
 }
 
+
+/// No character name is used as a MAP KEY anywhere under `blocks`.
+///
+/// The enforcement for Task 12's redesign. Two passes
+/// (`buffs::states`, `target_conditions`) keyed their per-source timelines
+/// by the applier's character NAME; native re-keys both by source entity id
+/// (`blocks.boons.by_entity.<id>.<id>.per_source.by_source` and
+/// `blocks.conditions...`), and this is what holds that line.
+///
+/// It overlaps `no_name_from_the_encounter_appears_outside_entities` above,
+/// which scans the serialized text and so would also see a name key -- but
+/// only as an anonymous substring match. This one reports the exact JSON
+/// PATH, which is the difference between "a name leaked somewhere" and
+/// "`blocks.boons.by_entity.7.740.per_source.by_source.Anon12`". It is also
+/// immune to the `MIN_NAME_LEN` floor that test needs: a two-character
+/// character name is a plausible key and an implausible substring.
+#[test]
+fn no_block_key_is_a_character_name() {
+    let (v, enc) = build_with_encounter();
+
+    // Character names only -- accounts are not, and never were, a key
+    // candidate for these maps. Empty names are skipped: `""` cannot be
+    // distinguished from a legitimately absent name, and is not a key any
+    // pass would produce.
+    let names: Vec<String> = enc
+        .players
+        .iter()
+        .map(|p| p.character.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
+    assert!(
+        !names.is_empty(),
+        "fixture must have named players for this test to mean anything"
+    );
+
+    fn walk(v: &serde_json::Value, names: &[String], path: &str, hits: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                for (k, child) in m {
+                    if names.iter().any(|n| n == k) {
+                        hits.push(format!("{path}/{k}"));
+                    }
+                    walk(child, names, &format!("{path}/{k}"), hits);
+                }
+            }
+            serde_json::Value::Array(a) => {
+                for (i, child) in a.iter().enumerate() {
+                    walk(child, names, &format!("{path}/{i}"), hits);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut hits = Vec::new();
+    walk(&v["blocks"], &names, "blocks", &mut hits);
+    assert!(hits.is_empty(), "character name(s) used as block keys: {hits:?}");
+}

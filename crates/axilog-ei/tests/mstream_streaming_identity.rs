@@ -110,9 +110,17 @@ fn render_both(flags: Flags) -> (String, String) {
     let healing_detail = (flags.skill_damage || flags.timeseries)
         .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
         .flatten();
+    let boon_states = flags
+        .timeseries
+        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
+    let target_conditions =
+        flags.timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, "0.0.0-test", None,
-        &axilog_schema::v1::Passes { activity: Some(&activity),
+        &axilog_schema::v1::Passes {
+            activity: Some(&activity),
+            boon_states: boon_states.as_ref(),
+            target_conditions: target_conditions.as_ref(),
             minions: minion_rollups.as_ref(),
             health_percents: health_percents.as_ref(),
             enemy_dist: enemy_dist.as_ref(),
@@ -123,12 +131,6 @@ fn render_both(flags: Flags) -> (String, String) {
             ..Default::default()
         },
     );
-    let boon_states = flags
-        .timeseries
-        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
-    let target_conditions = flags
-        .timeseries
-        .then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     let damage_mods = flags.modifiers.then(|| {
         axilog_core::analysis::damage_mods::evaluate_catalog_full(
             &raw,
@@ -143,8 +145,6 @@ fn render_both(flags: Flags) -> (String, String) {
     let inputs = || EiInputs {
         replay: ei_replay_data.as_ref(),
         modifiers: damage_mods.as_ref(),
-        boon_states: boon_states.as_ref(),
-        target_conditions: target_conditions.as_ref(),
     };
 
     let mut streamed: Vec<u8> = Vec::new();

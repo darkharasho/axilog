@@ -477,10 +477,82 @@ Both decoders were executed against `/tmp/v1.json` (default flags) and
 real RLE row) as part of writing this document; both round-tripped `len`
 correctly and matched the raw/RLE encoding the binary actually chose.
 
+## Buff stack timelines — `boons`' second gate, and `conditions`
+
+Two blocks carry per-buff **stack timelines**: when a buff was up, and at
+what stack count. Both ride `--timeseries` (`timeseries: true` in the SDKs).
+
+`blocks.boons` rows gain two fields under that flag — `states`, the fused
+timeline, and `per_source`, the same split by applier. This makes `boons`
+the second two-gate block after `replay`: its uptime/generation numbers are
+computed on every parse, its timelines are not, so **`coverage.boons` is
+about the uptime half only** and says nothing about whether timelines are
+present. Check for the fields.
+
+`blocks.conditions` is the enemy-side counterpart, and is wholly gated —
+`coverage.conditions` does settle the question there. Its rows carry
+`per_source` and no fused `states`: summing appliers would not reconstruct
+one, because two players holding the same duration condition overlap rather
+than stack.
+
+Real excerpt (`--timeseries`), showing only the fields this section adds —
+entity `22`'s Might (`740`), and a condition on enemy entity `42`:
+
+```json
+{
+  "boons": {
+    "by_entity": {
+      "22": {
+        "740": {
+          "states": [[0, 0], [14, 6], [15, 12], [2211, 16], "..."],
+          "per_source": {
+            "by_source": { "18": [[0, 0], [14, 1], [15, 3], [6385, 0]] }
+          }
+        }
+      }
+    }
+  },
+  "conditions": {
+    "by_entity": {
+      "42": {
+        "19426": { "per_source": { "by_source": { "12": [[0, 0], [24654, 1], [26654, 0]] } } }
+      }
+    }
+  }
+}
+```
+
+The two halves read together: entity `22` held 16 stacks of Might at
+`2211 ms` in total, of which entity `18` was holding 3. The fused `states`
+counts stacks from every applier; each `by_source` entry counts only that
+one applier's.
+
+A timeline is `[[time_ms_from_log_start, stacks], ...]`, always opens with a
+`[0, 0]` pair, and never carries two pairs at one timestamp. Duration buffs
+report `0`/`1`; only intensity buffs (Might, Stability, most damaging
+conditions) exceed 1.
+
+Three things worth knowing:
+
+- **`per_source.by_source` is keyed by the APPLIER's entity id**, joining
+  back into `entities[]` like every other key here. The upstream analysis
+  keys these by the applier's character *name*; native does not, both
+  because a name is identity data this format confines to `entities[]` and
+  because two players sharing a character name collide onto one key.
+- **`per_source.unresolved`** is an optional sibling: one merged timeline
+  for appliers that resolve to no `entities[]` row at all. It exists so
+  those applications are neither dropped nor given a fabricated entity id.
+  It is normally absent, and always absent on `conditions`, whose appliers
+  are narrowed to the squad.
+- **`states` may be `[]`** — meaning the timeline pass ran and this entity
+  never held the buff. A real timeline always has at least its leading
+  `[0, 0]`, so `[]` is unambiguous, and `states` being present at all is
+  the honest signal that `--timeseries` was on.
+
 ## Combat replay — two halves, two gates
 
-`blocks.replay` is the one block whose halves are gated differently, and
-the only place in this document where `coverage` does not settle the whole
+`blocks.replay` is the other block whose halves are gated differently. Along
+with `boons` above, it is where `coverage` does not settle the whole
 question.
 
 `by_entity` — down/dead intervals plus each squad player's own first/last-
@@ -557,13 +629,30 @@ Enforced by test (`crates/axilog-schema/tests/v1_shape.rs`,
   A consumer should treat "key absent" and "key null" as the same signal,
   but should not expect to see the latter.
 
-**One relocation predates these rules taking effect.** The replay split
-above moved `blocks.replay.{poll_ms,bounds,by_entity}` down under
-`blocks.replay.tracks`, and gave `blocks.replay.by_entity` a new meaning —
-which under the rules above is breaking. It was done while 1.0 still had no
-external consumer reading it (the ei-json adapter is 1.0's only reader, and
-it is in-tree), and it is recorded here rather than passed over because the
-key-set golden diff will show nine removals to anyone bisecting.
+**The rules above are not yet in force.** 1.0 is explicitly still malleable:
+until it is declared frozen here, a shape that turns out wrong gets fixed
+rather than carried, and breaking changes land without a major bump. The
+licence is narrow — it exists because 1.0 has no external consumer reading
+it yet (the ei-json adapter is its only reader, and it is in-tree), and it
+ends the moment one does.
+
+Breaking changes made under it are recorded here rather than passed over,
+because the key-set golden diff shows them as bare removals to anyone
+bisecting:
+
+- The replay split moved `blocks.replay.{poll_ms,bounds,by_entity}` down
+  under `blocks.replay.tracks` and gave `blocks.replay.by_entity` a new
+  meaning — nine keys removed at the old paths.
+
+## The ei-json layer is permanent
+
+The side-channel absorption work moves data *into* this format and makes
+the Elite Insights-compatible output read from it — it does **not** work
+toward deleting that output. `to_ei_json` stays, indefinitely, as the
+compatibility path for downstream consumers that have not moved to the
+native format and for those that never will. The goal is for it to be
+thin: a translation over this document, with no analysis of its own and no
+private data it alone can see. "Thin and lean," not "eventually gone."
 
 ## Joining across reports
 

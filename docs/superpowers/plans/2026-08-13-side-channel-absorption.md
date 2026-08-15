@@ -1364,7 +1364,7 @@ entity id. If it genuinely does not resolve, drop the row and record a
 structured warning — do **not** invent a sentinel entity id, which would put a
 non-existent entity in a block keyed by `entities[]`.
 
-- [ ] **PII assertion — the enforcement for this whole redesign**
+- [x] **PII assertion — the enforcement for this whole redesign**
 
 Add to `crates/axilog-schema/tests/` (alongside spec #1's existing identity
 tests):

@@ -768,7 +768,7 @@ fn ei_json_combat_replay_matches_the_golden() {
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
     let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &axilog_schema::v1::Passes { activity: Some(&activity), ..Default::default() });
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
+    let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { replay: Some(&ei_replay), modifiers: None });
 
     // -- combatReplayMetaData: EXACT, field by field, as text --
     let meta = &ei["combatReplayMetaData"];
@@ -883,7 +883,7 @@ fn ei_json_replay_fields_do_not_disturb_the_always_on_surface() {
 
     let without = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { ..Default::default() });
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let mut with = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
+    let mut with = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { replay: Some(&ei_replay), modifiers: None });
 
     // Sanity: the replay-on document really does carry the new surface
     // (otherwise this test would pass vacuously).
@@ -952,7 +952,7 @@ fn ei_json_combat_replay_matches_the_local_postrework_export() {
     let report = axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
     let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &axilog_schema::v1::Passes { activity: Some(&activity), ..Default::default() });
     let ei_replay = build_ei_replay_auto(&raw, &enc);
-    let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { replay: Some(&ei_replay), modifiers: None, boon_states: None, ..Default::default() });
+    let ei = axilog_ei::to_ei_json(&report_v1, &report, &EiInputs { replay: Some(&ei_replay), modifiers: None });
 
     // metaData: text-exact against the export's own object.
     let want_meta = &golden["combatReplayMetaData"];
@@ -1196,6 +1196,7 @@ fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
     let full_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &full, "0.0.0-test", None,
         &axilog_schema::v1::Passes { activity: Some(&activity),
+            target_conditions: Some(&conditions),
             enemy_dist: Some(&dist),
             enemy_series: Some(&series),
             ..Default::default()
@@ -1204,7 +1205,6 @@ fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
     let on = axilog_ei::to_ei_json(
         &full_v1, &full,
         &EiInputs {
-            target_conditions: Some(&conditions),
             ..Default::default()
         },
     );

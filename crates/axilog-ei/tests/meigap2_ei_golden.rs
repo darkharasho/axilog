@@ -104,22 +104,23 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
         &enemies,
         &enemy_addr_to_rep,
     );
+    let target_conditions =
+        axilog_core::analysis::target_conditions::build_with_registry(&raw, &registry, &enc);
+
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, "0.0.0-test", None,
         &axilog_schema::v1::Passes { activity: Some(&activity),
+            target_conditions: Some(&target_conditions),
             enemy_dist: Some(&enemy_dist),
             enemy_series: Some(&enemy_series),
             dist_outcomes: Some(&dist_outcomes),
             ..Default::default()
         },
     );
-    let target_conditions =
-        axilog_core::analysis::target_conditions::build_with_registry(&raw, &registry, &enc);
 
     let ours = axilog_ei::to_ei_json(
         &report_v1, &report,
         &EiInputs {
-            target_conditions: Some(&target_conditions),
             ..Default::default()
         },
     );

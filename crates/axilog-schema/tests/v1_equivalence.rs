@@ -61,6 +61,10 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
     // Task 11: ungated, like every real caller -- `blocks.replay.by_entity`
     // is the always-on half of that block.
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    // Task 12: the two name-keyed passes, now keyed by source ADDRESS at
+    // the source and by source ENTITY ID once native reprojects them.
+    let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
+    let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -88,6 +92,8 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
             activity: Some(&activity),
+            boon_states: Some(&boon_states),
+            target_conditions: Some(&target_conditions),
         },
     );
     (legacy, v1)

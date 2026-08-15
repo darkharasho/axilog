@@ -142,6 +142,12 @@ fn build_report_v1_from_bytes(
     // always-on half of that block, so the native document carries
     // down/dead intervals whether or not positions were asked for.
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    // Task 12: the native path needs these too -- they feed
+    // `blocks.boons`/`blocks.conditions`, not just the ei-json adapter.
+    let boon_states = want_timeseries
+        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
+    let target_conditions =
+        want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     Ok(axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
@@ -158,6 +164,8 @@ fn build_report_v1_from_bytes(
             healing_detail: healing_detail.as_ref().filter(|_| want_skill_damage),
             healing_series: healing_detail.as_ref().filter(|_| want_timeseries),
             activity: Some(&activity),
+            boon_states: boon_states.as_ref(),
+            target_conditions: target_conditions.as_ref(),
         },
     ))
 }
@@ -171,8 +179,6 @@ type EiPipelineOutputs = (
     axilog_schema::v1::ReportV1,
     Option<axilog_core::analysis::ei_replay::EiReplay>,
     Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
-    Option<axilog_core::analysis::buffs::BoonStates>,
-    Option<axilog_core::analysis::target_conditions::TargetConditionStates>,
 );
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
@@ -295,6 +301,15 @@ fn build_report_and_ei_inputs_from_bytes(
     // ei-json adapter, so it has to exist by the time that block is built.
     let dist_outcomes =
         want_skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
+    // MEIGAP Task 1b / Task 2d: the two timeline passes, gated on the
+    // timeseries flag -- the same setting GW2EI gates their arrays behind
+    // (`RawFormatTimelineArrays`). Absorption Task 12 made them inputs to
+    // `blocks.boons`/`blocks.conditions` rather than side channels handed
+    // to the ei-json adapter, so they must exist before the reprojection.
+    let boon_states = want_timeseries
+        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
+    let target_conditions =
+        want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, env!("CARGO_PKG_VERSION"), None,
         &axilog_schema::v1::Passes {
@@ -307,24 +322,15 @@ fn build_report_and_ei_inputs_from_bytes(
             healing_detail: healing_detail.as_ref().filter(|_| want_skill_damage),
             healing_series: healing_detail.as_ref().filter(|_| want_timeseries),
             activity: Some(&activity),
+            boon_states: boon_states.as_ref(),
+            target_conditions: target_conditions.as_ref(),
         },
     );
-    // MEIGAP Task 1b: GW2EI-shape boon stack timelines
-    // (`buffUptimes[].states`/`.statesPerSource`), gated on the timeseries
-    // flag -- the same setting GW2EI itself gates those two arrays behind
-    // (`RawFormatTimelineArrays`). See
-    // `axilog_core::analysis::buffs::states`'s module doc.
-    let boon_states = want_timeseries
-        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
-    let target_conditions =
-        want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     Ok((
         report,
         report_v1,
         ei_replay,
         damage_mods,
-        boon_states,
-        target_conditions,
     ))
 }
 
@@ -424,8 +430,7 @@ fn parse_file_ei(
     modifiers: bool,
 ) -> PyResult<Py<PyAny>> {
     let bytes = std::fs::read(path).map_err(io_err)?;
-    let (report, report_v1, ei_replay, damage_mods, boon_states,
-         target_conditions) =
+    let (report, report_v1, ei_replay, damage_mods) =
         build_report_and_ei_inputs_from_bytes(&bytes, replay, skill_damage, timeseries, missiles, rotation, modifiers)?;
     let ei = axilog_ei::to_ei_json(
         &report_v1,
@@ -433,8 +438,6 @@ fn parse_file_ei(
         &axilog_ei::EiInputs {
             replay: ei_replay.as_ref(),
             modifiers: damage_mods.as_ref(),
-            boon_states: boon_states.as_ref(),
-            target_conditions: target_conditions.as_ref(),
         },
     );
     value_to_py(py, &ei)

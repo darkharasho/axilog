@@ -1,9 +1,7 @@
 use std::collections::BTreeMap;
 use serde_json::{json, Value};
-use axilog_core::analysis::buffs::{BoonStates, BOON_IDS};
 use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
 use axilog_core::analysis::ei_replay::EiReplay;
-use axilog_core::analysis::target_conditions::TargetConditionStates;
 use axilog_core::icons::prof_icon_url;
 use axilog_schema::v1::ReportV1;
 use axilog_schema::Report;
@@ -440,6 +438,68 @@ fn ei_states_json(states: &[(u64, u32)]) -> Value {
     Value::Array(states.iter().map(|&(t, v)| json!([t, v])).collect())
 }
 
+/// GW2EI's placeholder for an actor it cannot name -- what its reference
+/// export shows for every applier that is not a recorded squad player (e.g.
+/// `"statesPerSource": {"UNKNOWN": [...]}`).
+///
+/// This const lived in `axilog_core` until Task 12. It belongs here: it is
+/// an EI PRESENTATION choice, not a fact about the log, and the analysis
+/// pass that used to apply it now reports the applier's real address and
+/// lets each consumer decide (the native document keys by entity id and
+/// never needs a placeholder at all).
+const UNKNOWN_SOURCE: &str = "UNKNOWN";
+
+/// Project a native `PerSourceStates` back onto EI's name-keyed
+/// `statesPerSource` object.
+///
+/// This is the lossy direction, and deliberately so. Native keys appliers by
+/// entity id, which EI's shape cannot express, so three separate collapses
+/// happen here -- all of them reinstating a conflation EI already had:
+///
+/// 1. An applier who is not in EI's `players[]` becomes `UNKNOWN`. The
+///    membership test is the EI player roster itself, so this reproduces the
+///    old `enc.players` name lookup exactly rather than approximating it
+///    with "is this entity a player" (an ENEMY player would pass that test
+///    and wrongly get named).
+/// 2. The `unresolved` bucket joins them under the same key.
+/// 3. Two squad players sharing a character name collapse onto one key.
+///
+/// Every collapse merges rather than overwrites: dropping the loser would
+/// under-report a boon that really was applied.
+fn ei_states_per_source(
+    join: &crate::join::EiJoin<'_>,
+    squad_ids: &std::collections::BTreeSet<u32>,
+    per_source: Option<&axilog_schema::v1::blocks::PerSourceStates>,
+) -> Value {
+    use axilog_core::analysis::buffs::states::merge_step_timelines;
+    let Some(per_source) = per_source else { return json!({}) };
+    let mut merged: BTreeMap<String, Vec<(u64, u32)>> = BTreeMap::new();
+    let mut fold = |name: String, timeline: &Vec<(u64, u32)>| match merged.entry(name) {
+        std::collections::btree_map::Entry::Vacant(v) => {
+            v.insert(timeline.clone());
+        }
+        std::collections::btree_map::Entry::Occupied(mut o) => {
+            let m = merge_step_timelines(o.get(), timeline);
+            o.insert(m);
+        }
+    };
+    for (&source_id, timeline) in &per_source.by_source {
+        let name = if squad_ids.contains(&source_id) {
+            join.display_name(source_id).to_string()
+        } else {
+            UNKNOWN_SOURCE.to_string()
+        };
+        fold(name, timeline);
+    }
+    if let Some(timeline) = &per_source.unresolved {
+        fold(UNKNOWN_SOURCE.to_string(), timeline);
+    }
+    json!(merged
+        .iter()
+        .map(|(name, timeline)| (name.as_str(), ei_states_json(timeline)))
+        .collect::<BTreeMap<_, _>>())
+}
+
 /// One of the three boon-generation attribution arrays
 /// (`selfBuffs`/`groupBuffs`/`squadBuffs`), `pick` selecting which scope of
 /// [`axilog_schema::GenerationOut`] to read -- see the call sites' doc
@@ -618,53 +678,6 @@ pub struct EiInputs<'a> {
     /// `damageModifiersTarget` 497,702, `incomingDamageModifiersTarget`
     /// 356,375, `damageModMap` 19,325.
     pub modifiers: Option<&'a DamageModifierResults>,
-    /// `boon_states` (MEIGAP Task 1b): the GW2EI-shape boon stack timelines
-    /// from `axilog_core::analysis::buffs::states::build`, or `None`. This
-    /// is the OPT-IN gate for `buffUptimes[].states` and
-    /// `buffUptimes[].statesPerSource`.
-    ///
-    /// GW2EI puts those same two arrays behind its own
-    /// `RawFormatTimelineArrays` setting
-    /// (`GW2EIBuilders/JsonModels/JsonActorUtilities/JsonBuffsUptimeBuilder.cs:52`)
-    /// -- the setting axibridge already maps onto axilog's `--timeseries`
-    /// -- so every caller computes this exactly when `--timeseries`/SDK
-    /// `timeseries: true` was requested, i.e. the same request that
-    /// populates `axilog_schema::PlayerOut::per_second`. Reproducing EI's
-    /// own gate rather than inventing one is what keeps the two payloads
-    /// shaped alike under the same settings.
-    ///
-    /// It arrives as a side-channel input rather than a `Report` field for
-    /// the same reason `activity`/`replay` do: it is EI-SHAPE data
-    /// (LOG-RELATIVE ms with GW2EI's mandatory leading `[0, 0]` pair,
-    /// keyed by source CHARACTER NAME), which the native schema
-    /// deliberately does not carry -- `Metrics::boons` is this project's
-    /// own absolute-time, addr-keyed shape.
-    ///
-    /// Joined to `report.players` by `PlayerOut::agent_addr` -- a real key,
-    /// not a position, so a mismatch yields an absent entry rather than a
-    /// mis-attributed timeline.
-    ///
-    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, pretty-printed,
-    /// 41 players x 12 boons over a 49s fight):** `--format ei-json
-    /// --timeseries` grows 3,878,210 -> 4,855,657 bytes (**+25.2%**). The
-    /// flagless payload is byte-identical to before (763,450 both sides).
-    /// It scales with transitions, i.e. roughly `players x boons x
-    /// applications`, which is why it stays behind the flag GW2EI itself
-    /// puts it behind.
-    pub boon_states: Option<&'a BoonStates>,
-    /// `target_conditions` (MEIGAP Task 2d): per-(enemy, condition)
-    /// source-split stack timelines from
-    /// `axilog_core::analysis::target_conditions::build`, or `None`. The
-    /// OPT-IN gate for `targets[].buffs[].id`/`.statesPerSource` -- and for
-    /// the fourteen CONDITION entries this adapter then adds to `buffMap`,
-    /// without which axibridge's `resolveBuffMetaById` returns nothing and
-    /// the whole array is skipped (`conditionsMetrics.ts:311-314`).
-    ///
-    /// Gated on `--timeseries`: `statesPerSource` sits inside GW2EI's own
-    /// `RawFormatTimelineArrays` block
-    /// (`JsonBuffsUptimeBuilder.cs:52`), the same gate the player-side
-    /// [`Self::boon_states`] rides.
-    pub target_conditions: Option<&'a TargetConditionStates>,
 }
 
 /// A lazily-serialized JSON array (MSTREAM).
@@ -816,12 +829,7 @@ impl serde::Serialize for EiDoc<'_> {
 /// See [`EiInputs`] for what each input gates; `EiInputs::default()` renders
 /// everything that is derivable from the `Report` alone.
 fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -> EiDoc<'a> {
-    let EiInputs {
-        replay,
-        modifiers,
-        boon_states,
-        target_conditions,
-    } = *inputs;
+    let EiInputs { replay, modifiers } = *inputs;
     // Positional join guard: the tracks must be `legacy.players` followed by
     // the enemy-PLAYER subset of `legacy.ei_targets`, in those orders. A
     // caller that hand-builds a `Report` (every unit test below) can violate
@@ -853,6 +861,16 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // once per row here so every block lookup below shares one join --
     // the whole reason `EiJoin` exists (see `join.rs`'s module doc).
     let player_ids: Vec<u32> = report.source_order.players().to_vec();
+    // Task 12: the two things `statesPerSource` needs to project entity ids
+    // back onto EI's names. `squad_ids` is EI's own `players[]` roster,
+    // which is the exact membership test the old name lookup applied -- see
+    // `ei_states_per_source`.
+    // Cloned per closure, like `detected_players`/`detected_targets` above:
+    // both the player rows and the target rows project `statesPerSource`,
+    // and each `Box<dyn FnMut>` owns what it captures.
+    let squad_ids: std::collections::BTreeSet<u32> = player_ids.iter().copied().collect();
+    let squad_ids_targets = squad_ids.clone();
+    let join = crate::join::EiJoin::new(report);
     let player_json: Box<dyn FnMut(usize) -> Value + 'a> = Box::new(move |player_idx: usize| {
         let p = &legacy.players[player_idx];
         // The native rows backing this player. Blocks are `Option` (the
@@ -878,6 +896,8 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             .and_then(|id| report.blocks.series.as_ref()?.by_entity.get(id));
         let n_minions = entity_id
             .and_then(|id| report.blocks.minions.as_ref()?.by_entity.get(id));
+        let n_boons = entity_id
+            .and_then(|id| report.blocks.boons.as_ref()?.by_entity.get(id));
         let n_healing = entity_id
             .and_then(|id| report.blocks.healing.as_ref()?.by_entity.get(id));
         let team_id_for = |color: &str| -> u64 {
@@ -1257,16 +1277,15 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // player's own self-generation — emitted as `{ <own character>:
             // self_pct }` rather than fabricating group/squad members' names.
             //
-            // MEIGAP Task 1b: `states` and `statesPerSource` join each
-            // entry exactly when `EiInputs::boon_states` was supplied (see
-            // that field's doc comment for GW2EI's own
-            // `RawFormatTimelineArrays` gate, which it mirrors). Both are
-            // `[[time_ms_from_log_start, stackCount], ...]`;
-            // `statesPerSource` keys by source CHARACTER name, with
-            // GW2EI's own `"UNKNOWN"` placeholder for an unresolved source
-            // -- see `axilog_core::analysis::buffs::states`'s module doc
-            // for the full shape/citation trail, including why a leading
-            // `[0, 0]` pair is always present.
+            // MEIGAP Task 1b, re-pointed onto the native block in Task 12:
+            // `states` and `statesPerSource` join each entry exactly when
+            // `blocks.boons`' rows carry them, which is `--timeseries`
+            // (GW2EI's own `RawFormatTimelineArrays` gate). Both are
+            // `[[time_ms_from_log_start, stackCount], ...]` -- see
+            // `axilog_core::analysis::buffs::states`'s module doc for the
+            // shape/citation trail, including why a leading `[0, 0]` pair
+            // is always present, and `ei_states_per_source` for the
+            // id-back-to-name projection.
             "buffUptimes": p.boons.iter().map(|b| {
                 let (uptime, presence) = match b.avg_stacks {
                     Some(avg) => (avg, b.presence_pct), // intensity boon
@@ -1280,21 +1299,26 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                         "generated": { &p.character: b.generation.self_pct }
                     } ]
                 });
-                if let Some(bs) = boon_states {
+                // The native row's presence IS the gate: `attach_boon_states`
+                // only fills `states` when the pass ran, so an absent
+                // `states` means `--timeseries` was off. A row that ran but
+                // held the boon never still carries `Some([])`, which is
+                // why this tests the field rather than the block.
+                if let Some(n_states) = n_boons
+                    .and_then(|rows| rows.get(&b.id))
+                    .filter(|row| row.states.is_some())
+                {
                     let obj = entry.as_object_mut().expect("buffUptimes entry is an object");
-                    let key = (p.agent_addr, b.id);
                     obj.insert(
                         "states".to_string(),
-                        ei_states_json(bs.total.get(&key).map(|v| v.as_slice()).unwrap_or(&[])),
+                        ei_states_json(
+                            n_states.states.as_deref().unwrap_or(&[]),
+                        ),
                     );
-                    let per_source: BTreeMap<&str, Value> = bs
-                        .per_source
-                        .get(&key)
-                        .into_iter()
-                        .flatten()
-                        .map(|(name, states)| (name.as_str(), ei_states_json(states)))
-                        .collect();
-                    obj.insert("statesPerSource".to_string(), json!(per_source));
+                    obj.insert(
+                        "statesPerSource".to_string(),
+                        ei_states_per_source(&join, &squad_ids, n_states.per_source.as_ref()),
+                    );
                 }
                 entry
             }).collect::<Vec<_>>(),
@@ -1622,9 +1646,32 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // then drops the array (`axibridge src/main/detailsProcessing.ts:
         // 128-142,167-170`), which is why the array itself is fine to keep
         // behind the timeline gate.
-        if let Some(bs) = boon_states {
-            let states = axilog_core::analysis::buffs::states::boon_count_states(bs, p.agent_addr);
-            if !states.is_empty() {
+        //
+        // Task 12: folded from `blocks.boons`' own `states` rather than from
+        // the side channel. `boon_count_states` did this fold in
+        // axilog-core against a map that no longer exists in that shape;
+        // the fold itself is unchanged, including its two subtleties -- the
+        // per-boon clamp to PRESENCE (an intensity boon at 25 stacks counts
+        // once), and folding even the first boon through the merge, since
+        // clamping can leave two consecutive pairs at the same value.
+        if let Some(rows) = n_boons {
+            let mut states: Vec<(u64, u32)> = vec![(0, 0)];
+            let mut any = false;
+            for row in rows.values() {
+                // `Some([])` means the timeline pass ran and this player
+                // never held the boon -- skipped, not folded, so a player
+                // with no boons at all still yields no `boonsStates` key
+                // rather than a lone `[[0, 0]]`.
+                let Some(timeline) = row.states.as_ref().filter(|t| !t.is_empty()) else {
+                    continue;
+                };
+                let presence: Vec<(u64, u32)> =
+                    timeline.iter().map(|&(t, v)| (t, v.min(1))).collect();
+                states =
+                    axilog_core::analysis::buffs::states::merge_step_timelines(&states, &presence);
+                any = true;
+            }
+            if any {
                 let obj = v.as_object_mut().expect("player value is always a JSON object");
                 obj.insert("boonsStates".to_string(), ei_states_json(&states));
             }
@@ -2292,20 +2339,27 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 .unwrap_or_default();
             obj.insert("totalDamageDist".to_string(), json!([skills]));
         }
-        if let Some(tc) = target_conditions {
+        if let Some(n_conditions) = report.blocks.conditions.as_ref() {
             // `targets[].buffs[]`: `{id, statesPerSource}` per condition
             // this enemy carried, source-split by squad-player character
             // name -- see `axilog_core::analysis::target_conditions`'s
             // module doc for the direction citation and the deliberate
             // conditions-only / `statesPerSource`-only narrowing.
-            let buffs: Vec<Value> = tc
-                .range((enemy_id, 0u32)..=(enemy_id, u32::MAX))
-                .map(|(&(_, buff_id), per_source)| {
-                    let states: BTreeMap<&str, Value> = per_source
-                        .iter()
-                        .map(|(name, tl)| (name.as_str(), ei_states_json(tl)))
-                        .collect();
-                    json!({ "id": buff_id, "statesPerSource": states })
+            //
+            // Task 12: read off `blocks.conditions` rather than a side
+            // channel. The block's own presence is the gate, and the row
+            // key is this enemy's ENTITY id -- the same id `targets[]` was
+            // built from just above, so no second join is needed.
+            let buffs: Vec<Value> = entity_id
+                .and_then(|id| n_conditions.by_entity.get(id))
+                .into_iter()
+                .flatten()
+                .map(|(&buff_id, row)| {
+                    json!({
+                        "id": buff_id,
+                        "statesPerSource":
+                            ei_states_per_source(&join, &squad_ids_targets, Some(&row.per_source)),
+                    })
                 })
                 .collect();
             obj.insert("buffs".to_string(), json!(buffs));
@@ -2331,30 +2385,30 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // (`conditionsMetrics.ts:311-314`), so without these rows the whole
     // `targets[].buffs` array would be dead payload. Gated on the same
     // input so the flagless `buffMap` stays byte-identical.
-    // NOT yet re-pointed onto `report.catalogs.buffs`, though it looks
-    // ready: the 12 flagless boon ids match exactly, and native's
-    // `stacking: "intensity"|"duration"` maps onto EI's boolean with no
-    // residue. The blocker is the CONDITION half. Native's catalog is
-    // referenced-scoped, and nothing references the 14 condition ids until
-    // the conditions block exists (Task 12), so re-pointing now empties
-    // the condition rows out of `buffMap` while `targets[].buffs` still
-    // emits those ids -- which axibridge answers by DROPPING each entry
-    // whose id misses `resolveBuffMetaById`. `ei_json_meigap2_target_
-    // mirrors_are_gated_and_internally_consistent` catches exactly this.
-    // Re-point this map in Task 12, once conditions register natively.
-    let mut buff_map: BTreeMap<String, Value> = BOON_IDS.iter().map(|&(id, name, is_intensity)| {
-        (ei_catalog_key('b', i64::from(id)), json!({ "name": name, "stacking": is_intensity }))
-    }).collect();
-    if target_conditions.is_some() {
-        for (id, name, is_intensity) in
-            axilog_core::analysis::target_conditions::condition_buff_map()
-        {
-            buff_map.insert(
+    // Task 12 re-points this onto `report.catalogs.buffs`, which the
+    // previous note here said was blocked only by the condition half: the
+    // native catalog is REFERENCE-scoped, and nothing referenced the 14
+    // condition ids until `blocks.conditions` existed. It does now, and
+    // `build_conditions` registers each id it emits a row for, so the
+    // catalog gains exactly the ids `targets[].buffs` emits -- which is the
+    // invariant `ei_json_meigap2_target_mirrors_are_gated_and_internally_
+    // consistent` checks, and which axibridge's `resolveBuffMetaById`
+    // depends on (it DROPS any target-buff entry whose id misses).
+    //
+    // `stacking` narrows from native's `"intensity"|"duration"` to EI's
+    // boolean. That is the direction that loses nothing: the native string
+    // is the richer spelling of the same two-valued fact.
+    let buff_map: BTreeMap<String, Value> = report
+        .catalogs
+        .buffs
+        .iter()
+        .map(|(&id, entry)| {
+            (
                 ei_catalog_key('b', i64::from(id)),
-                json!({ "name": name, "stacking": is_intensity }),
-            );
-        }
-    }
+                json!({ "name": entry.name, "stacking": entry.stacking == "intensity" }),
+            )
+        })
+        .collect();
     // `skillMap` (M14, Task 3): keyed `"s<id>"` per real EI's convention
     // (verified against axibridge's `test-fixtures/boon/
     // 20260117-181030.json`, `skillMap.s45534` etc -- same `"s"`-prefix

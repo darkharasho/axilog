@@ -9,7 +9,7 @@ pub mod envelope;
 pub mod order;
 pub mod series;
 
-use crate::v1::blocks::{activity, damage, defense, minions, support};
+use crate::v1::blocks::{activity, conditions, damage, defense, minions, support};
 use crate::v1::catalogs::{CatalogBuilder, Catalogs};
 use crate::v1::entities::build_entities;
 use crate::v1::envelope::{AxilogMeta, BlockName, Coverage, CoverageState, Severity, WarningOut};
@@ -116,6 +116,8 @@ pub struct Blocks {
     pub series: Option<activity::SeriesBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub minions: Option<minions::MinionsBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<conditions::ConditionsBlock>,
 }
 
 /// The coverage state for a block that DID run: [`CoverageState::Empty`]
@@ -231,6 +233,17 @@ pub struct Passes<'a> {
     /// comment). `None` here therefore means a caller that has no log to
     /// scan at all, not a gate.
     pub activity: Option<&'a [axilog_core::analysis::replay::ActivityIntervals]>,
+    /// MEIGAP Task 1b `--timeseries`: per-(player, boon) stack timelines,
+    /// total and split by applier. Lands on `blocks.boons`'
+    /// `states`/`per_source` row fields -- enriching the rows the always-on
+    /// uptime pass already built, which is why `blocks.boons` is a two-gate
+    /// block and `coverage.boons` says nothing about these.
+    pub boon_states: Option<&'a axilog_core::analysis::buffs::BoonStates>,
+    /// MEIGAP Task 2d `--timeseries`: per-(enemy, condition) stack
+    /// timelines split by squad applier. Lands on `blocks.conditions`, the
+    /// block spec #1 reserved the name for.
+    pub target_conditions:
+        Option<&'a axilog_core::analysis::target_conditions::TargetConditionStates>,
 }
 
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
@@ -264,8 +277,20 @@ pub fn build_report_v1(
     coverage.set(BlockName::HitStats, computed(hit_stats.is_empty()));
     let cc = defense::build_cc(legacy, &index);
     coverage.set(BlockName::Cc, computed(cc.is_empty()));
-    let boons = support::build_boons(legacy, &index, &mut cats);
-    coverage.set(BlockName::Boons, computed(boons.is_empty()));
+    let boons = {
+        let mut block = support::build_boons(legacy, &index, &mut cats);
+        // `coverage.boons` is set from the UPTIME rows, before the gated
+        // timelines are attached -- deliberately. The uptime half is
+        // always-on, so `Empty` here means "this log had no boon rows",
+        // which stays true whether or not `--timeseries` ran. Setting it
+        // after the attach would make the same log report differently
+        // depending on a flag that cannot change the answer.
+        coverage.set(BlockName::Boons, computed(block.is_empty()));
+        if let Some(states) = passes.boon_states {
+            support::attach_boon_states(&mut block, &index, states);
+        }
+        block
+    };
     let support_block = support::build_support(legacy, &index);
     coverage.set(BlockName::Support, computed(support_block.is_empty()));
     let contribution = support::build_contribution(legacy, &index);
@@ -350,8 +375,16 @@ pub fn build_report_v1(
         coverage.set(BlockName::Minions, CoverageState::NotComputed);
     }
 
-    // Reserved for spec #2. Named here so the vocabulary is fixed.
-    coverage.set(BlockName::Conditions, CoverageState::NotComputed);
+    // The name spec #1 reserved, filled by Task 12. The pass runs only
+    // under `--timeseries`, so its presence IS the gate signal.
+    let conditions_block = passes.target_conditions.map(|states| {
+        let block = conditions::build_conditions(states, &index, &mut cats);
+        coverage.set(BlockName::Conditions, computed(block.is_empty()));
+        block
+    });
+    if conditions_block.is_none() {
+        coverage.set(BlockName::Conditions, CoverageState::NotComputed);
+    }
 
     // `Metrics::warnings` carries a code at the source as of this task --
     // see `axilog_core::analysis::Warning`. A catch-all code would defeat
@@ -466,6 +499,7 @@ pub fn build_report_v1(
             replay,
             series: Some(series),
             minions: minions_block,
+            conditions: conditions_block,
         },
         coverage,
         warnings,

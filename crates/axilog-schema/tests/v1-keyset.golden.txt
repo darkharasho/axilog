@@ -15,6 +15,10 @@ blocks.boons.by_entity.<id>.<id>.generation.self_pct
 blocks.boons.by_entity.<id>.<id>.generation.self_wasted
 blocks.boons.by_entity.<id>.<id>.generation.squad_pct
 blocks.boons.by_entity.<id>.<id>.generation.squad_wasted
+blocks.boons.by_entity.<id>.<id>.per_source
+blocks.boons.by_entity.<id>.<id>.per_source.by_source
+blocks.boons.by_entity.<id>.<id>.per_source.by_source.<id>
+blocks.boons.by_entity.<id>.<id>.states
 blocks.boons.by_entity.<id>.<id>.uptime_pct
 blocks.cc
 blocks.cc.by_entity
@@ -26,6 +30,13 @@ blocks.cc.by_entity.<id>.stun_breaks
 blocks.cc.squad
 blocks.cc.squad.applied_duration_ms
 blocks.cc.squad.applied_total
+blocks.conditions
+blocks.conditions.by_entity
+blocks.conditions.by_entity.<id>
+blocks.conditions.by_entity.<id>.<id>
+blocks.conditions.by_entity.<id>.<id>.per_source
+blocks.conditions.by_entity.<id>.<id>.per_source.by_source
+blocks.conditions.by_entity.<id>.<id>.per_source.by_source.<id>
 blocks.contribution
 blocks.contribution.by_entity
 blocks.contribution.by_entity.<id>

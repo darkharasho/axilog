@@ -181,6 +181,11 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
         true,
         Some(&damage_mods),
     );
+    // Task 12: this per-block report is the all-gates one, so both
+    // timeline passes run here (the ratio test above deliberately
+    // excludes every absorbed pass -- see its comment).
+    let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
+    let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
     let v1 = axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
@@ -197,6 +202,8 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
             activity: Some(&activity),
+            boon_states: Some(&boon_states),
+            target_conditions: Some(&target_conditions),
         },
     );
     let v = serde_json::to_value(&v1).expect("serializable");

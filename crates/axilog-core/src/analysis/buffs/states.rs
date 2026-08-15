@@ -84,19 +84,22 @@ use crate::evtc::RawLog;
 use crate::model::Encounter;
 use std::collections::BTreeMap;
 
-/// GW2EI's own placeholder for an actor it cannot name -- what the
-/// reference export shows for every unresolved boon source (e.g.
-/// `"statesPerSource": {"UNKNOWN": [...]}`). Reused verbatim rather than
-/// inventing a key, so a consumer keyed on character names sees exactly the
-/// string EI would have written.
-pub const UNKNOWN_SOURCE: &str = "UNKNOWN";
-
 /// One `[[time_ms_from_log_start, stacks], ...]` step timeline.
 pub type StateTimeline = Vec<(u64, u32)>;
 
-/// Per-(player representative addr, buff id) state timelines, split by
-/// source CHARACTER name.
-pub type PerSourceTimelines = BTreeMap<(u64, u32), BTreeMap<String, StateTimeline>>;
+/// Per-(player representative addr, buff id) state timelines, split by the
+/// applier's AGENT ADDRESS.
+///
+/// This used to key by source character name, with GW2EI's `"UNKNOWN"`
+/// placeholder for any applier that was not a recorded squad player. Task 12
+/// moved both of those concerns out of this crate: a name is identity data
+/// (the native document confines it to `entities[]`, and two players sharing
+/// a character name collided onto one key here), and `"UNKNOWN"` is an EI
+/// PRESENTATION choice, not a fact about the log. This pass now reports the
+/// address it actually observed and lets each consumer decide -- the native
+/// builder resolves it to an entity id, the ei-json adapter reconstructs
+/// EI's naming including `UNKNOWN`.
+pub type PerSourceTimelines = BTreeMap<(u64, u32), BTreeMap<u64, StateTimeline>>;
 
 /// One log's EI-shape boon stack timelines, keyed by
 /// `(player representative addr, buff id)`.
@@ -104,8 +107,7 @@ pub type PerSourceTimelines = BTreeMap<(u64, u32), BTreeMap<String, StateTimelin
 pub struct BoonStates {
     /// `buffUptimes[].states`.
     pub total: BTreeMap<(u64, u32), StateTimeline>,
-    /// `buffUptimes[].statesPerSource`: the same, per source CHARACTER name
-    /// ([`UNKNOWN_SOURCE`] for a source that is not a recorded player).
+    /// `buffUptimes[].statesPerSource`: the same, per applier agent address.
     pub per_source: PerSourceTimelines,
 }
 
@@ -204,8 +206,6 @@ pub fn build(
     boons: &BTreeMap<(u64, u32), BoonTimeline>,
 ) -> BoonStates {
     let log_start = raw.events.first().map(|e| e.time).unwrap_or(0);
-    let name_of: BTreeMap<u64, &str> =
-        enc.players.iter().map(|p| (p.agent_addr, p.character.as_str())).collect();
 
     let is_intensity = |buff_id: u32| {
         BOON_IDS.iter().any(|&(id, _, intensity)| id == buff_id && intensity)
@@ -229,28 +229,22 @@ pub fn build(
         for s in segments {
             by_source.entry(s.source).or_default().push(s);
         }
-        let mut named: BTreeMap<String, StateTimeline> = BTreeMap::new();
+        // Keyed by the applier's own address, so no two appliers can
+        // collide and nothing needs merging here. The collapse onto one
+        // key that this loop used to do (several unnamed sources folding
+        // onto `UNKNOWN`) is a property of EI's naming, so it now happens
+        // in the ei-json adapter where that naming is applied -- see
+        // `PerSourceTimelines`.
+        let mut by_addr: BTreeMap<u64, StateTimeline> = BTreeMap::new();
         for (source, segs) in by_source {
             let steps = overlap_steps(&segs);
             if steps.is_empty() {
                 continue;
             }
-            let name = name_of.get(&source).copied().unwrap_or(UNKNOWN_SOURCE).to_string();
-            // Several unresolved sources collapse onto the one `UNKNOWN`
-            // key, exactly as they do in GW2EI (whose dictionary is keyed
-            // by `Character` too); merge rather than overwrite.
-            match named.entry(name) {
-                std::collections::btree_map::Entry::Vacant(v) => {
-                    v.insert(to_ei_states(steps.into_iter(), log_start));
-                }
-                std::collections::btree_map::Entry::Occupied(mut o) => {
-                    let merged = merge_step_timelines(o.get(), &to_ei_states(steps.into_iter(), log_start));
-                    o.insert(merged);
-                }
-            }
+            by_addr.insert(source, to_ei_states(steps.into_iter(), log_start));
         }
-        if !named.is_empty() {
-            per_source.insert(key, named);
+        if !by_addr.is_empty() {
+            per_source.insert(key, by_addr);
         }
     }
 
@@ -316,9 +310,17 @@ pub fn boon_count_states(states: &BoonStates, player: u64) -> StateTimeline {
 }
 
 /// Pointwise sum of two already-relative step timelines (both start with
-/// the mandatory `[0, 0]`), used only to collapse several unresolved
-/// sources onto the single [`UNKNOWN_SOURCE`] key.
-fn merge_step_timelines(a: &[(u64, u32)], b: &[(u64, u32)]) -> Vec<(u64, u32)> {
+/// the mandatory `[0, 0]`), over the union of their transition times and
+/// dropping any time the total does not actually change at.
+///
+/// `pub` as of Task 12: this pass no longer collapses several appliers onto
+/// one key itself (see [`PerSourceTimelines`]), so the two consumers that
+/// still need a collapse -- the native builder's `unresolved` bucket and the
+/// ei-json adapter's `UNKNOWN` key -- fold with this rather than each
+/// reinventing it. Folding is order-independent: the result is the pointwise
+/// sum, and a time dropped by an inner fold was one where the total was
+/// unchanged anyway.
+pub fn merge_step_timelines(a: &[(u64, u32)], b: &[(u64, u32)]) -> Vec<(u64, u32)> {
     let mut times: Vec<u64> = a.iter().chain(b).map(|&(t, _)| t).collect();
     times.sort_unstable();
     times.dedup();

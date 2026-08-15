@@ -24,7 +24,7 @@ pub mod states;
 pub mod uptime;
 
 pub use generation::GenerationStats;
-pub use states::{BoonStates, UNKNOWN_SOURCE};
+pub use states::BoonStates;
 pub use uptime::BoonUptime;
 
 /// GW2EI's `ArcDPSEnums.BuffStackType`
