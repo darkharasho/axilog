@@ -7,7 +7,6 @@ use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::analysis::replay::{ActivityIntervals, Interval};
 use axilog_core::analysis::healing_detail::{HealDistEntry, HealingDetail};
 use axilog_core::analysis::target_conditions::TargetConditionStates;
-use axilog_core::analysis::timeseries::EnemySeries;
 use axilog_core::icons::prof_icon_url;
 use axilog_schema::v1::ReportV1;
 use axilog_schema::Report;
@@ -660,26 +659,6 @@ pub struct EiInputs<'a> {
     /// applications`, which is why it stays behind the flag GW2EI itself
     /// puts it behind.
     pub boon_states: Option<&'a BoonStates>,
-    /// `enemy_series` (MEIGAP Task 2b): per-enemy cumulative outgoing-damage
-    /// series from `axilog_core::analysis::timeseries::build_enemy_series`,
-    /// or `None`. The OPT-IN gate for `targets[].damage1S` and
-    /// `targets[].powerDamage1S`.
-    ///
-    /// GW2EI gates the same two arrays on `RawFormatTimelineArrays`
-    /// (`GW2EIBuilders/JsonModels/JsonActors/JsonActorBuilder.cs:63-80`,
-    /// the shared actor builder `JsonNPCBuilder` runs first), so every
-    /// caller computes this exactly when `--timeseries`/SDK
-    /// `timeseries: true` was requested -- the same request that populates
-    /// `PlayerOut::per_second`.
-    ///
-    /// Side-channel rather than a `Report` field because it is keyed by
-    /// enemy, and the native schema carries no per-enemy block at all
-    /// (`Report::ei_targets` is identity-only, and is itself
-    /// `#[serde(skip)]`).
-    ///
-    /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, pretty-printed):**
-    /// see this crate's `targets[]` block comment.
-    pub enemy_series: Option<&'a BTreeMap<u64, EnemySeries>>,
     /// `target_conditions` (MEIGAP Task 2d): per-(enemy, condition)
     /// source-split stack timelines from
     /// `axilog_core::analysis::target_conditions::build`, or `None`. The
@@ -896,7 +875,6 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         replay,
         modifiers,
         boon_states,
-        enemy_series,
         target_conditions,
         healing_detail,
         healing_series,
@@ -2127,16 +2105,6 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // `targets[]` carries `profession: null` on all 57 rows. This crate
     // emits that key anyway as a deliberate superset; see the `profession`
     // comment on the target object below for why.
-    // Bucket count for an enemy that never dealt damage (MEIGAP Task 2b):
-    // read off any enemy that did, since every series in the map is built
-    // to the one length `axilog_core::analysis::timeseries::ei_grid`
-    // computes (GW2EI's own `InterpolatedGraph` allocation). Falling back to
-    // a player's own `per_second.damage` length keeps the arrays aligned
-    // even on the degenerate log where no enemy dealt any damage at all.
-    let enemy_buckets = enemy_series
-        .and_then(|m| m.values().next().map(|s| s.damage.len()))
-        .or_else(|| legacy.players.iter().find_map(|p| p.per_second.as_ref()).map(|ps| ps.damage.len()))
-        .unwrap_or(0);
     // MSTREAM: one target row, built on demand — same treatment as
     // `player_json` above, body unchanged. This builder is genuinely
     // stateful: `enemy_track` is walked forward by the enemy-PLAYER rows
@@ -2301,20 +2269,28 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // `skill_damage`/`per_second` already use on the player side), so a
         // flagless render emits none of them and stays byte-identical.
         let obj = t.as_object_mut().expect("target is a JSON object");
-        if let Some(series) = enemy_series {
-            // `targets[].damage1S`/`.powerDamage1S` are this enemy's OUTGOING
-            // damage, `[phase][second]`-shaped exactly like the player-side
-            // `damage1S` -- built by the SHARED `JsonActorBuilder.
-            // FillJsonActor` (`JsonActorBuilder.cs:72-73`) over an NPC actor
-            // (`JsonNPCBuilder.cs:20` calls it first). An enemy that never
-            // dealt damage gets a full-length zero series, not an absent
-            // key, matching EI's always-present arrays.
-            let (damage, power) = match series.get(&enemy_id) {
-                Some(s) => (s.damage.clone(), s.power_damage.clone()),
-                None => (vec![0u64; enemy_buckets], vec![0u64; enemy_buckets]),
-            };
-            obj.insert("damage1S".to_string(), json!([damage]));
-            obj.insert("powerDamage1S".to_string(), json!([power]));
+        // `targets[].damage1S`/`.powerDamage1S` are this enemy's OUTGOING
+        // damage, `[phase][second]`-shaped exactly like the player-side
+        // `damage1S` -- built by the SHARED `JsonActorBuilder.
+        // FillJsonActor` (`JsonActorBuilder.cs:72-73`) over an NPC actor
+        // (`JsonNPCBuilder.cs:20` calls it first). An enemy that never dealt
+        // damage still gets a full-length zero series rather than an absent
+        // key, matching EI's always-present arrays -- but that zero-fill now
+        // happens in `build_series`, so an absent native row here means the
+        // `--timeseries` gate was off, which is the whole reason this branch
+        // can key off the native block instead of a side-channel `Option`.
+        if let Some(row) = entity_id
+            .and_then(|id| report.blocks.series.as_ref()?.by_entity.get(id))
+        {
+            obj.insert("damage1S".to_string(), json!([row.damage.decode_u64()]));
+            // An enemy row always carries the outgoing power split; the
+            // `unwrap_or_default` is for the type, not for a case that
+            // happens. A missing one would be a builder bug, and an empty
+            // array is a visibly wrong answer rather than a plausible one.
+            obj.insert(
+                "powerDamage1S".to_string(),
+                json!([row.power_damage.as_ref().map(|s| s.decode_u64()).unwrap_or_default()]),
+            );
         }
         if skill_damage_requested {
             // `targets[].totalDamageDist[0]`: this enemy's OUTGOING damage

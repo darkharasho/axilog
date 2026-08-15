@@ -243,6 +243,21 @@ pub struct SquadSeries {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct EntitySeries {
     pub damage: SeriesOut,
+    /// The non-condition half of OUTGOING [`Self::damage`] -- GW2EI's
+    /// `powerDamage1S`.
+    ///
+    /// `Option`, and in practice `Some` only on ENEMY rows, because no pass
+    /// computes it for players: `PlayerPerSecondOut` carries `damage`,
+    /// `damage_taken` and `power_damage_taken` but no outgoing power split,
+    /// while `timeseries::build_enemy_series` computes exactly that split
+    /// for enemies. This is the same shape Task 7 gave
+    /// `damage::SkillRow::hits` and for the same reason: absent means "no
+    /// pass ever measured this", which a zero-filled series would misreport
+    /// as "measured, and it was all condition damage". Give players an
+    /// outgoing power pass later and this becomes `Some` for them too
+    /// without a shape change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub power_damage: Option<SeriesOut>,
     pub damage_taken: SeriesOut,
     pub power_damage_taken: SeriesOut,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -289,6 +304,7 @@ pub struct TargetSeries {
 fn empty_series(res: u64) -> EntitySeries {
     EntitySeries {
         damage: SeriesOut::encode_u64(res, &[]),
+        power_damage: None,
         damage_taken: SeriesOut::encode_u64(res, &[]),
         power_damage_taken: SeriesOut::encode_u64(res, &[]),
         per_target: BTreeMap::new(),
@@ -300,6 +316,9 @@ pub fn build_series(
     report: &crate::Report,
     index: &EntityIndex,
     health_percents: Option<&BTreeMap<u64, Vec<(u64, f64)>>>,
+    enemy_series: Option<
+        &BTreeMap<u64, axilog_core::analysis::timeseries::EnemySeries>,
+    >,
 ) -> SeriesBlock {
     let res = report.timeline.resolution_ms;
     let ps = &report.timeline.per_second;
@@ -359,12 +378,74 @@ pub fn build_series(
             id,
             EntitySeries {
                 damage: SeriesOut::encode_u64(res, &series.damage),
+                power_damage: None,
                 damage_taken: SeriesOut::encode_u64(res, &series.damage_taken),
                 power_damage_taken: SeriesOut::encode_u64(res, &series.power_damage_taken),
                 per_target,
                 health_percents: health,
             },
         );
+    }
+
+    // Enemy rows (side-channel absorption Task 8). An enemy is an entity
+    // like any other, so its outgoing series land in the SAME `by_entity`
+    // map the player rows above use.
+    //
+    // Every `Enemy` gets a row, not just the ones the pass returned:
+    // `build_enemy_series` only emits enemies that actually dealt damage,
+    // and the previous ei-json emitter zero-filled the rest so that the
+    // arrays stayed the fixed grid length GW2EI's `InterpolatedGraph`
+    // allocates. Doing that fill HERE rather than in the adapter is what
+    // lets the native block answer the gate question by itself: with every
+    // enemy filled, "this enemy has no series row" means the flag was off,
+    // never "this enemy dealt nothing". That distinction is exactly what
+    // Task 7's `by_skill` could not make -- so the gate absorbs here even
+    // though it did not there. RLE makes the fill nearly free: a
+    // full-length zero series is one pair.
+    //
+    // The roster is `report.enemies` and NOT every enemy-role entity. The
+    // entity list is the broader of the two (80 enemy-role entities against
+    // 49 `Enemy` records on the committed fixture; the extra rows are
+    // minions and gadgets promoted to entities), and no pass measures a
+    // series for an entity with no `Enemy` record -- filling those would
+    // invent data rather than carry it. `build_damage`'s enemy rows draw
+    // the same line. What makes that safe for the adapter's gate inference
+    // is that the rendered `source_order.targets()` are all backed by
+    // `Enemy` records, pinned by `v1_enemy_series.rs::
+    // every_rendered_target_has_a_row_so_absent_can_only_mean_gate_off`.
+    if let Some(pass) = enemy_series {
+        // The grid length. Read off a real series rather than recomputed,
+        // for the same reason the adapter read it that way: every series
+        // the pass builds is `timeseries::ei_grid(duration)` long, and
+        // that grid is NOT the squad timeline's bucketing, so deriving it
+        // from `report.timeline` could silently disagree. On a log where no
+        // enemy dealt any damage, fall back to a player's own series, which
+        // is built on the same grid.
+        let buckets = pass
+            .values()
+            .next()
+            .map(|s| s.damage.len())
+            .or_else(|| report.players.iter().find_map(|p| p.per_second.as_ref()).map(|ps| ps.damage.len()))
+            .unwrap_or(0);
+        let zeros = vec![0u64; buckets];
+        for e in &report.enemies {
+            let Some(id) = index.by_enemy_id(e.id) else { continue };
+            let (damage, power) = match pass.get(&e.id) {
+                Some(s) => (s.damage.as_slice(), s.power_damage.as_slice()),
+                None => (zeros.as_slice(), zeros.as_slice()),
+            };
+            // An enemy that is ALSO a player row cannot happen (the two
+            // rosters are disjoint by role), so this never overwrites the
+            // loop above.
+            by_entity.insert(
+                id,
+                EntitySeries {
+                    damage: SeriesOut::encode_u64(res, damage),
+                    power_damage: Some(SeriesOut::encode_u64(res, power)),
+                    ..empty_series(res)
+                },
+            );
+        }
     }
 
     SeriesBlock { squad, by_entity }
@@ -511,7 +592,7 @@ mod tests {
     #[test]
     fn squad_series_use_the_shared_envelope_and_decode_to_the_legacy_arrays() {
         let (report, index) = fixture_report();
-        let block = build_series(&report, &index, None);
+        let block = build_series(&report, &index, None, None);
         let squad = &block.squad;
         assert_eq!(
             squad.damage.decode_u64(),

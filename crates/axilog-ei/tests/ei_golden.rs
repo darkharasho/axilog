@@ -1195,13 +1195,16 @@ fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
     // block, so the pass enters through `Passes`, not `EiInputs`.
     let full_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &full, "0.0.0-test", None,
-        &axilog_schema::v1::Passes { enemy_dist: Some(&dist), ..Default::default() },
+        &axilog_schema::v1::Passes {
+            enemy_dist: Some(&dist),
+            enemy_series: Some(&series),
+            ..Default::default()
+        },
     );
     let on = axilog_ei::to_ei_json(
         &full_v1, &full,
         &EiInputs {
             activity: &activity,
-            enemy_series: Some(&series),
             target_conditions: Some(&conditions),
             ..Default::default()
         },

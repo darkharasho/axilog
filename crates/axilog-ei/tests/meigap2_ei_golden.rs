@@ -95,16 +95,20 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     // enemy per-skill rows on `blocks.damage`.
     let enemy_dist =
         axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &enemy_addr_to_rep);
-    let report_v1 = axilog_schema::v1::build_report_v1(
-        &enc, &metrics, &report, "0.0.0-test", None,
-        &axilog_schema::v1::Passes { enemy_dist: Some(&enemy_dist), ..Default::default() },
-    );
     let enemy_series = axilog_core::analysis::timeseries::build_enemy_series(
         &enc,
         &raw,
         &registry,
         &enemies,
         &enemy_addr_to_rep,
+    );
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-test", None,
+        &axilog_schema::v1::Passes {
+            enemy_dist: Some(&enemy_dist),
+            enemy_series: Some(&enemy_series),
+            ..Default::default()
+        },
     );
     let target_conditions =
         axilog_core::analysis::target_conditions::build_with_registry(&raw, &registry, &enc);
@@ -113,7 +117,6 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
         &report_v1, &report,
         &EiInputs {
             activity: &activity,
-            enemy_series: Some(&enemy_series),
             target_conditions: Some(&target_conditions),
             ..Default::default()
         },

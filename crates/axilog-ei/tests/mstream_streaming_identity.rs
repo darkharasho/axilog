@@ -96,18 +96,6 @@ fn render_both(flags: Flags) -> (String, String) {
     let enemy_dist = enemy_sets.as_ref().filter(|_| flags.skill_damage).map(|(en, rep)| {
         axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep)
     });
-    let report_v1 = axilog_schema::v1::build_report_v1(
-        &enc, &metrics, &report, "0.0.0-test", None,
-        &axilog_schema::v1::Passes {
-            minions: minion_rollups.as_ref(),
-            health_percents: health_percents.as_ref(),
-            enemy_dist: enemy_dist.as_ref(),
-            ..Default::default()
-        },
-    );
-    let boon_states = flags
-        .timeseries
-        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
     let enemy_series = enemy_sets.as_ref().filter(|_| flags.timeseries).map(|(en, rep)| {
         axilog_core::analysis::timeseries::build_enemy_series(
             &enc,
@@ -117,6 +105,19 @@ fn render_both(flags: Flags) -> (String, String) {
             rep,
         )
     });
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-test", None,
+        &axilog_schema::v1::Passes {
+            minions: minion_rollups.as_ref(),
+            health_percents: health_percents.as_ref(),
+            enemy_dist: enemy_dist.as_ref(),
+            enemy_series: enemy_series.as_ref(),
+            ..Default::default()
+        },
+    );
+    let boon_states = flags
+        .timeseries
+        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
     let target_conditions = flags
         .timeseries
         .then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
@@ -141,7 +142,6 @@ fn render_both(flags: Flags) -> (String, String) {
         replay: ei_replay_data.as_ref(),
         modifiers: damage_mods.as_ref(),
         boon_states: boon_states.as_ref(),
-        enemy_series: enemy_series.as_ref(),
         target_conditions: target_conditions.as_ref(),
         healing_detail: healing_detail.as_ref(),
         healing_series: flags.timeseries,

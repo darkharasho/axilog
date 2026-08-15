@@ -183,6 +183,14 @@ pub struct Passes<'a> {
     pub enemy_dist: Option<
         &'a std::collections::BTreeMap<u64, Vec<axilog_core::analysis::skill_damage::SkillEntry>>,
     >,
+    /// MEIGAP Task 2b `--timeseries`: per-enemy cumulative outgoing damage
+    /// and its power half, keyed by the enemy's representative agent id
+    /// (`Enemy::id`). Lands on `blocks.series.by_entity[enemy]` -- the same
+    /// rows the players use, with the outgoing power split in
+    /// `EntitySeries::power_damage`.
+    pub enemy_series: Option<
+        &'a std::collections::BTreeMap<u64, axilog_core::analysis::timeseries::EnemySeries>,
+    >,
 }
 
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
@@ -223,7 +231,8 @@ pub fn build_report_v1(
     coverage.set(BlockName::Contribution, computed(contribution.is_empty()));
     let healing = support::build_healing(legacy, &index);
     coverage.set(BlockName::Healing, computed(healing.is_empty()));
-    let series = activity::build_series(legacy, &index, passes.health_percents);
+    let series =
+        activity::build_series(legacy, &index, passes.health_percents, passes.enemy_series);
     coverage.set(BlockName::Series, computed(series.is_empty()));
 
     // Gated blocks: presence of the legacy `Option` IS the gate signal, the

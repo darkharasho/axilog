@@ -237,6 +237,11 @@ blocks.series.by_entity.<id>.per_target.<id>.power_damage.data
 blocks.series.by_entity.<id>.per_target.<id>.power_damage.enc
 blocks.series.by_entity.<id>.per_target.<id>.power_damage.interval_ms
 blocks.series.by_entity.<id>.per_target.<id>.power_damage.len
+blocks.series.by_entity.<id>.power_damage
+blocks.series.by_entity.<id>.power_damage.data
+blocks.series.by_entity.<id>.power_damage.enc
+blocks.series.by_entity.<id>.power_damage.interval_ms
+blocks.series.by_entity.<id>.power_damage.len
 blocks.series.by_entity.<id>.power_damage_taken
 blocks.series.by_entity.<id>.power_damage_taken.data
 blocks.series.by_entity.<id>.power_damage_taken.enc

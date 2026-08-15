@@ -136,9 +136,11 @@ fn build_report_v1_from_bytes(
         want_skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
     let health_percents =
         want_timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
-    // Task 7, same story: enemy per-skill damage now lands on the native
-    // `damage` block, so the native path has to run the pass too.
-    let enemy_dist = want_skill_damage.then(|| {
+    // Tasks 7 and 8, same story: enemy per-skill damage and the per-enemy
+    // outgoing series now land on the native `damage` and `series` blocks,
+    // so the native path has to run both passes too. The addr set and the
+    // representative fold are shared, and built at most once.
+    let enemy_sets = (want_skill_damage || want_timeseries).then(|| {
         let enemies: std::collections::BTreeSet<u64> =
             enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
         let rep: std::collections::BTreeMap<u64, u64> = enc
@@ -146,7 +148,20 @@ fn build_report_v1_from_bytes(
             .iter()
             .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
             .collect();
-        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &rep)
+        (enemies, rep)
+    });
+    let enemy_dist = enemy_sets
+        .as_ref()
+        .filter(|_| want_skill_damage)
+        .map(|(en, rep)| axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep));
+    let enemy_series = enemy_sets.as_ref().filter(|_| want_timeseries).map(|(en, rep)| {
+        axilog_core::analysis::timeseries::build_enemy_series(
+            &enc,
+            &raw,
+            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+            en,
+            rep,
+        )
     });
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
@@ -163,6 +178,7 @@ fn build_report_v1_from_bytes(
             minions: minion_rollups.as_ref(),
             health_percents: health_percents.as_ref(),
             enemy_dist: enemy_dist.as_ref(),
+            enemy_series: enemy_series.as_ref(),
         },
     ))
 }
@@ -199,7 +215,6 @@ fn build_report_and_activity_from_bytes(
     Option<axilog_core::analysis::ei_replay::EiReplay>,
     Option<axilog_core::analysis::damage_mods::DamageModifierResults>,
     Option<axilog_core::analysis::buffs::BoonStates>,
-    Option<std::collections::BTreeMap<u64, axilog_core::analysis::timeseries::EnemySeries>>,
     Option<axilog_core::analysis::target_conditions::TargetConditionStates>,
     Option<axilog_core::analysis::healing_detail::HealingDetail>,
     Option<std::collections::BTreeMap<u64, axilog_core::analysis::dist_outcomes::DistOutcomes>>,
@@ -258,8 +273,9 @@ fn build_report_and_activity_from_bytes(
     // three are standalone passes -- `analyze()` above does not compute
     // them, so an unflagged call pays nothing.
     //
-    // Task 7 hoisted `enemy_sets`/`enemy_dist` above the `ReportV1` build,
-    // which now consumes the latter as enemy rows on the `damage` block.
+    // Tasks 7 and 8 hoisted `enemy_sets`/`enemy_dist`/`enemy_series` above
+    // the `ReportV1` build, which now consumes both passes as enemy rows on
+    // the `damage` and `series` blocks.
     let enemy_sets = (want_timeseries || want_skill_damage).then(|| {
         let enemies: std::collections::BTreeSet<u64> =
             enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
@@ -274,22 +290,8 @@ fn build_report_and_activity_from_bytes(
         .as_ref()
         .filter(|_| want_skill_damage)
         .map(|(en, rep)| axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep));
-    let report_v1 = axilog_schema::v1::build_report_v1(
-        &enc, &metrics, &report, env!("CARGO_PKG_VERSION"), None,
-        &axilog_schema::v1::Passes {
-            damage_mods: damage_mods.as_ref(),
-            minions: minion_rollups.as_ref(),
-            health_percents: health_percents.as_ref(),
-            enemy_dist: enemy_dist.as_ref(),
-        },
-    );
-    // MEIGAP Task 1b: GW2EI-shape boon stack timelines
-    // (`buffUptimes[].states`/`.statesPerSource`), gated on the timeseries
-    // flag -- the same setting GW2EI itself gates those two arrays behind
-    // (`RawFormatTimelineArrays`). See
-    // `axilog_core::analysis::buffs::states`'s module doc.
-    let boon_states = want_timeseries
-        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
+    // Task 8: hoisted above the `ReportV1` build for the same reason Task 7
+    // hoisted `enemy_dist` -- the native `series` block consumes it now.
     let enemy_series = enemy_sets.as_ref().filter(|_| want_timeseries).map(|(en, rep)| {
         axilog_core::analysis::timeseries::build_enemy_series(
             &enc,
@@ -299,6 +301,23 @@ fn build_report_and_activity_from_bytes(
             rep,
         )
     });
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, env!("CARGO_PKG_VERSION"), None,
+        &axilog_schema::v1::Passes {
+            damage_mods: damage_mods.as_ref(),
+            minions: minion_rollups.as_ref(),
+            health_percents: health_percents.as_ref(),
+            enemy_dist: enemy_dist.as_ref(),
+            enemy_series: enemy_series.as_ref(),
+        },
+    );
+    // MEIGAP Task 1b: GW2EI-shape boon stack timelines
+    // (`buffUptimes[].states`/`.statesPerSource`), gated on the timeseries
+    // flag -- the same setting GW2EI itself gates those two arrays behind
+    // (`RawFormatTimelineArrays`). See
+    // `axilog_core::analysis::buffs::states`'s module doc.
+    let boon_states = want_timeseries
+        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
     let target_conditions =
         want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     // MEIGAP Task 3a/3b. Every healing-detail family is flag-gated in the
@@ -320,7 +339,6 @@ fn build_report_and_activity_from_bytes(
         ei_replay,
         damage_mods,
         boon_states,
-        enemy_series,
         target_conditions,
         healing_detail,
         dist_outcomes,
@@ -415,7 +433,7 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
     let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let (report, report_v1, activity, ei_replay, damage_mods, boon_states, enemy_series,
+    let (report, report_v1, activity, ei_replay, damage_mods, boon_states,
          target_conditions, healing_detail, dist_outcomes) = build_report_and_activity_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
         want_modifiers,
@@ -428,7 +446,6 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
             replay: ei_replay.as_ref(),
             modifiers: damage_mods.as_ref(),
             boon_states: boon_states.as_ref(),
-            enemy_series: enemy_series.as_ref(),
             target_conditions: target_conditions.as_ref(),
             healing_detail: healing_detail.as_ref(),
             healing_series: want_timeseries,

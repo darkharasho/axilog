@@ -52,8 +52,9 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
     let minion_rollups = all_gates.then(|| axilog_core::analysis::minions::build(&raw, &enc));
     let health_percents =
         all_gates.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
-    // Task 7: the pass behind the enemy rows' `by_skill`.
-    let enemy_dist = all_gates.then(|| {
+    // Tasks 7 and 8: the two passes behind the enemy rows' `by_skill` and
+    // the enemy rows on `blocks.series`.
+    let enemy_sets = all_gates.then(|| {
         let enemies: std::collections::BTreeSet<u64> =
             enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
         let rep: std::collections::BTreeMap<u64, u64> = enc
@@ -61,7 +62,19 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
             .iter()
             .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
             .collect();
-        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &rep)
+        (enemies, rep)
+    });
+    let enemy_dist = enemy_sets
+        .as_ref()
+        .map(|(en, rep)| axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep));
+    let enemy_series = enemy_sets.as_ref().map(|(en, rep)| {
+        axilog_core::analysis::timeseries::build_enemy_series(
+            &enc,
+            &raw,
+            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+            en,
+            rep,
+        )
     });
 
     let legacy = axilog_schema::build_report(
@@ -86,6 +99,7 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
             minions: minion_rollups.as_ref(),
             health_percents: health_percents.as_ref(),
             enemy_dist: enemy_dist.as_ref(),
+            enemy_series: enemy_series.as_ref(),
         },
     );
     (enc, metrics, legacy, v1)
