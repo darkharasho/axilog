@@ -48,6 +48,17 @@ pub struct DamageEntity {
     /// Enemy players this entity landed the KILLING blow on -- the legacy
     /// `PlayerOut::kills_dealt`. See `downs_dealt`.
     pub kills_dealt: u32,
+    /// Breakbar damage this entity DEALT -- the legacy
+    /// `PlayerOut::breakbar_damage_dealt`, which had no 1.0 destination
+    /// and is the one `players[]` field the ei-json adapter could not read
+    /// from this document (it feeds `dpsAll[0].breakbarDamage`).
+    ///
+    /// Here rather than on `defenses` for the reason `downs_dealt` gives
+    /// above: this is outgoing. `DefensesEntity::breakbar_count`/
+    /// `breakbar_damage` are its INCOMING mirror, and the legacy field's
+    /// origin (`Metrics::defenses`) is where it was computed, not what it
+    /// measures.
+    pub breakbar_damage_dealt: u64,
     /// Keyed by the TARGET's entity id -- so it joins directly to that
     /// entity's own row. Sparse; omitted when empty.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -236,6 +247,7 @@ pub fn build_damage(
                 taken: p.damage_taken,
                 downs_dealt: p.downs_dealt,
                 kills_dealt: p.kills_dealt,
+                breakbar_damage_dealt: p.breakbar_damage_dealt,
                 per_target,
                 by_skill,
                 by_skill_taken,
