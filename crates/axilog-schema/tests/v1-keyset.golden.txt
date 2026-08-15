@@ -256,6 +256,7 @@ catalogs.damage_mods
 catalogs.damage_mods.<id>
 catalogs.damage_mods.<id>.approximate
 catalogs.damage_mods.<id>.description
+catalogs.damage_mods.<id>.icon
 catalogs.damage_mods.<id>.is_counter
 catalogs.damage_mods.<id>.name
 catalogs.damage_mods.<id>.non_multiplier

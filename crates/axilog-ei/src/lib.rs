@@ -888,6 +888,16 @@ impl serde::Serialize for LazySeq<'_, '_> {
 /// `streaming_matches_value_tree_byte_for_byte`, which diffs the streamed
 /// text against `to_ei_json`'s tree (the tree re-sorts through `BTreeMap`,
 /// so any hand-ordering mistake below shows up as a diff).
+/// EI prefixes catalog keys by kind (`b1187`, `s5491`, `d64`); native
+/// stores bare ids. One helper so the three maps cannot disagree.
+///
+/// The id is `i64` rather than `u32` because `damageModMap`'s ids are
+/// SIGNED -- `d-128` is a real key, and the sign is what distinguishes an
+/// incoming modifier from an outgoing one.
+fn ei_catalog_key(prefix: char, id: i64) -> String {
+    format!("{prefix}{id}")
+}
+
 struct EiDoc<'a> {
     fight_name: String,
     duration_ms: u64,
@@ -2340,14 +2350,28 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // (`conditionsMetrics.ts:311-314`), so without these rows the whole
     // `targets[].buffs` array would be dead payload. Gated on the same
     // input so the flagless `buffMap` stays byte-identical.
+    // NOT yet re-pointed onto `report.catalogs.buffs`, though it looks
+    // ready: the 12 flagless boon ids match exactly, and native's
+    // `stacking: "intensity"|"duration"` maps onto EI's boolean with no
+    // residue. The blocker is the CONDITION half. Native's catalog is
+    // referenced-scoped, and nothing references the 14 condition ids until
+    // the conditions block exists (Task 12), so re-pointing now empties
+    // the condition rows out of `buffMap` while `targets[].buffs` still
+    // emits those ids -- which axibridge answers by DROPPING each entry
+    // whose id misses `resolveBuffMetaById`. `ei_json_meigap2_target_
+    // mirrors_are_gated_and_internally_consistent` catches exactly this.
+    // Re-point this map in Task 12, once conditions register natively.
     let mut buff_map: BTreeMap<String, Value> = BOON_IDS.iter().map(|&(id, name, is_intensity)| {
-        (format!("b{id}"), json!({ "name": name, "stacking": is_intensity }))
+        (ei_catalog_key('b', i64::from(id)), json!({ "name": name, "stacking": is_intensity }))
     }).collect();
     if target_conditions.is_some() {
         for (id, name, is_intensity) in
             axilog_core::analysis::target_conditions::condition_buff_map()
         {
-            buff_map.insert(format!("b{id}"), json!({ "name": name, "stacking": is_intensity }));
+            buff_map.insert(
+                ei_catalog_key('b', i64::from(id)),
+                json!({ "name": name, "stacking": is_intensity }),
+            );
         }
     }
     // `skillMap` (M14, Task 3): keyed `"s<id>"` per real EI's convention
@@ -2372,8 +2396,12 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // external DB) are NOT computed anywhere in this project, so they're
     // omitted rather than faked, same "don't fake absent data" convention
     // `statsTargets`/`support`/`extHealingStats` above already follow.
+    // NOT yet re-pointed onto `report.catalogs.skills`: that map is
+    // referenced-scoped, and with every gate off it is EMPTY while this
+    // one carries 368 entries on the committed fixture. Closing that is
+    // absorption work, not a re-point, so it stays on `legacy` here.
     let skill_map: BTreeMap<String, Value> = legacy.skill_map.iter().map(|(&id, e)| {
-        (format!("s{id}"), json!({
+        (ei_catalog_key('s', i64::from(id)), json!({
             "name": e.name,
             "isSwap": e.is_swap,
             "canCrit": e.can_crit,
@@ -2415,11 +2443,25 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // `damageModMap` lazily from inside the per-player emission loop
     // (`JsonDamageModifierDataBuilder.cs:47-51`) -- a catalogued modifier no
     // player triggered never appears.
-    let damage_mod_map: Option<BTreeMap<String, Value>> = modifiers.map(|mods| {
-        mods.meta
+    //
+    // Side-channel absorption, Task 3: read from `report.catalogs
+    // .damage_mods`. Two of EI's eight fields are not stored there
+    // verbatim. `incoming` is not stored at all because the map key's SIGN
+    // already encodes it -- negative ids are incoming (see
+    // `axilog_schema::v1::catalogs::DamageModEntry`'s doc comment); that
+    // equivalence was checked against `incoming` on all 59 referenced ids
+    // of the committed fixture, zero disagreements, so deriving it here
+    // reproduces the field rather than approximating it. `icon` WAS
+    // missing and has been added to the native entry by this task: the
+    // adapter emitting a value the native document cannot produce is
+    // exactly the superset violation this milestone exists to remove.
+    let damage_mod_map: Option<BTreeMap<String, Value>> = modifiers.map(|_| {
+        report
+            .catalogs
+            .damage_mods
             .iter()
             .map(|(&id, m)| {
-                (format!("d{id}"), json!({
+                (ei_catalog_key('d', i64::from(id)), json!({
                     "name": m.name,
                     "icon": m.icon,
                     "description": m.description,
@@ -2427,7 +2469,7 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                     "isCounter": m.is_counter,
                     "skillBased": m.skill_based,
                     "approximate": m.approximate,
-                    "incoming": m.incoming,
+                    "incoming": id < 0,
                 }))
             })
             .collect()
@@ -2757,7 +2799,29 @@ mod tests {
     /// explicit `boon_uptime`/`boon_generation`/`support` values (not the
     /// golden fixture, which lives in `axilog-core`'s own calibration
     /// tests) so this crate's unit test stays self-contained.
+    /// Returns the 1.0 document alongside the legacy one, both built from
+    /// the SAME `enc`/`metrics`. The three tests below used to pair this
+    /// with `empty_report_v1()`, which was harmless only while every field
+    /// they assert still read off `legacy`. Task 3 moved `buffMap` onto
+    /// `report.catalogs`, so an empty `report` now means an empty
+    /// `buffMap` -- a test artifact, not a regression (every real-fixture
+    /// golden stayed byte-identical). Pairing the two sources here is what
+    /// keeps these tests meaningful as Tasks 4-13 drain `legacy`.
+    fn sample_v1_and_report_with_boons()
+    -> (axilog_schema::v1::ReportV1, axilog_schema::Report) {
+        let legacy = sample_report_with_boons();
+        let (enc, m) = sample_boon_inputs();
+        let v1 = axilog_schema::v1::build_report_v1(&enc, &m, &legacy, "0.1.0", None, None);
+        (v1, legacy)
+    }
+
     fn sample_report_with_boons() -> axilog_schema::Report {
+        let (enc, m) = sample_boon_inputs();
+        axilog_schema::build_report(&enc, &m, "0.1.0", None, None, false, false, false, None)
+    }
+
+    /// The shared `enc`/`metrics` pair both sample builders above project.
+    fn sample_boon_inputs() -> (axilog_core::model::Encounter, axilog_core::analysis::Metrics) {
         use axilog_core::model::{Encounter, Player};
         use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
         use axilog_core::analysis::buffs::{self, BoonUptime, GenerationStats};
@@ -2786,12 +2850,13 @@ mod tests {
             combat_participant_enemies: Default::default(),
             skill_map: Default::default(),
         };
-        axilog_schema::build_report(&enc,&m,"0.1.0", None, None, false, false, false, None)
+        (enc, m)
     }
 
     #[test]
     fn buff_map_covers_the_12_tracked_boons_with_computed_fields_only() {
-        let v = to_ei_json(&empty_report_v1(), &sample_report_with_boons(), &EiInputs::default());
+        let (v1, legacy) = sample_v1_and_report_with_boons();
+        let v = to_ei_json(&v1, &legacy, &EiInputs::default());
         let buff_map = v["buffMap"].as_object().expect("buffMap must be an object");
         assert_eq!(buff_map.len(), 12, "exactly the 12 tracked boons");
         // Known value: Might (740) is Intensity-type -> stacking: true.
@@ -2804,7 +2869,8 @@ mod tests {
 
     #[test]
     fn buff_uptimes_map_intensity_and_duration_boons_to_ei_field_meanings() {
-        let v = to_ei_json(&empty_report_v1(), &sample_report_with_boons(), &EiInputs::default());
+        let (v1, legacy) = sample_v1_and_report_with_boons();
+        let v = to_ei_json(&v1, &legacy, &EiInputs::default());
         let entries = v["players"][0]["buffUptimes"].as_array().expect("buffUptimes must be an array");
         assert_eq!(entries.len(), 12, "one entry per tracked boon");
         let might = entries.iter().find(|e| e["id"] == 740).expect("Might entry present");
@@ -2824,7 +2890,8 @@ mod tests {
 
     #[test]
     fn support_block_carries_the_four_new_computed_fields() {
-        let v = to_ei_json(&empty_report_v1(), &sample_report_with_boons(), &EiInputs::default());
+        let (v1, legacy) = sample_v1_and_report_with_boons();
+        let v = to_ei_json(&v1, &legacy, &EiInputs::default());
         let support = &v["players"][0]["support"][0];
         assert_eq!(support["condiCleanse"], 5);
         assert_eq!(support["condiCleanseSelf"], 2);

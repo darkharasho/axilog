@@ -63,6 +63,13 @@ pub struct BuffEntry {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct DamageModEntry {
     pub name: String,
+    /// The `render.guildwars2.com` asset URL for this modifier, when its
+    /// definition is known. Carried because the ei-json adapter's
+    /// `damageModMap.icon` must be reconstructible from this document
+    /// alone -- absorbing the side channel means native is a superset, and
+    /// an icon the adapter emits but native drops would break that.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -164,6 +171,7 @@ impl CatalogBuilder {
                         id,
                         DamageModEntry {
                             name: meta.name.to_string(),
+                            icon: Some(meta.icon.to_string()),
                             description: Some(meta.description.clone()),
                             non_multiplier: Some(meta.non_multiplier),
                             is_counter: Some(meta.is_counter),
@@ -183,6 +191,7 @@ impl CatalogBuilder {
                         id,
                         DamageModEntry {
                             name: format!("Damage modifier {id}"),
+                            icon: None,
                             description: None,
                             non_multiplier: None,
                             is_counter: None,
