@@ -34,11 +34,18 @@ Pushing a tag matching `v*` triggers `.github/workflows/release.yml`, which:
    `import axilog`, end-to-end parse of the committed fixture). The `release` job
    `needs` this, so a broken wheel never becomes a release asset.
 6. **`npm-publish`** — gated npm publish step (see below).
-7. **`release`** — downloads every build's artifacts, re-checks the version guard,
+7. **`lockfile-refresh`** — waits for the just-published `@axiapps/axilog-*@X.Y.Z`
+   packages to become visible on the registry, regenerates
+   `crates/axilog-node/package-lock.json` against them, re-runs
+   `scripts/check-versions.sh`, and commits the result to `main` via the GitHub
+   contents API. This exists because the lockfile is the one version-duplication
+   site that provably *cannot* be bumped with the others — see step 6 of "Cutting
+   a release" for the full reasoning.
+8. **`release`** — downloads every build's artifacts, re-checks the version guard,
    generates a consolidated `SHA256SUMS`, and creates the GitHub Release (`gh release
    create`) with generated release notes and every archive/tarball/wheel/sdist +
    checksum file attached.
-8. **PyPI publish** happens in a SEPARATE workflow, `.github/workflows/pypi-publish.yml`,
+9. **PyPI publish** happens in a SEPARATE workflow, `.github/workflows/pypi-publish.yml`,
    which fires when the GitHub Release is *published*: it downloads the release's wheel +
    sdist assets and uploads them to PyPI via **trusted publishing** (OIDC — no token
    secret). The PyPI trusted-publisher config is bound to that exact filename; do not
@@ -46,12 +53,12 @@ Pushing a tag matching `v*` triggers `.github/workflows/release.yml`, which:
 
 Every job above runs the same way whether the workflow was triggered by a tag push or by
 `workflow_dispatch` (manual "dry run" — see the workflow file's header comment) — the only
-difference is that `npm-publish` and `release` are gated to run **only**
-on `github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')`. A
+difference is that `npm-publish`, `lockfile-refresh`, and `release` are gated to run
+**only** on `github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')`. A
 `workflow_dispatch` run — even one manually pointed at an existing tag ref — always
-dry-runs: it builds, packs, and validates everything, but never creates a Release or
-publishes to npm (and since no Release is created, PyPI trusted publishing never fires
-either).
+dry-runs: it builds, packs, and validates everything, but never creates a Release,
+publishes to npm, or commits to `main` (and since no Release is created, PyPI trusted
+publishing never fires either).
 
 ### aarch64-unknown-linux-gnu cross-compilation
 
@@ -116,8 +123,9 @@ and re-runnable locally at any time):
   maturin's `dynamic = ["version"]` option)
 - `crates/axilog-node/package-lock.json` (root `version`, `packages[""].version`, and a
   resolved entry per `optionalDependencies` pin) — **the one exception to "bump in
-  lockstep": it is refreshed *after* the release publishes, not with the bump. See
-  step 6 of "Cutting a release" for why it cannot be done earlier.**
+  lockstep": it cannot be bumped with the others, and you do not bump it by hand at
+  all. `release.yml`'s `lockfile-refresh` job regenerates it and commits it to `main`
+  after `npm-publish`. See step 6 of "Cutting a release" for why.**
 
 `scripts/check-versions.sh` prints every mismatch it finds (not just the first) and
 exits non-zero if anything is out of sync — run it after bumping, before tagging:
@@ -157,7 +165,7 @@ release needs both to agree.
    ```
 
    Note `crates/axilog-node/package-lock.json` is deliberately NOT bumped here.
-   It cannot be — see step 6.
+   It cannot be, and CI handles it for you — see step 6.
 5. Watch the `Release` workflow run in GitHub Actions. On success, a GitHub Release
    named `vX.Y.Z` will exist with:
    - One `axilog-X.Y.Z-<target>.tar.gz` / `.zip` per CLI target, each with a `.sha256`
@@ -167,35 +175,47 @@ release needs both to agree.
    - A consolidated `SHA256SUMS` covering every archive/tarball/wheel/sdist
    - Auto-generated release notes
 
-6. **After `npm-publish` has succeeded**, refresh the Node lockfile and push it to
-   `main` as a follow-up commit:
-   ```sh
-   cd crates/axilog-node && npm install --package-lock-only && cd -
-   scripts/check-versions.sh          # must pass, including the lockfile section
-   git commit -am "chore: refresh package-lock for X.Y.Z"
-   git push origin main
-   ```
+6. **`git pull` — the `lockfile-refresh` job has committed to `main` for you.** Once
+   `npm-publish` succeeds, that job waits for `@axiapps/axilog-*@X.Y.Z` to become
+   visible on the registry, regenerates `crates/axilog-node/package-lock.json` against
+   it, runs `scripts/check-versions.sh`, and commits the result to `main` through the
+   GitHub contents API (so the commit is signed by GitHub's web-flow key — a runner has
+   no signing key, and every commit in this repo's history is signed). Nothing to do by
+   hand; just pull before you start your next branch.
 
-   **This step cannot be folded into the bump, and that ordering is not a style
-   preference.** `npm ci` demands a lock entry for every `optionalDependencies`
-   pin, carrying a matching `version` and a real `resolved`/`integrity` — and it
-   rejects the lock whether those entries are stubbed *or* absent (both were
-   tested). Those fields only exist once `@axiapps/axilog-*@X.Y.Z` is on the
-   registry, and publishing happens in `npm-publish`, which is gated on the tag
-   push from step 4. So at bump time the packages provably do not exist yet:
-   `npm install` resolves an unresolvable *optional* dependency to a bare
-   `{"optional": true}` stub and **exits 0**, so a lock regenerated in step 1
-   looks fine locally and only fails later, on every `npm ci` leg of CI.
+   **Why this is a second commit rather than part of the bump — this is not a style
+   preference.** `npm ci` demands a lock entry for every `optionalDependencies` pin,
+   carrying a matching `version` and a real `resolved`/`integrity` — and it rejects the
+   lock whether those entries are stubbed *or* absent (both were tested). Those fields
+   only exist once `@axiapps/axilog-*@X.Y.Z` is on the registry, and publishing happens
+   in `npm-publish`, which is gated on the tag push from step 4. So at bump time the
+   packages provably do not exist yet: `npm install` resolves an unresolvable *optional*
+   dependency to a bare `{"optional": true}` stub and **exits 0**, so a lock regenerated
+   in step 1 looks fine locally and only fails later, on every `npm ci` leg of CI.
 
-   That is exactly how 0.3.1 and 0.3.2 both broke — 12c9f71 omitted the lock,
-   and 08cf911 "fixed" it by regenerating at bump time, reproducing the outage
-   one cycle later. `scripts/check-versions.sh` now fails on stubbed entries, so
-   a skipped step 6 is caught by the gate rather than by four red CI legs.
+   That is exactly how 0.3.1 and 0.3.2 both broke — 12c9f71 omitted the lock, and
+   08cf911 "fixed" it by regenerating at bump time, reproducing the outage one cycle
+   later. Two layers now prevent a third: the refresh is automatic, and
+   `scripts/check-versions.sh` fails on stubbed entries either way.
 
-   Consequence to accept: between the step-4 tag push and this commit, `main`'s
-   `npm ci` legs are red. That window is inherent to publishing on tag — closing
-   it means having CI commit the refreshed lock back to `main` automatically
-   after `npm-publish`, which is a deliberate design change, not a fix.
+   The job bails out rather than guessing in three cases, each of which just leaves the
+   lock stale (fix it by re-running the job, or by doing the old manual `npm install
+   --package-lock-only` on `main`):
+   - `main` has already moved to a newer version than the tag being released — the newer
+     release's own refresh will do the work.
+   - A pinned platform package never appears on the registry within 5 minutes.
+     Regenerating then would write the exact stub this job exists to prevent.
+   - `NPM_TOKEN` is unset, so `npm-publish` published nothing and there is no new
+     registry state to lock.
+
+   Residual window to accept: `main`'s `npm ci` legs are red between the step-4 tag push
+   and this commit — roughly the length of one release run, rather than until someone
+   remembers. Removing it entirely would mean publishing off something other than a tag
+   push, which is a larger change than this problem warrants.
+
+   Note this job pushes to `main` with the default `GITHUB_TOKEN`. If `main` ever gets a
+   branch-protection rule, that rule needs an allowance for it or the commit will be
+   rejected.
 
 If the tag doesn't match `Cargo.toml`'s version, the workflow fails immediately in the
 `version-guard` job (and again, redundantly, right before the Release is created) with a

@@ -171,8 +171,10 @@ if [ -f "$NODE_LOCK" ]; then
   if [ -n "$LOCK_PROBLEMS" ]; then
     echo "MISMATCH: crates/axilog-node/package-lock.json --" >&2
     echo "$LOCK_PROBLEMS" | sed 's/^/  /' >&2
-    echo "  Fix: publish the platform packages first, then regenerate with" >&2
-    echo "  'npm install --package-lock-only' in crates/axilog-node." >&2
+    echo "  Fix: release.yml's lockfile-refresh job normally does this for you" >&2
+    echo "  after npm-publish. To do it by hand, make sure the platform packages" >&2
+    echo "  are published first, then run 'npm install --package-lock-only' in" >&2
+    echo "  crates/axilog-node." >&2
     FAIL=1
   else
     echo "OK: crates/axilog-node/package-lock.json ($CARGO_VERSION)"

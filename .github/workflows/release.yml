@@ -575,6 +575,129 @@ jobs:
         if: env.NPM_TOKEN == ''
         run: echo "NPM_TOKEN repository secret is not set -- skipping npm publish. Set NPM_TOKEN to enable publishing on future tag pushes."
 
+  # Closes the one ordering hole in the release flow. crates/axilog-node/
+  # package-lock.json cannot be bumped alongside every other version string:
+  # `npm ci` demands a lock entry per optionalDependencies pin carrying a
+  # matching version AND a real resolved/integrity, and those fields only
+  # exist once @axiapps/axilog-*@X.Y.Z is on the registry -- which happens in
+  # npm-publish, gated on the very tag push that follows the bump commit. Worse,
+  # `npm install` resolves an unresolvable OPTIONAL dependency to a bare
+  # `{"optional": true}` stub and exits 0, so a lock regenerated at bump time
+  # looks fine locally and only fails later, on every `npm ci` leg of CI. That
+  # is exactly how 0.3.1 and 0.3.2 both broke.
+  #
+  # So the refresh has to be a second commit, after publish. Doing it by hand
+  # is what got skipped twice; this job does it automatically, leaving `main`
+  # red only for the length of a release run rather than until someone
+  # notices. See "Cutting a release" in RELEASING.md.
+  lockfile-refresh:
+    name: Refresh package-lock on main (post-publish)
+    needs: [npm-publish]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Skip refresh (NPM_TOKEN not set)
+        if: env.NPM_TOKEN == ''
+        run: echo "NPM_TOKEN is not set, so npm-publish published nothing -- there is no new registry state to lock. Skipping."
+
+      # Deliberately checks out `main`, not the tag: the refreshed lock has to
+      # land on the branch CI runs against. The tag itself is immutable and
+      # correct as-is.
+      - uses: actions/checkout@v4
+        if: env.NPM_TOKEN != ''
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        if: env.NPM_TOKEN != ''
+        with:
+          node-version: 20
+
+      # Guard against racing a later bump. If someone pushed X.Y.Z+1 to main
+      # while this release was building, regenerating here would lock versions
+      # that don't match main's package.json and leave CI redder than it
+      # started. Bail out and let the newer release's own refresh do the work.
+      - name: Check main is still at the released version
+        if: env.NPM_TOKEN != ''
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          MAIN_VERSION="$(scripts/workspace-version.sh)"
+          if [ "$TAG_VERSION" != "$MAIN_VERSION" ]; then
+            echo "::error::main is at $MAIN_VERSION but this release is $TAG_VERSION -- main moved on. Skipping the lockfile refresh; the newer release will regenerate it."
+            exit 1
+          fi
+          echo "VERSION=$TAG_VERSION" >> "$GITHUB_ENV"
+
+      # npm's registry reads are served from a CDN that can lag a publish by
+      # seconds. Regenerating too eagerly would re-create the exact stub
+      # lockfile this job exists to prevent, so wait until every pinned
+      # platform package is actually visible before touching anything.
+      - name: Wait for the platform packages to be visible on the registry
+        if: env.NPM_TOKEN != ''
+        run: |
+          set -euo pipefail
+          PINS="$(node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("crates/axilog-node/package.json", "utf8"));
+            process.stdout.write(Object.keys(pkg.optionalDependencies || {}).join("\n"));
+          ')"
+          for name in $PINS; do
+            for attempt in $(seq 1 30); do
+              if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+                echo "visible: $name@$VERSION"
+                break
+              fi
+              if [ "$attempt" -eq 30 ]; then
+                echo "::error::$name@$VERSION never appeared on the registry after 5 minutes. Not regenerating the lock -- doing so now would write an unresolved stub."
+                exit 1
+              fi
+              sleep 10
+            done
+          done
+
+      - name: Regenerate the lockfile
+        if: env.NPM_TOKEN != ''
+        working-directory: crates/axilog-node
+        run: npm install --package-lock-only
+
+      # The same gate that runs in ci.yml. If the regenerated lock is somehow
+      # still stubbed, fail here rather than committing it to main.
+      - name: Verify versions (including the lockfile)
+        if: env.NPM_TOKEN != ''
+        run: scripts/check-versions.sh
+
+      # Committed through the contents API rather than `git push` so the commit
+      # is signed by GitHub's web-flow key -- every commit in this repo's
+      # history is signed, and a runner has no signing key. It also fails
+      # cleanly with a 409 if main moved under us, instead of force-resolving.
+      - name: Commit the refreshed lockfile to main
+        if: env.NPM_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LOCK=crates/axilog-node/package-lock.json
+          if git diff --quiet -- "$LOCK"; then
+            echo "Lockfile is already up to date for $VERSION -- nothing to commit."
+            exit 0
+          fi
+          MESSAGE="$(printf '%s\n' \
+            "chore: refresh package-lock for $VERSION" \
+            "" \
+            "Regenerated by release.yml's lockfile-refresh job after npm-publish," \
+            "once the @axiapps platform packages for $VERSION were live on the" \
+            "registry. See RELEASING.md, 'Cutting a release'.")"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/$LOCK?ref=main" --jq .sha)"
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$LOCK" \
+            -f message="$MESSAGE" \
+            -f content="$(base64 -w0 "$LOCK")" \
+            -f sha="$SHA" \
+            -f branch=main
+          echo "Committed the refreshed lockfile to main."
+
   release:
     name: Create GitHub Release
     needs: [build, npm-pack-main, addon-build, npm-install-shape, wheel-build, sdist-build, pypi-validate]
