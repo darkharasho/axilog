@@ -1093,6 +1093,77 @@ read from the enriched skill rows. Delete `EiInputs::dist_outcomes`.
 
 ---
 
+**Execution notes (Task 9, done).** Five things, one of which corrects
+this task's own sketch.
+
+1. **The sketch's assertion is FALSE, and the merge is a UNION.**
+   `every_outcome_row_joins_an_existing_skill_row` cannot hold: a skill
+   whose every attempt was blocked deals no damage, so it never reaches
+   `skill_damage`'s `dmg > 0` accumulator, while `dist_outcomes` counts
+   exactly those rows and GW2EI emits them (`totalDamage: 0, hits: n`).
+   Those pure-mitigation rows ARE the payload — axibridge's damage-
+   mitigation table is what the pass exists to feed. Asserting the row
+   sets match would have failed on the first real log; intersecting them
+   would have deleted the data silently. The ei-json adapter had emitted
+   this union since MEIGAP2, inside `dist_rows_ei_json`; Task 9 moved the
+   union down into `merge_outcomes` so both readers see the same rows
+   instead of the native container carrying half the set. The committed
+   fixture has real mitigation-only rows, so
+   `the_row_set_is_a_union_not_an_intersection` proves it rather than
+   asserting into a vacuum.
+
+2. **There are THREE hit counts, not two.** Task 7 split `hits`
+   (contributing, `dmg > 0`) from `connected_hits` (`HasHit`). The outcome
+   pass brings a third, GW2EI's own attempt count — every non-marker row,
+   a superset of both — which is what real EI exports mean by `hits`. It
+   landed as `SkillOutcomeCols::attempt_hits` rather than being folded
+   into either existing field, for exactly Task 7's reason: one field
+   reinterpreted by context is how a consumer divides by the wrong
+   denominator. The nesting `hits <= connected_hits <= attempt_hits`
+   holds and is pinned. **`interrupted` is NOT bounded by `attempt_hits`**
+   — GW2EI excludes its Interrupt/KillingBlow/Downed markers from the
+   attempt count while still counting the interrupt as an outcome, so an
+   interrupt-heavy skill legitimately reports more interrupts than
+   attempts (fixture: skill 77357, 2 attempts, 3 interrupts). The first
+   draft of that test asserted the tidier invariant and caught only its
+   own wrong assumption.
+
+3. **Eight columns behind ONE `Option`, not eight `Option`s.** The
+   counters come from a single pass over a single event list, so no
+   "this one measured, that one didn't" combination can arise.
+   `outcomes: Option<SkillOutcomeCols>` states that in the type and gives
+   the adapter one presence check for the branch that emits all eight
+   keys together. `connected_hits` deliberately stays on `SkillRow`: the
+   enemy pass (Task 7) measures the same quantity, and duplicating it
+   would leave two fields for one number with nothing forcing agreement.
+
+4. **The GATE absorbed for free — no Task 13 dependency.** Unlike Task
+   7's, this gate needs no native gate record, because the outcome pass
+   and the distributions it annotates ride the same `--skill-damage`
+   flag: `by_skill`'s presence already answers both questions. The merge
+   runs INSIDE the `p.skill_damage` guard so the two can never be built
+   off different conditions, and
+   `outcome_columns_are_absent_entirely_when_the_gate_is_off` pins it.
+   Task 8's zero-fill rule decided the one genuinely ambiguous field: a
+   union row gets `hits: Some(0)`, because absence from the damage pass
+   is a measurement (zero contributing events), not a gap.
+
+5. **ei-json: 15 `skillMap` entries added, and nothing else changes.**
+   Verified byte-for-byte across all four gate combos — the flagless and
+   `--timeseries`-only renders are identical outright, and both
+   `--skill-damage` renders differ in `skillMap` alone (`players[]` and
+   `targets[]` are byte-identical, existing `skillMap` values unchanged).
+   All 15 were **already referenced by the OLD document's own
+   distributions**, so this is a dangling-reference fix, not new data:
+   `merge_outcomes` calls `reference_skill` for the union rows it
+   creates, which the adapter's private union never could. The CLI also
+   dropped its `&& format == Format::EiJson` condition (Task 6's
+   precedent) — these columns are a native surface now, so gating them
+   on the output format would make the native JSON depend on which
+   writer was asked for; both SDKs' native paths run the pass too.
+
+---
+
 ### Task 10: `healing_detail` — detail arrays on `blocks.healing`
 
 Follow Task 6's spine. What differs:

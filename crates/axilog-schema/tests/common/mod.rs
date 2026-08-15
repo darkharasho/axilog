@@ -77,6 +77,10 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
         )
     });
 
+    // Task 9: the outcome columns on both player-side distributions.
+    let dist_outcomes =
+        all_gates.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
+
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -100,6 +104,7 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
             health_percents: health_percents.as_ref(),
             enemy_dist: enemy_dist.as_ref(),
             enemy_series: enemy_series.as_ref(),
+            dist_outcomes: dist_outcomes.as_ref(),
         },
     );
     (enc, metrics, legacy, v1)

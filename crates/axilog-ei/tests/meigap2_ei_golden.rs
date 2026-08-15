@@ -83,6 +83,8 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let enc = resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
+    // Task 9: the outcome columns on both player-side distributions.
+    let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
@@ -107,6 +109,7 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
         &axilog_schema::v1::Passes {
             enemy_dist: Some(&enemy_dist),
             enemy_series: Some(&enemy_series),
+            dist_outcomes: Some(&dist_outcomes),
             ..Default::default()
         },
     );

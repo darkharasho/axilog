@@ -191,6 +191,15 @@ pub struct Passes<'a> {
     pub enemy_series: Option<
         &'a std::collections::BTreeMap<u64, axilog_core::analysis::timeseries::EnemySeries>,
     >,
+    /// MEIGAP2 row 1 `--skill-damage`: per-player hit-OUTCOME columns for
+    /// both player-side distributions, keyed by the account's
+    /// representative agent address. Lands on
+    /// `blocks.damage.by_entity[player].by_skill[_taken][].outcomes` --
+    /// enriching the rows `skill_damage` already built, and ADDING the
+    /// mitigation-only rows it has no entry for (see `merge_outcomes`).
+    pub dist_outcomes: Option<
+        &'a std::collections::BTreeMap<u64, axilog_core::analysis::dist_outcomes::DistOutcomes>,
+    >,
 }
 
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
@@ -215,7 +224,8 @@ pub fn build_report_v1(
     // Always-on blocks. `computed` distinguishes `Present` from `Empty` --
     // see its doc comment for why that distinction has to be made HERE, at
     // the only layer that knows a block both ran and produced nothing.
-    let damage_block = damage::build_damage(legacy, &index, &mut cats, passes.enemy_dist);
+    let damage_block =
+        damage::build_damage(legacy, &index, &mut cats, passes.enemy_dist, passes.dist_outcomes);
     coverage.set(BlockName::Damage, computed(damage_block.is_empty()));
     let defenses = defense::build_defenses(legacy, &index);
     coverage.set(BlockName::Defenses, computed(defenses.is_empty()));

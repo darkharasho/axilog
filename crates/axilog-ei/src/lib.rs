@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 use axilog_core::analysis::buffs::{BoonStates, BOON_IDS};
 use axilog_core::analysis::damage_mods::{DamageModifierResults, DamageModifierStat};
-use axilog_core::analysis::dist_outcomes::{DistOutcomes, SkillOutcomes};
 use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::analysis::replay::{ActivityIntervals, Interval};
 use axilog_core::analysis::healing_detail::{HealDistEntry, HealingDetail};
@@ -188,22 +187,24 @@ fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
 ///
 /// ## The union
 ///
-/// The two inputs are keyed the same way (skill id) but do NOT have the
-/// same row set. `entries` comes from
-/// `axilog_core::analysis::skill_damage`, which counts CONTRIBUTING rows
-/// only, so a skill whose every attempt was blocked has no entry there at
-/// all; `outcomes` (`axilog_core::analysis::dist_outcomes`) counts exactly
-/// those rows. GW2EI emits both kinds (its dist is keyed off the whole
-/// `HealthDamageEvent` list), and the blocked-only rows are precisely what
-/// axibridge's damage-mitigation table exists to read -- so this emits the
-/// UNION, with the missing side's fields defaulted to zero.
+/// Side-channel absorption Task 9: the rows arrive already unioned, off
+/// `blocks.damage.by_entity[player].by_skill`/`by_skill_taken`. Two passes
+/// feed that map and they do NOT agree on which skills exist --
+/// `skill_damage` counts CONTRIBUTING rows only, so a skill whose every
+/// attempt was blocked has no entry there, while `dist_outcomes` counts
+/// exactly those rows and GW2EI emits them. Merging the two used to happen
+/// right here, which meant the native container carried only half the row
+/// set and this adapter was the only place the whole one existed; it now
+/// happens in `v1::blocks::damage::merge_outcomes`, so both readers see
+/// the same rows.
 ///
 /// ## `hits`
 ///
 /// When outcome data is present, `hits` is GW2EI's own attempt count
 /// (`dmgEvt.IsNotADamageEvent ? 0 : 1`, `JsonDamageDistBuilder.cs:52`),
-/// which is what the key means in every real EI export. Without it the
-/// long-standing M12 fallback stands (the CONTRIBUTING count -- see
+/// which is what the key means in every real EI export -- carried on
+/// `SkillOutcomeCols::attempt_hits`. Without it the long-standing M12
+/// fallback stands (`SkillRow::hits`, the CONTRIBUTING count -- see
 /// [`skill_entry_ei_json`]), so a caller that asks for the distributions
 /// but not their outcome columns still gets the pre-MEIGAP2 numbers rather
 /// than a hole. Every first-party caller passes both together.
@@ -221,36 +222,37 @@ fn skill_entry_ei_json(e: &axilog_schema::SkillEntryOut) -> Value {
 /// pass `None`, exactly as GW2EI does (`JsonActorBuilder.cs:135` hands the
 /// damage-taken builder a null dictionary).
 fn dist_rows_ei_json(
-    entries: &[axilog_schema::SkillEntryOut],
-    outcomes: Option<&[SkillOutcomes]>,
+    entries: &BTreeMap<u32, axilog_schema::v1::blocks::damage::SkillRow>,
     down_contribution: Option<&BTreeMap<u32, u64>>,
 ) -> Value {
-    let by_outcome: BTreeMap<u32, &SkillOutcomes> =
-        outcomes.into_iter().flatten().map(|o| (o.skill_id, o)).collect();
-    let by_entry: BTreeMap<u32, &axilog_schema::SkillEntryOut> =
-        entries.iter().map(|e| (e.skill_id, e)).collect();
-    let ids: std::collections::BTreeSet<u32> =
-        by_entry.keys().chain(by_outcome.keys()).copied().collect();
-    let rows: Vec<Value> = ids
-        .into_iter()
-        .map(|id| {
-            let e = by_entry.get(&id);
-            let o = by_outcome.get(&id);
+    let rows: Vec<Value> = entries
+        .iter()
+        .map(|(&id, r)| {
             let mut row = serde_json::Map::new();
             row.insert("id".into(), Value::from(id));
-            row.insert("totalDamage".into(), Value::from(e.map(|e| e.total).unwrap_or(0)));
-            row.insert("min".into(), Value::from(e.map(|e| e.min).unwrap_or(0)));
-            row.insert("max".into(), Value::from(e.map(|e| e.max).unwrap_or(0)));
-            let hits = match (o, e) {
-                (Some(o), _) => o.hits,
-                (None, Some(e)) => e.hits,
-                (None, None) => 0,
-            };
-            row.insert("hits".into(), Value::from(hits));
-            row.insert("crit".into(), Value::from(e.map(|e| e.crit_hits).unwrap_or(0)));
-            row.insert("flank".into(), Value::from(e.map(|e| e.flank_hits).unwrap_or(0)));
-            if let Some(o) = o {
-                row.insert("connectedHits".into(), Value::from(o.connected_hits));
+            row.insert("totalDamage".into(), Value::from(r.total));
+            row.insert("min".into(), Value::from(r.min));
+            row.insert("max".into(), Value::from(r.max));
+            // `attempt_hits` when the outcome pass ran, else the
+            // contributing count -- see this fn's `hits` section. A player
+            // row always has `SkillRow::hits`; the `unwrap_or(0)` is for
+            // the shape's sake, not a case this reaches.
+            row.insert(
+                "hits".into(),
+                Value::from(
+                    r.outcomes.as_ref().map_or_else(|| r.hits.unwrap_or(0), |o| o.attempt_hits),
+                ),
+            );
+            row.insert("crit".into(), Value::from(r.crit_hits));
+            row.insert("flank".into(), Value::from(r.flank_hits));
+            if let Some(o) = r.outcomes.as_ref() {
+                // `connected_hits` rides the OUTCOMES presence check, not
+                // its own: it lives on `SkillRow` (shared with the enemy
+                // pass, Task 7) but on a player row it is filled by the
+                // very same pass as the eight below, so splitting the two
+                // checks would let a future refactor emit seven keys and
+                // silently drop the eighth.
+                row.insert("connectedHits".into(), Value::from(r.connected_hits.unwrap_or(0)));
                 row.insert("glance".into(), Value::from(o.glance));
                 row.insert("missed".into(), Value::from(o.missed));
                 row.insert("evaded".into(), Value::from(o.evaded));
@@ -708,17 +710,6 @@ pub struct EiInputs<'a> {
     /// `totalDamageDist` already gets, and axibridge hardcodes that flag to
     /// `true`. Ignored when [`Self::healing_detail`] is `None`.
     pub healing_dist: bool,
-    /// `dist_outcomes` (MEIGAP2 row 1): per-skill hit-OUTCOME columns for
-    /// the two player-side distributions, from
-    /// `axilog_core::analysis::dist_outcomes::build`, or `None`. Keyed by
-    /// player representative addr (`PlayerOut::agent_addr`).
-    ///
-    /// The OPT-IN gate for `totalDamageDist[][]`/`totalDamageTaken[][]`'s
-    /// `connectedHits`/`glance`/`missed`/`evaded`/`blocked`/`invulned`/
-    /// `interrupted`/`indirectDamage` columns -- set by the caller on
-    /// `--skill-damage`, the flag that already gates the distributions
-    /// themselves, so this can never annotate rows that are not emitted.
-    pub dist_outcomes: Option<&'a BTreeMap<u64, DistOutcomes>>,
 }
 
 /// A lazily-serialized JSON array (MSTREAM).
@@ -879,7 +870,6 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         healing_detail,
         healing_series,
         healing_dist,
-        dist_outcomes,
     } = *inputs;
     // Positional-join guards, same convention `replay` uses just below: a
     // hand-built `Report` (every unit test) can violate them, and dropping
@@ -1523,23 +1513,31 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // shape.
         if let Some(sd) = &p.skill_damage {
             let obj = v.as_object_mut().expect("player value is always a JSON object");
-            // MEIGAP2 row 1: the outcome columns ride the same
-            // `--skill-damage` gate the distributions themselves do, and
-            // are joined per player by representative addr. See
-            // `dist_rows_ei_json` for the union/`hits`/`downContribution`
-            // rules.
-            let po = dist_outcomes.and_then(|m| m.get(&p.agent_addr));
+            // Side-channel absorption Task 9: both whole-fight
+            // distributions now read off this player's own `blocks.damage`
+            // row -- the SAME `by_skill`/`by_skill_taken` maps that carry
+            // the MEIGAP2 outcome columns, already unioned and already
+            // annotated. The `--skill-damage` gate is unchanged: it is
+            // still `p.skill_damage`'s presence, the signal Task 7 pinned,
+            // because these rows and the outcome columns on them ride one
+            // flag. See `dist_rows_ei_json` for the `hits`/
+            // `downContribution` rules.
+            //
+            // `targetDamageDist` below stays on `sd.per_target`: the
+            // outcome pass produces no per-target split to absorb, so
+            // re-pointing it would buy nothing and would drop the enemy-id
+            // ordering this array is positionally keyed to.
+            let empty = BTreeMap::new();
             obj.insert(
                 "totalDamageDist".to_string(),
                 json!([dist_rows_ei_json(
-                    &sd.outgoing,
-                    po.map(|o| o.outgoing.as_slice()),
+                    n_damage.map_or(&empty, |d| &d.by_skill),
                     Some(&p.downs_contribution_per_skill),
                 )]),
             );
             obj.insert(
                 "totalDamageTaken".to_string(),
-                json!([dist_rows_ei_json(&sd.taken, po.map(|o| o.taken.as_slice()), None)]),
+                json!([dist_rows_ei_json(n_damage.map_or(&empty, |d| &d.by_skill_taken), None)]),
             );
             let target_dist: Vec<Value> = legacy
                 .ei_targets
@@ -3109,10 +3107,12 @@ mod tests {
         fn entry() -> SkillEntryOut {
             SkillEntryOut { skill_id: 42009, total: 32503, hits: 5, min: 100, max: 20000, crit_hits: 2, flank_hits: 1 }
         }
-        let taken_entry = SkillEntryOut { skill_id: 700, total: 275, hits: 2, min: 75, max: 200, crit_hits: 0, flank_hits: 0 };
+        fn taken_entry() -> SkillEntryOut {
+            SkillEntryOut { skill_id: 700, total: 275, hits: 2, min: 75, max: 200, crit_hits: 0, flank_hits: 0 }
+        }
         let sd = SkillDamageOut {
             outgoing: vec![entry()],
-            taken: vec![taken_entry],
+            taken: vec![taken_entry()],
             per_target: vec![PerTargetSkillsOut { enemy_id: 9, skills: vec![entry()] }],
         };
         let enemies = vec![
@@ -3122,7 +3122,35 @@ mod tests {
         let player = skill_and_timeseries_player(Some(sd), None, vec![]);
         let report = report_with_players(enemies, vec![player]);
 
-        let v = to_ei_json(&empty_report_v1(), &report, &EiInputs::default());
+        // Side-channel absorption Task 9: the two WHOLE-FIGHT distributions
+        // are now rendered off `blocks.damage`, so an `empty_report_v1()`
+        // shell would make them empty and this test would assert nothing.
+        // It gets the minimum native container that can carry them -- one
+        // player entity, its two skill maps -- rather than being narrowed
+        // to `targetDamageDist` (still legacy-sourced) and losing the
+        // known-value coverage that is the point of the test. RULING T3-3
+        // stands for the other legacy-path tests here; this one had to move
+        // because its SOURCE moved.
+        use axilog_schema::v1::blocks::damage::{DamageBlock, DamageEntity, SkillRow};
+        let native_row = |e: &SkillEntryOut| SkillRow {
+            total: e.total, hits: Some(e.hits), connected_hits: None,
+            min: e.min, max: e.max, crit_hits: e.crit_hits, flank_hits: e.flank_hits,
+            outcomes: None,
+        };
+        let mut v1 = empty_report_v1();
+        v1.source_order = axilog_schema::v1::SourceOrder::new(vec![0], vec![]);
+        let mut dmg = DamageBlock::default();
+        dmg.by_entity.insert(
+            0,
+            DamageEntity {
+                by_skill: [(42009, native_row(&entry()))].into_iter().collect(),
+                by_skill_taken: [(700, native_row(&taken_entry()))].into_iter().collect(),
+                ..Default::default()
+            },
+        );
+        v1.blocks.damage = Some(dmg);
+
+        let v = to_ei_json(&v1, &report, &EiInputs::default());
         let p = &v["players"][0];
 
         // totalDamageDist: [phase][skillEntry], only the computed fields.

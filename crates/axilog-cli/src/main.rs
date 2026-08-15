@@ -314,8 +314,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // carry it. See `axilog_core::analysis::dist_outcomes`'s module
             // doc for why it is a standalone pass rather than more work
             // inside `analyze()`.
-            let dist_outcomes = (skill_damage && format == Format::EiJson)
-                .then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
+            // Side-channel absorption Task 9: no longer `&& format ==
+            // Format::EiJson`, for the same reason `minion_rollups` above
+            // dropped it in Task 6 -- these columns are now a native
+            // surface (`blocks.damage.by_entity[].by_skill[].outcomes`),
+            // so gating them on the output format would make the native
+            // JSON's contents depend on which writer was asked for.
+            let dist_outcomes =
+                skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
             // MEIGAP2 row 2: `players[].healthPercents` rides
             // `--timeseries`, GW2EI's own `RawFormatTimelineArrays` gate on
             // that field.
@@ -363,6 +369,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     health_percents: health_percents.as_ref(),
                     enemy_dist: enemy_dist.as_ref(),
                     enemy_series: enemy_series.as_ref(),
+                    dist_outcomes: dist_outcomes.as_ref(),
                 },
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
@@ -396,7 +403,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     healing_detail: healing_detail.as_ref(),
                     healing_series: timeseries,
                     healing_dist: skill_damage,
-                    dist_outcomes: dist_outcomes.as_ref(),
                 };
                 // One `dyn Write` so the two destinations share the emit
                 // code; the `BufWriter` (not the trait object) is what makes

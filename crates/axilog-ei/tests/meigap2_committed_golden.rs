@@ -89,6 +89,9 @@ fn rendered_and_golden() -> (Value, Vec<Value>, HashMap<String, usize>) {
         &enc, &metrics, &report, "0.0.0-test", None,
         &axilog_schema::v1::Passes {
             health_percents: Some(&health_percents),
+            // Task 9: the outcome columns enter through the native damage
+            // block now, not through `EiInputs`.
+            dist_outcomes: Some(&dist_outcomes),
             ..Default::default()
         },
     );
@@ -97,7 +100,6 @@ fn rendered_and_golden() -> (Value, Vec<Value>, HashMap<String, usize>) {
         &EiInputs {
             activity: &activity,
             boon_states: Some(&boon_states),
-            dist_outcomes: Some(&dist_outcomes),
             ..Default::default()
         },
     );

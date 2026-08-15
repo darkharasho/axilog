@@ -162,6 +162,8 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
             ),
         )
     };
+    // Task 9: the outcome columns on both player-side distributions.
+    let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -185,6 +187,7 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
             health_percents: Some(&health_percents),
             enemy_dist: Some(&enemy_dist),
             enemy_series: Some(&enemy_series),
+            dist_outcomes: Some(&dist_outcomes),
         },
     );
     let v = serde_json::to_value(&v1).expect("serializable");

@@ -181,6 +181,60 @@ pub struct SkillRow {
     /// `crate::SkillEntryOut::flank_hits`. Same fix-round-2 correction as
     /// `crit_hits` above.
     pub flank_hits: u32,
+    /// The hit-OUTCOME breakdown for this row, from
+    /// `axilog_core::analysis::dist_outcomes` (side-channel absorption
+    /// Task 9). See [`SkillOutcomeCols`] for why these eight live in a
+    /// nested struct rather than as eight sibling `Option`s.
+    ///
+    /// Present on PLAYER rows (both `by_skill` and `by_skill_taken`) when
+    /// `--skill-damage` is on, absent on enemy rows -- that pass only runs
+    /// over the friendly side. Absent is therefore "this pass did not
+    /// measure this row", never "every attempt connected".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcomes: Option<SkillOutcomeCols>,
+}
+
+/// The outcome columns a `dist_outcomes` row contributes to a [`SkillRow`],
+/// beyond the `connected_hits` it shares with the enemy pass.
+///
+/// Nested behind one `Option` rather than spread across the parent as eight
+/// `Option` fields because their presence is genuinely all-or-nothing: they
+/// come from a single pass over a single event list, so no combination of
+/// "this counter measured, that one didn't" can arise. One `Option` states
+/// that invariant in the type instead of leaving eight fields free to
+/// disagree, and it gives a consumer a single presence check for "were
+/// outcomes computed at all" -- which is exactly the branch the ei-json
+/// adapter takes, emitting all eight keys together or none.
+///
+/// `connected_hits` is deliberately NOT here: it stays on [`SkillRow`]
+/// because the ENEMY pass measures that same quantity too (Task 7), and
+/// duplicating it would leave two fields for one number with nothing
+/// forcing them to agree.
+#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+pub struct SkillOutcomeCols {
+    /// GW2EI's own `hits`: every row that is not one of its
+    /// `NoDamageHealthDamageEvent` markers -- an ATTEMPT count, and a third
+    /// distinct quantity from [`SkillRow::hits`] (contributing rows, `dmg >
+    /// 0`) and [`SkillRow::connected_hits`] (`HasHit` rows). All three are
+    /// separate fields for the reason Task 7 gave: one field reinterpreted
+    /// by context is how a consumer divides by the wrong denominator.
+    pub attempt_hits: u32,
+    /// Zero on a condition skill: GW2EI zeroes this and the four below
+    /// inside its `if (!IndirectDamage)` guard, and `dist_outcomes`
+    /// reproduces that in its own post-pass.
+    pub glance: u32,
+    pub missed: u32,
+    pub evaded: u32,
+    pub blocked: u32,
+    /// NOT inside the indirect guard above -- a condition tick can land on
+    /// an invulnerable target and GW2EI counts it.
+    pub invulned: u32,
+    pub interrupted: u32,
+    /// GW2EI's per-skill `IndirectDamage` flag: this skill produced at
+    /// least one non-direct (condition) damage row. Every strike-damage
+    /// surface downstream uses it as a skip filter, so without it condition
+    /// ticks read as strike damage.
+    pub indirect: bool,
 }
 
 /// One legacy `SkillEntryOut` as a [`SkillRow`]. Shared by the three
@@ -199,6 +253,9 @@ fn skill_row(e: &crate::SkillEntryOut) -> SkillRow {
         max: e.max,
         crit_hits: e.crit_hits,
         flank_hits: e.flank_hits,
+        // Task 9's `merge_outcomes` fills this in a second pass over the
+        // assembled map, because its row set is a superset of this one's.
+        outcomes: None,
     }
 }
 
@@ -217,6 +274,51 @@ fn enemy_skill_row(e: &axilog_core::analysis::skill_damage::SkillEntry) -> Skill
         max: e.max,
         crit_hits: e.crit_hits,
         flank_hits: e.flank_hits,
+        // The outcome pass runs over the friendly side only.
+        outcomes: None,
+    }
+}
+
+/// Fold one player-side distribution's outcome rows into the [`SkillRow`]
+/// map `skill_damage` already built for it.
+///
+/// **This is a UNION, not an enrichment** -- which is the one place Task 9
+/// departs from its plan sketch. The two passes disagree about which skills
+/// exist, on purpose: `skill_damage` accumulates only CONTRIBUTING (`dmg >
+/// 0`) rows, so a skill whose every attempt was blocked never reaches it,
+/// while `dist_outcomes` counts exactly those rows and GW2EI emits them
+/// (`totalDamage: 0, hits: n`). Those pure-mitigation rows are the reason
+/// the outcome pass exists at all, so asserting the row sets match -- as
+/// the plan proposed -- would have failed on the first real log, and
+/// intersecting them would have dropped the payload. The ei-json adapter
+/// has emitted this same union since MEIGAP2; absorbing it here just moves
+/// the union one layer down, to the container both readers share.
+///
+/// An outcome-only row gets `hits: Some(0)`, not `None`: absence from
+/// `skill_damage` is a measurement (zero contributing events), not a gap.
+/// That is Task 8's rule -- zero-fill where the number is genuinely known,
+/// omit only where the pass never looked.
+fn merge_outcomes(
+    rows: &mut BTreeMap<u32, SkillRow>,
+    outcomes: &[axilog_core::analysis::dist_outcomes::SkillOutcomes],
+    cats: &mut CatalogBuilder,
+) {
+    for o in outcomes {
+        cats.reference_skill(o.skill_id);
+        let row = rows
+            .entry(o.skill_id)
+            .or_insert_with(|| SkillRow { hits: Some(0), ..SkillRow::default() });
+        row.connected_hits = Some(o.connected_hits);
+        row.outcomes = Some(SkillOutcomeCols {
+            attempt_hits: o.hits,
+            glance: o.glance,
+            missed: o.missed,
+            evaded: o.evaded,
+            blocked: o.blocked,
+            invulned: o.invulned,
+            interrupted: o.interrupted,
+            indirect: o.indirect,
+        });
     }
 }
 
@@ -225,6 +327,7 @@ pub fn build_damage(
     index: &EntityIndex,
     cats: &mut CatalogBuilder,
     enemy_dist: Option<&BTreeMap<u64, Vec<axilog_core::analysis::skill_damage::SkillEntry>>>,
+    dist_outcomes: Option<&BTreeMap<u64, axilog_core::analysis::dist_outcomes::DistOutcomes>>,
 ) -> DamageBlock {
     let mut by_entity = ByEntity::default();
     let mut squad_total = 0u64;
@@ -285,6 +388,25 @@ pub fn build_damage(
                     cats.reference_skill(e.skill_id);
                     row.by_skill.insert(e.skill_id, skill_row(e));
                 }
+            }
+            // Task 9. Inside the `skill_damage` guard on purpose: both this
+            // pass and the distributions above ride the SAME
+            // `--skill-damage` request, so an outcome row arriving without
+            // a distribution to annotate would mean the caller built the
+            // two off different flags. Merging outside the guard would
+            // materialize `by_skill` rows for a player whose block is
+            // absent, and `by_skill`'s presence is precisely the signal
+            // Task 7 taught the adapter to read as "the gate was on".
+            //
+            // Keyed by the account's representative agent address -- the
+            // same `p.agent_addr` the ei-json adapter joined on, not the
+            // positional join over `report.players` the plan assumed.
+            // `per_target`'s rows get no outcome columns: the pass produces
+            // exactly two distributions, whole-fight outgoing and taken,
+            // with no per-target split to join to.
+            if let Some(o) = dist_outcomes.and_then(|m| m.get(&p.agent_addr)) {
+                merge_outcomes(&mut by_skill, &o.outgoing, cats);
+                merge_outcomes(&mut by_skill_taken, &o.taken, cats);
             }
         }
 
@@ -401,7 +523,7 @@ mod tests {
         // the legacy shape, where enemy statistics were `#[serde(skip)]`.
         let (report, index) = crate::v1::blocks::tests_support::fixture_report();
         let mut cats = crate::v1::catalogs::CatalogBuilder::default();
-        let block = build_damage(&report, &index, &mut cats, None);
+        let block = build_damage(&report, &index, &mut cats, None, None);
 
         // agent_addr 4575 / enemy_id 9588 are real ids from the committed
         // `wvw-small.anon.zevtc` fixture (the brief's literal `1`/`9` do not
@@ -425,7 +547,7 @@ mod tests {
         // the assertion that it is now a first-class native measurement.
         let (report, index) = crate::v1::blocks::tests_support::fixture_report();
         let mut cats = crate::v1::catalogs::CatalogBuilder::default();
-        let block = build_damage(&report, &index, &mut cats, None);
+        let block = build_damage(&report, &index, &mut cats, None, None);
 
         let with_damage =
             report.enemies.iter().find(|e| e.damage_out > 0).expect("some enemy dealt damage");
@@ -443,7 +565,7 @@ mod tests {
     fn squad_total_matches_the_legacy_report() {
         let (report, index) = crate::v1::blocks::tests_support::fixture_report();
         let mut cats = crate::v1::catalogs::CatalogBuilder::default();
-        let block = build_damage(&report, &index, &mut cats, None);
+        let block = build_damage(&report, &index, &mut cats, None, None);
         let expected: u64 = report.players.iter().map(|p| p.damage.total).sum();
         assert_eq!(block.squad.total, expected, "no number may change in this spec");
     }
@@ -452,7 +574,7 @@ mod tests {
     fn skill_rows_reference_ids_and_register_them_in_the_catalog() {
         let (report, index) = crate::v1::blocks::tests_support::fixture_report();
         let mut cats = crate::v1::catalogs::CatalogBuilder::default();
-        let block = build_damage(&report, &index, &mut cats, None);
+        let block = build_damage(&report, &index, &mut cats, None, None);
 
         // Same real fixture id as the test above (see its comment).
         let squad_entity = index.by_agent_addr(4575).expect("squad player resolves");
@@ -489,7 +611,7 @@ mod tests {
         report.players[1].damage.total = 300;
         report.players[1].damage.dps = 30.0;
         let mut cats = CatalogBuilder::default();
-        let block = build_damage(&report, &index, &mut cats, None);
+        let block = build_damage(&report, &index, &mut cats, None, None);
 
         assert_eq!(block.by_entity.len(), 2, "by_entity is the full roster: squad AND non-squad friendlies");
         assert_eq!(block.squad.total, 500, "squad.total must be the in-squad player's damage only, not the sum of both");

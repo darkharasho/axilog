@@ -163,6 +163,10 @@ fn build_report_v1_from_bytes(
             rep,
         )
     });
+    // Task 9, same story again: the outcome columns are native now, so the
+    // native path runs the pass on the gate that produces them.
+    let dist_outcomes =
+        want_skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
@@ -179,6 +183,7 @@ fn build_report_v1_from_bytes(
             health_percents: health_percents.as_ref(),
             enemy_dist: enemy_dist.as_ref(),
             enemy_series: enemy_series.as_ref(),
+            dist_outcomes: dist_outcomes.as_ref(),
         },
     ))
 }
@@ -217,7 +222,6 @@ fn build_report_and_activity_from_bytes(
     Option<axilog_core::analysis::buffs::BoonStates>,
     Option<axilog_core::analysis::target_conditions::TargetConditionStates>,
     Option<axilog_core::analysis::healing_detail::HealingDetail>,
-    Option<std::collections::BTreeMap<u64, axilog_core::analysis::dist_outcomes::DistOutcomes>>,
 )> {
     let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
     let enc = axilog_core::model::resolve(&raw);
@@ -301,6 +305,13 @@ fn build_report_and_activity_from_bytes(
             rep,
         )
     });
+    // MEIGAP2 row 1 -- same gate the CLI uses (`--skill-damage`, the gate
+    // on the distributions these columns annotate). Computed BEFORE the
+    // reprojection, not after: side-channel absorption Task 9 made it an
+    // input to `blocks.damage` rather than a side channel handed to the
+    // ei-json adapter, so it has to exist by the time that block is built.
+    let dist_outcomes =
+        want_skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, env!("CARGO_PKG_VERSION"), None,
         &axilog_schema::v1::Passes {
@@ -309,6 +320,7 @@ fn build_report_and_activity_from_bytes(
             health_percents: health_percents.as_ref(),
             enemy_dist: enemy_dist.as_ref(),
             enemy_series: enemy_series.as_ref(),
+            dist_outcomes: dist_outcomes.as_ref(),
         },
     );
     // MEIGAP Task 1b: GW2EI-shape boon stack timelines
@@ -328,10 +340,6 @@ fn build_report_and_activity_from_bytes(
     let healing_detail = (want_skill_damage || want_timeseries)
         .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
         .flatten();
-    // MEIGAP2 row 1 -- same gate the CLI uses (`--skill-damage`, the gate
-    // on the distributions these columns annotate).
-    let dist_outcomes =
-        want_skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
     Ok((
         report,
         report_v1,
@@ -341,7 +349,6 @@ fn build_report_and_activity_from_bytes(
         boon_states,
         target_conditions,
         healing_detail,
-        dist_outcomes,
     ))
 }
 
@@ -434,7 +441,7 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
     let (report, report_v1, activity, ei_replay, damage_mods, boon_states,
-         target_conditions, healing_detail, dist_outcomes) = build_report_and_activity_from_bytes(
+         target_conditions, healing_detail) = build_report_and_activity_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
         want_modifiers,
     )?;
@@ -450,7 +457,6 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
             healing_detail: healing_detail.as_ref(),
             healing_series: want_timeseries,
             healing_dist: want_skill_damage,
-            dist_outcomes: dist_outcomes.as_ref(),
         },
     ))
 }

@@ -57,6 +57,8 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
             ),
         )
     };
+    // Task 9: the outcome columns on both player-side distributions.
+    let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -80,6 +82,7 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
             health_percents: Some(&health_percents),
             enemy_dist: Some(&enemy_dist),
             enemy_series: Some(&enemy_series),
+            dist_outcomes: Some(&dist_outcomes),
         },
     );
     (serde_json::to_value(&v1).expect("serializable"), enc)
