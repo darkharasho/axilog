@@ -121,6 +121,67 @@ else
   FAIL=1
 fi
 
+# --- crates/axilog-node/package-lock.json ---
+# The lock is a version-duplication site too, and the one that has broken CI
+# twice (0.3.1 and 0.3.2). The failure mode is specific: a version bump that
+# regenerates the lock *before* the @axiapps platform packages are published
+# gets empty `{"optional": true}` stubs, because npm resolves an unresolvable
+# OPTIONAL dependency to a stub and exits 0 rather than failing. The bad lock
+# then commits cleanly and every later `npm ci` rejects it as out of sync.
+# Assert the root versions, and that every optionalDependencies pin has a
+# real lock entry carrying a matching version and a resolved URL.
+NODE_LOCK="$REPO_ROOT/crates/axilog-node/package-lock.json"
+if [ -f "$NODE_LOCK" ]; then
+  LOCK_PROBLEMS="$(node -e '
+    const fs = require("fs");
+    const [lockPath, want] = process.argv.slice(1);
+    const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    const problems = [];
+
+    for (const [label, actual] of [
+      ["root \"version\"", lock.version],
+      ["packages[\"\"].version", lock.packages?.[""]?.version],
+    ]) {
+      if (actual !== want) {
+        problems.push(`${label} is ${JSON.stringify(actual)}, want "${want}"`);
+      }
+    }
+
+    const pins = lock.packages?.[""]?.optionalDependencies || {};
+    for (const [name, pin] of Object.entries(pins)) {
+      if (pin !== want) {
+        problems.push(`optionalDependencies["${name}"] pins "${pin}", want "${want}"`);
+      }
+      const entry = lock.packages?.[`node_modules/${name}`];
+      if (!entry) {
+        problems.push(`no lock entry for "${name}"`);
+      } else if (entry.version !== want) {
+        // The stub case: entry exists but carries only {"optional": true}.
+        problems.push(
+          `lock entry for "${name}" has version ${JSON.stringify(entry.version)}, want "${want}"` +
+          (entry.version === undefined ? " (unresolved stub -- were the platform packages published before the lock was regenerated?)" : "")
+        );
+      } else if (!entry.resolved) {
+        problems.push(`lock entry for "${name}" has no "resolved" URL (unresolved stub)`);
+      }
+    }
+
+    process.stdout.write(problems.join("\n"));
+  ' "$NODE_LOCK" "$CARGO_VERSION" 2>&1)"
+  if [ -n "$LOCK_PROBLEMS" ]; then
+    echo "MISMATCH: crates/axilog-node/package-lock.json --" >&2
+    echo "$LOCK_PROBLEMS" | sed 's/^/  /' >&2
+    echo "  Fix: publish the platform packages first, then regenerate with" >&2
+    echo "  'npm install --package-lock-only' in crates/axilog-node." >&2
+    FAIL=1
+  else
+    echo "OK: crates/axilog-node/package-lock.json ($CARGO_VERSION)"
+  fi
+else
+  echo "MISMATCH: $NODE_LOCK does not exist" >&2
+  FAIL=1
+fi
+
 # --- crates/axilog-py/pyproject.toml ---
 PYPROJECT="$REPO_ROOT/crates/axilog-py/pyproject.toml"
 check "crates/axilog-py/pyproject.toml" "$(toml_project_version "$PYPROJECT")" "$PYPROJECT"
