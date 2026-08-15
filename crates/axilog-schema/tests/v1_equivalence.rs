@@ -34,6 +34,16 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
     );
     let minion_rollups = axilog_core::analysis::minions::build(&raw, &enc);
     let health_percents = axilog_core::analysis::health::ei_health_percents(&raw, &enc);
+    let enemy_dist = {
+        let enemies: std::collections::BTreeSet<u64> =
+            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+        let rep: std::collections::BTreeMap<u64, u64> = enc
+            .enemies
+            .iter()
+            .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+            .collect();
+        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &rep)
+    };
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -55,6 +65,7 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
             damage_mods: Some(&damage_mods),
             minions: Some(&minion_rollups),
             health_percents: Some(&health_percents),
+            enemy_dist: Some(&enemy_dist),
         },
     );
     (legacy, v1)
@@ -553,7 +564,7 @@ fn every_legacy_skill_damage_row_survives_the_reshape() {
                 .get(&legacy_skill.skill_id)
                 .unwrap_or_else(|| panic!("{account} by_skill missing entry for skill {}", legacy_skill.skill_id));
             assert_eq!(got.total, legacy_skill.total, "{account} by_skill[{}].total", legacy_skill.skill_id);
-            assert_eq!(got.hits, legacy_skill.hits, "{account} by_skill[{}].hits", legacy_skill.skill_id);
+            assert_eq!(got.hits, Some(legacy_skill.hits), "{account} by_skill[{}].hits", legacy_skill.skill_id);
             assert_eq!(got.min, legacy_skill.min, "{account} by_skill[{}].min", legacy_skill.skill_id);
             assert_eq!(got.max, legacy_skill.max, "{account} by_skill[{}].max", legacy_skill.skill_id);
             assert_eq!(
@@ -698,7 +709,7 @@ fn every_legacy_incoming_and_per_target_skill_row_survives_the_reshape() {
                 panic!("{account} by_skill_taken missing skill {}", legacy_skill.skill_id)
             });
             assert_eq!(got.total, legacy_skill.total, "{account} taken total");
-            assert_eq!(got.hits, legacy_skill.hits, "{account} taken hits");
+            assert_eq!(got.hits, Some(legacy_skill.hits), "{account} taken hits");
             assert_eq!(got.min, legacy_skill.min, "{account} taken min");
             assert_eq!(got.max, legacy_skill.max, "{account} taken max");
             assert_eq!(got.crit_hits, legacy_skill.crit_hits, "{account} taken crit_hits");
@@ -721,7 +732,7 @@ fn every_legacy_incoming_and_per_target_skill_row_survives_the_reshape() {
                     panic!("{account}/{tid} per-target by_skill missing {}", legacy_skill.skill_id)
                 });
                 assert_eq!(got.total, legacy_skill.total, "{account}/{tid} per-target total");
-                assert_eq!(got.hits, legacy_skill.hits, "{account}/{tid} per-target hits");
+                assert_eq!(got.hits, Some(legacy_skill.hits), "{account}/{tid} per-target hits");
                 assert_eq!(got.min, legacy_skill.min, "{account}/{tid} per-target min");
                 assert_eq!(got.max, legacy_skill.max, "{account}/{tid} per-target max");
                 assert_eq!(got.crit_hits, legacy_skill.crit_hits, "{account}/{tid} per-target crit_hits");

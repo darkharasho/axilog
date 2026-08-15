@@ -86,13 +86,19 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
-
     let registry = axilog_core::analysis::damage::InstidRegistry::build(&raw);
     let enemies: BTreeSet<u64> =
         enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
     let enemy_addr_to_rep: BTreeMap<u64, u64> =
         enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id))).collect();
+    // Task 7: hoisted above the `ReportV1` build, which now carries the
+    // enemy per-skill rows on `blocks.damage`.
+    let enemy_dist =
+        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &enemy_addr_to_rep);
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-test", None,
+        &axilog_schema::v1::Passes { enemy_dist: Some(&enemy_dist), ..Default::default() },
+    );
     let enemy_series = axilog_core::analysis::timeseries::build_enemy_series(
         &enc,
         &raw,
@@ -100,8 +106,6 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
         &enemies,
         &enemy_addr_to_rep,
     );
-    let enemy_dist =
-        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &enemy_addr_to_rep);
     let target_conditions =
         axilog_core::analysis::target_conditions::build_with_registry(&raw, &registry, &enc);
 
@@ -110,7 +114,6 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
         &EiInputs {
             activity: &activity,
             enemy_series: Some(&enemy_series),
-            enemy_dist: Some(&enemy_dist),
             target_conditions: Some(&target_conditions),
             ..Default::default()
         },

@@ -52,6 +52,17 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
     let minion_rollups = all_gates.then(|| axilog_core::analysis::minions::build(&raw, &enc));
     let health_percents =
         all_gates.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
+    // Task 7: the pass behind the enemy rows' `by_skill`.
+    let enemy_dist = all_gates.then(|| {
+        let enemies: std::collections::BTreeSet<u64> =
+            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+        let rep: std::collections::BTreeMap<u64, u64> = enc
+            .enemies
+            .iter()
+            .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+            .collect();
+        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &rep)
+    });
 
     let legacy = axilog_schema::build_report(
         &enc,
@@ -74,6 +85,7 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
             damage_mods: damage_mods.as_ref(),
             minions: minion_rollups.as_ref(),
             health_percents: health_percents.as_ref(),
+            enemy_dist: enemy_dist.as_ref(),
         },
     );
     (enc, metrics, legacy, v1)

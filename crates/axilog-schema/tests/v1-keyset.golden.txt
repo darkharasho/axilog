@@ -45,6 +45,7 @@ blocks.damage.by_entity.<id>
 blocks.damage.by_entity.<id>.breakbar_damage_dealt
 blocks.damage.by_entity.<id>.by_skill
 blocks.damage.by_entity.<id>.by_skill.<id>
+blocks.damage.by_entity.<id>.by_skill.<id>.connected_hits
 blocks.damage.by_entity.<id>.by_skill.<id>.crit_hits
 blocks.damage.by_entity.<id>.by_skill.<id>.flank_hits
 blocks.damage.by_entity.<id>.by_skill.<id>.hits

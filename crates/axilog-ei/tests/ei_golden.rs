@@ -1191,13 +1191,17 @@ fn ei_json_meigap2_target_mirrors_are_gated_and_internally_consistent() {
     let full = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, true, false, None,
     );
-    let full_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &full, "0.0.0-test", None, &Default::default());
+    // Task 7: `targets[].totalDamageDist` now comes off the native damage
+    // block, so the pass enters through `Passes`, not `EiInputs`.
+    let full_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &full, "0.0.0-test", None,
+        &axilog_schema::v1::Passes { enemy_dist: Some(&dist), ..Default::default() },
+    );
     let on = axilog_ei::to_ei_json(
         &full_v1, &full,
         &EiInputs {
             activity: &activity,
             enemy_series: Some(&series),
-            enemy_dist: Some(&dist),
             target_conditions: Some(&conditions),
             ..Default::default()
         },
@@ -1377,10 +1381,13 @@ fn ei_json_enemy_player_skill_dist_matches_the_golden_aggregate() {
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-test", None, None, true, false, false, None,
     );
-    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &Default::default());
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-test", None,
+        &axilog_schema::v1::Passes { enemy_dist: Some(&dist), ..Default::default() },
+    );
     let ei = axilog_ei::to_ei_json(
         &report_v1, &report,
-        &EiInputs { activity: &activity, enemy_dist: Some(&dist), ..Default::default() },
+        &EiInputs { activity: &activity, ..Default::default() },
     );
 
     let mut ours: std::collections::BTreeMap<i64, (i64, i64)> = std::collections::BTreeMap::new();

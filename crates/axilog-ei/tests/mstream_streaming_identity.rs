@@ -83,17 +83,6 @@ fn render_both(flags: Flags) -> (String, String) {
         flags.skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
     let health_percents =
         flags.timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
-    let report_v1 = axilog_schema::v1::build_report_v1(
-        &enc, &metrics, &report, "0.0.0-test", None,
-        &axilog_schema::v1::Passes {
-            minions: minion_rollups.as_ref(),
-            health_percents: health_percents.as_ref(),
-            ..Default::default()
-        },
-    );
-    let boon_states = flags
-        .timeseries
-        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
     let enemy_sets = (flags.timeseries || flags.skill_damage).then(|| {
         let enemies: std::collections::BTreeSet<u64> =
             enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
@@ -104,6 +93,21 @@ fn render_both(flags: Flags) -> (String, String) {
             .collect();
         (enemies, rep)
     });
+    let enemy_dist = enemy_sets.as_ref().filter(|_| flags.skill_damage).map(|(en, rep)| {
+        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep)
+    });
+    let report_v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &report, "0.0.0-test", None,
+        &axilog_schema::v1::Passes {
+            minions: minion_rollups.as_ref(),
+            health_percents: health_percents.as_ref(),
+            enemy_dist: enemy_dist.as_ref(),
+            ..Default::default()
+        },
+    );
+    let boon_states = flags
+        .timeseries
+        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
     let enemy_series = enemy_sets.as_ref().filter(|_| flags.timeseries).map(|(en, rep)| {
         axilog_core::analysis::timeseries::build_enemy_series(
             &enc,
@@ -116,9 +120,6 @@ fn render_both(flags: Flags) -> (String, String) {
     let target_conditions = flags
         .timeseries
         .then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
-    let enemy_dist = enemy_sets.as_ref().filter(|_| flags.skill_damage).map(|(en, rep)| {
-        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep)
-    });
     let healing_detail = (flags.skill_damage || flags.timeseries)
         .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
         .flatten();
@@ -141,7 +142,6 @@ fn render_both(flags: Flags) -> (String, String) {
         modifiers: damage_mods.as_ref(),
         boon_states: boon_states.as_ref(),
         enemy_series: enemy_series.as_ref(),
-        enemy_dist: enemy_dist.as_ref(),
         target_conditions: target_conditions.as_ref(),
         healing_detail: healing_detail.as_ref(),
         healing_series: flags.timeseries,

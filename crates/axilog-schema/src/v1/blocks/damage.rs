@@ -141,7 +141,34 @@ pub struct PerTargetDetail {
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct SkillRow {
     pub total: u64,
-    pub hits: u32,
+    /// CONTRIBUTING (`dmg > 0`) row count -- see `crate::SkillEntryOut::
+    /// hits` for the predicate and its documented divergence from GW2EI's
+    /// own attempt-count `hits`.
+    ///
+    /// `Option` because the ENEMY rows this block also carries (side-channel
+    /// absorption Task 7) come from a different pass,
+    /// `skill_damage::build_enemy_dist`, which counts `HasHit` rows instead
+    /// -- a superset that includes zero-damage connecting hits. That pass
+    /// never computes the contributing count at all, so an enemy row omits
+    /// this field rather than publishing a `0` that a consumer would divide
+    /// `total` by. Player rows are always `Some`, so the serialized bytes
+    /// are unchanged for them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hits: Option<u32>,
+    /// `HasHit` row count -- GW2EI's `connectedHits`
+    /// (`JsonDamageDistBuilder.cs:72`, `dmgEvt.HasHit ? 1 : 0`), which
+    /// counts a connecting hit that dealt zero health damage and excludes
+    /// the blocked/evaded/missed/invulned cases.
+    ///
+    /// Populated for ENEMY rows by Task 7. Task 9 fills it for player rows
+    /// from `dist_outcomes`, a third pass that measures the same quantity on
+    /// the friendly side -- which is why this is a distinct field from
+    /// `hits` rather than a role-dependent reinterpretation of it. The
+    /// ei-json adapter emits the two under distinct keys already (`hits` vs
+    /// `connectedHits`), and axibridge's mitigation math divides by
+    /// `connectedHits` specifically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connected_hits: Option<u32>,
     pub min: u64,
     pub max: u64,
     /// Hit COUNT (not a damage sum) of hits that crit, mirroring
@@ -164,7 +191,28 @@ pub struct SkillRow {
 fn skill_row(e: &crate::SkillEntryOut) -> SkillRow {
     SkillRow {
         total: e.total,
-        hits: e.hits,
+        hits: Some(e.hits),
+        // Not measured on the friendly side by this pass; Task 9's
+        // `dist_outcomes` fills it.
+        connected_hits: None,
+        min: e.min,
+        max: e.max,
+        crit_hits: e.crit_hits,
+        flank_hits: e.flank_hits,
+    }
+}
+
+/// One `skill_damage::SkillEntry` from the enemy pass as a [`SkillRow`].
+///
+/// Deliberately NOT [`skill_row`]: that helper's input counts contributing
+/// rows and this one counts `HasHit` rows, so the same `hits` number means
+/// two different things and lands in two different fields. Sharing the
+/// helper would silently equate them.
+fn enemy_skill_row(e: &axilog_core::analysis::skill_damage::SkillEntry) -> SkillRow {
+    SkillRow {
+        total: e.total,
+        hits: None,
+        connected_hits: Some(e.hits),
         min: e.min,
         max: e.max,
         crit_hits: e.crit_hits,
@@ -176,6 +224,7 @@ pub fn build_damage(
     report: &crate::Report,
     index: &EntityIndex,
     cats: &mut CatalogBuilder,
+    enemy_dist: Option<&BTreeMap<u64, Vec<axilog_core::analysis::skill_damage::SkillEntry>>>,
 ) -> DamageBlock {
     let mut by_entity = ByEntity::default();
     let mut squad_total = 0u64;
@@ -261,12 +310,13 @@ pub fn build_damage(
     // legacy shape had to keep it (`EnemyOut::damage_out`, `#[serde(skip)]`
     // and EI-adapter-only precisely because it had nowhere else to go).
     //
-    // Only `total`/`dps` are filled; every other column stays at its
-    // default. That is not a stub -- the per-skill breakdown for these rows
-    // is `enemy_dist`, which is still on the side channel and lands in this
-    // same `by_skill` in a later task. Defaults here mean "not measured for
-    // an enemy", the same thing an absent row would mean, so nothing reads
-    // a zero as a measurement.
+    // `total`/`dps` are always filled; `by_skill` joins the `enemy_dist`
+    // pass when `--skill-damage` is on (side-channel absorption Task 7 --
+    // it lands in the SAME `by_skill` the player rows use, because the
+    // identity/statistics split's whole point is that an enemy is an entity
+    // like any other). Every other column stays at its default, which means
+    // "not measured for an enemy" -- the same thing an absent row would
+    // mean, so nothing reads a zero as a measurement.
     //
     // Iterating `report.enemies` (the combat-participant roster) rather
     // than `ei_targets` (the curated EI one) is deliberate: this is the
@@ -280,6 +330,21 @@ pub fn build_damage(
     let secs = (report.encounter.duration_ms as f64 / 1000.0).max(1.0);
     for e in &report.enemies {
         let Some(entity_id) = index.by_enemy_id(e.id) else { continue };
+        // The pass is keyed by the enemy's REPRESENTATIVE agent id, which is
+        // `Enemy::id` -- the same key `index.by_enemy_id` takes, so this is
+        // a direct join rather than a positional one.
+        let by_skill: BTreeMap<u32, SkillRow> = enemy_dist
+            .and_then(|d| d.get(&e.id))
+            .map(|skills| {
+                skills
+                    .iter()
+                    .map(|s| {
+                        cats.reference_skill(s.skill_id);
+                        (s.skill_id, enemy_skill_row(s))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         by_entity.insert(
             entity_id,
             DamageEntity {
@@ -288,9 +353,38 @@ pub fn build_damage(
                 // rows above carry from `PlayerMetrics::dps`, so the two
                 // kinds of row on this block mean the same thing.
                 dps: e.damage_out as f64 / secs,
+                by_skill,
                 ..DamageEntity::default()
             },
         );
+    }
+
+    // The two enemy sources are UNIONED, for the same reason the three
+    // per-target families above are. `report.enemies` is the
+    // combat-participant roster, whose criterion (c) is "dealt nonzero
+    // damage"; `enemy_dist` keys off any actor that produced a
+    // `HealthDamageEvent`, and `build_enemy_dist` deliberately KEEPS
+    // legitimate all-zero rows (a connecting hit that dealt no health
+    // damage). So a dist key can have no participant row, and iterating
+    // only `report.enemies` would drop its whole skill breakdown. The
+    // curated `ei_targets` roster the ei-json adapter walks is a third,
+    // differently-filtered list, which makes this the difference between
+    // the adapter finding its rows on this block and finding nothing.
+    if let Some(dist) = enemy_dist {
+        for (&enemy_id, skills) in dist {
+            let Some(entity_id) = index.by_enemy_id(enemy_id) else { continue };
+            if by_entity.get(entity_id).is_some() {
+                continue;
+            }
+            let by_skill = skills
+                .iter()
+                .map(|s| {
+                    cats.reference_skill(s.skill_id);
+                    (s.skill_id, enemy_skill_row(s))
+                })
+                .collect();
+            by_entity.insert(entity_id, DamageEntity { by_skill, ..DamageEntity::default() });
+        }
     }
 
     DamageBlock { squad: DamageSquad { total: squad_total, dps: squad_dps }, by_entity }
@@ -307,7 +401,7 @@ mod tests {
         // the legacy shape, where enemy statistics were `#[serde(skip)]`.
         let (report, index) = crate::v1::blocks::tests_support::fixture_report();
         let mut cats = crate::v1::catalogs::CatalogBuilder::default();
-        let block = build_damage(&report, &index, &mut cats);
+        let block = build_damage(&report, &index, &mut cats, None);
 
         // agent_addr 4575 / enemy_id 9588 are real ids from the committed
         // `wvw-small.anon.zevtc` fixture (the brief's literal `1`/`9` do not
@@ -331,7 +425,7 @@ mod tests {
         // the assertion that it is now a first-class native measurement.
         let (report, index) = crate::v1::blocks::tests_support::fixture_report();
         let mut cats = crate::v1::catalogs::CatalogBuilder::default();
-        let block = build_damage(&report, &index, &mut cats);
+        let block = build_damage(&report, &index, &mut cats, None);
 
         let with_damage =
             report.enemies.iter().find(|e| e.damage_out > 0).expect("some enemy dealt damage");
@@ -349,7 +443,7 @@ mod tests {
     fn squad_total_matches_the_legacy_report() {
         let (report, index) = crate::v1::blocks::tests_support::fixture_report();
         let mut cats = crate::v1::catalogs::CatalogBuilder::default();
-        let block = build_damage(&report, &index, &mut cats);
+        let block = build_damage(&report, &index, &mut cats, None);
         let expected: u64 = report.players.iter().map(|p| p.damage.total).sum();
         assert_eq!(block.squad.total, expected, "no number may change in this spec");
     }
@@ -358,7 +452,7 @@ mod tests {
     fn skill_rows_reference_ids_and_register_them_in_the_catalog() {
         let (report, index) = crate::v1::blocks::tests_support::fixture_report();
         let mut cats = crate::v1::catalogs::CatalogBuilder::default();
-        let block = build_damage(&report, &index, &mut cats);
+        let block = build_damage(&report, &index, &mut cats, None);
 
         // Same real fixture id as the test above (see its comment).
         let squad_entity = index.by_agent_addr(4575).expect("squad player resolves");
@@ -395,7 +489,7 @@ mod tests {
         report.players[1].damage.total = 300;
         report.players[1].damage.dps = 30.0;
         let mut cats = CatalogBuilder::default();
-        let block = build_damage(&report, &index, &mut cats);
+        let block = build_damage(&report, &index, &mut cats, None);
 
         assert_eq!(block.by_entity.len(), 2, "by_entity is the full roster: squad AND non-squad friendlies");
         assert_eq!(block.squad.total, 500, "squad.total must be the in-squad player's damage only, not the sum of both");

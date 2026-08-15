@@ -258,7 +258,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // The enemy addr set + representative fold both enemy-side
             // passes need -- built at most once, and only when one of them
             // will actually run (a flagless parse pays nothing).
-            let enemy_sets = ((timeseries || skill_damage) && format == Format::EiJson).then(|| {
+            // Side-channel absorption Task 7: `enemy_dist` now lands on the
+            // native damage block, so its half of this gate no longer
+            // depends on the output format. `enemy_series` (Task 8) still
+            // does, hence the split rather than dropping the clause.
+            let enemy_sets = (skill_damage || (timeseries && format == Format::EiJson)).then(|| {
                 let enemies: std::collections::BTreeSet<u64> =
                     enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
                 let enemy_addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
@@ -268,15 +272,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .collect();
                 (enemies, enemy_addr_to_rep)
             });
-            let enemy_series = enemy_sets.as_ref().filter(|_| timeseries).map(|(en, rep)| {
-                axilog_core::analysis::timeseries::build_enemy_series(
-                    &enc,
-                    &raw,
-                    &axilog_core::analysis::damage::InstidRegistry::build(&raw),
-                    en,
-                    rep,
-                )
-            });
+            let enemy_series = enemy_sets
+                .as_ref()
+                .filter(|_| timeseries && format == Format::EiJson)
+                .map(|(en, rep)| {
+                    axilog_core::analysis::timeseries::build_enemy_series(
+                        &enc,
+                        &raw,
+                        &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+                        en,
+                        rep,
+                    )
+                });
             let target_conditions = (timeseries && format == Format::EiJson)
                 .then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
             // MEIGAP Task 2c: `targets[].totalDamageDist` rides
@@ -357,6 +364,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     damage_mods: damage_mods.as_ref(),
                     minions: minion_rollups.as_ref(),
                     health_percents: health_percents.as_ref(),
+                    enemy_dist: enemy_dist.as_ref(),
                 },
             );
             // Final-review fix wave: surface analysis warnings (e.g. a
@@ -387,7 +395,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     modifiers: damage_mods.as_ref(),
                     boon_states: boon_states.as_ref(),
                     enemy_series: enemy_series.as_ref(),
-                    enemy_dist: enemy_dist.as_ref(),
                     target_conditions: target_conditions.as_ref(),
                     healing_detail: healing_detail.as_ref(),
                     healing_series: timeseries,

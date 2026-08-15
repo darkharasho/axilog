@@ -176,6 +176,13 @@ pub struct Passes<'a> {
     /// MEIGAP2 row 2 `--timeseries`: per-player health-percent step series,
     /// keyed by the account's representative agent address.
     pub health_percents: Option<&'a std::collections::BTreeMap<u64, Vec<(u64, f64)>>>,
+    /// MEIGAP Task 2c `--skill-damage`: per-enemy outgoing per-skill damage,
+    /// keyed by the enemy's representative agent id (`Enemy::id`). Lands on
+    /// `blocks.damage.by_entity[enemy].by_skill` -- the same field the
+    /// player rows use, not a parallel enemy structure.
+    pub enemy_dist: Option<
+        &'a std::collections::BTreeMap<u64, Vec<axilog_core::analysis::skill_damage::SkillEntry>>,
+    >,
 }
 
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
@@ -200,7 +207,7 @@ pub fn build_report_v1(
     // Always-on blocks. `computed` distinguishes `Present` from `Empty` --
     // see its doc comment for why that distinction has to be made HERE, at
     // the only layer that knows a block both ran and produced nothing.
-    let damage_block = damage::build_damage(legacy, &index, &mut cats);
+    let damage_block = damage::build_damage(legacy, &index, &mut cats, passes.enemy_dist);
     coverage.set(BlockName::Damage, computed(damage_block.is_empty()));
     let defenses = defense::build_defenses(legacy, &index);
     coverage.set(BlockName::Defenses, computed(defenses.is_empty()));

@@ -38,6 +38,16 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
     );
     let minion_rollups = axilog_core::analysis::minions::build(&raw, &enc);
     let health_percents = axilog_core::analysis::health::ei_health_percents(&raw, &enc);
+    let enemy_dist = {
+        let enemies: std::collections::BTreeSet<u64> =
+            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+        let rep: std::collections::BTreeMap<u64, u64> = enc
+            .enemies
+            .iter()
+            .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
+            .collect();
+        axilog_core::analysis::skill_damage::build_enemy_dist(&raw, &enemies, &rep)
+    };
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -59,6 +69,7 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
             damage_mods: Some(&damage_mods),
             minions: Some(&minion_rollups),
             health_percents: Some(&health_percents),
+            enemy_dist: Some(&enemy_dist),
         },
     );
     (serde_json::to_value(&v1).expect("serializable"), enc)

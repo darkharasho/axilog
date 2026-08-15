@@ -6,7 +6,6 @@ use axilog_core::analysis::dist_outcomes::{DistOutcomes, SkillOutcomes};
 use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::analysis::replay::{ActivityIntervals, Interval};
 use axilog_core::analysis::healing_detail::{HealDistEntry, HealingDetail};
-use axilog_core::analysis::skill_damage::SkillEntry;
 use axilog_core::analysis::target_conditions::TargetConditionStates;
 use axilog_core::analysis::timeseries::EnemySeries;
 use axilog_core::icons::prof_icon_url;
@@ -269,28 +268,6 @@ fn dist_rows_ei_json(
         .collect();
     Value::Array(rows)
 }
-
-/// [`skill_entry_ei_json`]'s enemy-side twin: one
-/// `targets[].totalDamageDist[0][]` entry (MEIGAP Task 2c).
-///
-/// Same fields, ONE addition: `connectedHits`. On the player side that key
-/// is deliberately omitted (see [`skill_entry_ei_json`]'s doc comment --
-/// this project tracks no missed/blocked/evaded outcomes, so it cannot
-/// distinguish EI's `hits` from its `connectedHits`). On the ENEMY side the
-/// distinction is forced, because axibridge's damage-mitigation math
-/// divides by `connectedHits` specifically
-/// (`computePlayerAggregation.ts:277-286`, `avg = totalDamage /
-/// connectedHits`) and would otherwise get a `0` denominator and drop the
-/// skill entirely (`if (!enemy.hasSkill || enemy.hits <= 0) return;`).
-///
-/// So the CONTRIBUTING-hit count this project tracks is emitted under the
-/// key whose EI meaning it actually reproduces -- `connectedHits` is
-/// `dmgEvt.HasHit ? 1 : 0` (`JsonDamageDistBuilder.cs:72`), and a
-/// blocked/evaded/missed/invulned row (the `HasHit == false` cases) carries
-/// `dmg == 0` and is skipped by this project's damage predicate. `hits`
-/// (EI's attempt count) stays absent rather than being filled with a number
-/// that means something else; the exact residual is stated in
-/// `skill_damage::build_enemy_dist`'s doc comment.
 /// `extHealingStats.totalHealingDist[0]` / `extBarrierStats
 /// .totalBarrierDist[0]` (MEIGAP Task 3a) -- GW2EI's `EXTJsonHealingDist`
 /// / `EXTJsonBarrierDist` shape, field-for-field.
@@ -320,18 +297,6 @@ fn heal_dist_json(rows: &[HealDistEntry], total_key: &str, with_downed: bool) ->
             })
             .collect(),
     )
-}
-
-fn enemy_skill_entry_ei_json(e: &SkillEntry) -> Value {
-    json!({
-        "id": e.skill_id,
-        "totalDamage": e.total,
-        "min": e.min,
-        "max": e.max,
-        "connectedHits": e.hits,
-        "crit": e.crit_hits,
-        "flank": e.flank_hits,
-    })
 }
 
 /// `damageModifiers[].damageModifiers[].damageGain` (M16, Task 3).
@@ -715,18 +680,6 @@ pub struct EiInputs<'a> {
     /// **Size (measured, `fixtures/wvw-small.anon.zevtc`, pretty-printed):**
     /// see this crate's `targets[]` block comment.
     pub enemy_series: Option<&'a BTreeMap<u64, EnemySeries>>,
-    /// `enemy_dist` (MEIGAP Task 2c): per-enemy outgoing per-skill damage
-    /// distribution from `axilog_core::analysis::skill_damage::
-    /// build_enemy_dist`, or `None`. The OPT-IN gate for
-    /// `targets[].totalDamageDist`.
-    ///
-    /// Unlike its two siblings here, GW2EI emits this UNCONDITIONALLY
-    /// (`JsonActorBuilder.cs:87` sits outside every
-    /// `RawFormatTimelineArrays` block). It rides `--skill-damage` here for
-    /// the same reason the player-side `totalDamageDist` already does --
-    /// payload -- and axibridge hardcodes that flag to `true`, so the read
-    /// surface is unchanged (see the cutover report's flag table).
-    pub enemy_dist: Option<&'a BTreeMap<u64, Vec<SkillEntry>>>,
     /// `target_conditions` (MEIGAP Task 2d): per-(enemy, condition)
     /// source-split stack timelines from
     /// `axilog_core::analysis::target_conditions::build`, or `None`. The
@@ -755,9 +708,9 @@ pub struct EiInputs<'a> {
     /// the two flag bits the caller sets alongside it.
     ///
     /// Side-channel rather than a `Report` field for the same reason
-    /// [`Self::enemy_dist`] is: it is a per-(player, ally) matrix and a
-    /// per-skill map that the native schema deliberately reduces to the
-    /// five `HealingOut` scalars.
+    /// `enemy_dist` was until Task 7 absorbed it: it is a per-(player, ally)
+    /// matrix and a per-skill map that the native schema deliberately
+    /// reduces to the five `HealingOut` scalars. Task 10 moves it.
     pub healing_detail: Option<&'a HealingDetail>,
     /// Emit `extHealingStats.healing1S` -- set by the caller exactly when
     /// `--timeseries`/SDK `timeseries: true` was requested, GW2EI's own
@@ -944,7 +897,6 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         modifiers,
         boon_states,
         enemy_series,
-        enemy_dist,
         target_conditions,
         healing_detail,
         healing_series,
@@ -2202,6 +2154,20 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // `ei_replay` in particular is never absorbed at all (it is derived
     // inside this adapter once `EiInputs` dies).
     let join = crate::join::EiJoin::new(report);
+    // The `--skill-damage` presence signal for `targets[].totalDamageDist`.
+    //
+    // Task 7 absorbed the DATA onto `blocks.damage`, but not the gate: an
+    // empty `by_skill` on an enemy row cannot distinguish "the flag was off"
+    // from "this enemy landed nothing", and the flagless render must omit
+    // the key rather than emit `[[]]`. So this reads the exact predicate the
+    // player-side `totalDamageDist` branch already uses several hundred
+    // lines above (`PlayerOut::skill_damage`'s presence), which is driven by
+    // the same `include_skill_damage` flag -- deliberately the SAME signal,
+    // so the two sides cannot come to disagree about whether the gate was
+    // on. It is the one thing here still read off `legacy`; Task 13 has to
+    // give the document a native gate record for the player side anyway, and
+    // both sides move to it together at that point.
+    let skill_damage_requested = legacy.players.iter().any(|p| p.skill_damage.is_some());
     let target_json: Box<dyn FnMut(usize) -> Value + 'a> = Box::new(move |target_idx: usize| {
         let entity_id = report.source_order.targets().get(target_idx).copied();
         let entity = entity_id.and_then(|id| join.entity(id));
@@ -2350,16 +2316,40 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             obj.insert("damage1S".to_string(), json!([damage]));
             obj.insert("powerDamage1S".to_string(), json!([power]));
         }
-        if let Some(dist) = enemy_dist {
+        if skill_damage_requested {
             // `targets[].totalDamageDist[0]`: this enemy's OUTGOING damage
             // by skill, ACTOR-ONLY (`GetJustActorDamageEvents`) -- see
             // `skill_damage::build_enemy_dist`'s doc comment, including why
-            // the contributing-hit count is emitted as `connectedHits`
+            // the connecting-hit count is emitted as `connectedHits`
             // (the key axibridge's mitigation math divides by) rather than
             // as EI's attempt-count `hits`.
-            let skills: Vec<Value> = dist
-                .get(&enemy_id)
-                .map(|v| v.iter().map(enemy_skill_entry_ei_json).collect())
+            //
+            // Side-channel absorption Task 7: read off the enemy's own
+            // `blocks.damage` row, the SAME `by_skill` map the player rows
+            // use. `SkillRow::connected_hits` is the field the enemy pass
+            // fills (`SkillRow::hits` is the friendly side's
+            // contributing-row count and is absent here) -- so this maps
+            // one field to one key rather than reinterpreting `hits` by the
+            // row's role, which is what putting both counts in one field
+            // would have forced.
+            let skills: Vec<Value> = entity_id
+                .and_then(|id| report.blocks.damage.as_ref()?.by_entity.get(id))
+                .map(|d| {
+                    d.by_skill
+                        .iter()
+                        .map(|(skill_id, r)| {
+                            json!({
+                                "id": skill_id,
+                                "totalDamage": r.total,
+                                "min": r.min,
+                                "max": r.max,
+                                "connectedHits": r.connected_hits.unwrap_or(0),
+                                "crit": r.crit_hits,
+                                "flank": r.flank_hits,
+                            })
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
             obj.insert("totalDamageDist".to_string(), json!([skills]));
         }
