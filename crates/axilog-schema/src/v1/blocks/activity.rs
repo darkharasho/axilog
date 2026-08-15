@@ -32,9 +32,12 @@ pub struct RotationEntity {
     /// Aftercast/interrupt cast counters -- the legacy
     /// `PlayerOut::aftercast`, which the spec's own block-source table
     /// assigns to `rotation` but which no builder read before the final
-    /// review. Always present on a row that exists (the legacy field is
-    /// ungated), though the enclosing block is gated on `--rotation` like
-    /// the casts themselves.
+    /// review.
+    ///
+    /// Ungated, and so is the row carrying it: this block is built even
+    /// when `--rotation` is off, precisely so that turning the CASTS gate
+    /// off cannot take this with it. `casts` is then empty and
+    /// `coverage.rotation` reports which case it is.
     pub aftercast: Aftercast,
 }
 
@@ -311,9 +314,12 @@ pub fn build_rotation(
     let mut by_entity = ByEntity::default();
     for p in &report.players {
         let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
-        let Some(rot) = p.rotation.as_ref() else { continue };
+        // NOT `else { continue }` on a missing rotation: `aftercast` below
+        // is ungated, so skipping the row would drop it whenever
+        // `--rotation` is off. An empty `casts` is the honest answer for
+        // the gated half; `coverage.rotation` is what says which it is.
         let mut casts = Vec::new();
-        for skill in rot {
+        for skill in p.rotation.iter().flatten() {
             cats.reference_skill(skill.skill_id);
             for c in &skill.casts {
                 casts.push(CastRow {

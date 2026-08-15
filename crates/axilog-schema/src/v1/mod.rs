@@ -186,9 +186,18 @@ pub fn build_report_v1(
     // same rule the legacy shape already uses. A gate that was ON but
     // produced no rows is `Empty`, not `Present` -- the gate answers
     // "did it run", the row count answers "was there anything".
-    let rotation = legacy.players.iter().any(|p| p.rotation.is_some()).then(|| {
+    // `rotation` is the one exception to the rule above, because it carries
+    // TWO quantities with different gates: `casts` is gated on `--rotation`,
+    // but `aftercast` is computed unconditionally. Gating the whole block on
+    // the casts meant an ungated legacy field silently vanished whenever
+    // `--rotation` was off -- which the ei-json adapter then read as four
+    // zeroes rather than the real counters. So the block is always built,
+    // and `coverage` keeps its exact meaning by answering the casts question
+    // it always answered: `Present` only when some row actually has casts.
+    let rotation = Some({
         let block = activity::build_rotation(legacy, &index, &mut cats);
-        coverage.set(BlockName::Rotation, computed(block.is_empty()));
+        let no_casts = block.by_entity.0.values().all(|r| r.casts.is_empty());
+        coverage.set(BlockName::Rotation, computed(no_casts));
         block
     });
     let damage_mods_block = legacy.damage_mod_map.is_some().then(|| {

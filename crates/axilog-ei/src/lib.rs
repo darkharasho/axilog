@@ -1005,8 +1005,32 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
     // cloned in (a <=3-entry `BTreeMap<&str, u64>`) so the outer
     // `team_id_for` and the `targets` builder can each keep their own.
     let detected_players = detected.clone();
+    // Task 4: `players[]` is indexed by EI position, and `source_order`
+    // is what maps that position back to a native entity id. Resolved
+    // once per row here so every block lookup below shares one join --
+    // the whole reason `EiJoin` exists (see `join.rs`'s module doc).
+    let player_ids: Vec<u32> = report.source_order.players().to_vec();
     let player_json: Box<dyn FnMut(usize) -> Value + 'a> = Box::new(move |player_idx: usize| {
         let p = &legacy.players[player_idx];
+        // The native rows backing this player. Blocks are `Option` (the
+        // compute gates) and `by_entity` is sparse, so each is an
+        // `Option<&Row>` and every read below carries its own zero
+        // default -- an absent row means "this entity did nothing of that
+        // kind", which is genuinely zero, not unknown.
+        let entity_id = player_ids.get(player_idx).copied();
+        let n_damage = entity_id
+            .and_then(|id| report.blocks.damage.as_ref()?.by_entity.get(id));
+        let n_hit_stats = entity_id
+            .and_then(|id| report.blocks.hit_stats.as_ref()?.by_entity.get(id));
+        let n_defenses = entity_id
+            .and_then(|id| report.blocks.defenses.as_ref()?.by_entity.get(id));
+        let n_cc = entity_id.and_then(|id| report.blocks.cc.as_ref()?.by_entity.get(id));
+        let n_support = entity_id
+            .and_then(|id| report.blocks.support.as_ref()?.by_entity.get(id));
+        let n_contribution = entity_id
+            .and_then(|id| report.blocks.contribution.as_ref()?.by_entity.get(id));
+        let n_rotation = entity_id
+            .and_then(|id| report.blocks.rotation.as_ref()?.by_entity.get(id));
         let team_id_for = |color: &str| -> u64 {
             detected_players.get(color).copied().unwrap_or_else(|| representative_team_id(color))
         };
@@ -1041,11 +1065,11 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
         // not a parity claim — a consumer wanting EI's OWN algorithm's
         // number has no equivalent field in this adapter's output at all.
         let stats_all = json!([ {
-            "downContribution": p.downs_contribution.damage,
-            "killed": p.kills_dealt,
-            "downed": p.downs_dealt,
-            "appliedCrowdControl": p.cc.applied_total,
-            "appliedCrowdControlDuration": p.cc.applied_duration_ms,
+            "downContribution": n_contribution.map_or(0, |c| c.downs_contribution.damage),
+            "killed": n_damage.map_or(0, |d| d.kills_dealt),
+            "downed": n_damage.map_or(0, |d| d.downs_dealt),
+            "appliedCrowdControl": n_cc.map_or(0, |c| c.applied_total),
+            "appliedCrowdControlDuration": n_cc.map_or(0, |c| c.applied_duration_ms),
             // M13 Task 3: outgoing hit-quality fields, mapped from
             // `p.hit_stats` (`HitStatsOut`, mirrors `axilog_core::
             // analysis::hit_stats::HitStats` field-for-field -- see that
@@ -1059,26 +1083,26 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // present (not gated) -- `hit_stats` is unconditionally
             // computed by `analyze()`, same "always-on" convention as the
             // down-contribution/CC fields above.
-            "criticalRate": p.hit_stats.crit_count,
-            "criticalDmg": p.hit_stats.crit_damage,
-            "flankingRate": p.hit_stats.flank_count,
-            "glanceRate": p.hit_stats.glance_count,
-            "againstMovingRate": p.hit_stats.moving_count,
-            "connectedDamageCount": p.hit_stats.connected_count,
-            "connectedDmg": p.hit_stats.connected_damage,
-            "connectedDirectDamageCount": p.hit_stats.direct_count,
-            "connectedDirectDmg": p.hit_stats.direct_damage,
-            "connectedConditionCount": p.hit_stats.condition_count,
-            "connectedConditionDamage": p.hit_stats.condition_damage,
-            "critableDirectDamageCount": p.hit_stats.critable_direct_count,
-            "againstDownedCount": p.hit_stats.against_downed_count,
-            "againstDownedDamage": p.hit_stats.against_downed_damage,
-            "connectedLifeLeechCount": p.hit_stats.life_leech_count,
-            "connectedLifeLeechDamage": p.hit_stats.life_leech_damage,
-            "connectedPowerAbove90HPCount": p.hit_stats.above90_power_count,
-            "connectedPowerAbove90HPDamage": p.hit_stats.above90_power_damage,
-            "connectedConditionAbove90HPCount": p.hit_stats.above90_condition_count,
-            "connectedConditionAbove90HPDamage": p.hit_stats.above90_condition_damage,
+            "criticalRate": n_hit_stats.map_or(0, |h| h.crit_count),
+            "criticalDmg": n_hit_stats.map_or(0, |h| h.crit_damage),
+            "flankingRate": n_hit_stats.map_or(0, |h| h.flank_count),
+            "glanceRate": n_hit_stats.map_or(0, |h| h.glance_count),
+            "againstMovingRate": n_hit_stats.map_or(0, |h| h.moving_count),
+            "connectedDamageCount": n_hit_stats.map_or(0, |h| h.connected_count),
+            "connectedDmg": n_hit_stats.map_or(0, |h| h.connected_damage),
+            "connectedDirectDamageCount": n_hit_stats.map_or(0, |h| h.direct_count),
+            "connectedDirectDmg": n_hit_stats.map_or(0, |h| h.direct_damage),
+            "connectedConditionCount": n_hit_stats.map_or(0, |h| h.condition_count),
+            "connectedConditionDamage": n_hit_stats.map_or(0, |h| h.condition_damage),
+            "critableDirectDamageCount": n_hit_stats.map_or(0, |h| h.critable_direct_count),
+            "againstDownedCount": n_hit_stats.map_or(0, |h| h.against_downed_count),
+            "againstDownedDamage": n_hit_stats.map_or(0, |h| h.against_downed_damage),
+            "connectedLifeLeechCount": n_hit_stats.map_or(0, |h| h.life_leech_count),
+            "connectedLifeLeechDamage": n_hit_stats.map_or(0, |h| h.life_leech_damage),
+            "connectedPowerAbove90HPCount": n_hit_stats.map_or(0, |h| h.above90_power_count),
+            "connectedPowerAbove90HPDamage": n_hit_stats.map_or(0, |h| h.above90_power_damage),
+            "connectedConditionAbove90HPCount": n_hit_stats.map_or(0, |h| h.above90_condition_count),
+            "connectedConditionAbove90HPDamage": n_hit_stats.map_or(0, |h| h.above90_condition_damage),
             // MSMALL item 3: the `JsonGameplayStatsAll` aftercast/interrupt
             // family, from `p.aftercast` (`AftercastOut`, mirroring
             // `axilog_core::analysis::rotation::AftercastStats` -- see that
@@ -1104,10 +1128,10 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // Calibrated on `fixtures/local/wvw-postrework.zevtc` against
             // that log's own EI export: all FOUR fields exact for all 44
             // players.
-            "saved": p.aftercast.saved_count,
-            "timeSaved": ei_time_secs(p.aftercast.saved_ms.max(0) as u64),
-            "wasted": p.aftercast.wasted_count,
-            "timeWasted": ei_time_secs(p.aftercast.wasted_ms.max(0) as u64)
+            "saved": n_rotation.map_or(0, |r| r.aftercast.saved_count),
+            "timeSaved": ei_time_secs(n_rotation.map_or(0, |r| r.aftercast.saved_ms).max(0) as u64),
+            "wasted": n_rotation.map_or(0, |r| r.aftercast.wasted_count),
+            "timeWasted": ei_time_secs(n_rotation.map_or(0, |r| r.aftercast.wasted_ms).max(0) as u64)
         } ]);
         // Real EI's `statsTargets[targetIndex][phaseIndex]` carries a large
         // per-target breakdown (including its own per-target
@@ -1218,16 +1242,16 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // minion fold) is not computed separately and is omitted
             // rather than faked with the folded number.
             "dpsAll": [ {
-                "dps": p.damage.dps.round() as i64,
-                "damage": p.damage.total,
-                "breakbarDamage": ei_breakbar(p.breakbar_damage_dealt),
+                "dps": n_damage.map_or(0.0, |d| d.dps).round() as i64,
+                "damage": n_damage.map_or(0, |d| d.total),
+                "breakbarDamage": ei_breakbar(n_damage.map_or(0, |d| d.breakbar_damage_dealt)),
             } ],
             "statsAll": stats_all,
             "statsTargets": stats_targets,
             "defenses": [ {
-                "downCount": p.downs_taken,
-                "deadCount": p.deaths,
-                "damageTaken": p.damage_taken,
+                "downCount": n_defenses.map_or(0, |d| d.downs_taken),
+                "deadCount": n_defenses.map_or(0, |d| d.deaths),
+                "damageTaken": n_damage.map_or(0, |d| d.taken),
                 // M13 Task 3: hit-outcome + damage-taken breakdown fields,
                 // mapped from `p.defenses` (`DefensesOut`, mirrors
                 // `axilog_core::analysis::defenses::DefenseStats`
@@ -1242,7 +1266,7 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 //
                 // IMPORTANT -- `lifeLeechDamageTakenCount` intentionally
                 // diverges from real EI: this emits OUR correct derived
-                // value (`p.defenses.life_leech_count`), NOT a
+                // value (`n_defenses.map_or(0, |d| d.life_leech_count)`), NOT a
                 // reproduction of GW2EI's own real, verified counting bug
                 // (`DefensePerTargetStatistics.cs`'s life-leech branch
                 // increments the SUM field a second time instead of the
@@ -1258,22 +1282,22 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 // derived TRUE reference instead of the fixture's raw
                 // (buggy) value, mirroring `defenses_golden.rs`'s own
                 // native-layer calibration.
-                "blockedCount": p.defenses.blocked_count,
-                "evadedCount": p.defenses.evaded_count,
-                "dodgeCount": p.defenses.dodge_count,
-                "missedCount": p.defenses.missed_count,
-                "interruptedCount": p.defenses.interrupted_count,
-                "invulnedCount": p.defenses.invulned_count,
-                "strikeDamageTaken": p.defenses.strike_damage,
-                "strikeDamageTakenCount": p.defenses.strike_count,
-                "powerDamageTaken": p.defenses.power_damage,
-                "powerDamageTakenCount": p.defenses.power_count,
-                "conditionDamageTaken": p.defenses.condition_damage,
-                "conditionDamageTakenCount": p.defenses.condition_count,
-                "lifeLeechDamageTaken": p.defenses.life_leech_damage,
-                "lifeLeechDamageTakenCount": p.defenses.life_leech_count,
-                "damageBarrier": p.defenses.barrier_damage,
-                "damageBarrierCount": p.defenses.barrier_count,
+                "blockedCount": n_defenses.map_or(0, |d| d.blocked_count),
+                "evadedCount": n_defenses.map_or(0, |d| d.evaded_count),
+                "dodgeCount": n_defenses.map_or(0, |d| d.dodge_count),
+                "missedCount": n_defenses.map_or(0, |d| d.missed_count),
+                "interruptedCount": n_defenses.map_or(0, |d| d.interrupted_count),
+                "invulnedCount": n_defenses.map_or(0, |d| d.invulned_count),
+                "strikeDamageTaken": n_defenses.map_or(0, |d| d.strike_damage),
+                "strikeDamageTakenCount": n_defenses.map_or(0, |d| d.strike_count),
+                "powerDamageTaken": n_defenses.map_or(0, |d| d.power_damage),
+                "powerDamageTakenCount": n_defenses.map_or(0, |d| d.power_count),
+                "conditionDamageTaken": n_defenses.map_or(0, |d| d.condition_damage),
+                "conditionDamageTakenCount": n_defenses.map_or(0, |d| d.condition_count),
+                "lifeLeechDamageTaken": n_defenses.map_or(0, |d| d.life_leech_damage),
+                "lifeLeechDamageTakenCount": n_defenses.map_or(0, |d| d.life_leech_count),
+                "damageBarrier": n_defenses.map_or(0, |d| d.barrier_damage),
+                "damageBarrierCount": n_defenses.map_or(0, |d| d.barrier_count),
                 // MEIGAP2 review: this was emitting RAW arcdps units, ten
                 // times GW2EI's own number, and the milestone that added
                 // the DEALT twin would otherwise have shipped the two
@@ -1295,8 +1319,8 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 // changes the rendered document only on a log that has
                 // squad-directed breakbar damage. `breakbarDamageTakenCount`
                 // is a count and is untouched.
-                "breakbarDamageTaken": ei_breakbar(p.defenses.breakbar_damage),
-                "breakbarDamageTakenCount": p.defenses.breakbar_count,
+                "breakbarDamageTaken": ei_breakbar(n_defenses.map_or(0, |d| d.breakbar_damage)),
+                "breakbarDamageTakenCount": n_defenses.map_or(0, |d| d.breakbar_count),
                 // MEIGAP Task 1c: incoming CC + incoming boon strips, the
                 // last four always-on `defenses[0]` fields axibridge reads.
                 // Mapped from `p.defenses` like every field above -- see
@@ -1332,10 +1356,10 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 // per-boon removal count and every removal after the first;
                 // EI's `Max` swallows the first one's duration).
                 // `TimeDigit` is 3, matching the export's own precision.
-                "receivedCrowdControl": p.defenses.received_cc_count,
-                "receivedCrowdControlDuration": p.defenses.received_cc_duration_ms,
-                "boonStrips": p.defenses.boon_strips_taken,
-                "boonStripsTime": ei_time_secs(p.defenses.boon_strips_taken_duration_ms)
+                "receivedCrowdControl": n_defenses.map_or(0, |d| d.received_cc_count),
+                "receivedCrowdControlDuration": n_defenses.map_or(0, |d| d.received_cc_duration_ms),
+                "boonStrips": n_defenses.map_or(0, |d| d.boon_strips_taken),
+                "boonStripsTime": ei_time_secs(n_defenses.map_or(0, |d| d.boon_strips_taken_duration_ms))
             } ],
             // EI places stun-break stats under `support`, not `defenses` — verified
             // against GW2EI's `SupportAllStatistics` (StunBreakCount /
@@ -1351,11 +1375,11 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
             // sibling fields real EI also carries aren't computed here, so they're
             // omitted rather than faked (same convention as `statsTargets` above).
             "support": [ {
-                "stunBreak": p.cc.stun_breaks,
-                "removedStunDuration": p.cc.removed_stun_duration_ms as f64 / 1000.0,
-                "condiCleanse": p.support.cleanses,
-                "condiCleanseSelf": p.support.cleanses_self,
-                "boonStrips": p.support.strips,
+                "stunBreak": n_cc.map_or(0, |c| c.stun_breaks),
+                "removedStunDuration": n_cc.map_or(0, |c| c.removed_stun_duration_ms) as f64 / 1000.0,
+                "condiCleanse": n_support.map_or(0, |s| s.cleanses),
+                "condiCleanseSelf": n_support.map_or(0, |s| s.cleanses_self),
+                "boonStrips": n_support.map_or(0, |s| s.strips),
                 // MEIGAP Task 3e: the outgoing twin of
                 // `defenses[0].boonStripsTime`, and the same deliberate,
                 // calibrated divergence -- axilog emits the TRUE sum in
@@ -1366,8 +1390,8 @@ fn ei_doc<'a>(report: &'a ReportV1, legacy: &'a Report, inputs: &EiInputs<'a>) -
                 // `axilog_core::analysis::support::SupportMetrics::
                 // strips_duration_ms` for the full transcription and what
                 // the calibration's reconstruction pins.
-                "boonStripsTime": ei_time_secs(p.support.strips_duration_ms),
-                "resurrects": p.support.resurrects
+                "boonStripsTime": ei_time_secs(n_support.map_or(0, |s| s.strips_duration_ms)),
+                "resurrects": n_support.map_or(0, |s| s.resurrects)
             } ],
             // `buffUptimes[]` (M3 Task 5): one entry per tracked boon (the 12 in
             // `BOON_IDS`), in that table's order. Field meanings verified against
