@@ -1282,4 +1282,31 @@ Two things worth noting for anyone sizing a transport:
   for. Any future size work should be specified against those, not against
   bytes on the wire.
 
+### Consumer-side parse cost — the measurement that should drive size work
+
+Transfer bytes are close to a solved problem (gzip is 17.9×). What is not
+solved is what a CONSUMER pays to turn the document back into objects, which
+is what the size work was asked to be specified against. Measured in Node 
+(`JSON.parse`, best of 5, heap delta with the result retained):
+
+| Form | Bytes | `JSON.parse` | Retained heap |
+|---|---:|---:|---:|
+| pretty (what `--format json` emits) | 7.05 MB | 19.3 ms | +5.3 MB |
+| compact (identical content) | 2.00 MB | **9.0 ms** | +5.2 MB |
+
+**Pretty-printing costs 10.3 ms — 53% of parse time — for zero content.**
+The retained heap is identical, because the object graph is the same; the
+difference is entirely whitespace the parser must walk and discard.
+
+That reorders the obvious size levers. Structural dedup, f64→f32 narrowing
+and a binary encoding (`rmp-serde`/CBOR) all attack the 5.2 MB retained heap
+and the remaining 9 ms, and each is a format change with a compatibility
+cost. Emitting compact JSON for machine consumers is neither, and it is the
+larger win of the two. Any spec for the format-level work should start from
+the 9.0 ms / 5.2 MB baseline, not the 19.3 ms one, or it will credit itself
+with a saving that a serializer flag already delivers.
+
+Method: `node -e` over the `--all` document, both forms byte-for-byte the
+same content (`json.dumps(..., separators=(',',':'))` of the pretty form).
+
 Run: `/usr/bin/time -v axilog parse <log> --all --format json -o /dev/null`
