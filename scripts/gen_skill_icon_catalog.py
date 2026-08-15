@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Regenerate `analysis::skill_icons` from the official GW2 API.
+
+axilog computes a skill's name from the log's own skill table, which is all
+an arcdps log carries. Icons and auto-attack classification are NOT in the
+log -- they live in ArenaNet's skill database -- so they are EXTRACTED here
+rather than guessed, the same discipline `gen_damage_mod_catalog.py` applies
+to the GW2EI damage-modifier definitions.
+
+Two fields are produced, both read straight off `/v2/skills`:
+
+  icon         `skill.icon`, verbatim.
+  auto_attack  `skill.slot == "Weapon_1"`. GW2 has no `autoAttack` field;
+               the first weapon slot IS the auto-attack chain, and that
+               positional rule is the same one GW2EI applies. Skills with
+               NO slot at all (transforms, shared/bundle entries, most
+               non-equippable skills) get `None`, not `false` -- absence of
+               a slot means the question does not apply, and answering
+               `false` would assert something the API never said.
+
+Nothing here guesses. A skill missing an icon, or carrying one that does
+not match the render-service URL shape, raises `Skip` and lands in the
+skipped table WITH its reason instead of producing a wrong entry. The
+accounting printed at the end -- `considered == transcribed + skipped` --
+is the machine-diff behind the catalog's completeness claim.
+
+Icons are stored as `(signature, file_id)` rather than as whole URLs: every
+one of them is `https://render.guildwars2.com/file/<SIG>/<FILE_ID>.png`,
+verified for all of them at generation time, so keeping the shared prefix
+4,700 times over would be pure payload. `skill_icons::icon` rebuilds it.
+
+Usage:
+
+    python3 scripts/gen_skill_icon_catalog.py [cached-skills.json]
+
+then `git diff`: a clean tree means the committed catalog is exactly what
+the current GW2 API returns. With no argument it fetches from the API;
+pass a previously-fetched `/v2/skills` array to regenerate offline.
+Standard library only.
+"""
+
+import collections
+import json
+import os
+import re
+import sys
+import time
+import urllib.request
+
+API = "https://api.guildwars2.com/v2/skills"
+BATCH = 200
+ICON_RE = re.compile(r"^https://render\.guildwars2\.com/file/([0-9A-F]{40})/(\d+)\.png$")
+
+OUT = os.path.normpath(
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "crates", "axilog-core", "src", "analysis", "skill_icons.rs",
+    )
+)
+
+
+class Skip(Exception):
+    """A skill that cannot be transcribed, carrying the reason why."""
+
+
+def get(url, attempts=3):
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=45) as r:
+                return json.load(r)
+        except Exception:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(2)
+
+
+def fetch_all():
+    ids = get(API)
+    out = []
+    for i in range(0, len(ids), BATCH):
+        batch = ",".join(str(x) for x in ids[i:i + BATCH])
+        out.extend(get(f"{API}?ids={batch}"))
+        print(f"  fetched {len(out)}/{len(ids)}", file=sys.stderr)
+    return out
+
+
+def transcribe(skill):
+    icon = skill.get("icon")
+    if not icon:
+        raise Skip("no icon in the API record")
+    m = ICON_RE.match(icon)
+    if not m:
+        raise Skip("icon URL does not match the render-service shape")
+    slot = skill.get("slot")
+    auto = None if slot is None else (slot == "Weapon_1")
+    return m.group(1), int(m.group(2)), auto
+
+
+def main():
+    skills = json.load(open(sys.argv[1])) if len(sys.argv) > 1 else fetch_all()
+
+    rows, skipped = [], collections.Counter()
+    for skill in sorted(skills, key=lambda s: s["id"]):
+        try:
+            sig, file_id, auto = transcribe(skill)
+        except Skip as e:
+            skipped[str(e)] += 1
+            continue
+        rows.append((skill["id"], sig, file_id, auto))
+
+    with open(OUT, "w") as f:
+        f.write(HEADER.format(
+            count=len(rows),
+            considered=len(skills),
+            skipped=sum(skipped.values()),
+            # No leading indent: rustdoc reads a 4-space-indented block in a
+            # doc comment as a Rust code sample and tries to compile it.
+            skip_table="\n".join(f"//! - {n} {reason}" for reason, n in skipped.most_common()),
+        ))
+        for skill_id, sig, file_id, auto in rows:
+            auto_lit = {None: "None", True: "Some(true)", False: "Some(false)"}[auto]
+            f.write(f'    ({skill_id}, "{sig}", {file_id}, {auto_lit}),\n')
+        f.write("];\n")
+
+    print(f"considered {len(skills)} = transcribed {len(rows)} + skipped {sum(skipped.values())}")
+    for reason, n in skipped.most_common():
+        print(f"  skipped {n}: {reason}")
+    assert len(skills) == len(rows) + sum(skipped.values()), "accounting must balance"
+
+
+HEADER = '''//! Skill icons and auto-attack classification, from the official GW2 API.
+//!
+//! GENERATED by `scripts/gen_skill_icon_catalog.py` -- do not hand-edit.
+//! Re-run it and `git diff` to verify this table against the live API.
+//!
+//! An arcdps log carries skill NAMES (badly, and only for what it saw) and
+//! nothing else about a skill. Icons and auto-attack status come from
+//! ArenaNet's database, so they are extracted rather than inferred. The
+//! generator's accounting for this table:
+//!
+//! considered {considered} = transcribed {count} + skipped {skipped}
+//!
+{skip_table}
+//!
+//! Entries are sorted by id so lookups can binary-search.
+
+/// The render service every icon lives on. Factored out of the table
+/// because it is identical for all {count} entries.
+const RENDER_PREFIX: &str = "https://render.guildwars2.com/file/";
+
+/// The icon URL for `id`, or `None` when the GW2 API has no icon for it.
+///
+/// Rebuilt from the stored `(signature, file_id)` -- see the module doc.
+pub fn icon(id: u32) -> Option<String> {{
+    lookup(id).map(|&(_, sig, file_id, _)| format!("{{RENDER_PREFIX}}{{sig}}/{{file_id}}.png"))
+}}
+
+/// Whether `id` is an auto-attack, or `None` when the question does not
+/// apply (the API gives it no weapon/utility slot) or the skill is unknown.
+///
+/// Two different absences collapse to `None` here on purpose: callers
+/// treat "we cannot say" identically either way, and neither is `false`.
+pub fn auto_attack(id: u32) -> Option<bool> {{
+    lookup(id).and_then(|&(_, _, _, auto)| auto)
+}}
+
+fn lookup(id: u32) -> Option<&'static (u32, &'static str, u32, Option<bool>)> {{
+    SKILL_ICONS
+        .binary_search_by_key(&id, |&(sid, _, _, _)| sid)
+        .ok()
+        .map(|i| &SKILL_ICONS[i])
+}}
+
+/// `(skill_id, icon_signature, icon_file_id, auto_attack)`.
+///
+/// `auto_attack` is `None` when the API gives the skill no slot at all --
+/// the question does not apply, which is not the same as `Some(false)`.
+pub static SKILL_ICONS: &[(u32, &str, u32, Option<bool>)] = &[
+'''
+
+if __name__ == "__main__":
+    main()

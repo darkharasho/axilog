@@ -94,6 +94,7 @@ pub mod rotation;
 /// per-player data" placement). See `skill_map`'s module doc for the full
 /// name-gap-vs-EI honesty writeup and the `is_swap`/`can_crit`/`auto_attack`
 /// citation trail.
+pub mod skill_icons;
 pub mod skill_map;
 
 /// Damage modifiers -- GW2EI's "+X% while ..." framework (M16): definition

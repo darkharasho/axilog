@@ -263,7 +263,9 @@ catalogs.damage_mods.<id>.non_multiplier
 catalogs.damage_mods.<id>.skill_based
 catalogs.skills
 catalogs.skills.<id>
+catalogs.skills.<id>.auto_attack
 catalogs.skills.<id>.can_crit
+catalogs.skills.<id>.icon
 catalogs.skills.<id>.is_swap
 catalogs.skills.<id>.name
 coverage

@@ -22,6 +22,13 @@ pub struct Catalogs {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct SkillEntry {
     pub name: String,
+    /// The `render.guildwars2.com` asset URL, from the generated GW2 API
+    /// catalog (`axilog_core::analysis::skill_icons`). Omitted for ids the
+    /// API has no icon for, and for the log-table ids that are not real
+    /// API skills at all -- an absent icon is the honest answer, and a
+    /// consumer rendering icons already has to handle a missing one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     pub is_swap: bool,
     pub can_crit: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,9 +140,17 @@ impl CatalogBuilder {
                         name: entry
                             .map(|e| e.name.clone())
                             .unwrap_or_else(|| format!("Skill {id}")),
+                        icon: axilog_core::analysis::skill_icons::icon(id),
                         is_swap: entry.map(|e| e.is_swap).unwrap_or(false),
                         can_crit: entry.map(|e| e.can_crit).unwrap_or(true),
-                        auto_attack: entry.and_then(|e| e.auto_attack),
+                        // The log never carries this; the generated GW2 API
+                        // catalog is the only source. Kept as a fallback to
+                        // whatever the pipeline resolved, which is `None`
+                        // everywhere today, so the catalog is in practice
+                        // the answer.
+                        auto_attack: entry
+                            .and_then(|e| e.auto_attack)
+                            .or_else(|| axilog_core::analysis::skill_icons::auto_attack(id)),
                     },
                 )
             })
@@ -278,6 +293,39 @@ mod tests {
         // 5491 once, plus the always-on 9999 the skill table carries.
         assert_eq!(c.skills.len(), 2);
         assert!(c.skills.contains_key(&5491));
+    }
+
+    /// Icons and auto-attack come from the generated GW2 API catalog, NOT
+    /// from the log. 5491 is a real API skill (Fireball, `Weapon_1`), so
+    /// both resolve -- while its `name` still comes from the log table,
+    /// which calls it something else entirely here. That split is the
+    /// point: the log owns what it observed, the catalog owns what only
+    /// ArenaNet's database knows.
+    #[test]
+    fn skill_icons_and_auto_attack_come_from_the_generated_api_catalog() {
+        let mut b = CatalogBuilder::default();
+        b.reference_skill(5491);
+        let c = b.finish(&metrics_with_skills(), None);
+        let e = &c.skills[&5491];
+        assert_eq!(e.name, "Symbol of Protection", "the name stays the log's");
+        assert_eq!(
+            e.icon.as_deref(),
+            Some("https://render.guildwars2.com/file/E57B9C0358A6B1CE4631E336D22614E9E544DD4B/102965.png")
+        );
+        assert_eq!(e.auto_attack, Some(true), "Fireball is Weapon_1");
+    }
+
+    /// A buff id the log records as a skill (717 = Protection) has no
+    /// record in `/v2/skills`, so it gets no icon rather than a wrong one.
+    /// This is the known coverage edge -- 60 of the committed fixture's
+    /// 368 skill ids are buff ids like this one.
+    #[test]
+    fn a_buff_id_logged_as_a_skill_simply_has_no_icon() {
+        let mut b = CatalogBuilder::default();
+        b.reference_skill(717);
+        let c = b.finish(&metrics_with_skills(), None);
+        assert!(c.skills[&717].icon.is_none());
+        assert!(c.skills[&717].auto_attack.is_none());
     }
 
     #[test]

@@ -3320,6 +3320,7 @@ mod tests {
         {
             v1.catalogs.skills.insert(id, axilog_schema::v1::catalogs::SkillEntry {
                 name: name.into(),
+                icon: None,
                 is_swap,
                 can_crit,
                 auto_attack: None,
