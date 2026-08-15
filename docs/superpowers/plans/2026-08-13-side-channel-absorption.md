@@ -989,6 +989,50 @@ fn enemy_damage_rows_land_on_the_same_block_as_players() {
 **Adapter:** `targets[].totalDamageDist[0][]` now reads
 `report.blocks.damage.by_entity[id].by_skill`. Delete `EiInputs::enemy_dist`.
 
+**Execution notes (Task 7, done).** Four things Tasks 8-12 inherit.
+
+1. **`SkillRow` needed a SECOND hit-count field, not a shared one.** The
+   sketch says the enemy rows go in the same `by_skill` map, which is right,
+   but `hits` does not mean the same thing on both sides: the player pass
+   counts CONTRIBUTING (`dmg > 0`) rows, and `build_enemy_dist` counts
+   `HasHit` rows -- a superset including zero-damage connecting hits. The
+   ei-json adapter already emits them under different keys (`hits` vs
+   `connectedHits`), so folding both into one field would have forced the
+   adapter to reinterpret it by the row's ROLE, which is exactly the
+   coupling this container exists to remove. `SkillRow::hits` became
+   `Option<u32>` (absent on enemy rows -- a `0` there is a denominator a
+   consumer would divide `total` by) and `connected_hits: Option<u32>` was
+   added. **Task 9 fills `connected_hits` for player rows** from
+   `dist_outcomes`; it does not need to add the field.
+
+2. **The DATA absorbed; the GATE did not.** An empty `by_skill` cannot
+   distinguish "the flag was off" from "this enemy landed nothing", and the
+   flagless render must omit `totalDamageDist` rather than emit `[[]]`. The
+   adapter therefore reads the same `PlayerOut::skill_damage` presence its
+   own player-side branch already uses -- deliberately the SAME signal, so
+   the two sides cannot diverge. **Every remaining task hits this**: absorbed
+   data does not carry its own gate, and the document has no native gate
+   record. Task 13 has to add one (or accept that `legacy` outlives the
+   other reads) -- do not solve it per-task.
+
+3. **The enemy row set is a UNION of two sources.** `report.enemies` is the
+   combat-participant roster ("dealt nonzero damage"); `enemy_dist` keys off
+   any actor that produced a `HealthDamageEvent` and deliberately keeps
+   legitimate all-zero rows. Iterating only the former drops a dist key's
+   whole breakdown. The adapter's own `ei_targets` is a third, differently
+   filtered roster -- so a block built from one list and read through
+   another loses rows silently.
+
+4. **ei-json: `skillMap` gains 12 entries on the committed fixture, zero
+   other diffs.** Same mechanism as Task 6's note 4, with one new wrinkle:
+   only 6 of the 12 are referenced by `targets[].totalDamageDist`. The other
+   6 belong to enemies present in the NATIVE enemy roster but absent from
+   the curated `ei_targets` the adapter renders -- so they are required
+   references natively (the container's own orphan test proves it) and
+   merely unreferenced in the narrower ei-json view. Verified: every target
+   distribution is byte-identical, and the flagless and `--timeseries`-only
+   renders are byte-identical outright.
+
 ---
 
 ### Task 8: `enemy_series` — enemy rows on `blocks.series`
