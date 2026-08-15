@@ -40,7 +40,6 @@
 
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::{anon_account, decode_raw};
-use axilog_ei::EiInputs;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -96,10 +95,7 @@ fn rendered_and_golden() -> (Value, Vec<Value>, HashMap<String, usize>) {
         },
     );
     let ei = axilog_ei::to_ei_json(
-        &report_v1, &report,
-        &EiInputs {
-            ..Default::default()
-        },
+        &report_v1, None,
     );
 
     // `fixtures/wvw-small.ei.json`'s players are index-order with the

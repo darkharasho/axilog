@@ -50,6 +50,8 @@ blocks.contribution.by_entity.<id>.downs_contribution.cc
 blocks.contribution.by_entity.<id>.downs_contribution.damage
 blocks.contribution.by_entity.<id>.downs_contribution.movement_impairing
 blocks.contribution.by_entity.<id>.downs_contribution.strips
+blocks.contribution.by_entity.<id>.downs_contribution_by_skill
+blocks.contribution.by_entity.<id>.downs_contribution_by_skill.<id>
 blocks.damage
 blocks.damage.by_entity
 blocks.damage.by_entity.<id>
@@ -264,7 +266,6 @@ blocks.rotation.by_entity.<id>.aftercast.saved_count
 blocks.rotation.by_entity.<id>.aftercast.saved_ms
 blocks.rotation.by_entity.<id>.aftercast.wasted_count
 blocks.rotation.by_entity.<id>.aftercast.wasted_ms
-blocks.rotation.by_entity.<id>.cast_count
 blocks.rotation.by_entity.<id>.casts
 blocks.rotation.by_entity.<id>.casts[].cast_time_ms
 blocks.rotation.by_entity.<id>.casts[].duration_ms

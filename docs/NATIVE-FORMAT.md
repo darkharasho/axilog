@@ -646,6 +646,10 @@ bisecting:
 - The damage-modifier split moved `blocks.damage_mods.by_entity.<id>.<mod>`
   down under a `.overall` key, to make room for the per-target scope beside
   it — five keys removed at the old paths.
+- `blocks.rotation.by_entity.<id>.casts` became optional, as the format's
+  `--rotation` gate record, and `cast_count` went with it — one key removed.
+  The count was exactly `casts.len()`, so keeping it would have meant two
+  fields encoding one gate, free to disagree.
 
 ## The ei-json layer is permanent
 

@@ -24,14 +24,13 @@
 
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::decode_raw;
-use axilog_ei::EiInputs;
 
 const ANON_FIXTURE_PATH: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/wvw-small.anon.zevtc");
 
 /// The three `ei-json`-relevant CLI opt-in flags, as
 /// `(replay, skill_damage, timeseries, modifiers, rotation)` is overkill —
-/// `rotation` does not reach `EiInputs` — so the matrix is over the four
+/// `rotation` does not reach the adapter's replay input — so the matrix is over the four
 /// that do.
 #[derive(Clone, Copy)]
 struct Flags {
@@ -140,17 +139,12 @@ fn render_both(flags: Flags) -> (String, String) {
         },
     );
 
-    // Rebuilt per render: `EiInputs` is `Copy`, but each `write_ei_json`/
-    // `to_ei_json` call builds its own single-use document.
-    let inputs = || EiInputs {
-        replay: ei_replay_data.as_ref(),
-    };
-
+    let replay = ei_replay_data.as_ref();
     let mut streamed: Vec<u8> = Vec::new();
-    axilog_ei::write_ei_json(&report_v1, &report, &inputs(), &mut streamed)
+    axilog_ei::write_ei_json(&report_v1, replay, &mut streamed)
         .expect("stream ei-json");
     let streamed = String::from_utf8(streamed).expect("ei-json is UTF-8");
-    let tree = serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report_v1, &report, &inputs()))
+    let tree = serde_json::to_string_pretty(&axilog_ei::to_ei_json(&report_v1, replay))
         .expect("pretty-print ei-json tree");
     (streamed, tree)
 }

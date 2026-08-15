@@ -358,13 +358,22 @@ test('parseFile: modifiers opt-in (M16) -- damage_mods block + catalog absent by
   const mapIds = Object.keys(catalog)
   assert.ok(mapIds.length > 0, 'expected at least one referenced modifier id')
 
-  // One flat map per entity: the direction that used to be an
-  // outgoing/incoming array split is now carried by the id's SIGN.
+  // Two SCOPES per entity: `overall` (whole fight) and the sparse
+  // `per_target` map beside it, keyed by the target's entity id. Within
+  // each scope the direction that used to be an outgoing/incoming array
+  // split is carried by the id's SIGN.
   const rowSets = Object.values(withIt.blocks.damage_mods.by_entity)
   assert.ok(rowSets.length > 0, 'expected at least one entity with modifier rows')
   let sawIncoming = false
   let sawOutgoing = false
-  for (const rows of rowSets) {
+  // The per-target scope is the expensive half (measured at ~11x the
+  // whole-fight arrays), so the NATIVE path does not compute it -- only
+  // `parseFileEi` asks for it. An absent `per_target` on a present block
+  // therefore means "the split was not computed", which is what the
+  // field's own schema doc says; it is checked when present, never
+  // required.
+  let sawPerTarget = false
+  const checkScope = (rows) => {
     for (const [id, r] of Object.entries(rows)) {
       if (Number(id) < 0) sawIncoming = true
       else sawOutgoing = true
@@ -377,8 +386,17 @@ test('parseFile: modifiers opt-in (M16) -- damage_mods block + catalog absent by
       assert.ok(r.hit_count >= 1 && r.hit_count <= r.total_hit_count)
     }
   }
+  for (const entity of rowSets) {
+    assert.ok(entity.overall, 'every damage_mods row carries an overall scope')
+    checkScope(entity.overall)
+    for (const perTarget of Object.values(entity.per_target ?? {})) {
+      sawPerTarget = true
+      checkScope(perTarget)
+    }
+  }
   assert.ok(sawOutgoing, 'expected at least one outgoing (positive-id) modifier row')
   assert.ok(sawIncoming, 'expected at least one incoming (negative-id) modifier row')
+  assert.equal(sawPerTarget, false, 'the native path must not compute the per-target split')
 
   const desc = catalog[mapIds[0]]
   for (const k of ['name', 'description']) assert.equal(typeof desc[k], 'string')

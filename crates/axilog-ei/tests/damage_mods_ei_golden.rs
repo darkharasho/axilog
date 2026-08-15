@@ -44,7 +44,6 @@ use axilog_core::analysis::damage_mods::evaluate_catalog_full;
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
-use axilog_ei::EiInputs;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -158,8 +157,7 @@ fn ei_json_damage_modifiers_match_the_reference_export_text_when_available() {
     );
     let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &axilog_schema::v1::Passes { activity: Some(&activity), damage_mods: Some(&mods), ..Default::default() });
     let ours = axilog_ei::to_ei_json(
-        &report_v1, &report,
-        &EiInputs { replay: None },
+        &report_v1, None,
     );
 
     // ---- damageModMap: the descriptor table, character for character ----
@@ -489,7 +487,7 @@ fn committed_fixture_damage_modifier_emission_is_correctly_shaped_and_gated() {
         axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
     let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, &axilog_schema::v1::Passes { activity: Some(&activity), ..Default::default() });
     let plain_ei =
-        axilog_ei::to_ei_json(&plain_v1, &plain, &EiInputs { ..Default::default() });
+        axilog_ei::to_ei_json(&plain_v1, None);
     assert!(plain_ei.get("damageModMap").is_none(), "damageModMap must be omitted when not requested");
     for p in plain_ei["players"].as_array().expect("players") {
         for k in [
@@ -515,8 +513,7 @@ fn committed_fixture_damage_modifier_emission_is_correctly_shaped_and_gated() {
     );
     let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &axilog_schema::v1::Passes { activity: Some(&activity), damage_mods: Some(&mods), ..Default::default() });
     let ei = axilog_ei::to_ei_json(
-        &report_v1, &report,
-        &EiInputs { replay: None },
+        &report_v1, None,
     );
 
     let map = ei["damageModMap"].as_object().expect("damageModMap present when requested");
@@ -604,8 +601,7 @@ fn committed_fixture_damage_modifier_emission_is_correctly_shaped_and_gated() {
 
     // -- determinism: the same inputs must produce byte-identical JSON --
     let again = axilog_ei::to_ei_json(
-        &report_v1, &report,
-        &EiInputs { replay: None },
+        &report_v1, None,
     );
     assert_eq!(
         serde_json::to_string(&ei).unwrap(),

@@ -122,7 +122,9 @@ fn build_report_v1_from_bytes(
     let missiles = want_missiles
         .then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
     // Native path: whole-fight only -- the per-target split has no native
-    // counterpart (see `axilog_ei::EiInputs::modifiers`).
+    // counterpart on this path -- it is the expensive half, and only the
+    // ei-json builder below asks for it (absorption Task 13 gave it a native
+    // home on `blocks.damage_mods`, but not a reason to always pay for it).
     let damage_mods = want_modifiers.then(|| {
         axilog_core::analysis::damage_mods::evaluate_catalog_full(
             &raw, &axilog_core::analysis::damage::InstidRegistry::build(&raw), &enc, false,
@@ -211,9 +213,9 @@ fn build_report_v1_from_bytes(
 }
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
-/// but additionally returns the EI-SHAPE side inputs `axilog_ei::EiInputs`
-/// still carries -- the data the native document deliberately does not
-/// model. The M11 Task 3 activity intervals used to be among them;
+/// but additionally returns the one EI-SHAPE input the adapter still takes
+/// -- the combat-replay position surface the native document deliberately
+/// does not model (see `axilog_ei::EiReplayInput`). The M11 Task 3 activity intervals used to be among them;
 /// side-channel absorption Task 11 moved them onto
 /// `blocks.replay.by_entity`, so both builders now compute them and neither
 /// hands them out.
@@ -237,7 +239,6 @@ fn build_report_and_ei_inputs_from_bytes(
     want_rotation: bool,
     want_modifiers: bool,
 ) -> Result<(
-    axilog_schema::Report,
     axilog_schema::v1::ReportV1,
     Option<axilog_core::analysis::ei_replay::EiReplay>,
 )> {
@@ -361,11 +362,7 @@ fn build_report_and_ei_inputs_from_bytes(
             target_conditions: target_conditions.as_ref(),
         },
     );
-    Ok((
-        report,
-        report_v1,
-        ei_replay,
-    ))
+    Ok((report_v1, ei_replay))
 }
 
 fn report_v1_to_value(report: &axilog_schema::v1::ReportV1) -> Result<Value> {
@@ -456,16 +453,12 @@ pub fn parse_file_ei(path: String, opts: Option<ParseOptions>) -> Result<Value> 
     let want_rotation = opts.and_then(|o| o.rotation).unwrap_or(false);
     let want_modifiers = opts.and_then(|o| o.modifiers).unwrap_or(false);
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let (report, report_v1, ei_replay) = build_report_and_ei_inputs_from_bytes(
+    let (report_v1, ei_replay) = build_report_and_ei_inputs_from_bytes(
         &bytes, want_replay, want_skill_damage, want_timeseries, want_missiles, want_rotation,
         want_modifiers,
     )?;
     Ok(axilog_ei::to_ei_json(
-        &report_v1,
-        &report,
-        &axilog_ei::EiInputs {
-            replay: ei_replay.as_ref(),
-        },
+        &report_v1, ei_replay.as_ref(),
     ))
 }
 

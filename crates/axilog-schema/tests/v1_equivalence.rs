@@ -456,8 +456,12 @@ fn every_legacy_rotation_cast_survives_the_reshape() {
 
         let legacy_cast_count: usize = legacy_rotation.iter().map(|s| s.casts.len()).sum();
         let row = rotation.by_entity.get(e.id).expect("rotation row for every player with legacy rotation data");
-        assert_eq!(row.cast_count as usize, legacy_cast_count, "{account} cast_count");
-        assert_eq!(row.casts.len(), legacy_cast_count, "{account} casts.len()");
+        // `casts` is the `--rotation` gate record (Task 13): the legacy
+        // rotation being `Some` is exactly the condition that makes it
+        // `Some` here, which the `expect` pins alongside the count.
+        let v1_casts_vec =
+            row.casts.as_ref().expect("casts is Some wherever the legacy rotation is Some");
+        assert_eq!(v1_casts_vec.len(), legacy_cast_count, "{account} casts.len()");
 
         // Every legacy cast (skill_id, cast_time_ms, duration_ms,
         // time_gained_ms, quickness) must appear exactly once among the
@@ -471,8 +475,7 @@ fn every_legacy_rotation_cast_survives_the_reshape() {
                 })
             })
             .collect();
-        let mut v1_casts: Vec<(u32, i64, i64, i64, u64)> = row
-            .casts
+        let mut v1_casts: Vec<(u32, i64, i64, i64, u64)> = v1_casts_vec
             .iter()
             .map(|c| (c.skill_id, c.cast_time_ms, c.duration_ms, c.time_gained_ms, c.quickness.to_bits()))
             .collect();
@@ -1215,7 +1218,7 @@ fn every_legacy_player_field_has_a_one_point_oh_destination() {
         // --- rotation / damage_mods / series --------------------------------
         let r = rotation_block.by_entity.get(id);
         assert_eq!(
-            r.map(|r| r.casts.len()),
+            r.and_then(|r| r.casts.as_ref()).map(|c| c.len()),
             rotation.as_ref().map(|v| v.iter().map(|s| s.casts.len()).sum::<usize>()),
             "rotation -> rotation block"
         );
@@ -1235,16 +1238,38 @@ fn every_legacy_player_field_has_a_one_point_oh_destination() {
             "per_second -> series block"
         );
 
-        // INTENTIONALLY ABSENT: `breakbar_damage_dealt` and
-        // `downs_contribution_per_skill`. Both are `#[serde(skip)]` on
-        // `PlayerOut` -- they have never been part of the native JSON at
-        // all, existing solely as side data `axilog_ei::to_ei_json` reads
-        // in-process (see their doc comments). Reprojecting them into 1.0
-        // would be NEW public surface, not equivalence, and this milestone's
-        // claim is only that nothing the legacy format PUBLISHED was lost.
-        // Asserted as skipped rather than asserted equal, so that flipping
-        // either to a serialized field breaks this test and forces the
-        // decision to be made deliberately:
+        // `breakbar_damage_dealt` and `downs_contribution_per_skill` are
+        // both `#[serde(skip)]` on `PlayerOut` -- they were never part of
+        // the LEGACY JSON at all, existing solely as side data
+        // `axilog_ei::to_ei_json` read in-process. This block used to record
+        // them as intentionally absent from 1.0 on the grounds that
+        // publishing them would be new surface rather than equivalence.
+        //
+        // Side-channel absorption ended that: 1.0 is now the ONLY thing the
+        // ei-json adapter reads, so side data with no native home is data no
+        // consumer of this format can see. Both have homes now --
+        // `blocks.damage.by_entity[].breakbar_damage_dealt` and
+        // `blocks.contribution.by_entity[].downs_contribution_by_skill`
+        // (Task 13) -- and the per-skill slice is asserted equal against
+        // its legacy source below.
+        //
+        // The two assertions here still stand and still mean something: they
+        // pin that neither field became part of the LEGACY format, which
+        // would make it a second, competing publication of the same number.
+        let credits = contribution_block
+            .by_entity
+            .get(id)
+            .map(|c| c.downs_contribution_by_skill.clone())
+            .unwrap_or_default();
+        let expected: std::collections::BTreeMap<u32, u64> = downs_contribution_per_skill
+            .iter()
+            .filter(|(_, &v)| v > 0)
+            .map(|(&k, &v)| (k, v))
+            .collect();
+        assert_eq!(
+            credits, expected,
+            "downs_contribution_per_skill -> contribution.downs_contribution_by_skill"
+        );
         let legacy_json = serde_json::to_value(p).expect("serializable");
         assert!(
             legacy_json.get("breakbar_damage_dealt").is_none(),

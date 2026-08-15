@@ -116,6 +116,26 @@ impl ContributionBlock {
 pub struct ContributionEntity {
     pub downs_contribution: ContributionRow,
     pub downed_by: ContributionRow,
+    /// [`Self::downs_contribution`]`.damage`, sliced by the skill that
+    /// dealt it -- the legacy `PlayerOut::downs_contribution_per_skill`.
+    ///
+    /// The last piece of `players[]` data the ei-json adapter could not
+    /// read from this document: it is `#[serde(skip)]` on the legacy struct,
+    /// so it reached ei-json's `totalDamageDist[].downContribution` through
+    /// the private side channel and no consumer of the native format could
+    /// see it at all. The equivalence test recorded it as "intentionally
+    /// absent from 1.0"; side-channel absorption Task 13 is what made that
+    /// no longer tenable.
+    ///
+    /// Here rather than on `damage.by_entity[].by_skill` even though the
+    /// only consumer joins it to those rows, because the gates differ: the
+    /// per-skill damage rows ride `--skill-damage` while the contribution
+    /// pass is always-on, so hanging this off them would make an ungated
+    /// quantity vanish with a flag it has nothing to do with. Sparse --
+    /// only skills with a nonzero credit appear, which is also exactly the
+    /// condition GW2EI's own `int?` field is written under.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub downs_contribution_by_skill: BTreeMap<u32, u64>,
 }
 
 /// Mirrors `crate::ContributionOut` field-for-field. `movement_impairing`
@@ -384,7 +404,11 @@ pub fn build_support(report: &crate::Report, index: &EntityIndex) -> SupportBloc
     SupportBlock { by_entity }
 }
 
-pub fn build_contribution(report: &crate::Report, index: &EntityIndex) -> ContributionBlock {
+pub fn build_contribution(
+    report: &crate::Report,
+    index: &EntityIndex,
+    cats: &mut CatalogBuilder,
+) -> ContributionBlock {
     let row = |c: &crate::ContributionOut| ContributionRow {
         damage: c.damage,
         cc: c.cc,
@@ -399,6 +423,15 @@ pub fn build_contribution(report: &crate::Report, index: &EntityIndex) -> Contri
             ContributionEntity {
                 downs_contribution: row(&p.downs_contribution),
                 downed_by: row(&p.downed_by),
+                downs_contribution_by_skill: p
+                    .downs_contribution_per_skill
+                    .iter()
+                    .filter(|(_, &v)| v > 0)
+                    .map(|(&skill, &v)| {
+                        cats.reference_skill(skill);
+                        (skill, v)
+                    })
+                    .collect(),
             },
         );
     }
@@ -598,11 +631,19 @@ mod tests {
     #[test]
     fn contribution_carries_both_directions() {
         let (report, index) = fixture_report();
-        let block = build_contribution(&report, &index);
+        let mut cats = crate::v1::catalogs::CatalogBuilder::default();
+        let block = build_contribution(&report, &index, &mut cats);
         let p = &report.players[0];
         let id = index.by_agent_addr(p.agent_addr).expect("player resolves");
         let row = block.by_entity.get(id).expect("row");
         assert_eq!(row.downs_contribution.damage, p.downs_contribution.damage);
         assert_eq!(row.downed_by.damage, p.downed_by.damage);
+        // The per-skill slice carries only nonzero credits, and every skill
+        // it names must be resolvable through the catalog it registered in.
+        let built = cats.finish(&Default::default(), None);
+        for (skill, credit) in &row.downs_contribution_by_skill {
+            assert!(*credit > 0, "only nonzero credits are carried");
+            assert!(built.skills.contains_key(skill), "down-contribution skill must resolve");
+        }
     }
 }

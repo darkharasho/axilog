@@ -1223,6 +1223,14 @@ export interface ContributionRow {
 export interface ContributionEntity {
   downs_contribution: ContributionRow
   downed_by: ContributionRow
+  /**
+   * `downs_contribution.damage` sliced by the skill that dealt it, keyed by
+   * skill id as a decimal string. Sparse -- only skills with a nonzero
+   * credit appear -- and omitted entirely when there are none. Ungated:
+   * the contribution pass is always-on, unlike the per-skill DAMAGE rows on
+   * `blocks.damage`, which is why it lives here rather than beside them.
+   */
+  downs_contribution_by_skill?: Record<string, number>
 }
 
 export interface ContributionBlock {
@@ -1277,12 +1285,15 @@ export interface Aftercast {
 }
 
 export interface RotationEntity {
-  cast_count: number
-  casts: CastRow[]
   /**
-   * Cast counters, computed unconditionally but published only when this
-   * block is (gated on `rotation: true`).
+   * This entity's casts, in cast-start order. Present exactly when the cast
+   * gate (`rotation: true`) was on -- an EMPTY array means the pass ran and
+   * this entity cast nothing, while an absent field means it never ran.
+   * `aftercast` below is always-on, so the block's `coverage` cannot answer
+   * that question and this field's presence is the gate record.
    */
+  casts?: CastRow[]
+  /** Cast counters, computed unconditionally. */
   aftercast: Aftercast
 }
 
@@ -1301,9 +1312,27 @@ export interface DamageModRow {
   total_damage: number
 }
 
+/**
+ * One entity's damage modifiers, in the two scopes GW2EI evaluates them at.
+ * Neither is derivable from the other: `overall` counts every qualifying
+ * hit, including hits on agents that are not targets at all (enemy minions),
+ * while `per_target` restricts to one foe.
+ */
+export interface DamageModEntity {
+  /** Whole fight. Keyed by the signed damage-modifier id as a decimal string. */
+  overall: Record<string, DamageModRow>
+  /**
+   * Restricted to one foe, keyed by the TARGET's entity id then by the
+   * signed modifier id. Sparse in both dimensions. The per-target split is
+   * the expensive half and the native path does not compute it, so an
+   * absent `per_target` on a present block means "the split was not
+   * computed", not "there was none".
+   */
+  per_target?: Record<string, Record<string, DamageModRow>>
+}
+
 export interface DamageModsBlock {
-  /** Keyed by the signed damage-modifier id as a decimal string. */
-  by_entity: ByEntity<Record<string, DamageModRow>>
+  by_entity: ByEntity<DamageModEntity>
 }
 
 export interface MissilesSquad {

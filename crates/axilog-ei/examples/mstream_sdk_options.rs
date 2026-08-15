@@ -9,7 +9,6 @@
 //! Run: `cargo run --release -p axilog-ei --example mstream_sdk_options -- <log> <to_value|string>`
 //! and wrap it in `/usr/bin/time -v` for peak RSS.
 
-use axilog_ei::EiInputs;
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -54,16 +53,12 @@ fn main() {
         },
     );
 
-    let inputs = EiInputs {
-        replay: None,
-    };
-
     let t0 = std::time::Instant::now();
     let v: serde_json::Value = match mode.as_str() {
-        "to_value" => axilog_ei::to_ei_json(&report_v1, &report, &inputs),
+        "to_value" => axilog_ei::to_ei_json(&report_v1, None),
         "string" => {
             let mut buf: Vec<u8> = Vec::new();
-            axilog_ei::write_ei_json(&report_v1, &report, &inputs, &mut buf).expect("stream");
+            axilog_ei::write_ei_json(&report_v1, None, &mut buf).expect("stream");
             serde_json::from_slice(&buf).expect("parse back")
         }
         other => panic!("unknown mode {other}"),

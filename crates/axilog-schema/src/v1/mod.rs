@@ -162,10 +162,11 @@ fn computed(is_empty: bool) -> CoverageState {
 /// edit total (this task's), after which a new pass is a new field and no
 /// call site moves at all.
 ///
-/// It is emphatically NOT a second `EiInputs`. The distinction that makes
+/// It was emphatically NOT a second `EiInputs` (the ei-json adapter's own
+/// side-channel struct, deleted in Task 13). The distinction that made
 /// the program work is *who reads it*: this is consumed HERE, by the
 /// native builder, and every value in it lands in a block on the native
-/// wire. `EiInputs` is read by the ei-json adapter, which is precisely the
+/// wire. `EiInputs` was read by the ei-json adapter, which is precisely the
 /// data path spec #2 exists to delete -- data that reached ei-json without
 /// ever existing natively. A pass entering through this struct has already
 /// been absorbed.
@@ -293,7 +294,7 @@ pub fn build_report_v1(
     };
     let support_block = support::build_support(legacy, &index);
     coverage.set(BlockName::Support, computed(support_block.is_empty()));
-    let contribution = support::build_contribution(legacy, &index);
+    let contribution = support::build_contribution(legacy, &index, &mut cats);
     coverage.set(BlockName::Contribution, computed(contribution.is_empty()));
     let healing = support::build_healing(legacy, &index, passes.healing_detail, &mut cats);
     // The one block whose absence has a THIRD cause, and the reason
@@ -336,9 +337,12 @@ pub fn build_report_v1(
     // zeroes rather than the real counters. So the block is always built,
     // and `coverage` keeps its exact meaning by answering the casts question
     // it always answered: `Present` only when some row actually has casts.
+    // Which case a `not present` is -- gate off, or gate on and nobody cast
+    // -- is answered by `RotationEntity::casts` itself (Task 13), not here.
     let rotation = Some({
         let block = activity::build_rotation(legacy, &index, &mut cats);
-        let no_casts = block.by_entity.0.values().all(|r| r.casts.is_empty());
+        let no_casts =
+            block.by_entity.0.values().all(|r| r.casts.as_ref().map_or(true, |c| c.is_empty()));
         coverage.set(BlockName::Rotation, computed(no_casts));
         block
     });

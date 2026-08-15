@@ -27,8 +27,29 @@ impl RotationBlock {
 
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct RotationEntity {
-    pub cast_count: u32,
-    pub casts: Vec<CastRow>,
+    /// This entity's casts, in cast-start order. `Some` exactly when the
+    /// cast gate (`--rotation` / SDK `rotation: true`) was on.
+    ///
+    /// **This `Option` is the format's `--rotation` GATE RECORD, and
+    /// `Some([])` is a meaningful value** -- a player who was present and
+    /// cast nothing, as against a log where the pass never ran. The
+    /// distinction is the same one [`super::damage::DamageEntity::by_skill`]
+    /// makes for `--skill-damage`, and it is needed here for the same
+    /// reason: `rotation` is a TWO-GATE block. Its other half
+    /// ([`Self::aftercast`]) is always-on, so the row exists either way and
+    /// `coverage.rotation` -- which answers for the block, not the field --
+    /// reports `present` off the always-on half alone. The field doc here
+    /// used to claim `coverage` could tell the two cases apart; it cannot,
+    /// and the ei-json adapter was reading the legacy `PlayerOut::rotation`'s
+    /// presence to make up the difference.
+    ///
+    /// The count that used to sit beside this (`cast_count`) is gone with
+    /// the change: it was exactly `casts.len()`, so keeping it would have
+    /// meant two fields encoding one gate, free to disagree -- and an
+    /// ungated-looking `0` is the very "absent reported as zero" reading
+    /// this `Option` exists to remove.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub casts: Option<Vec<CastRow>>,
     /// Aftercast/interrupt cast counters -- the legacy
     /// `PlayerOut::aftercast`, which the spec's own block-source table
     /// assigns to `rotation` but which no builder read before the final
@@ -36,8 +57,7 @@ pub struct RotationEntity {
     ///
     /// Ungated, and so is the row carrying it: this block is built even
     /// when `--rotation` is off, precisely so that turning the CASTS gate
-    /// off cannot take this with it. `casts` is then empty and
-    /// `coverage.rotation` reports which case it is.
+    /// off cannot take this with it.
     pub aftercast: Aftercast,
 }
 
@@ -612,26 +632,27 @@ pub fn build_rotation(
         // is ungated, so skipping the row would drop it whenever
         // `--rotation` is off. An empty `casts` is the honest answer for
         // the gated half; `coverage.rotation` is what says which it is.
-        let mut casts = Vec::new();
-        for skill in p.rotation.iter().flatten() {
-            cats.reference_skill(skill.skill_id);
-            for c in &skill.casts {
-                casts.push(CastRow {
-                    skill_id: skill.skill_id,
-                    cast_time_ms: c.cast_time_ms,
-                    duration_ms: c.duration_ms,
-                    time_gained_ms: c.time_gained_ms,
-                    quickness: c.quickness,
-                });
+        let casts = p.rotation.as_ref().map(|rotation| {
+            let mut casts = Vec::new();
+            for skill in rotation {
+                cats.reference_skill(skill.skill_id);
+                for c in &skill.casts {
+                    casts.push(CastRow {
+                        skill_id: skill.skill_id,
+                        cast_time_ms: c.cast_time_ms,
+                        duration_ms: c.duration_ms,
+                        time_gained_ms: c.time_gained_ms,
+                        quickness: c.quickness,
+                    });
+                }
             }
-        }
-        casts.sort_by_key(|c| (c.cast_time_ms, c.skill_id));
-        let cast_count = casts.len() as u32;
+            casts.sort_by_key(|c| (c.cast_time_ms, c.skill_id));
+            casts
+        });
         let a = &p.aftercast;
         by_entity.insert(
             id,
             RotationEntity {
-                cast_count,
                 casts,
                 aftercast: Aftercast {
                     saved_count: a.saved_count,
@@ -833,7 +854,7 @@ mod tests {
         let block = build_rotation(&report, &index, &mut cats);
         let built = cats.finish(&Default::default(), None);
         for row in block.by_entity.0.values() {
-            for cast in &row.casts {
+            for cast in row.casts.iter().flatten() {
                 assert!(built.skills.contains_key(&cast.skill_id), "cast skill must resolve");
             }
         }

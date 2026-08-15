@@ -17,7 +17,6 @@
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::{anon_account, decode_raw};
 use axilog_core::model::resolve;
-use axilog_ei::EiInputs;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -49,8 +48,7 @@ fn render_ei(bytes: &[u8]) -> Value {
     );
     let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &axilog_schema::v1::Passes { activity: Some(&activity), ..Default::default() });
     axilog_ei::to_ei_json(
-        &report_v1, &report,
-        &EiInputs { ..Default::default() },
+        &report_v1, None,
     )
 }
 

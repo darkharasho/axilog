@@ -144,7 +144,7 @@ enum Cmd {
         /// (+441.5%). The gap is EI's per-target arrays, which have no
         /// native counterpart and are 854,077 of those bytes on their own
         /// (`damageModifiersTarget` 497,702 + its incoming twin 356,375)
-        /// -- see `axilog_ei::EiInputs::modifiers`. Wall clock on that
+        /// -- the split now lands on `blocks.damage_mods`'s `per_target`. Wall clock on that
         /// fixture (release build, `--format ei-json`): 0.074s -> 0.155s.
         #[arg(long)]
         modifiers: bool,
@@ -413,9 +413,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // included (see that function's doc comment, and axilog-ei's
             // `streaming_matches_value_tree_byte_for_byte` test).
             if format == Format::EiJson {
-                let ei_inputs = axilog_ei::EiInputs {
-                    replay: ei_replay_data.as_ref(),
-                };
                 // One `dyn Write` so the two destinations share the emit
                 // code; the `BufWriter` (not the trait object) is what makes
                 // the per-token writes cheap.
@@ -425,7 +422,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 use std::io::Write as _;
                 let mut w = std::io::BufWriter::with_capacity(1 << 20, sink);
-                axilog_ei::write_ei_json(&report_v1, &report, &ei_inputs, &mut w)?;
+                axilog_ei::write_ei_json(&report_v1, ei_replay_data.as_ref(), &mut w)?;
                 w.write_all(b"\n")?;
                 // Explicit flush: a `BufWriter`'s `Drop` swallows write
                 // errors (a full disk would otherwise truncate silently).

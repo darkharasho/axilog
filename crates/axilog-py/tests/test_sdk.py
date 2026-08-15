@@ -426,12 +426,21 @@ class ModifiersOptInTests(unittest.TestCase):
         self.assertGreater(len(catalog), 0, "expected at least one referenced modifier id")
         self.assertEqual(with_it["coverage"]["damage_mods"], "present")
 
-        # One flat map per entity: the direction that used to be an
-        # outgoing/incoming array split is now carried by the id's SIGN.
+        # Two SCOPES per entity: `overall` (whole fight) and the sparse
+        # `per_target` map beside it, keyed by the target's entity id.
+        # Within each scope the direction that used to be an
+        # outgoing/incoming array split is carried by the id's SIGN.
+        #
+        # The per-target scope is the expensive half (~11x the whole-fight
+        # arrays), so the NATIVE path does not compute it -- only
+        # `parse_file_ei` asks for it, and an absent `per_target` on a
+        # present block means exactly that.
         row_sets = list(with_it["blocks"]["damage_mods"]["by_entity"].values())
         self.assertGreater(len(row_sets), 0, "expected at least one entity with modifier rows")
-        saw_incoming = saw_outgoing = False
-        for rows in row_sets:
+        saw_incoming = saw_outgoing = saw_per_target = False
+
+        def check_scope(rows):
+            nonlocal saw_incoming, saw_outgoing
             for mod_id, r in rows.items():
                 if int(mod_id) < 0:
                     saw_incoming = True
@@ -445,8 +454,16 @@ class ModifiersOptInTests(unittest.TestCase):
                 self.assertIsInstance(r["damage_gain"], float)
                 self.assertGreaterEqual(r["hit_count"], 1)
                 self.assertLessEqual(r["hit_count"], r["total_hit_count"])
+
+        for entity in row_sets:
+            self.assertIn("overall", entity, "every damage_mods row carries an overall scope")
+            check_scope(entity["overall"])
+            for per_target in entity.get("per_target", {}).values():
+                saw_per_target = True
+                check_scope(per_target)
         self.assertTrue(saw_outgoing, "expected at least one outgoing (positive-id) row")
         self.assertTrue(saw_incoming, "expected at least one incoming (negative-id) row")
+        self.assertFalse(saw_per_target, "the native path must not compute the per-target split")
 
         desc = next(iter(catalog.values()))
         for k in ("name", "description"):

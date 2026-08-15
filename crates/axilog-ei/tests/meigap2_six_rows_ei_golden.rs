@@ -27,7 +27,6 @@
 use axilog_core::analysis::replay::build_activity_intervals;
 use axilog_core::evtc::decode_raw;
 use axilog_core::model::resolve;
-use axilog_ei::EiInputs;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -88,10 +87,7 @@ fn render_and_reference(label: &str) -> Option<Calibration> {
 
 
     let ours = axilog_ei::to_ei_json(
-        &report_v1, &report,
-        &EiInputs {
-            ..Default::default()
-        },
+        &report_v1, None,
     );
 
     // --- the instid-based targets join (see this file's module doc) ---
