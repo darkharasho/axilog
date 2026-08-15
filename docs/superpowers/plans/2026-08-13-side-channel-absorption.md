@@ -1456,3 +1456,44 @@ on structures too large to transcribe here (`crates/axilog-ei/src/lib.rs` is
 - The exact `SkillOutcomes` → `by_skill` field names in Task 9 depend on what
   spec #1's `SkillRow` already carries; check `blocks/damage.rs` before
   writing.
+
+### Execution notes (Task 8, done)
+
+Four notes Tasks 9–12 inherit.
+
+1. **The gate CAN absorb — when the block zero-fills.** Task 7 had to leave the
+   gate behind because an empty `by_skill` could not distinguish "flag off"
+   from "this enemy landed nothing". Task 8 does not have that problem,
+   because `build_series` gives EVERY `Enemy` a row — zero-filling the ones
+   the pass skipped, which is the fill the ei-json adapter used to do itself.
+   With every enemy filled, "no row" can only mean the flag was off, so the
+   adapter branches on the native row's presence and reads no `EiInputs`
+   `Option` at all. The general rule for the remaining tasks: **if a block
+   can be made total over its roster, its gate absorbs with it; if absence is
+   also a legitimate data value, the gate has to wait for Task 13.**
+
+2. **The entity roster is broader than `report.enemies`.** 80 enemy-role
+   entities against 49 `Enemy` records on the committed fixture — the extra
+   rows are minions and gadgets promoted to entities. Zero-filling all 80
+   would invent measurements for entities no pass ever considered, so the
+   fill runs over `report.enemies` (which is also where `blocks.damage` draws
+   the line). The adapter's gate inference stays sound because every rendered
+   `source_order.targets()` entry is backed by an `Enemy` record — that is a
+   stronger claim than "enemies are a superset", so it is pinned by its own
+   test rather than left as reasoning.
+
+3. **`EntitySeries` needed a field only one side populates**, exactly like
+   Task 7's `SkillRow`. Enemies carry an outgoing power split
+   (`powerDamage1S`); no pass computes one for players — `PlayerPerSecondOut`
+   has `power_damage_taken` but no outgoing equivalent. So `power_damage` is
+   `Option<SeriesOut>`, absent on player rows. Expect this shape again: the
+   two sides of this format are measured by different passes, and a shared
+   field with a zero default silently reports "measured zero" for "never
+   measured".
+
+4. **ei-json is byte-identical across all four gate combos** (flagless,
+   `--timeseries`, `--skill-damage`, both) — unlike Tasks 6 and 7, which grew
+   `skillMap`. Nothing grew here because a series references no catalog
+   entry. A task whose absorbed data carries skill or buff ids should still
+   expect additive catalog growth; one carrying only numbers should expect
+   none, and a diff is then a real regression rather than a known effect.
