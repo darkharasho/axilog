@@ -28,7 +28,8 @@ export declare function parseBuffer(buf: Buffer, opts?: ParseOptions | undefined
  * native combat-replay block; omitted entirely for back-compat with every
  * existing zero-arg call site. Unlike `parseBuffer`, this entry point has
  * a real file name to offer, so it threads `path`'s file name (never the
- * full path) into the document's `generated_from`.
+ * full path -- see `build_report_v1_from_bytes`'s doc comment) into the
+ * document's `generated_from`.
  */
 export declare function parseFile(path: string, opts?: ParseOptions | undefined | null): ReportV1
 
