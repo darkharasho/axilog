@@ -22,11 +22,15 @@ pub struct Catalogs {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct SkillEntry {
     pub name: String,
-    /// The `render.guildwars2.com` asset URL, from the generated GW2 API
-    /// catalog (`axilog_core::analysis::skill_icons`). Omitted for ids the
-    /// API has no icon for, and for the log-table ids that are not real
-    /// API skills at all -- an absent icon is the honest answer, and a
-    /// consumer rendering icons already has to handle a missing one.
+    /// The asset URL for this id, from whichever generated catalog knows
+    /// it: `skill_icons` (the GW2 API) first, then `buff_icons` (GW2EI's
+    /// buff list) for the boons and conditions arcdps reports through the
+    /// skill table but the API has no record of. The API wins ties because
+    /// it is ArenaNet's own data.
+    ///
+    /// Still omitted when neither catalog has art -- an absent icon is the
+    /// honest answer, and a consumer rendering icons already has to handle
+    /// a missing one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub is_swap: bool,
@@ -140,7 +144,9 @@ impl CatalogBuilder {
                         name: entry
                             .map(|e| e.name.clone())
                             .unwrap_or_else(|| format!("Skill {id}")),
-                        icon: axilog_core::analysis::skill_icons::icon(id),
+                        icon: axilog_core::analysis::skill_icons::icon(id).or_else(|| {
+                            axilog_core::analysis::buff_icons::icon(id).map(str::to_owned)
+                        }),
                         is_swap: entry.map(|e| e.is_swap).unwrap_or(false),
                         can_crit: entry.map(|e| e.can_crit).unwrap_or(true),
                         // The log never carries this; the generated GW2 API
@@ -320,12 +326,42 @@ mod tests {
     /// This is the known coverage edge -- 60 of the committed fixture's
     /// 368 skill ids are buff ids like this one.
     #[test]
-    fn a_buff_id_logged_as_a_skill_simply_has_no_icon() {
+    fn a_buff_id_logged_as_a_skill_gets_its_icon_from_the_buff_catalog() {
+        // 717 is Protection. arcdps reports it through the skill table, so
+        // it reaches us looking like a skill, but `/v2/skills` has no record
+        // of it -- this is exactly the gap `buff_icons` exists to close, and
+        // the fallback is what makes the two catalogs add up to one answer.
         let mut b = CatalogBuilder::default();
         b.reference_skill(717);
         let c = b.finish(&metrics_with_skills(), None);
-        assert!(c.skills[&717].icon.is_none());
+        assert!(axilog_core::analysis::skill_icons::icon(717).is_none(), "not an API skill");
+        assert_eq!(
+            c.skills[&717].icon.as_deref(),
+            axilog_core::analysis::buff_icons::icon(717),
+        );
+        // A buff has no weapon slot, so the auto-attack question still does
+        // not apply -- the buff catalog carries art and nothing else.
         assert!(c.skills[&717].auto_attack.is_none());
+    }
+
+    #[test]
+    fn the_api_catalog_wins_when_both_catalogs_know_an_id() {
+        // Ids in both tables are real skills that also apply a buff. The
+        // API is ArenaNet's own data, so it is the one that must show up.
+        let overlapping = axilog_core::analysis::buff_icons::BUFF_ICONS
+            .iter()
+            .find(|(id, _)| axilog_core::analysis::skill_icons::icon(*id).is_some());
+        let Some(&(id, buff_url)) = overlapping else {
+            return; // no overlap in the current tables; nothing to assert
+        };
+        let mut b = CatalogBuilder::default();
+        b.reference_skill(id);
+        let c = b.finish(&metrics_with_skills(), None);
+        let api_url = axilog_core::analysis::skill_icons::icon(id);
+        assert_eq!(c.skills[&id].icon, api_url);
+        if api_url.as_deref() != Some(buff_url) {
+            assert_ne!(c.skills[&id].icon.as_deref(), Some(buff_url), "buff art did not win");
+        }
     }
 
     #[test]

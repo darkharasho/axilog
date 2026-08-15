@@ -84,6 +84,12 @@ pub mod defenses;
 /// `CombatEventFactory.CreateCastEvents`/`AnimatedCastEvent` citation trail
 /// and the documented `InstantCastEvent`-machinery scope gap.
 pub mod rotation;
+/// Generated reference tables, not analysis passes: skill art from the GW2
+/// API and buff art from GW2EI's own buff list. They are grouped here, ahead
+/// of `skill_map`, because nothing in the pipeline computes them -- they are
+/// the two lookups that answer what a log cannot say about an id.
+pub mod buff_icons;
+pub mod skill_icons;
 /// Best-effort `skillMap` built from the log's own skill table (M14, Task 2)
 /// -- like `hit_stats`/`defenses` above, wired into [`analyze`] below
 /// (`Metrics::skill_map`), computed ONCE after every per-player pass
@@ -94,7 +100,6 @@ pub mod rotation;
 /// per-player data" placement). See `skill_map`'s module doc for the full
 /// name-gap-vs-EI honesty writeup and the `is_swap`/`can_crit`/`auto_attack`
 /// citation trail.
-pub mod skill_icons;
 pub mod skill_map;
 
 /// Damage modifiers -- GW2EI's "+X% while ..." framework (M16): definition
