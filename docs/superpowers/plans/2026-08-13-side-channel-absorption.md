@@ -721,7 +721,16 @@ regroup means the mapping is not naive.
 |---|---|
 | `id`, `name`, `teamID`, `enemyPlayer`, `isFake`, `instanceID`, `profession` | `entities[id]` |
 | `dpsAll[0].damage` | `blocks.damage.by_entity[id]` |
-| `combatReplayData.{positions,start,down,dead}` | `blocks.replay.by_entity[id]` |
+
+**Two corrections found in execution.** First, `blocks.damage` had no enemy
+rows at all — `build_damage` only walked `report.players`, so `dpsAll[0]` had
+no native source and `EnemyOut::damage_out` had to be absorbed onto the block
+first (same shape as Task 4's `breakbar_damage_dealt`). Second, the row that
+said `combatReplayData ← blocks.replay.by_entity[id]` is struck: it contradicts
+Task 13 Step 9, which derives `ei_replay` inside the adapter and never absorbs
+it. The two are different structures — `blocks.replay` is the NATIVE replay
+pass and carries no `end`/`orientations`/`dc`. `combatReplayData` stays on
+`inputs` until Task 13.
 
 `totalDamageDist`, `damage1S`/`powerDamage1S` and `buffs[]` stay on `inputs`
 for now — they are Tasks 6, 8 and 10.
@@ -733,8 +742,16 @@ Expected: PASS, byte-identical.
 
 - [ ] **Step 3: Run the local calibrations — mandatory for this task**
 
-Run: `AXILOG_LOCAL_FIXTURES=1 cargo test --workspace`
+Run: `AXILOG_LOCAL_FIXTURES=<primary-checkout>/fixtures/local cargo test --workspace`
 Expected: PASS, all 36.
+
+**Not `AXILOG_LOCAL_FIXTURES=1`.** The variable is a PATH, not a boolean
+(`crates/axilog-core/tests/common/mod.rs::local_fixture`) — `=1` resolves every
+capture to `1/<name>`, every calibration skips, and the run goes green having
+checked nothing. A worktree's own `fixtures/local/` is empty (the captures are
+gitignored and never copied, so PII is not duplicated), so the var must point
+at the primary checkout. Confirm it actually ran: the calibrating binaries take
+seconds, not `0.00s`.
 
 This is the task where the committed fixture is *not* sufficient evidence. It
 has 32 enemy targets; the local capture has 56 real enemy instids, and the
