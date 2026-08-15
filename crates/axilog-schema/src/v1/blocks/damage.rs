@@ -255,6 +255,44 @@ pub fn build_damage(
         );
     }
 
+    // Enemy rows. The identity/statistics split's whole point is that an
+    // enemy is an entity like any other, so its OUTGOING damage belongs on
+    // this block rather than on its `entities[]` identity row -- where the
+    // legacy shape had to keep it (`EnemyOut::damage_out`, `#[serde(skip)]`
+    // and EI-adapter-only precisely because it had nowhere else to go).
+    //
+    // Only `total`/`dps` are filled; every other column stays at its
+    // default. That is not a stub -- the per-skill breakdown for these rows
+    // is `enemy_dist`, which is still on the side channel and lands in this
+    // same `by_skill` in a later task. Defaults here mean "not measured for
+    // an enemy", the same thing an absent row would mean, so nothing reads
+    // a zero as a measurement.
+    //
+    // Iterating `report.enemies` (the combat-participant roster) rather
+    // than `ei_targets` (the curated EI one) is deliberate: this is the
+    // NATIVE surface, so it follows native's own enemy list. The two
+    // filters genuinely differ, but not in a way that can lose a number --
+    // criterion (c) of `Metrics::combat_participant_enemies` is "dealt
+    // nonzero damage", so every enemy with a nonzero `damage_out` is in
+    // `enemies` by construction. An `ei_targets`-only enemy is one that
+    // never dealt damage, and its absent row and a zero row say the same
+    // thing.
+    let secs = (report.encounter.duration_ms as f64 / 1000.0).max(1.0);
+    for e in &report.enemies {
+        let Some(entity_id) = index.by_enemy_id(e.id) else { continue };
+        by_entity.insert(
+            entity_id,
+            DamageEntity {
+                total: e.damage_out,
+                // Same `total / max(duration_secs, 1)` convention the player
+                // rows above carry from `PlayerMetrics::dps`, so the two
+                // kinds of row on this block mean the same thing.
+                dps: e.damage_out as f64 / secs,
+                ..DamageEntity::default()
+            },
+        );
+    }
+
     DamageBlock { squad: DamageSquad { total: squad_total, dps: squad_dps }, by_entity }
 }
 
@@ -283,6 +321,28 @@ mod tests {
             row.per_target.contains_key(&enemy_entity),
             "per_target is keyed by ENTITY id, so it joins to the enemy's own row"
         );
+    }
+
+    #[test]
+    fn an_enemy_carries_its_outgoing_damage_on_this_block_not_on_its_identity_row() {
+        // The one number `targets[].dpsAll[0]` needs. It lived on
+        // `EnemyOut::damage_out` -- `#[serde(skip)]`, so invisible on the
+        // native wire and readable only through the side channel; this is
+        // the assertion that it is now a first-class native measurement.
+        let (report, index) = crate::v1::blocks::tests_support::fixture_report();
+        let mut cats = crate::v1::catalogs::CatalogBuilder::default();
+        let block = build_damage(&report, &index, &mut cats);
+
+        let with_damage =
+            report.enemies.iter().find(|e| e.damage_out > 0).expect("some enemy dealt damage");
+        let entity_id = index.by_enemy_id(with_damage.id).expect("enemy resolves to an entity");
+        let row = block.by_entity.get(entity_id).expect("enemy has a damage row");
+        assert_eq!(row.total, with_damage.damage_out, "no number may change in this spec");
+
+        // The squad aggregate is a SQUAD aggregate: adding enemy rows to
+        // `by_entity` must not fold enemy damage into it.
+        let expected: u64 = report.players.iter().map(|p| p.damage.total).sum();
+        assert_eq!(block.squad.total, expected, "enemy rows stay out of the squad total");
     }
 
     #[test]
