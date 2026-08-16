@@ -64,11 +64,16 @@ schedule. Absorption removed ei-json's *private data*, not ei-json.
   completeness. One named exception, the GW2EI combat-replay position surface
   (`axilog_ei::EiReplayInput`), which spec #1 decision 6 deliberately keeps out
   of the native shape.
-- **Phase B — NEXT.** Gaps native can close that ei-json can't: the
-  `statsTargets` field subset, replay join keys + down/dead export, enemy class
-  as a field, and the six values axibridge derives client-side today
-  (zone/map split, encounterDuration, timeStart, distToCom/stackDist). Absorbs
-  what an older roadmap called spec #3.
+- **Phase B — DONE**, merged 2026-08-16 (PR #5, `521abc9`; 16 commits, 39
+  files, +3601/−151, CI green on all four targets). Closed the five gaps native
+  could close that ei-json can't: the per-target split widened 7 → 23 fields,
+  replay `dc` (despawn) intervals, commander-tag segments, engine-side
+  `distToCom`/`stackDist` (`crates/axilog-core/src/analysis/distance.rs`, new),
+  and `encounter.started_at_unix`. Absorbed what an older roadmap called
+  spec #3. Two invariants worth not relearning: `CommanderTag::segments` and
+  `markers[].time_ms` are in **arcdps session time**, not log-relative; and a
+  distance scalar of `None` means the position pass never ran while `-1.0`
+  means it ran and nothing qualified — never collapse the two.
 - **Phase C — icons DONE, proc flags open.** Two generated catalogs ship:
   `analysis::skill_icons` (GW2 `/v2/skills`, 4,656 entries, plus `autoAttack`
   from `slot == "Weapon_1"`) and `analysis::buff_icons` (GW2EI's `new Buff(...)`
@@ -77,6 +82,22 @@ schedule. Absorption removed ei-json's *private data*, not ei-json.
   still unsourced.
 - **Phase D — the axibridge-side reader rewrite. NOT ours**: axilog-side
   readiness only unless the owner says otherwise.
+
+Debt left parked by Phase B, in rough value order:
+- `dc` is empty on all 42 fixture rows, and neither SDK asserts the field is
+  present before comparing — so a rename would pass both suites silently.
+- A `markers.rs` tag-colour-swap can emit two overlapping commander segments.
+- `t0` is re-derived in `distance.rs:142`, duplicating `replay.rs:172`.
+- `axilog.pyi` was swept for pre-1.0 staleness only at `PerTargetDetail`.
+- Windows CI `LNK1201`: the CLI bin and the Python cdylib are both named
+  `axilog`, so their PDBs collide. Root-caused, not fixed — a rerun usually
+  goes green; the real fix is renaming one. Predates Phase B.
+
+Two rules that hold across the whole program: the ei-json translation layer is
+**permanent** (a thin translation over the native document — do not propose
+sunsetting it), and native 1.0 is **malleable** — breaking changes land without
+a major bump while the in-tree adapter is 1.0's only reader, each recorded in
+`docs/NATIVE-FORMAT.md` §"1.x compatibility rules".
 
 ## In flight
 (none)
