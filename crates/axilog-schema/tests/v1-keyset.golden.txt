@@ -412,6 +412,7 @@ encounter.markers[].marker
 encounter.markers[].time_ms
 encounter.recorded_by
 encounter.revision
+encounter.started_at_unix
 encounter.teams
 encounter.teams[].color
 encounter.teams[].team_id

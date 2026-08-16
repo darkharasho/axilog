@@ -265,7 +265,7 @@ fn distance_semantics_match_ei_exactly() {
         players,
         enemies: vec![],
         markers: vec![],
-        tick_rate: None,
+        tick_rate: None, started_at_unix: None,
     };
     let replay = Replay { poll_ms: POLL_MS, tracks, distance: Default::default() };
     let out = distance::build(&raw, &replay, &enc);

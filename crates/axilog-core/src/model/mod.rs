@@ -130,7 +130,16 @@ pub struct Encounter { pub kind: String, pub map: String, pub duration_ms: u64,
     pub markers: Vec<MarkerAssignment>,
     /// Tick-rate telemetry from `CBTS_TICK` (Task 7, M2), `None` when the
     /// log has fewer than two such events.
-    pub tick_rate: Option<TickRate> }
+    pub tick_rate: Option<TickRate>,
+    /// Wall-clock log start, seconds since the epoch, from arcdps's
+    /// `CBTS_SQCOMBATSTART`/`sc::LOG_START` -- see that constant's doc
+    /// comment for the payload citation trail. `None` when the log carries
+    /// no such event (a truncated or synthetic log), which must stay
+    /// distinguishable from epoch zero -- the reason this isn't a bare
+    /// `u64` defaulting to 0. Phase B Task 8: replaces axibridge's
+    /// `.zevtc`-mtime inference, which is wrong for any copied or restored
+    /// file.
+    pub started_at_unix: Option<u64> }
 
 pub fn agent_kind(a: &RawAgent) -> AgentKind {
     if a.is_elite != 0xffff_ffff { AgentKind::Player }
@@ -276,7 +285,7 @@ pub fn resolve(raw: &RawLog) -> Encounter {
         kind: "wvw".into(), map: "World vs World".into(), duration_ms,
         build: raw.header.build.clone(), revision: raw.header.revision,
         recorded_by: None, teams: Vec::new(), players, enemies,
-        markers: Vec::new(), tick_rate: None,
+        markers: Vec::new(), tick_rate: None, started_at_unix: None,
     };
     crate::wvw::apply(&mut enc, raw);
     enc

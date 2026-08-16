@@ -353,7 +353,7 @@ mod tests {
             players,
             enemies,
             markers: vec![],
-            tick_rate: None,
+            tick_rate: None, started_at_unix: None,
         }
     }
 

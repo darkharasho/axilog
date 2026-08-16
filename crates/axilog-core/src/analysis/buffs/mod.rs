@@ -468,7 +468,7 @@ mod tests {
         Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms: 20_000, build: "20260114".into(),
             revision: 1, recorded_by: None, teams: vec![], players, enemies: vec![],
-            markers: vec![], tick_rate: None,
+            markers: vec![], tick_rate: None, started_at_unix: None,
         }
     }
 

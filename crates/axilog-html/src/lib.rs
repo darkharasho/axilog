@@ -77,6 +77,7 @@ mod tests {
                 ],
                 markers: vec![],
                 tick_rate: None,
+                started_at_unix: None,
             },
             players: vec![PlayerOut {
                 account: ":Player.1234".into(),

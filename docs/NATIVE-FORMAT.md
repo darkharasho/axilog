@@ -72,7 +72,8 @@ inside `blocks` is empty or absent.
   ],
   "markers": [
     { "entity_id": 58, "agent_addr": 9619, "marker": "3cd1c64a...", "time_ms": 33847418 }
-  ]
+  ],
+  "started_at_unix": 1768702180
 }
 ```
 
@@ -82,6 +83,14 @@ inside `blocks` is empty or absent.
 marker's agent resolved to a tracked entity — `arcdps` does not restrict
 `CBTS_MARKER` to squad members, so a marker on untracked friendly siege is
 ordinary and still needs to survive with `agent_addr` alone).
+
+`started_at_unix` is the wall-clock log start, seconds since the epoch, read
+from arcdps's own `CBTS_LOGSTART`/`CBTS_SQCOMBATSTART` event -- the SERVER
+timestamp specifically, not the recording client's local clock (arcdps
+records both; a machine's own clock skew is not a fact about the log).
+Omitted (not `0`) when the log carries no such event, so absence stays
+distinguishable from epoch zero. This replaces inferring the start time from
+the `.zevtc` file's mtime, which breaks for any copied or restored file.
 
 ## `entities[]` and the `role` field
 
