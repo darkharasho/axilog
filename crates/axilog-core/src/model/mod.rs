@@ -352,7 +352,7 @@ mod tests {
         let raw = RawLog {
             header: RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 },
             agents: vec![
-                agent(1, 27, b"Alice\0:Alice.1234\05\0"), // player
+                agent(1, 27, b"Alice\x00:Alice.1234\x005\x00"), // player
                 agent(2, 0xffff_ffff, b"Enemy Zerg\0"),   // npc/enemy
             ],
             skills: vec![],

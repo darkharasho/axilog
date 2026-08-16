@@ -295,8 +295,8 @@ mod tests {
     fn rewrites_player_names_preserves_subgroup_and_npc() {
         let mut data = synthetic_raw(&[
             npc_agent(0xB0),
-            player_agent(0x1, 27, b"Alice\0:Alice.1234\05\0"),
-            player_agent(0x2, 5, b"Bob\0:Bob.9999\012\0"),
+            player_agent(0x1, 27, b"Alice\x00:Alice.1234\x005\x00"),
+            player_agent(0x2, 5, b"Bob\x00:Bob.9999\x0012\x00"),
         ]);
         let agents_start_pre = HEADER_SIZE + 4;
         let before_npc = data[agents_start_pre..agents_start_pre + AGENT_SIZE].to_vec(); // agent 0's full record
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn errors_on_truncated_agent_table() {
-        let mut data = synthetic_raw(&[player_agent(0x1, 27, b"Alice\0:Alice.1234\05\0")]);
+        let mut data = synthetic_raw(&[player_agent(0x1, 27, b"Alice\x00:Alice.1234\x005\x00")]);
         data.truncate(data.len() - 10); // chop into the agent table
         assert!(anonymize_raw_evtc(&mut data).is_err());
     }

@@ -578,7 +578,7 @@ mod tests {
         let raw = RawLog {
             header: RawHeader { build: "20260718".into(), revision: 1, boss_id: 1 },
             agents: vec![
-                agent(1, 27, b"Alice\0:Alice.1234\05\0"), // squad player
+                agent(1, 27, b"Alice\x00:Alice.1234\x005\x00"), // squad player
                 agent(2, 0xffff_ffff, b"Keep Lord\0"),     // objective NPC
             ],
             skills: vec![],
@@ -608,7 +608,7 @@ mod tests {
         let raw = RawLog {
             header: RawHeader { build: "20260718".into(), revision: 1, boss_id: 1 },
             agents: vec![
-                agent(1, 27, b"Alice\0:Alice.1234\05\0"), // squad player
+                agent(1, 27, b"Alice\x00:Alice.1234\x005\x00"), // squad player
                 agent(2, 0xffff_ffff, b"Friendly Siege\0"), // our own siege
             ],
             skills: vec![],
@@ -662,7 +662,7 @@ mod tests {
         ];
         let raw = RawLog {
             header: RawHeader { build: "20260718".into(), revision: 1, boss_id: 1 },
-            agents: vec![agent(1, 27, b"Alice\0:Alice.1234\05\0")],
+            agents: vec![agent(1, 27, b"Alice\x00:Alice.1234\x005\x00")],
             skills: vec![],
             events: vec![
                 point_of_view(1),
@@ -694,8 +694,8 @@ mod tests {
         let raw = RawLog {
             header: RawHeader { build: "20260701".into(), revision: 1, boss_id: 1 },
             agents: vec![
-                agent(1, 27, b"Alice\0:Alice.1234\05\0"),
-                agent(2, 27, b"Bob\0:Bob.5678\05\0"),
+                agent(1, 27, b"Alice\x00:Alice.1234\x005\x00"),
+                agent(2, 27, b"Bob\x00:Bob.5678\x005\x00"),
             ],
             skills: vec![],
             events: vec![
@@ -728,7 +728,7 @@ mod tests {
     fn no_wvwteams_event_falls_back_to_static_table() {
         let raw = RawLog {
             header: RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 },
-            agents: vec![agent(1, 27, b"Alice\0:Alice.1234\05\0")],
+            agents: vec![agent(1, 27, b"Alice\x00:Alice.1234\x005\x00")],
             skills: vec![],
             events: vec![
                 point_of_view(1),
@@ -815,8 +815,8 @@ mod tests {
         let raw = RawLog {
             header: RawHeader { build: "20260701".into(), revision: 1, boss_id: 1 },
             agents: vec![
-                agent(1, 27, b"Alice\0:Alice.1234\05\0"),
-                agent(2, 27, b"Bob\0:Bob.5678\05\0"),
+                agent(1, 27, b"Alice\x00:Alice.1234\x005\x00"),
+                agent(2, 27, b"Bob\x00:Bob.5678\x005\x00"),
             ],
             skills: vec![],
             events: vec![

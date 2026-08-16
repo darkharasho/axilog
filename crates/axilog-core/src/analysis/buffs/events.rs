@@ -686,6 +686,13 @@ fn extract_buff_events_post_era(
             // Owner = src_agent, remover = dst_agent (opposite of apply,
             // same as pre-era, via the shared `AbstractBuffRemoveEvent`
             // ctor).
+            // Kept as an inner `if` rather than the match guard clippy
+            // suggests. The collapse IS semantically safe -- the only
+            // sibling arm keys off a different statechange and the
+            // fallthrough is `_ => {}` -- but a guard would move this
+            // condition up into the pattern and orphan the "Manual (or
+            // unknown/None)" comment below from the branch it explains.
+            #[allow(clippy::collapsible_match)]
             sc::BUFF_REMOVE_SINGLE => {
                 // MBUFFSIM Task 2, rule 1: same `OverstackOrNaturalEnd`
                 // drop as the pre-era branch -- GW2EI's

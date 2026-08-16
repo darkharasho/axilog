@@ -296,6 +296,23 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   Two attempts died to process exits before producing commits; no partial work exists. Lowest
   value of the remaining items — nothing consumes it today.
 
+- ~~Pre-existing clippy warnings~~ — CLOSED 2026-08-16; `cargo clippy --workspace
+  --all-targets` is now clean. 22 warnings: 13 `\0`-followed-by-a-digit escapes in
+  arcdps name-field test literals (Rust has no octal escapes, so the bytes were
+  always right, but they READ as octal — respelled `\x00`), 5 `len() > 0`,
+  a `get().is_none()`, a descending `sort_by` → `sort_by_key(Reverse(..))`, and
+  `credit_window`'s 8 arguments (fixed by collapsing `lo`/`hi` into the one
+  window tuple they always were, not by an `#[allow]`). One deliberate `#[allow]`
+  remains, on a `collapsible_match` whose collapse is safe but would orphan the
+  comment explaining the branch it guards; the reason is recorded inline.
+  Byproduct: the `len() > 0` lint drew the eye to
+  `assert_eq!(raw.events.len(), raw.events.len())` in `decode_fixture.rs` — a
+  value compared to ITSELF, under a comment claiming it checked layout-vs-decoded
+  agreement. It could not fail, so it never had. Replaced with pinned decode
+  counts (120,435 events / 173 agents / 969 skills), which is the check that was
+  wanted: a wrong event stride moves them, and `EVENT_SIZE_REV1` has been wrong
+  here before.
+
 ## Parked (user-gated — do NOT do autonomously)
 - axibridge's actual cutover from EI CLI to the axilog SDK (both registries now live, so this is
   unblocked whenever the user wants it).

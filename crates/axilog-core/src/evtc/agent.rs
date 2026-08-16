@@ -71,7 +71,7 @@ mod tests {
         b[8..12].copy_from_slice(&5u32.to_le_bytes()); // prof (guardian)
         b[12..16].copy_from_slice(&27u32.to_le_bytes()); // is_elite (firebrand)
                                                           // name combo at offset 28: char \0 account \0 subgroup \0
-        let name = b"Alice\0:Alice.1234\05\0";
+        let name = b"Alice\x00:Alice.1234\x005\x00";
         b[28..28 + name.len()].copy_from_slice(name);
         b
     }

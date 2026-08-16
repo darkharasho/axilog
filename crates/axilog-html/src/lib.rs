@@ -151,7 +151,7 @@ mod tests {
         let html = render(&fixture_report());
         let data = extract_data_block(&html);
         let v: serde_json::Value = serde_json::from_str(data).expect("valid JSON");
-        assert!(v["players"].as_array().unwrap().len() > 0);
+        assert!(!v["players"].as_array().unwrap().is_empty());
         assert_eq!(v["encounter"]["map"], "Eternal Battlegrounds");
     }
 

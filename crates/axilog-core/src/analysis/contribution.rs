@@ -323,8 +323,7 @@ pub fn apply_with_registry(
         let (credits, credits_by_skill) = credit_window(
             by_time[start..end].iter().copied(),
             registry,
-            lo,
-            t_down,
+            (lo, t_down),
             target,
             exclude_side,
             &boon_ids,
@@ -461,8 +460,10 @@ fn resolve_contributor(
 fn credit_window<'a>(
     events: impl IntoIterator<Item = &'a RawEvent>,
     registry: &InstidRegistry,
-    lo: u64,
-    hi: u64,
+    // The inclusive `[lo, hi]` credit window. One parameter rather than
+    // two because it is one concept -- and because splitting it made this
+    // an 8-argument function, which is a smell clippy was right about.
+    (lo, hi): (u64, u64),
     target: u64,
     exclude_side: &BTreeSet<u64>,
     boon_ids: &BTreeSet<u32>,

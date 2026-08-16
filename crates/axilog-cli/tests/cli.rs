@@ -31,7 +31,7 @@ fn check_parses_fixture_to_json(fixture_path: &str) {
     // `players[]` are gone, replaced by `axilog.schema` and `entities[]`
     // (see `crates/cli_v1.rs` for the dedicated 1.0-shape assertions).
     assert_eq!(v["axilog"]["schema"], "1.0");
-    assert!(v["entities"].as_array().unwrap().len() > 0);
+    assert!(!v["entities"].as_array().unwrap().is_empty());
 }
 
 /// Committed, PII-safe fixture — always present, so this runs in CI too

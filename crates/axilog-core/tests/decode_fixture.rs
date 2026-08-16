@@ -11,11 +11,13 @@ fn local_fixture_path() -> String {
 fn check_decodes(bytes: &[u8]) {
     let raw = decode_raw(bytes).unwrap();
     assert_eq!(raw.header.revision, 1);
-    assert!(raw.agents.len() > 0);
-    assert!(raw.skills.len() > 0);
-    assert!(raw.events.len() > 0);
-    // sanity: event count computed from layout matches decoded vec length
-    assert_eq!(raw.events.len(), raw.events.len());
+    assert!(!raw.agents.is_empty());
+    assert!(!raw.skills.is_empty());
+    assert!(!raw.events.is_empty());
+    // This helper runs against BOTH the committed fixture and a local one,
+    // so it can only assert what holds for any log. The layout/count
+    // agreement it used to claim to check is pinned on the committed
+    // fixture instead -- see `decodes_committed_wvw_fixture`.
 }
 
 /// Committed, PII-safe fixture — always present, so this runs in CI too
@@ -24,7 +26,25 @@ fn check_decodes(bytes: &[u8]) {
 fn decodes_committed_wvw_fixture() {
     let bytes = std::fs::read(ANON_FIXTURE_PATH)
         .unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"));
+    let raw = decode_raw(&bytes).expect("decode committed fixture");
     check_decodes(&bytes);
+
+    // The exact decoded counts, pinned. This replaces an assertion that
+    // claimed to check "event count computed from layout matches decoded
+    // vec length" but actually read `assert_eq!(raw.events.len(),
+    // raw.events.len())` -- a value compared to itself, which no defect
+    // could ever fail (found 2026-08-16 by clippy's neighbouring
+    // `len() > 0` lint, not by the test failing, because it cannot fail).
+    //
+    // A pinned count is the check that was wanted. The failure it guards
+    // is real and has happened here before: `EVENT_SIZE_REV1` was once 96
+    // instead of 64, which silently misaligned every event after the first
+    // -- decode still "succeeded" and returned a plausible-looking vec,
+    // just a shorter one full of garbage. A wrong stride changes this
+    // number; a self-comparison would have stayed green through it.
+    assert_eq!(raw.events.len(), 120_435, "decoded event count moved");
+    assert_eq!(raw.agents.len(), 173, "decoded agent count moved");
+    assert_eq!(raw.skills.len(), 969, "decoded skill count moved");
 }
 
 /// Belt-and-braces: when the real local raw fixture is also present

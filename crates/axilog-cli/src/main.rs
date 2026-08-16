@@ -550,7 +550,7 @@ fn axilog_cli_table_default(r: &axilog_schema::Report) -> String {
     s.push_str(&format!("{:<24} {:<12} {:>10} {:>8} {:>6} {:>6} {:>7}\n",
         "account", "profession", "damage", "DPS", "downs", "kills", "deaths"));
     let mut players: Vec<_> = r.players.iter().collect();
-    players.sort_by(|a, b| b.damage.total.cmp(&a.damage.total));
+    players.sort_by_key(|p| std::cmp::Reverse(p.damage.total));
     for p in players {
         s.push_str(&format!("{:<24} {:<12} {:>10} {:>8.0} {:>6} {:>6} {:>7}\n",
             trunc(&p.account, 24), trunc(&p.profession, 12), p.damage.total,

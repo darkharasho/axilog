@@ -1065,7 +1065,7 @@ mod tests {
         let raw = raw_from(vec![direct(300, 9, result::NORMAL, 500)]); // src 300 is not in squad
         let squad = squad1();
         let result_map = build(&raw, &squad, &enemies9(), &no_rep());
-        assert!(result_map.get(&1).is_none() || result_map[&1] == HitStats::default());
+        assert!(!result_map.contains_key(&1) || result_map[&1] == HitStats::default());
         assert!(!result_map.contains_key(&300), "non-squad source must not get its own entry either");
     }
 
