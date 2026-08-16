@@ -192,12 +192,12 @@ pub fn build(raw: &RawLog, replay: &Replay, enc: &Encounter) -> BTreeMap<u64, Di
 ///   removals, whose `src`/`dst` roles are inverted).
 /// - The damage predicate here goes through [`is_health_damage_result`],
 ///   which narrows GW2EI's own `GetDamageData`/`GetDamageTakenData` --
-///   those are not result-filtered at all (`ParsedEvtcLog.cs:78-79`). A
+///   those are not result-filtered at all (`ParsedEvtcLog.cs:80-81`). A
 ///   player whose only hits were blocked or evaded is dropped by this gate
 ///   but kept by GW2EI's.
 ///
 /// **Also not reproduced: GW2EI's two aware-window gates**
-/// (`ParsedEvtcLog.cs:74,77`), evaluated before the participation predicate
+/// (`ParsedEvtcLog.cs:74,78`), evaluated before the participation predicate
 /// above and not after it: `p.LastAware <= LogStart` removes a player who
 /// despawned before the log started, and `p.FirstAware < LogEnd` removes
 /// one who spawned after it ended (checked as `else`, i.e. `FirstAware >=
