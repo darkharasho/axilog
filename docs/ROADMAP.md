@@ -240,8 +240,9 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   held up in full: it is a subsystem port, not a catalog generator, and `isInstantCast`
   genuinely required running the finders. Shipped as
   `analysis::instant_cast` (model + one engine, mirroring `damage_mods`) plus
-  `scripts/gen_instant_cast_catalog.py`, which extracts **429 of GW2EI's 649** finder
-  constructions with a named reason for each of the 220 skips.
+  `scripts/gen_instant_cast_catalog.py`, which extracts **565 of GW2EI's 649** finder
+  constructions with a named reason for each of the 84 skips. (It was 429/220 as first
+  shipped; the effect decode below closed the largest skip bucket.)
 
   Four corrections to the scoping below, all found by machine accounting rather than by
   reading:
@@ -256,12 +257,32 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
     is now decoded and the snap implemented — a one-directional clamp, `min(swap-1, time)`.
   - `MinionCommandBuff` is `59536`, not the value a first pass guessed.
 
-  Remaining gap, deliberate: the **172 effect-keyed finders** are not evaluated, because
-  this project decodes no effect events (only their `CBTS_IDTOGUID` mappings). They are
-  gated on `HasEffectData`, so `isInstantCast` UNDER-COUNTS on a log carrying effect
-  events. Closing it means decoding statechanges 45/51/60/62 and is the natural follow-on.
-  The complementary `.UsingDisableWithEffectData()` finders — the ones that matter on
-  effect-less logs — do run.
+  ~~Remaining gap: the 172 effect-keyed finders are not evaluated.~~ — **CLOSED
+  2026-08-16.** `crates/axilog-core/src/evtc/effect.rs` decodes all three arcdps effect
+  generations (`CBTS_EFFECT` 45, `CBTS_EFFECT` 51 with its end form, and the split
+  ground/agent 60–63), folded into one `EffectEvent` the way GW2EI folds them. 136 of the
+  175 effect finders are now transcribed; the rest fall into the same `.UsingChecker(lambda)`
+  bucket every other subclass has. Effect on the committed fixture: distinct skills carrying
+  `isInstantCast` went **9 → 84**, and the named results are correct GW2 mechanics (Deploy
+  Jade Sphere, the chronomancer shatters, Relic of Fireworks, Tale of the Honorable Rogue).
+
+  Three things that decode is load-bearing for and that are worth not re-deriving:
+  - **Effect ids are session-local.** A row names its effect in `skillid`; the stable
+    16-byte GUID arrives separately as a `CBTS_IDTOGUID` row of content type EFFECT. A
+    finder therefore resolves GUID → local id per log. Below arcdps `20220709`
+    (`FunctionalIDToGUIDEvents`) there is no usable GUID table at all, so no effect finder
+    can fire — correct, not a bug.
+  - **Non-static-platform effects are DROPPED**, reproducing GW2EI's release-build filter.
+    An effect riding a moving platform has coordinates in the platform's frame. The drop is
+    observable through `HasEffectData` and through every effect finder, so it must not be
+    "fixed".
+  - **`UsingDurationChecker` means two different things.** On a buff finder it is an
+    epsilon band (`|applied - d| < eps`); on an effect finder it is exact equality, or an
+    inclusive `[min, max]` range. They are separate `Check` variants for that reason.
+
+  New deliberate gap, much smaller: **6 `UsingNoAnimatedCastChecker` finders** are skipped.
+  That checker needs a cast WINDOW (start plus actual duration), which `analysis::rotation`
+  builds downstream of `instant_cast`.
 
   Also still open: the **`rotation` fill** the entry below calls out as adjacent value.
   Instant casts are computed but are NOT merged into `PlayerMetrics::rotation`, which

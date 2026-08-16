@@ -90,16 +90,25 @@ reader rewrite — the owner's, not ours).
 Phase D, a `--compact` CLI flag, format-level size work. (MOBJ and MPROC
 were both on this list; both landed 2026-08-16.)
 
-MPROC's two deliberate leftovers, either of which is a sensible next task:
+MPROC's leftovers:
 
-- **Effect events are still not decoded** (statechanges 45/51/60/62). That
-  is what blocks the 172 effect-keyed instant-cast finders, so
-  `isInstantCast` under-counts on any log carrying effect data. It would
-  also unlock the replay eye-candy backlog (dev-notes #6/#8).
+- ~~Effect events are still not decoded~~ — CLOSED 2026-08-16.
+  `crates/axilog-core/src/evtc/effect.rs` decodes all three arcdps
+  generations (45, 51 + its end form, and the split 60–63) into one
+  `EffectEvent`. The catalog went 429 → 565 of 649 finders, and
+  `isInstantCast` on the committed fixture went 9 → 84 distinct skills.
+  The decoder is general (position, orientation, scale, dynamic end
+  times), so the replay eye-candy backlog can build on it — but note the
+  replay items themselves (dev-notes #6/#8) are TRANSFORMATION / GLIDER /
+  GADGETCAPTURE statechanges, not effects; they are still open.
 - **`rotation` is still `AnimatedCastEvent`-only.** The instant casts
   exist (`analysis::instant_cast::compute`) but are not merged in.
   Merging them moves cast counts and the ei-json `rotation[]`, so it is a
   behavioural change, not an additive one.
+- **6 `UsingNoAnimatedCastChecker` finders** are skipped: that checker
+  needs a cast window (start + actual duration), which `analysis::rotation`
+  builds downstream of `instant_cast`. Doing the `rotation` merge above
+  would likely make this reachable too.
 
 ---
 

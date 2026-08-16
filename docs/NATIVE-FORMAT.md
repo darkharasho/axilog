@@ -249,9 +249,8 @@ never populates it, since damage-modifier attribution needs `--modifiers`.
 A skill entry's five MPROC flags — `is_trait_proc`, `is_gear_proc`,
 `is_unconditional_proc`, `is_not_accurate`, `is_instant_cast` — are
 **omitted when `false`**, unlike their `is_swap`/`can_crit` neighbours.
-Absence means `false`, not "unknown". They are rare (on the committed
-fixture 9 of 368 skills carry any of them), and emitting ~370 × 5 literal
-`false`s cost 16% of the rendered report.
+Absence means `false`, not "unknown". They are sparse, and emitting
+~370 × 5 literal `false`s cost 16% of the rendered report.
 
 Two properties worth knowing before consuming them:
 
@@ -261,9 +260,10 @@ Two properties worth knowing before consuming them:
   same GW2 build can legitimately disagree.
 - **`is_instant_cast` is strictly stronger than the other four.** Those
   four say a finder for this skill was AVAILABLE; `is_instant_cast` says
-  one actually FIRED in this log. It currently UNDER-counts on logs
-  carrying effect events, because the 172 effect-keyed finders are not
-  evaluated — see `analysis::instant_cast`'s module doc.
+  one actually FIRED in this log. A log recorded WITHOUT effect events
+  will therefore carry far fewer of them than the same fight recorded
+  with — for many traits and sigils the spawned visual is the only trace
+  of the proc. That is a property of the recording, not of the fight.
 
 The map key's SIGN encodes direction: negative ids (like `-428` above) are
 incoming modifiers, positive ids outgoing — matching `-428`'s description
