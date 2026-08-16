@@ -4,6 +4,39 @@
 
 use crate::analysis::instant_cast::model::*;
 
+/// `EffectGUIDs.HarbingerCascadingCorruption`.
+const G_HARBINGER_CASCADING_CORRUPTION: [u8; 16] = [0xEE, 0xDC, 0xAB, 0x61, 0xCD, 0x35, 0xE8, 0x40, 0x90, 0x9B, 0x03, 0xD3, 0x98, 0x87, 0x8B, 0x1C];
+/// `EffectGUIDs.HarbingerDeathlyHaste`.
+const G_HARBINGER_DEATHLY_HASTE: [u8; 16] = [0x9C, 0x06, 0xD9, 0xD9, 0xB0, 0xE2, 0x22, 0x47, 0xA1, 0x75, 0x2C, 0x42, 0x68, 0x08, 0xCD, 0x80];
+/// `EffectGUIDs.HarbingerDoomApproaches`.
+const G_HARBINGER_DOOM_APPROACHES: [u8; 16] = [0x88, 0xC0, 0x01, 0x0F, 0x0B, 0x71, 0x48, 0x46, 0x9B, 0x88, 0xE2, 0xA1, 0xB4, 0x50, 0x0D, 0xCC];
+/// `EffectGUIDs.NecromancerPlagueSignet`.
+const G_NECROMANCER_PLAGUE_SIGNET: [u8; 16] = [0xE7, 0x8E, 0xD0, 0x95, 0xE9, 0x7F, 0x1D, 0x4A, 0x8B, 0xEB, 0x90, 0x17, 0x96, 0x44, 0x9E, 0x2F];
+/// `EffectGUIDs.ReaperSuffer`.
+const G_REAPER_SUFFER: [u8; 16] = [0x6C, 0x8C, 0x38, 0x8B, 0xCD, 0x26, 0xF0, 0x4C, 0xA6, 0x61, 0x8D, 0x29, 0x16, 0xB8, 0xD7, 0x96];
+/// `EffectGUIDs.ReaperYouAreAllWeaklings1`.
+const G_REAPER_YOU_ARE_ALL_WEAKLINGS_1: [u8; 16] = [0x37, 0x24, 0x2D, 0xF5, 0x1D, 0x23, 0x8A, 0x40, 0x9E, 0x82, 0x2E, 0x7A, 0x19, 0x36, 0xD7, 0xA6];
+/// `EffectGUIDs.ReaperYouAreAllWeaklings2`.
+const G_REAPER_YOU_ARE_ALL_WEAKLINGS_2: [u8; 16] = [0xFE, 0xE4, 0xF2, 0x6C, 0x28, 0x66, 0xE3, 0x4C, 0x9D, 0x75, 0x50, 0x6A, 0x8E, 0xD9, 0x4F, 0x5E];
+/// `EffectGUIDs.ReaperYouAreAllWeaklings3`.
+const G_REAPER_YOU_ARE_ALL_WEAKLINGS_3: [u8; 16] = [0xED, 0x6A, 0x84, 0x40, 0xCB, 0x49, 0xB2, 0x48, 0xA3, 0x52, 0xB2, 0x07, 0x3F, 0xAF, 0x1F, 0x5F];
+/// `EffectGUIDs.RitualistInnervateAnguish1`.
+const G_RITUALIST_INNERVATE_ANGUISH_1: [u8; 16] = [0x98, 0xE9, 0xE5, 0xF2, 0x6F, 0xF7, 0x6F, 0x44, 0x9A, 0x18, 0x16, 0x54, 0xE4, 0xF3, 0x96, 0x95];
+/// `EffectGUIDs.RitualistInnervateAnguish2`.
+const G_RITUALIST_INNERVATE_ANGUISH_2: [u8; 16] = [0xA1, 0x70, 0xA1, 0xC6, 0x1C, 0xD0, 0x97, 0x42, 0xA7, 0x98, 0x48, 0xD1, 0x43, 0x74, 0x90, 0x03];
+/// `EffectGUIDs.RitualistInnervatePreservation1`.
+const G_RITUALIST_INNERVATE_PRESERVATION_1: [u8; 16] = [0x81, 0x14, 0x6A, 0x66, 0xFC, 0xE3, 0xA3, 0x42, 0xB0, 0x0D, 0x4D, 0x2E, 0xB2, 0xA7, 0x64, 0x3E];
+/// `EffectGUIDs.RitualistInnervatePreservation2`.
+const G_RITUALIST_INNERVATE_PRESERVATION_2: [u8; 16] = [0x9F, 0x62, 0xB1, 0x40, 0x7B, 0x5E, 0x2A, 0x45, 0xB0, 0x68, 0x96, 0x7C, 0x0F, 0x17, 0x63, 0x15];
+/// `EffectGUIDs.RitualistInnervateWanderlust1`.
+const G_RITUALIST_INNERVATE_WANDERLUST_1: [u8; 16] = [0xBE, 0xFD, 0x0F, 0xD6, 0xAC, 0x4A, 0xE2, 0x40, 0x96, 0x59, 0x0D, 0xCD, 0xC6, 0x55, 0xF1, 0x6C];
+/// `EffectGUIDs.RitualistInnervateWanderlust2`.
+const G_RITUALIST_INNERVATE_WANDERLUST_2: [u8; 16] = [0xA8, 0xFA, 0x2A, 0xFA, 0xBB, 0x3F, 0xC8, 0x40, 0x89, 0x3E, 0x44, 0x1F, 0x47, 0x69, 0x35, 0x24];
+/// `EffectGUIDs.RitualistSummonSpirits`.
+const G_RITUALIST_SUMMON_SPIRITS: [u8; 16] = [0x0B, 0xC4, 0xAA, 0xBB, 0x74, 0xF2, 0xAC, 0x43, 0x96, 0x3C, 0xBB, 0x7B, 0x52, 0x99, 0x35, 0x59];
+/// `EffectGUIDs.ScourgeSandCascade`.
+const G_SCOURGE_SAND_CASCADE: [u8; 16] = [0x44, 0x09, 0x2A, 0xEF, 0x6D, 0x61, 0x9F, 0x40, 0x93, 0xFE, 0xA4, 0xE9, 0xD9, 0x14, 0x2D, 0x01];
+
 pub const FINDERS: &[FinderDef] = &[
     FinderDef {
         skill_id: 62567,
@@ -25,6 +58,45 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::Damage { skill_id: 62660 },
         origin: CastOrigin::Trait,
         enable: &[Enable::NoEffectData],
+        min_gw2_build: 118697,
+        max_gw2_build: 203989,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62660,
+        source: "HarbingerHelper",
+        trigger: Trigger::Effect { guid: &G_HARBINGER_CASCADING_CORRUPTION, by_dst: true },
+        origin: CastOrigin::Trait,
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Harbinger"], base: false, negated: false },
+        ],
+        min_gw2_build: 118697,
+        max_gw2_build: 203989,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62671,
+        source: "HarbingerHelper",
+        trigger: Trigger::Effect { guid: &G_HARBINGER_DEATHLY_HASTE, by_dst: true },
+        origin: CastOrigin::Trait,
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Harbinger"], base: false, negated: false },
+        ],
+        min_gw2_build: 118697,
+        max_gw2_build: 203989,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62558,
+        source: "HarbingerHelper",
+        trigger: Trigger::Effect { guid: &G_HARBINGER_DOOM_APPROACHES, by_dst: true },
+        origin: CastOrigin::Trait,
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Harbinger"], base: false, negated: false },
+        ],
         min_gw2_build: 118697,
         max_gw2_build: 203989,
         ..FinderDef::DEFAULT
@@ -101,6 +173,16 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 10562,
+        source: "NecromancerHelper",
+        trigger: Trigger::Effect { guid: &G_NECROMANCER_PLAGUE_SIGNET, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Necromancer"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 13863,
         source: "NecromancerHelper",
         trigger: Trigger::ExtHealing { skill_id: 13863 },
@@ -154,10 +236,30 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 29414,
+        source: "ReaperHelper",
+        trigger: Trigger::Effect { guid: &G_REAPER_YOU_ARE_ALL_WEAKLINGS_1, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Reaper"], base: false, negated: false },
+            Check::SecondaryEffect { guid: &G_REAPER_YOU_ARE_ALL_WEAKLINGS_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_REAPER_YOU_ARE_ALL_WEAKLINGS_3, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 30670,
         source: "ReaperHelper",
         trigger: Trigger::Damage { skill_id: 30670 },
         enable: &[Enable::NoEffectData],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 30670,
+        source: "ReaperHelper",
+        trigger: Trigger::Effect { guid: &G_REAPER_SUFFER, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Reaper"], base: false, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -179,6 +281,12 @@ pub const FINDERS: &[FinderDef] = &[
         source: "RitualistHelper",
         trigger: Trigger::BuffLoss { buff_id: 76958 },
         swap_snap: SwapSnap::Before,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76607,
+        source: "RitualistHelper",
+        trigger: Trigger::Effect { guid: &G_RITUALIST_SUMMON_SPIRITS, by_dst: false },
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -253,6 +361,33 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 77003,
+        source: "RitualistHelper",
+        trigger: Trigger::Effect { guid: &G_RITUALIST_INNERVATE_ANGUISH_1, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_RITUALIST_INNERVATE_ANGUISH_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76732,
+        source: "RitualistHelper",
+        trigger: Trigger::Effect { guid: &G_RITUALIST_INNERVATE_WANDERLUST_1, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_RITUALIST_INNERVATE_WANDERLUST_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76602,
+        source: "RitualistHelper",
+        trigger: Trigger::Effect { guid: &G_RITUALIST_INNERVATE_PRESERVATION_1, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_RITUALIST_INNERVATE_PRESERVATION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 40274,
         source: "ScourgeHelper",
         trigger: Trigger::BuffGain { buff_id: 42311 },
@@ -262,6 +397,12 @@ pub const FINDERS: &[FinderDef] = &[
         skill_id: 40813,
         source: "ScourgeHelper",
         trigger: Trigger::Damage { skill_id: 46808 },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 43448,
+        source: "ScourgeHelper",
+        trigger: Trigger::Effect { guid: &G_SCOURGE_SAND_CASCADE, by_dst: false },
         ..FinderDef::DEFAULT
     },
     FinderDef {

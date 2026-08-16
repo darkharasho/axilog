@@ -26,7 +26,7 @@
 //!
 //! # Shape of the port
 //!
-//! GW2EI has 13 finder subclasses and 658 constructions across ~44
+//! GW2EI has 13 finder subclasses and 649 constructions across ~44
 //! profession-helper files, but the subclasses are structurally identical:
 //!
 //! > take one event stream, group it by the agent the subclass calls the
@@ -41,16 +41,12 @@
 //!
 //! # Deliberate gaps
 //!
-//! * **Effect finders are not evaluated yet.** 175 of the 658 finders are
-//!   `EffectCastFinder`s keyed on an effect GUID, and this project does
-//!   not decode effect events (only their `CBTS_IDTOGUID` mappings). Those
-//!   finders are gated by [`model::Enable::HasEffectData`], so on a log
-//!   WITH effect data they would be available and are not being run --
-//!   that is a known undercount of `isInstantCast`, tracked in
-//!   `docs/ROADMAP.md`. The complementary
-//!   [`model::Enable::NoEffectData`] finders (GW2EI's
-//!   `.UsingDisableWithEffectData()`) ARE evaluated, and they are exactly
-//!   the ones that matter on effect-less logs.
+//! * **Six `UsingNoAnimatedCastChecker` finders are skipped.** That
+//!   checker asks whether the caster's animated cast WINDOW -- start plus
+//!   actual duration -- contains a time (`CombatData.IsCasting`). This
+//!   project pairs cast starts with stops in `analysis::rotation`, which
+//!   is downstream of here, so the window is not available. Dropping the
+//!   checker instead would widen those six onto casts EI excludes.
 //! * **Spec checkers read a static spec per agent**, not GW2EI's
 //!   `GetSpecAtTime`. An agent's spec cannot change within one agent addr
 //!   (a build swap or relog produces a NEW addr, which this project
@@ -73,26 +69,17 @@ use crate::analysis::damage::{is_health_damage_result, InstidRegistry};
 use crate::evtc::{result, sc, RawLog};
 use crate::model::Encounter;
 
-/// The `is_statechange` values that produce a GW2EI `EffectEvent`:
-/// `Effect_45`, `Effect_51`, `EffectGroundCreate` and `EffectAgentCreate`
-/// (`CombatEventFactory.cs:322,323,494,509`). The REMOVE counterparts
-/// (61/63) and `EffectMissileCreate` (79) are deliberately excluded --
-/// GW2EI files the latter as missile data, not effect data.
-///
-/// Used only to answer `HasEffectData`; this project does not decode the
-/// payloads (see the module doc's "Deliberate gaps").
-const EFFECT_CREATE_STATECHANGES: [u8; 4] = [45, 51, 60, 62];
-
 /// Probe the log for everything [`model::Enable`] conditions and build
 /// gates read.
 pub fn capabilities(raw: &RawLog) -> LogCapabilities {
     LogCapabilities {
         gw2_build: crate::analysis::damage_mods::gw2_build(raw),
         evtc_build: crate::analysis::damage_mods::evtc_build(raw),
-        has_effect_data: raw
-            .events
-            .iter()
-            .any(|e| EFFECT_CREATE_STATECHANGES.contains(&e.is_statechange)),
+        // The cheap probe rather than a full `effect::decode`, because
+        // `available_flags` asks this question without ever running the
+        // finders. The two agree by construction -- see
+        // `evtc::effect::has_effect_data`.
+        has_effect_data: crate::evtc::effect::has_effect_data(raw),
         has_missile_data: raw.events.iter().any(|e| {
             matches!(e.is_statechange, sc::MISSILE_CREATE | sc::MISSILE_LAUNCH | sc::MISSILE_REMOVE)
         }),
@@ -140,17 +127,42 @@ fn spec_index(enc: &Encounter) -> BTreeMap<u64, AgentSpec> {
 #[derive(Debug, Clone, Copy)]
 struct TriggerHit {
     time: u64,
-    /// [`Party::Key`] -- the subclass's `GetKeyAgent`.
+    /// [`Party::Key`] -- `To` on a buff event, `Src` on a damage or effect
+    /// one.
     key: u64,
     /// [`Party::Other`] -- its counterpart. `0` for streams with only one
-    /// party (spawns, minion casts).
+    /// party (spawns, minion casts), and for an effect with no anchor
+    /// agent.
     other: u64,
-    /// Applied/extended duration, for [`Check::Duration`]. `0` for
-    /// triggers that carry no duration.
+    /// Applied/extended duration, for [`Check::Duration`] and
+    /// [`Check::EffectDuration`]. `0` for triggers that carry no duration.
     duration: i64,
+    /// Whether an effect hit is anchored to an agent, for
+    /// [`Check::AroundDst`]. Always `false` on the non-effect streams,
+    /// which carry no such notion and never see the check.
+    around_dst: bool,
+    /// Index into [`Ctx::effects`] for an effect hit; [`NOT_AN_EFFECT`]
+    /// otherwise. Needed for the `other != evt` identity test inside
+    /// [`Check::SecondaryEffect`], which is reference inequality in C#.
+    effect_idx: usize,
 }
 
+/// [`TriggerHit::effect_idx`] for a hit that did not come from the effect
+/// stream.
+const NOT_AN_EFFECT: usize = usize::MAX;
+
 impl TriggerHit {
+    /// All-zero base, so a stream that has no notion of anchoring or
+    /// effect identity writes only the fields it means.
+    const NONE: TriggerHit = TriggerHit {
+        time: 0,
+        key: 0,
+        other: 0,
+        duration: 0,
+        around_dst: false,
+        effect_idx: NOT_AN_EFFECT,
+    };
+
     fn party(&self, p: Party) -> u64 {
         match p {
             Party::Key => self.key,
@@ -174,6 +186,10 @@ enum StreamKey {
     Spawn,
     Missile(u32),
     ExtHealing(u32),
+    /// Keyed by the STABLE effect GUID, not the session-local effect id
+    /// the wire carries: the id differs between two recordings of the same
+    /// fight, so a catalog row could not name one.
+    Effect([u8; 16]),
 }
 
 impl Trigger {
@@ -195,6 +211,9 @@ impl Trigger {
             Trigger::MinionSpawn { .. } => StreamKey::Spawn,
             Trigger::Missile { skill_id } => StreamKey::Missile(skill_id),
             Trigger::ExtHealing { skill_id } => StreamKey::ExtHealing(skill_id),
+            // Both effect subclasses share one stream per GUID; they
+            // differ only in which of the two agents they call the caster.
+            Trigger::Effect { guid, .. } => StreamKey::Effect(*guid),
         }
     }
 }
@@ -225,6 +244,14 @@ struct Ctx<'a> {
     /// wrong.
     swaps: BTreeMap<u64, Vec<u64>>,
     post_era: bool,
+    /// Decoded effect events plus their GUID table. Empty unless some
+    /// active finder is an effect finder -- the decode allocates one entry
+    /// per effect row, and a WvW log carries thousands.
+    effects: crate::evtc::effect::EffectIndex,
+    /// Effect-list indices grouped by the effect's session-local id, so
+    /// both the stream collection and [`Check::SecondaryEffect`] can go
+    /// from a GUID to its events in two lookups.
+    effects_by_id: BTreeMap<u32, Vec<usize>>,
 }
 
 impl Ctx<'_> {
@@ -253,6 +280,32 @@ impl Ctx<'_> {
             SwapSnap::None => time,
         }
     }
+
+    /// The effects a finder's GUID names, as indices into
+    /// [`Ctx::effects`]. Empty when this log never mapped that GUID.
+    fn effects_with_guid(&self, guid: &[u8; 16]) -> &[usize] {
+        self.effects
+            .id_for_guid(guid)
+            .and_then(|id| self.effects_by_id.get(&id))
+            .map_or(&[][..], |v| v.as_slice())
+    }
+}
+
+/// GW2EI's `EffectCastFinder.GetAgent` / `GetOtherAgent`
+/// (`EffectCastFinder.cs:18-36`) for one effect: the finder's key agent and
+/// its counterpart, minion-folded if the finder asked for it.
+///
+/// Both are instance methods on the FINDER, so the `by_dst` swap applies to
+/// every effect the finder inspects -- including the secondary effects a
+/// [`Check::SecondaryEffect`] compares against, not just the triggering one.
+fn effect_agents(ctx: &Ctx<'_>, f: &FinderDef, ev: &crate::evtc::EffectEvent) -> (u64, u64) {
+    let by_dst = matches!(f.trigger, Trigger::Effect { by_dst: true, .. });
+    let (k, o) = if by_dst { (ev.dst.unwrap_or(0), ev.src) } else { (ev.src, ev.dst.unwrap_or(0)) };
+    if f.minions {
+        (ctx.final_master(k), ctx.final_master(o))
+    } else {
+        (k, o)
+    }
 }
 
 /// Run every AVAILABLE finder over the log and return the instant casts
@@ -269,7 +322,8 @@ pub fn compute(raw: &RawLog, enc: &Encounter, finders: &[FinderDef]) -> Vec<Inst
         return Vec::new();
     }
 
-    let ctx = build_ctx(raw, enc);
+    let need_effects = active.iter().any(|f| matches!(f.trigger, Trigger::Effect { .. }));
+    let ctx = build_ctx(raw, enc, need_effects);
     let wanted: BTreeSet<StreamKey> = active.iter().map(|f| f.trigger.stream_key()).collect();
     let streams = collect_streams(&ctx, &wanted);
 
@@ -319,8 +373,18 @@ pub fn available_flags(
     (trait_p, gear_p, uncond_p, not_acc)
 }
 
-fn build_ctx<'a>(raw: &'a RawLog, enc: &Encounter) -> Ctx<'a> {
+fn build_ctx<'a>(raw: &'a RawLog, enc: &Encounter, need_effects: bool) -> Ctx<'a> {
     let registry = InstidRegistry::build(raw);
+
+    let effects = if need_effects {
+        crate::evtc::effect::decode(raw)
+    } else {
+        crate::evtc::EffectIndex::default()
+    };
+    let mut effects_by_id: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    for (i, ev) in effects.events.iter().enumerate() {
+        effects_by_id.entry(ev.effect_id).or_default().push(i);
+    }
 
     // `RawAgent::prof` is the species id for a non-player agent, which is
     // what `MinionSpawnCastFinder`/`MinionCommandCastFinder` match on.
@@ -361,6 +425,8 @@ fn build_ctx<'a>(raw: &'a RawLog, enc: &Encounter) -> Ctx<'a> {
         species,
         master,
         post_era: raw.header.is_post_buff_rework(),
+        effects,
+        effects_by_id,
     }
 }
 
@@ -408,6 +474,7 @@ fn collect_streams(
                     key: e.dst_agent,
                     other: e.src_agent,
                     duration: i64::from(e.value),
+                    ..TriggerHit::NONE
                 },
             );
         }
@@ -428,6 +495,7 @@ fn collect_streams(
                     key: e.src_agent,
                     other: e.dst_agent,
                     duration: 0,
+                    ..TriggerHit::NONE
                 },
             );
         }
@@ -444,6 +512,7 @@ fn collect_streams(
                     key: e.dst_agent,
                     other: e.src_agent,
                     duration: i64::from(e.value),
+                    ..TriggerHit::NONE
                 },
             );
         }
@@ -456,7 +525,7 @@ fn collect_streams(
             // `DamageCastFinder` does no minion folding, so a pet's hit
             // yields a cast by the PET. Faithful on purpose.
             let hit =
-                TriggerHit { time: e.time, key: e.src_agent, other: e.dst_agent, duration: 0 };
+                TriggerHit { time: e.time, key: e.src_agent, other: e.dst_agent, ..TriggerHit::NONE };
             if is_health_damage_result(e.result) {
                 push(StreamKey::Damage(e.skillid), hit);
             } else if e.result == result::BREAKBAR_DAMAGE {
@@ -476,7 +545,7 @@ fn collect_streams(
         if is_cast_start && ctx.master.contains_key(&e.src_agent) {
             push(
                 StreamKey::AnimatedCast(e.skillid),
-                TriggerHit { time: e.time, key: e.src_agent, other: 0, duration: 0 },
+                TriggerHit { time: e.time, key: e.src_agent, other: 0, ..TriggerHit::NONE },
             );
         }
 
@@ -488,7 +557,7 @@ fn collect_streams(
                 StreamKey::Spawn,
                 // The SPAWNED agent is the key: the per-finder species
                 // test reads it, and `caster_for` folds it to its master.
-                TriggerHit { time: e.time, key: e.src_agent, other: 0, duration: 0 },
+                TriggerHit { time: e.time, key: e.src_agent, other: 0, ..TriggerHit::NONE },
             );
         }
 
@@ -496,7 +565,7 @@ fn collect_streams(
         if e.is_statechange == sc::MISSILE_CREATE {
             push(
                 StreamKey::Missile(e.skillid),
-                TriggerHit { time: e.time, key: e.src_agent, other: e.dst_agent, duration: 0 },
+                TriggerHit { time: e.time, key: e.src_agent, other: e.dst_agent, ..TriggerHit::NONE },
             );
         }
 
@@ -507,8 +576,36 @@ fn collect_streams(
         ) {
             push(
                 StreamKey::ExtHealing(h.skill_id),
-                TriggerHit { time: e.time, key: e.src_agent, other: e.dst_agent, duration: 0 },
+                TriggerHit { time: e.time, key: e.src_agent, other: e.dst_agent, ..TriggerHit::NONE },
             );
+        }
+    }
+
+    // --- effects ----------------------------------------------------------
+    // Pulled per WANTED GUID rather than by scanning the effect list, which
+    // is GW2EI's own path: `GetEffectGUIDEventByGUID(guid)` to get the
+    // session-local id, then `GetEffectEventsByEffectID(id)`
+    // (`EffectCastFinder.cs:283-285`). A GUID this log never mapped simply
+    // yields no stream, and the finder never fires.
+    for k in wanted {
+        let StreamKey::Effect(guid) = k else { continue };
+        let hits: Vec<TriggerHit> = ctx
+            .effects_with_guid(guid)
+            .iter()
+            .map(|&i| {
+                let ev = &ctx.effects.events[i];
+                TriggerHit {
+                    time: ev.time,
+                    key: ev.src,
+                    other: ev.dst.unwrap_or(0),
+                    duration: ev.duration,
+                    around_dst: ev.dst.is_some(),
+                    effect_idx: i,
+                }
+            })
+            .collect();
+        if !hits.is_empty() {
+            out.insert(*k, hits);
         }
     }
     out
@@ -526,13 +623,22 @@ fn collect_streams(
 /// the shared apply stream keys on.
 fn key_agent_of(f: &FinderDef, hit: &TriggerHit) -> u64 {
     match f.trigger {
-        Trigger::BuffGive { .. } => hit.other,
+        // Both of these name the stream's SECOND party as their caster:
+        // the applier on a buff give, the anchor agent on a by-dst effect.
+        Trigger::BuffGive { .. } | Trigger::Effect { by_dst: true, .. } => hit.other,
         _ => hit.key,
     }
 }
 
 fn caster_for(ctx: &Ctx<'_>, f: &FinderDef, hit: &TriggerHit) -> Option<u64> {
     let base = key_agent_of(f, hit);
+    // `ComputeInstantCast` skips the group whose key `IsUnknown`
+    // (`EffectCastFinder.cs:287-290`). The case that matters is a by-dst
+    // finder meeting a ground-anchored effect, which has no anchor agent
+    // at all.
+    if matches!(f.trigger, Trigger::Effect { .. }) && base == 0 {
+        return None;
+    }
     if !(f.minions || f.trigger.forces_minions()) {
         return Some(base);
     }
@@ -564,14 +670,59 @@ fn passes(ctx: &Ctx<'_>, f: &FinderDef, hit: &TriggerHit) -> bool {
         _ => {}
     }
     f.checks.iter().all(|c| match *c {
-        Check::Spec { party, spec, base, negated } => {
+        Check::Spec { party, specs, base, negated } => {
             let matched = ctx.specs.get(&hit.party(party)).is_some_and(|s| {
                 let have = if base { &s.base } else { &s.elite };
-                have.eq_ignore_ascii_case(spec)
+                specs.iter().any(|w| have.eq_ignore_ascii_case(w))
             });
             matched != negated
         }
         Check::Duration { duration, epsilon } => (hit.duration - duration).abs() < epsilon,
+        Check::AroundDst { negated } => hit.around_dst != negated,
+        // Inclusive on BOTH ends -- see `Check::EffectDuration`.
+        Check::EffectDuration { min, max } => hit.duration >= min && hit.duration <= max,
+        Check::SecondaryEffect { guid, inverted_src, type_rel, time_offset, epsilon, negated } => {
+            secondary_effect(ctx, f, hit, guid, inverted_src, type_rel, time_offset, epsilon)
+                != negated
+        }
+    })
+}
+
+/// The `Using[No]SecondaryEffect*Checker` predicate, before the
+/// `negated` flip: is there another effect under `guid`, belonging to this
+/// finder's caster, near this hit?
+#[allow(clippy::too_many_arguments)]
+fn secondary_effect(
+    ctx: &Ctx<'_>,
+    f: &FinderDef,
+    hit: &TriggerHit,
+    guid: &[u8; 16],
+    inverted_src: bool,
+    type_rel: model::TypeRel,
+    time_offset: i64,
+    epsilon: i64,
+) -> bool {
+    let Some(this) = ctx.effects.events.get(hit.effect_idx) else { return false };
+    let (mine, _) = effect_agents(ctx, f, this);
+    ctx.effects_with_guid(guid).iter().any(|&i| {
+        // Reference inequality in C#; two effects at the same index are
+        // the same event, which the same-GUID case makes reachable.
+        if i == hit.effect_idx {
+            return false;
+        }
+        let other = &ctx.effects.events[i];
+        let type_ok = match type_rel {
+            model::TypeRel::Any => true,
+            model::TypeRel::Same => other.dst.is_some() == this.dst.is_some(),
+            model::TypeRel::Inverted => other.dst.is_some() != this.dst.is_some(),
+        };
+        if !type_ok {
+            return false;
+        }
+        let (k, o) = effect_agents(ctx, f, other);
+        let theirs = if inverted_src { o } else { k };
+        theirs == mine
+            && (other.time as i64 - time_offset - this.time as i64).abs() < epsilon
     })
 }
 

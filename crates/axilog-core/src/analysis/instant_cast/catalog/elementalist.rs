@@ -4,6 +4,37 @@
 
 use crate::analysis::instant_cast::model::*;
 
+/// `EffectGUIDs.CatalystDeployAirJadeSphere`.
+const G_CATALYST_DEPLOY_AIR_JADE_SPHERE: [u8; 16] = [0xA3, 0xC8, 0xA5, 0x5C, 0x3E, 0x53, 0x01, 0x40, 0xA7, 0xF9, 0x9A, 0xAA, 0x1C, 0xBB, 0x4E, 0x09];
+/// `EffectGUIDs.CatalystDeployEarthJadeSphere`.
+const G_CATALYST_DEPLOY_EARTH_JADE_SPHERE: [u8; 16] = [0xA6, 0x74, 0xD3, 0xE7, 0xBC, 0x0C, 0x43, 0x42, 0xBC, 0x7A, 0x4E, 0xF0, 0xEE, 0x8F, 0xF8, 0xF0];
+/// `EffectGUIDs.CatalystDeployFireJadeSphere`.
+const G_CATALYST_DEPLOY_FIRE_JADE_SPHERE: [u8; 16] = [0xAF, 0xC5, 0xD5, 0xC7, 0xDA, 0x63, 0xD6, 0x4B, 0xAA, 0xD5, 0x5F, 0x78, 0x72, 0x05, 0xB6, 0x4F];
+/// `EffectGUIDs.CatalystDeployWaterJadeSphere`.
+const G_CATALYST_DEPLOY_WATER_JADE_SPHERE: [u8; 16] = [0x6D, 0x7E, 0xB5, 0x74, 0x78, 0x73, 0x48, 0x4D, 0xAF, 0x29, 0xC0, 0x1F, 0xA5, 0x1F, 0xE1, 0x75];
+/// `EffectGUIDs.ElementalistArmorOfEarth1`.
+const G_ELEMENTALIST_ARMOR_OF_EARTH_1: [u8; 16] = [0xD4, 0x3D, 0xC3, 0x4D, 0xEF, 0x81, 0xB7, 0x46, 0xBC, 0x13, 0x0F, 0x7A, 0x03, 0x93, 0xAA, 0xC7];
+/// `EffectGUIDs.ElementalistCleansingFire1`.
+const G_ELEMENTALIST_CLEANSING_FIRE_1: [u8; 16] = [0xBF, 0xFE, 0x34, 0x77, 0xEC, 0xFA, 0x26, 0x45, 0x8D, 0x69, 0xE9, 0x3E, 0xE7, 0x6E, 0xFF, 0x6B];
+/// `EffectGUIDs.ElementalistCleansingFire2`.
+const G_ELEMENTALIST_CLEANSING_FIRE_2: [u8; 16] = [0x61, 0xF5, 0x66, 0x9F, 0x9F, 0xAC, 0x1F, 0x48, 0xB4, 0x76, 0x35, 0xC9, 0xF3, 0x83, 0x3C, 0xEF];
+/// `EffectGUIDs.ElementalistCleansingFire3`.
+const G_ELEMENTALIST_CLEANSING_FIRE_3: [u8; 16] = [0xAB, 0xF2, 0x33, 0x2D, 0x28, 0xC7, 0xD6, 0x44, 0x9A, 0x5B, 0x82, 0x2E, 0x57, 0x14, 0xAD, 0xA4];
+/// `EffectGUIDs.ElementalistSignetOfAir`.
+const G_ELEMENTALIST_SIGNET_OF_AIR: [u8; 16] = [0x30, 0xA9, 0x6C, 0x0E, 0x55, 0x9D, 0xBD, 0x48, 0x9F, 0xEE, 0x36, 0xDA, 0x96, 0xCC, 0x37, 0x4A];
+/// `EffectGUIDs.EvokerHaresAgility1`.
+const G_EVOKER_HARES_AGILITY_1: [u8; 16] = [0xCA, 0x98, 0x99, 0xBB, 0xDA, 0xC8, 0xC3, 0x48, 0xB9, 0x01, 0x12, 0x50, 0x94, 0x5C, 0x9A, 0x7B];
+/// `EffectGUIDs.EvokerHaresAgility2`.
+const G_EVOKER_HARES_AGILITY_2: [u8; 16] = [0xFF, 0x3D, 0xE8, 0xD0, 0x9A, 0x6F, 0xE8, 0x46, 0xB2, 0x4A, 0x7C, 0xDF, 0xAC, 0xB8, 0x07, 0x8C];
+/// `EffectGUIDs.EvokerOttersCompassion1`.
+const G_EVOKER_OTTERS_COMPASSION_1: [u8; 16] = [0xA3, 0x0D, 0xE3, 0x5C, 0x04, 0xE1, 0x45, 0x4E, 0xB3, 0xB0, 0xDC, 0xC0, 0xBC, 0xF9, 0xBD, 0x9A];
+/// `EffectGUIDs.EvokerOttersCompassion2`.
+const G_EVOKER_OTTERS_COMPASSION_2: [u8; 16] = [0x65, 0x07, 0x42, 0x4A, 0x0B, 0x7C, 0x38, 0x4A, 0x9C, 0x6D, 0xB1, 0x25, 0xE4, 0x72, 0x48, 0x54];
+/// `EffectGUIDs.TempestEyeOfTheStorm1`.
+const G_TEMPEST_EYE_OF_THE_STORM_1: [u8; 16] = [0x52, 0xFE, 0xF3, 0x89, 0xCF, 0x7D, 0x01, 0x4B, 0xAA, 0x37, 0x5E, 0xAC, 0xF1, 0x82, 0x6B, 0xB6];
+/// `EffectGUIDs.TempestFeelTheBurn`.
+const G_TEMPEST_FEEL_THE_BURN: [u8; 16] = [0xC6, 0x68, 0xB5, 0xDB, 0x62, 0x20, 0xD9, 0x44, 0x88, 0x17, 0xB3, 0xE5, 0xF7, 0xDE, 0x6E, 0x46];
+
 pub const FINDERS: &[FinderDef] = &[
     FinderDef {
         skill_id: 62982,
@@ -11,6 +42,42 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::BuffGain { buff_id: 62726 },
         min_gw2_build: 122479,
         max_gw2_build: 147734,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62813,
+        source: "CatalystHelper",
+        trigger: Trigger::Effect { guid: &G_CATALYST_DEPLOY_FIRE_JADE_SPHERE, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Catalyst"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62940,
+        source: "CatalystHelper",
+        trigger: Trigger::Effect { guid: &G_CATALYST_DEPLOY_AIR_JADE_SPHERE, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Catalyst"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62723,
+        source: "CatalystHelper",
+        trigger: Trigger::Effect { guid: &G_CATALYST_DEPLOY_WATER_JADE_SPHERE, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Catalyst"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62837,
+        source: "CatalystHelper",
+        trigger: Trigger::Effect { guid: &G_CATALYST_DEPLOY_EARTH_JADE_SPHERE, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Catalyst"], base: false, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -95,6 +162,18 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 5535,
+        source: "ElementalistHelper",
+        trigger: Trigger::Effect { guid: &G_ELEMENTALIST_CLEANSING_FIRE_1, by_dst: true },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_ELEMENTALIST_CLEANSING_FIRE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_ELEMENTALIST_CLEANSING_FIRE_3, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Elementalist"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 5543,
         source: "ElementalistHelper",
         trigger: Trigger::BuffGain { buff_id: 5543 },
@@ -107,10 +186,30 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 5639,
+        source: "ElementalistHelper",
+        trigger: Trigger::Effect { guid: &G_ELEMENTALIST_ARMOR_OF_EARTH_1, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Elementalist"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 5572,
         source: "ElementalistHelper",
         trigger: Trigger::Damage { skill_id: 5572 },
         enable: &[Enable::NoEffectData],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 5572,
+        source: "ElementalistHelper",
+        trigger: Trigger::Effect { guid: &G_ELEMENTALIST_SIGNET_OF_AIR, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Elementalist"], base: true, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -230,6 +329,43 @@ pub const FINDERS: &[FinderDef] = &[
         skill_id: 77226,
         source: "EvokerHelper",
         trigger: Trigger::MinionCast { skill_id: 76925 },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 77190,
+        source: "EvokerHelper",
+        trigger: Trigger::Effect { guid: &G_EVOKER_OTTERS_COMPASSION_1, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_EVOKER_OTTERS_COMPASSION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 77038,
+        source: "EvokerHelper",
+        trigger: Trigger::Effect { guid: &G_EVOKER_HARES_AGILITY_1, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_EVOKER_HARES_AGILITY_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        min_gw2_build: 190000,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 30662,
+        source: "TempestHelper",
+        trigger: Trigger::Effect { guid: &G_TEMPEST_FEEL_THE_BURN, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Tempest"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 30047,
+        source: "TempestHelper",
+        trigger: Trigger::Effect { guid: &G_TEMPEST_EYE_OF_THE_STORM_1, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Tempest"], base: false, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {

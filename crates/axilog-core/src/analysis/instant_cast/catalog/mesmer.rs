@@ -4,6 +4,57 @@
 
 use crate::analysis::instant_cast::model::*;
 
+/// `EffectGUIDs.ChronomancerRewinder`.
+const G_CHRONOMANCER_REWINDER: [u8; 16] = [0xDC, 0x1C, 0x8A, 0x04, 0x3A, 0xDC, 0xD2, 0x4B, 0x94, 0x58, 0x68, 0x8A, 0x79, 0x2B, 0x04, 0xBA];
+/// `EffectGUIDs.ChronomancerSeizeTheMomentShatter`.
+const G_CHRONOMANCER_SEIZE_THE_MOMENT_SHATTER: [u8; 16] = [0x4C, 0x7A, 0x5E, 0x14, 0x8F, 0x7F, 0xD6, 0x42, 0xB3, 0x4E, 0xE4, 0x99, 0x6D, 0xDC, 0xBB, 0xAB];
+/// `EffectGUIDs.ChronomancerSplitSecond`.
+const G_CHRONOMANCER_SPLIT_SECOND: [u8; 16] = [0xC0, 0x35, 0x16, 0x6E, 0x3E, 0x4C, 0x41, 0x4A, 0xBE, 0x64, 0x0F, 0x47, 0x79, 0x7D, 0x9B, 0x4A];
+/// `EffectGUIDs.ChronomancerTimeSink`.
+const G_CHRONOMANCER_TIME_SINK: [u8; 16] = [0xAB, 0x2E, 0x22, 0xE7, 0xEE, 0x74, 0xDA, 0x4C, 0x87, 0xDA, 0x77, 0x7C, 0x62, 0xE4, 0x75, 0xEA];
+/// `EffectGUIDs.MesmerCryOfFrustration`.
+const G_MESMER_CRY_OF_FRUSTRATION: [u8; 16] = [0x52, 0xF6, 0x5A, 0x4D, 0x99, 0x70, 0x95, 0x4B, 0xA8, 0x49, 0xCB, 0x57, 0xA4, 0x6A, 0x65, 0xA8];
+/// `EffectGUIDs.MesmerDiversion`.
+const G_MESMER_DIVERSION: [u8; 16] = [0x91, 0x6D, 0x83, 0x85, 0x08, 0x3F, 0x14, 0x4E, 0xBA, 0xA5, 0xBE, 0xED, 0xE2, 0x1F, 0xD4, 0x7A];
+/// `EffectGUIDs.MesmerFeedback`.
+const G_MESMER_FEEDBACK: [u8; 16] = [0xD6, 0xC8, 0xF4, 0x06, 0xE4, 0xDE, 0xE0, 0x4A, 0xB1, 0x6A, 0x21, 0x5B, 0xE0, 0x68, 0xE9, 0x10];
+/// `EffectGUIDs.MesmerMantraOfConcentrationAndPowerBreak`.
+const G_MESMER_MANTRA_OF_CONCENTRATION_AND_POWER_BREAK: [u8; 16] = [0x5B, 0x48, 0x8D, 0x55, 0x2E, 0x31, 0x60, 0x45, 0xAD, 0x99, 0xC4, 0xA9, 0x8E, 0xED, 0xDB, 0x1E];
+/// `EffectGUIDs.MesmerMantraOfResolveAndPowerCleanse`.
+const G_MESMER_MANTRA_OF_RESOLVE_AND_POWER_CLEANSE: [u8; 16] = [0x59, 0x3E, 0x66, 0x8A, 0x00, 0x6A, 0xB2, 0x4D, 0x84, 0x99, 0x9A, 0xED, 0x68, 0xF2, 0xE4, 0xC4];
+/// `EffectGUIDs.MesmerMantraOfResolveAndPowerCleanse2`.
+const G_MESMER_MANTRA_OF_RESOLVE_AND_POWER_CLEANSE_2: [u8; 16] = [0xAB, 0xF2, 0x33, 0x2D, 0x28, 0xC7, 0xD6, 0x44, 0x9A, 0x5B, 0x82, 0x2E, 0x57, 0x14, 0xAD, 0xA4];
+/// `EffectGUIDs.MesmerPowerReturn`.
+const G_MESMER_POWER_RETURN: [u8; 16] = [0xF5, 0x3E, 0x2C, 0xE3, 0xB0, 0x6B, 0x93, 0x40, 0x85, 0xD4, 0x6F, 0xA5, 0x94, 0x68, 0x47, 0x7B];
+/// `EffectGUIDs.MesmerRifleAbstraction`.
+const G_MESMER_RIFLE_ABSTRACTION: [u8; 16] = [0x6E, 0x2B, 0x9C, 0xF3, 0xE5, 0xC9, 0x58, 0x46, 0xB1, 0x5B, 0xBD, 0x1E, 0xAA, 0x9B, 0x3E, 0x98];
+/// `EffectGUIDs.MesmerRifleAbstraction2`.
+const G_MESMER_RIFLE_ABSTRACTION_2: [u8; 16] = [0x59, 0x3E, 0x66, 0x8A, 0x00, 0x6A, 0xB2, 0x4D, 0x84, 0x99, 0x9A, 0xED, 0x68, 0xF2, 0xE4, 0xC4];
+/// `EffectGUIDs.MesmerSignetOfMidnight`.
+const G_MESMER_SIGNET_OF_MIDNIGHT: [u8; 16] = [0x02, 0x15, 0x4B, 0x72, 0x90, 0x0B, 0x57, 0x40, 0xA7, 0x3C, 0xD0, 0xAD, 0xEC, 0xED, 0x27, 0xBF];
+/// `EffectGUIDs.MesmerThePrestigeDisappear2AndNonChronoShatterAroundClones`.
+const G_MESMER_THE_PRESTIGE_DISAPPEAR_2_AND_NON_CHRONO_SHATTER_AROUND_CLONES: [u8; 16] = [0x5F, 0xA6, 0x52, 0x72, 0x31, 0xBB, 0x80, 0x41, 0xAC, 0x78, 0x33, 0x96, 0x14, 0x2C, 0x62, 0x00];
+/// `EffectGUIDs.MirageJaunt`.
+const G_MIRAGE_JAUNT: [u8; 16] = [0x3A, 0x5A, 0x38, 0xC2, 0x6A, 0x1F, 0xFB, 0x43, 0x8E, 0xAD, 0x73, 0x4F, 0x3E, 0xD4, 0x2E, 0x5E];
+/// `EffectGUIDs.MirageJauntConflict1`.
+const G_MIRAGE_JAUNT_CONFLICT_1: [u8; 16] = [0xB6, 0x55, 0x7C, 0x33, 0x60, 0x41, 0xB2, 0x4F, 0xA7, 0xCC, 0x19, 0x8B, 0x6E, 0xBD, 0xAD, 0x9A];
+/// `EffectGUIDs.MirageJauntConflict2`.
+const G_MIRAGE_JAUNT_CONFLICT_2: [u8; 16] = [0xD7, 0xA0, 0x54, 0x78, 0xBA, 0x0E, 0x16, 0x43, 0x96, 0xEB, 0x90, 0xC0, 0x37, 0xDC, 0xCF, 0x42];
+/// `EffectGUIDs.TroubadourSyncopateDelayedWave1`.
+const G_TROUBADOUR_SYNCOPATE_DELAYED_WAVE_1: [u8; 16] = [0x24, 0x49, 0x8E, 0x18, 0xDE, 0xC9, 0x7B, 0x40, 0x94, 0x37, 0x68, 0x49, 0xEF, 0x7A, 0x37, 0x46];
+/// `EffectGUIDs.TroubadourSyncopateDelayedWave2`.
+const G_TROUBADOUR_SYNCOPATE_DELAYED_WAVE_2: [u8; 16] = [0x8E, 0xCB, 0x35, 0xB6, 0x3B, 0xA6, 0xC0, 0x45, 0xBE, 0x9F, 0x0B, 0x86, 0x49, 0x72, 0xB9, 0x83];
+/// `EffectGUIDs.TroubadourTaleOfTheHonorableRogue`.
+const G_TROUBADOUR_TALE_OF_THE_HONORABLE_ROGUE: [u8; 16] = [0xDB, 0xEC, 0xB5, 0x86, 0x7D, 0x11, 0x26, 0x4F, 0xA1, 0x9F, 0xFC, 0xDC, 0x48, 0x7A, 0x41, 0x0E];
+/// `EffectGUIDs.TroubadourTaleOfTheSoulkeeper`.
+const G_TROUBADOUR_TALE_OF_THE_SOULKEEPER: [u8; 16] = [0xFF, 0x11, 0x6F, 0x5E, 0x11, 0x2D, 0xA0, 0x42, 0xB2, 0x38, 0x46, 0x95, 0x90, 0xA1, 0xFC, 0xD8];
+/// `EffectGUIDs.TroubadourTaleOfTheValiantMarshal`.
+const G_TROUBADOUR_TALE_OF_THE_VALIANT_MARSHAL: [u8; 16] = [0xEB, 0xC4, 0x5B, 0x86, 0x2D, 0x29, 0x91, 0x43, 0xB4, 0xD6, 0x3C, 0xB6, 0xCA, 0xEC, 0x26, 0xED];
+/// `EffectGUIDs.VirtuosoBladeturnRequiem`.
+const G_VIRTUOSO_BLADETURN_REQUIEM: [u8; 16] = [0x87, 0xB7, 0x61, 0x20, 0x06, 0x37, 0xAC, 0x48, 0xB7, 0x14, 0x69, 0xF5, 0x53, 0xBA, 0x6F, 0x60];
+/// `EffectGUIDs.VirtuosoThousandCuts`.
+const G_VIRTUOSO_THOUSAND_CUTS: [u8; 16] = [0xE4, 0x00, 0x2B, 0x7A, 0xD7, 0xDF, 0x02, 0x43, 0x94, 0xD0, 0x18, 0x4B, 0x47, 0xA3, 0x16, 0xE7];
+
 pub const FINDERS: &[FinderDef] = &[
     FinderDef {
         skill_id: 29830,
@@ -18,9 +69,49 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 56930,
+        source: "ChronomancerHelper",
+        trigger: Trigger::Effect { guid: &G_CHRONOMANCER_SPLIT_SECOND, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_CHRONOMANCER_SEIZE_THE_MOMENT_SHATTER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::Spec { party: Party::Key, specs: &["Chronomancer"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 56928,
+        source: "ChronomancerHelper",
+        trigger: Trigger::Effect { guid: &G_CHRONOMANCER_REWINDER, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_CHRONOMANCER_SEIZE_THE_MOMENT_SHATTER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::Spec { party: Party::Key, specs: &["Chronomancer"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 56873,
+        source: "ChronomancerHelper",
+        trigger: Trigger::Effect { guid: &G_CHRONOMANCER_TIME_SINK, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_CHRONOMANCER_SEIZE_THE_MOMENT_SHATTER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::Spec { party: Party::Key, specs: &["Chronomancer"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 79359,
         source: "ChronomancerHelper",
         trigger: Trigger::Damage { skill_id: 79359 },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10234,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_SIGNET_OF_MIDNIGHT, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Mesmer"], base: true, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -40,6 +131,35 @@ pub const FINDERS: &[FinderDef] = &[
         source: "MesmerHelper",
         trigger: Trigger::Damage { skill_id: 30192 },
         origin: CastOrigin::Trait,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10302,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_FEEDBACK, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Mesmer"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10190,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_CRY_OF_FRUSTRATION, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Mirage", "Mesmer"], base: false, negated: false },
+            Check::SecondaryEffect { guid: &G_MESMER_THE_PRESTIGE_DISAPPEAR_2_AND_NON_CHRONO_SHATTER_AROUND_CLONES, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: true },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10287,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_DIVERSION, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Mirage", "Mesmer"], base: false, negated: false },
+            Check::SecondaryEffect { guid: &G_MESMER_THE_PRESTIGE_DISAPPEAR_2_AND_NON_CHRONO_SHATTER_AROUND_CLONES, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: true },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -75,9 +195,88 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 10214,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_POWER_RETURN, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Mesmer"], base: true, negated: false },
+        ],
+        min_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10207,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_MANTRA_OF_RESOLVE_AND_POWER_CLEANSE, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Mesmer"], base: true, negated: false },
+        ],
+        min_gw2_build: START_OF_LIFE,
+        max_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10209,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_MANTRA_OF_RESOLVE_AND_POWER_CLEANSE, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Mesmer"], base: true, negated: false },
+        ],
+        min_gw2_build: 141374,
+        max_gw2_build: 158837,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10209,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_MANTRA_OF_RESOLVE_AND_POWER_CLEANSE_2, by_dst: true },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Mesmer"], base: true, negated: true },
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Mesmer"], base: true, negated: false },
+            Check::SecondaryEffect { guid: &G_MESMER_MANTRA_OF_RESOLVE_AND_POWER_CLEANSE, inverted_src: true, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        min_gw2_build: 158837,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10237,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_MANTRA_OF_CONCENTRATION_AND_POWER_BREAK, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Mesmer"], base: true, negated: false },
+        ],
+        min_gw2_build: START_OF_LIFE,
+        max_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10238,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_MANTRA_OF_CONCENTRATION_AND_POWER_BREAK, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Mesmer"], base: true, negated: false },
+        ],
+        min_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 71792,
         source: "MesmerHelper",
         trigger: Trigger::BuffGive { buff_id: 71890 },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 72076,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_RIFLE_ABSTRACTION, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_MESMER_RIFLE_ABSTRACTION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::Spec { party: Party::Key, specs: &["Mesmer"], base: true, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -88,9 +287,67 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 45449,
+        source: "MirageHelper",
+        trigger: Trigger::Effect { guid: &G_MIRAGE_JAUNT, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_MIRAGE_JAUNT_CONFLICT_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_MIRAGE_JAUNT_CONFLICT_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::Spec { party: Party::Key, specs: &["Mirage"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: ((-17i32) as u32),
         source: "MirageHelper",
         trigger: Trigger::BuffGain { buff_id: 40408 },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76850,
+        source: "TroubadourHelper",
+        trigger: Trigger::Effect { guid: &G_TROUBADOUR_TALE_OF_THE_SOULKEEPER, by_dst: false },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 77178,
+        source: "TroubadourHelper",
+        trigger: Trigger::Effect { guid: &G_TROUBADOUR_TALE_OF_THE_VALIANT_MARSHAL, by_dst: false },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76611,
+        source: "TroubadourHelper",
+        trigger: Trigger::Effect { guid: &G_TROUBADOUR_TALE_OF_THE_HONORABLE_ROGUE, by_dst: false },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76689,
+        source: "TroubadourHelper",
+        trigger: Trigger::Effect { guid: &G_TROUBADOUR_SYNCOPATE_DELAYED_WAVE_1, by_dst: false },
+        origin: CastOrigin::Unconditional,
+        checks: &[
+            Check::SecondaryEffect { guid: &G_TROUBADOUR_SYNCOPATE_DELAYED_WAVE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62597,
+        source: "VirtuosoHelper",
+        trigger: Trigger::Effect { guid: &G_VIRTUOSO_BLADETURN_REQUIEM, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Virtuoso"], base: false, negated: false },
+        ],
+        min_gw2_build: 147734,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 24755,
+        source: "VirtuosoHelper",
+        trigger: Trigger::Effect { guid: &G_VIRTUOSO_THOUSAND_CUTS, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Virtuoso"], base: false, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
 ];

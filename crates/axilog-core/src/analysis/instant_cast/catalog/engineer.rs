@@ -4,6 +4,37 @@
 
 use crate::analysis::instant_cast::model::*;
 
+/// `EffectGUIDs.AmalgamDefensiveProtocolCleanse1`.
+const G_AMALGAM_DEFENSIVE_PROTOCOL_CLEANSE_1: [u8; 16] = [0xF2, 0xFB, 0x8A, 0x03, 0x17, 0x8A, 0x2B, 0x43, 0xB8, 0x2E, 0x01, 0x13, 0xF2, 0x0D, 0xF9, 0x32];
+/// `EffectGUIDs.AmalgamSymbioticShielding1`.
+const G_AMALGAM_SYMBIOTIC_SHIELDING_1: [u8; 16] = [0x84, 0x2F, 0x97, 0x7C, 0x31, 0x8F, 0xDC, 0x4F, 0x96, 0xC9, 0x9C, 0x38, 0x5C, 0x1D, 0x06, 0x72];
+/// `EffectGUIDs.EngineerHealingMist`.
+const G_ENGINEER_HEALING_MIST: [u8; 16] = [0xB0, 0x2D, 0x3D, 0x0F, 0xF0, 0xA4, 0xFC, 0x47, 0xB2, 0x3B, 0x14, 0x78, 0xD8, 0xE7, 0x70, 0xAE];
+/// `EffectGUIDs.EngineerOrbitalCommandStrike`.
+const G_ENGINEER_ORBITAL_COMMAND_STRIKE: [u8; 16] = [0x0D, 0x38, 0x8D, 0x23, 0xFF, 0x31, 0x3F, 0x48, 0x97, 0x94, 0x88, 0x1A, 0x54, 0x0E, 0x5A, 0x24];
+/// `EffectGUIDs.HolosmitBladeBurstParticleAccelerator1`.
+const G_HOLOSMIT_BLADE_BURST_PARTICLE_ACCELERATOR_1: [u8; 16] = [0x9D, 0x2A, 0x5C, 0x8F, 0xF1, 0xE6, 0x75, 0x47, 0xA4, 0x1B, 0x72, 0xD9, 0x1F, 0x43, 0x55, 0xE7];
+/// `EffectGUIDs.HolosmitBladeBurstParticleAccelerator2`.
+const G_HOLOSMIT_BLADE_BURST_PARTICLE_ACCELERATOR_2: [u8; 16] = [0x56, 0x35, 0xC8, 0x21, 0x75, 0x73, 0xC4, 0x49, 0x90, 0x55, 0x54, 0xA1, 0xBE, 0x38, 0x04, 0x4B];
+/// `EffectGUIDs.HolosmithFlashSpark`.
+const G_HOLOSMITH_FLASH_SPARK: [u8; 16] = [0x41, 0x8A, 0x09, 0x0D, 0x71, 0x9A, 0xB4, 0x4A, 0xAF, 0x1C, 0x4A, 0xD1, 0x47, 0x30, 0x68, 0xC4];
+/// `EffectGUIDs.MechanistOverclockSignet`.
+const G_MECHANIST_OVERCLOCK_SIGNET: [u8; 16] = [0x73, 0x48, 0x34, 0xE7, 0xEB, 0x7C, 0xD7, 0x4E, 0xB1, 0x29, 0xAC, 0xBC, 0xE5, 0xC6, 0x4C, 0x1D];
+/// `EffectGUIDs.MechanistShiftSignet1`.
+const G_MECHANIST_SHIFT_SIGNET_1: [u8; 16] = [0xE1, 0xC1, 0xDD, 0x7F, 0x86, 0x6B, 0x41, 0x49, 0xA1, 0xBA, 0xDD, 0x21, 0x6C, 0x9A, 0xA6, 0x9D];
+/// `EffectGUIDs.ScrapperBulwarkGyro`.
+const G_SCRAPPER_BULWARK_GYRO: [u8; 16] = [0xC6, 0xA4, 0x0B, 0x12, 0xF9, 0xE6, 0xE0, 0x46, 0xA9, 0x82, 0x23, 0xF3, 0x0E, 0x71, 0x76, 0x33];
+/// `EffectGUIDs.ScrapperBulwarkGyroTraited`.
+const G_SCRAPPER_BULWARK_GYRO_TRAITED: [u8; 16] = [0x61, 0x1D, 0x90, 0xC6, 0x9E, 0xCF, 0x81, 0x42, 0xBE, 0xEE, 0x84, 0x13, 0x9F, 0x33, 0x33, 0x88];
+/// `EffectGUIDs.ScrapperBypassCoating`.
+const G_SCRAPPER_BYPASS_COATING: [u8; 16] = [0xD2, 0x30, 0x7A, 0x69, 0xB2, 0x27, 0xBE, 0x4B, 0x83, 0x1C, 0x2A, 0xA1, 0xDA, 0xAE, 0x64, 0x6A];
+/// `EffectGUIDs.ScrapperDefenseField`.
+const G_SCRAPPER_DEFENSE_FIELD: [u8; 16] = [0x9E, 0x2D, 0x19, 0x0A, 0x92, 0xE2, 0xB5, 0x49, 0x8A, 0x88, 0x72, 0x29, 0x10, 0xA9, 0xDE, 0xCD];
+/// `EffectGUIDs.ScrapperPurgeGyro`.
+const G_SCRAPPER_PURGE_GYRO: [u8; 16] = [0x86, 0xDC, 0x53, 0x3F, 0xBB, 0x84, 0xBC, 0x43, 0xBB, 0xA0, 0x3E, 0xC3, 0xB3, 0xE1, 0x30, 0x34];
+/// `EffectGUIDs.ScrapperPurgeGyroTraited`.
+const G_SCRAPPER_PURGE_GYRO_TRAITED: [u8; 16] = [0x0D, 0xBE, 0x4F, 0x71, 0x15, 0xEA, 0xDC, 0x48, 0x89, 0xF1, 0xE0, 0x02, 0x32, 0xB2, 0x39, 0x8B];
+
 pub const FINDERS: &[FinderDef] = &[
     FinderDef {
         skill_id: 77018,
@@ -16,6 +47,18 @@ pub const FINDERS: &[FinderDef] = &[
         source: "AmalgamHelper",
         trigger: Trigger::BuffGain { buff_id: 77283 },
         min_gw2_build: 190000,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76798,
+        source: "AmalgamHelper",
+        trigger: Trigger::Effect { guid: &G_AMALGAM_DEFENSIVE_PROTOCOL_CLEANSE_1, by_dst: false },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76613,
+        source: "AmalgamHelper",
+        trigger: Trigger::Effect { guid: &G_AMALGAM_SYMBIOTIC_SHIELDING_1, by_dst: false },
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -58,6 +101,16 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: ((-29i32) as u32),
+        source: "EngineerHelper",
+        trigger: Trigger::Effect { guid: &G_ENGINEER_HEALING_MIST, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Engineer"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 73064,
         source: "EngineerHelper",
         trigger: Trigger::Damage { skill_id: 73064 },
@@ -78,6 +131,13 @@ pub const FINDERS: &[FinderDef] = &[
         origin: CastOrigin::Trait,
         time_offset: -2000,
         enable: &[Enable::NoEffectData],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 41612,
+        source: "EngineerHelper",
+        trigger: Trigger::Effect { guid: &G_ENGINEER_ORBITAL_COMMAND_STRIKE, by_dst: false },
+        origin: CastOrigin::Trait,
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -121,6 +181,28 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 43176,
+        source: "HolosmithHelper",
+        trigger: Trigger::Effect { guid: &G_HOLOSMITH_FLASH_SPARK, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Holosmith"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: ((-31i32) as u32),
+        source: "HolosmithHelper",
+        trigger: Trigger::Effect { guid: &G_HOLOSMIT_BLADE_BURST_PARTICLE_ACCELERATOR_1, by_dst: true },
+        enable: &[Enable::NoMissileData],
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Holosmith"], base: false, negated: false },
+            Check::SecondaryEffect { guid: &G_HOLOSMIT_BLADE_BURST_PARTICLE_ACCELERATOR_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 42163,
         source: "HolosmithHelper",
         trigger: Trigger::Missile { skill_id: 42163 },
@@ -133,11 +215,30 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 63111,
+        source: "MechanistHelper",
+        trigger: Trigger::Effect { guid: &G_MECHANIST_SHIFT_SIGNET_1, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Mechanist"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 63095,
         source: "MechanistHelper",
         trigger: Trigger::MinionCast { skill_id: 63334 },
         not_accurate: true,
         enable: &[Enable::NoEffectData],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 63095,
+        source: "MechanistHelper",
+        trigger: Trigger::Effect { guid: &G_MECHANIST_OVERCLOCK_SIGNET, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Mechanist"], base: false, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -201,6 +302,60 @@ pub const FINDERS: &[FinderDef] = &[
         source: "MechanistHelper",
         trigger: Trigger::Missile { skill_id: 63185 },
         minions: true,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 30101,
+        source: "ScrapperHelper",
+        trigger: Trigger::Effect { guid: &G_SCRAPPER_BULWARK_GYRO_TRAITED, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Scrapper"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 30101,
+        source: "ScrapperHelper",
+        trigger: Trigger::Effect { guid: &G_SCRAPPER_BULWARK_GYRO, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Scrapper"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 29739,
+        source: "ScrapperHelper",
+        trigger: Trigger::Effect { guid: &G_SCRAPPER_PURGE_GYRO_TRAITED, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Scrapper"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 29739,
+        source: "ScrapperHelper",
+        trigger: Trigger::Effect { guid: &G_SCRAPPER_PURGE_GYRO, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Scrapper"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 30027,
+        source: "ScrapperHelper",
+        trigger: Trigger::Effect { guid: &G_SCRAPPER_DEFENSE_FIELD, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Scrapper"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 29665,
+        source: "ScrapperHelper",
+        trigger: Trigger::Effect { guid: &G_SCRAPPER_BYPASS_COATING, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Scrapper"], base: false, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
 ];

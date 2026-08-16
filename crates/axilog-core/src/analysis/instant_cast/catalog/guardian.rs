@@ -4,7 +4,72 @@
 
 use crate::analysis::instant_cast::model::*;
 
+/// `EffectGUIDs.DragonhunterFragmentsOfFaith`.
+const G_DRAGONHUNTER_FRAGMENTS_OF_FAITH: [u8; 16] = [0xC8, 0x46, 0x44, 0xDD, 0xAA, 0x59, 0xE5, 0x42, 0x98, 0x9F, 0xDB, 0x98, 0xCD, 0x69, 0x13, 0x4C];
+/// `EffectGUIDs.DragonhunterTestOfFaith`.
+const G_DRAGONHUNTER_TEST_OF_FAITH: [u8; 16] = [0xD7, 0x00, 0x6A, 0xC2, 0x47, 0xBB, 0xE7, 0x4B, 0xA5, 0x4E, 0x91, 0x21, 0x88, 0xEF, 0x6B, 0x12];
+/// `EffectGUIDs.FirebrandMantraOfFlameSymbol`.
+const G_FIREBRAND_MANTRA_OF_FLAME_SYMBOL: [u8; 16] = [0xAF, 0x2B, 0x09, 0xAC, 0x11, 0x45, 0xAA, 0x48, 0x80, 0xB9, 0x67, 0xC3, 0x2A, 0x11, 0xE8, 0x1C];
+/// `EffectGUIDs.FirebrandMantraOfLiberationSymbol`.
+const G_FIREBRAND_MANTRA_OF_LIBERATION_SYMBOL: [u8; 16] = [0xA8, 0xE0, 0xE4, 0xC4, 0x88, 0x48, 0x42, 0x4D, 0x85, 0x50, 0x3B, 0x67, 0x40, 0x15, 0xD2, 0x47];
+/// `EffectGUIDs.FirebrandMantraOfLoreSymbol`.
+const G_FIREBRAND_MANTRA_OF_LORE_SYMBOL: [u8; 16] = [0x3D, 0x01, 0xB0, 0x4C, 0x57, 0x00, 0x90, 0x4B, 0xA2, 0x79, 0xE9, 0xF1, 0x35, 0xA3, 0xFA, 0xB3];
+/// `EffectGUIDs.FirebrandMantraOfPotenceSymbol`.
+const G_FIREBRAND_MANTRA_OF_POTENCE_SYMBOL: [u8; 16] = [0x95, 0xB5, 0x27, 0x93, 0xB8, 0x38, 0x52, 0x4A, 0xB2, 0x37, 0xEB, 0x9F, 0xED, 0x78, 0x34, 0xBF];
+/// `EffectGUIDs.FirebrandMantraOfSolaceSymbol`.
+const G_FIREBRAND_MANTRA_OF_SOLACE_SYMBOL: [u8; 16] = [0x8F, 0x0C, 0x77, 0x78, 0x4A, 0xFD, 0x7F, 0x40, 0xB2, 0x74, 0x46, 0x61, 0x7D, 0xC0, 0x5C, 0xDC];
+/// `EffectGUIDs.FirebrandMantraOfTruthSymbol`.
+const G_FIREBRAND_MANTRA_OF_TRUTH_SYMBOL: [u8; 16] = [0xE3, 0x3E, 0xA0, 0xA6, 0x38, 0x98, 0xCA, 0x46, 0x9F, 0x86, 0x4E, 0xDA, 0x13, 0x36, 0xFC, 0xD0];
+/// `EffectGUIDs.GuardianContemplationOfPurity1`.
+const G_GUARDIAN_CONTEMPLATION_OF_PURITY_1: [u8; 16] = [0x75, 0xD7, 0x2E, 0x2D, 0xA4, 0x7E, 0xCF, 0x47, 0xA6, 0xBD, 0x00, 0x9B, 0x49, 0xB7, 0xC7, 0x08];
+/// `EffectGUIDs.GuardianDetonateJurisdictionLevel1`.
+const G_GUARDIAN_DETONATE_JURISDICTION_LEVEL_1: [u8; 16] = [0x66, 0x46, 0xD4, 0x8A, 0x24, 0x46, 0x88, 0x49, 0x98, 0xEF, 0xAD, 0xB3, 0xEF, 0xEF, 0x04, 0x83];
+/// `EffectGUIDs.GuardianDetonateJurisdictionLevel2`.
+const G_GUARDIAN_DETONATE_JURISDICTION_LEVEL_2: [u8; 16] = [0x3E, 0x33, 0xC9, 0x64, 0x5D, 0x62, 0xCF, 0x4D, 0xBC, 0x20, 0x85, 0x11, 0xBB, 0x3D, 0x12, 0xF1];
+/// `EffectGUIDs.GuardianDetonateJurisdictionLevel3`.
+const G_GUARDIAN_DETONATE_JURISDICTION_LEVEL_3: [u8; 16] = [0x29, 0xF6, 0xAA, 0xDD, 0xF5, 0xE7, 0x53, 0x48, 0x85, 0x41, 0x23, 0xB9, 0x56, 0xE4, 0xBF, 0x0E];
+/// `EffectGUIDs.GuardianSaveYourselves`.
+const G_GUARDIAN_SAVE_YOURSELVES: [u8; 16] = [0x68, 0xF2, 0xC3, 0x78, 0xE6, 0xC8, 0x05, 0x48, 0xB5, 0xA3, 0xC8, 0x98, 0x70, 0xC5, 0xDD, 0x86];
+/// `EffectGUIDs.GuardianShout`.
+const G_GUARDIAN_SHOUT: [u8; 16] = [0x12, 0x2B, 0xA5, 0x5C, 0xCD, 0xF2, 0xB6, 0x43, 0x92, 0x9F, 0x6C, 0x4A, 0x97, 0x22, 0x6D, 0xC9];
+/// `EffectGUIDs.GuardianSignetOfJudgement2`.
+const G_GUARDIAN_SIGNET_OF_JUDGEMENT_2: [u8; 16] = [0x5E, 0xAC, 0x13, 0xDB, 0x09, 0x53, 0xEF, 0x4C, 0x9C, 0x5B, 0xCC, 0x10, 0xDB, 0x13, 0xC9, 0xC8];
+/// `EffectGUIDs.LuminaryRadiantCourage1`.
+const G_LUMINARY_RADIANT_COURAGE_1: [u8; 16] = [0x03, 0x85, 0x07, 0x57, 0xF1, 0x4F, 0xD4, 0x4A, 0x99, 0x98, 0xD4, 0xCA, 0xD7, 0x1C, 0xC5, 0x89];
+/// `EffectGUIDs.LuminaryRadiantCourage2`.
+const G_LUMINARY_RADIANT_COURAGE_2: [u8; 16] = [0x08, 0xE6, 0xD2, 0x31, 0x50, 0x7C, 0xDD, 0x45, 0x8E, 0xDE, 0xCF, 0x67, 0xD2, 0x64, 0x22, 0x8C];
+/// `EffectGUIDs.LuminaryRadiantJustice1`.
+const G_LUMINARY_RADIANT_JUSTICE_1: [u8; 16] = [0xFB, 0x78, 0x80, 0x1B, 0xB3, 0x1C, 0xAF, 0x48, 0x8B, 0x55, 0xF2, 0xF5, 0x7E, 0xF9, 0xB0, 0x70];
+/// `EffectGUIDs.LuminaryRadiantJustice2`.
+const G_LUMINARY_RADIANT_JUSTICE_2: [u8; 16] = [0x75, 0x35, 0xB4, 0xCB, 0x81, 0x52, 0x32, 0x41, 0x8B, 0x69, 0x09, 0x2F, 0x33, 0x90, 0xA7, 0xAB];
+/// `EffectGUIDs.LuminaryRadiantResolve1`.
+const G_LUMINARY_RADIANT_RESOLVE_1: [u8; 16] = [0x4A, 0x83, 0xF0, 0xB6, 0x27, 0xB7, 0x5C, 0x47, 0x89, 0x49, 0x41, 0xC4, 0xD3, 0x5B, 0xA8, 0x9F];
+/// `EffectGUIDs.LuminaryRadiantResolve2`.
+const G_LUMINARY_RADIANT_RESOLVE_2: [u8; 16] = [0xFB, 0xA4, 0xC4, 0xF0, 0x41, 0xE7, 0x87, 0x48, 0xAC, 0x1C, 0xA5, 0xFF, 0x5D, 0x37, 0xD2, 0xDA];
+/// `EffectGUIDs.LuminarySovereignOfLightAudio`.
+const G_LUMINARY_SOVEREIGN_OF_LIGHT_AUDIO: [u8; 16] = [0xD2, 0x3C, 0xB7, 0xF8, 0xA2, 0x75, 0x5F, 0x4F, 0xA2, 0xA6, 0x8A, 0x68, 0x34, 0xAB, 0xAD, 0x98];
+/// `EffectGUIDs.LuminarySovereignOfLightModel`.
+const G_LUMINARY_SOVEREIGN_OF_LIGHT_MODEL: [u8; 16] = [0xFB, 0x06, 0x6A, 0x1F, 0x03, 0x29, 0x4D, 0x4D, 0x85, 0x0D, 0x22, 0xB2, 0x66, 0x50, 0xFF, 0xA9];
+
 pub const FINDERS: &[FinderDef] = &[
+    FinderDef {
+        skill_id: 29786,
+        source: "DragonhunterHelper",
+        trigger: Trigger::Effect { guid: &G_DRAGONHUNTER_TEST_OF_FAITH, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Dragonhunter"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 30553,
+        source: "DragonhunterHelper",
+        trigger: Trigger::Effect { guid: &G_DRAGONHUNTER_FRAGMENTS_OF_FAITH, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Dragonhunter"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
     FinderDef {
         skill_id: 41714,
         source: "FirebrandHelper",
@@ -12,6 +77,29 @@ pub const FINDERS: &[FinderDef] = &[
         enable: &[Enable::NoEffectData, Enable::HasExtHealing],
         min_gw2_build: 115190,
         max_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 41714,
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_SOLACE_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+        ],
+        min_gw2_build: 115190,
+        max_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: ((-20i32) as u32),
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_SOLACE_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+        ],
+        min_gw2_build: 141374,
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -56,6 +144,64 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 46148,
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_FLAME_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+        ],
+        min_gw2_build: 115190,
+        max_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 45460,
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_LORE_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+        ],
+        min_gw2_build: 115190,
+        max_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: ((-21i32) as u32),
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_LORE_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+        ],
+        min_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 40915,
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_POTENCE_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+        ],
+        min_gw2_build: 115190,
+        max_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: ((-22i32) as u32),
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_POTENCE_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+        ],
+        min_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 42360,
         source: "FirebrandHelper",
         trigger: Trigger::Damage { skill_id: 42360 },
@@ -78,6 +224,41 @@ pub const FINDERS: &[FinderDef] = &[
         enable: &[Enable::NoEffectData],
         min_gw2_build: 115190,
         max_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 44080,
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_TRUTH_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+        ],
+        min_gw2_build: 115190,
+        max_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 43357,
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_LIBERATION_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+        ],
+        min_gw2_build: 115190,
+        max_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: ((-23i32) as u32),
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_LIBERATION_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+        ],
+        min_gw2_build: 141374,
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -149,6 +330,16 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 9248,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_CONTEMPLATION_OF_PURITY_1, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Guardian"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 9245,
         source: "GuardianHelper",
         trigger: Trigger::Damage { skill_id: 9245 },
@@ -159,6 +350,27 @@ pub const FINDERS: &[FinderDef] = &[
         source: "GuardianHelper",
         trigger: Trigger::Damage { skill_id: 9101 },
         origin: CastOrigin::Trait,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 9085,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_SAVE_YOURSELVES, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Guardian"], base: true, negated: false },
+            Check::SecondaryEffect { guid: &G_GUARDIAN_SHOUT, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 9120,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_SIGNET_OF_JUDGEMENT_2, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Guardian"], base: true, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -199,6 +411,71 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::ExtHealing { skill_id: 13594 },
         origin: CastOrigin::Unconditional,
         enable: &[Enable::HasExtHealing],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 71989,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_DETONATE_JURISDICTION_LEVEL_1, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Guardian"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 71989,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_DETONATE_JURISDICTION_LEVEL_2, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Guardian"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 71989,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_DETONATE_JURISDICTION_LEVEL_3, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Guardian"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 78837,
+        source: "LuminaryHelper",
+        trigger: Trigger::Effect { guid: &G_LUMINARY_RADIANT_JUSTICE_1, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_LUMINARY_RADIANT_JUSTICE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 78604,
+        source: "LuminaryHelper",
+        trigger: Trigger::Effect { guid: &G_LUMINARY_RADIANT_RESOLVE_1, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_LUMINARY_RADIANT_RESOLVE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 78358,
+        source: "LuminaryHelper",
+        trigger: Trigger::Effect { guid: &G_LUMINARY_RADIANT_COURAGE_1, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_LUMINARY_RADIANT_COURAGE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 77164,
+        source: "LuminaryHelper",
+        trigger: Trigger::Effect { guid: &G_LUMINARY_SOVEREIGN_OF_LIGHT_MODEL, by_dst: false },
+        origin: CastOrigin::Trait,
+        checks: &[
+            Check::SecondaryEffect { guid: &G_LUMINARY_SOVEREIGN_OF_LIGHT_AUDIO, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::Spec { party: Party::Key, specs: &["Luminary"], base: false, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {

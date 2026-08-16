@@ -4,7 +4,52 @@
 
 use crate::analysis::instant_cast::model::*;
 
+/// `EffectGUIDs.AntiquaryChakShield1`.
+const G_ANTIQUARY_CHAK_SHIELD_1: [u8; 16] = [0x1B, 0x48, 0xB9, 0x1A, 0x5B, 0x0E, 0xC5, 0x40, 0xBE, 0xA2, 0x76, 0x55, 0x83, 0x41, 0x2C, 0xBC];
+/// `EffectGUIDs.AntiquaryChakShield3`.
+const G_ANTIQUARY_CHAK_SHIELD_3: [u8; 16] = [0xF0, 0x11, 0xBC, 0x77, 0xBB, 0x1D, 0x4D, 0x40, 0xBD, 0xE0, 0xC0, 0x78, 0x8F, 0x51, 0x22, 0x4B];
+/// `EffectGUIDs.AntiquaryChakShield4`.
+const G_ANTIQUARY_CHAK_SHIELD_4: [u8; 16] = [0xEE, 0x18, 0x0A, 0xE8, 0x6C, 0x6D, 0x31, 0x4E, 0x90, 0xA6, 0xE3, 0x5D, 0x6C, 0x9B, 0xA5, 0xC6];
+/// `EffectGUIDs.AntiquaryUnstableSkrittBomb1`.
+const G_ANTIQUARY_UNSTABLE_SKRITT_BOMB_1: [u8; 16] = [0xF0, 0xA2, 0x3B, 0xA5, 0x90, 0x3B, 0x91, 0x40, 0x9D, 0x39, 0x40, 0xAD, 0x33, 0x35, 0xDE, 0xF1];
+/// `EffectGUIDs.DeadeyeMercy`.
+const G_DEADEYE_MERCY: [u8; 16] = [0xB5, 0x9F, 0xCE, 0xFC, 0xF1, 0xD5, 0xD8, 0x4B, 0x9F, 0xDB, 0x17, 0xF1, 0x1E, 0x9B, 0x52, 0xE6];
+/// `EffectGUIDs.EnemyAoE240`.
+const G_ENEMY_AO_E_2_4_0: [u8; 16] = [0x21, 0x25, 0xA1, 0x30, 0x79, 0xC1, 0xC5, 0x47, 0x9C, 0x15, 0x09, 0x26, 0xEB, 0x60, 0xA1, 0x5D];
+/// `EffectGUIDs.ThiefInfiltratorsSignet1`.
+const G_THIEF_INFILTRATORS_SIGNET_1: [u8; 16] = [0x23, 0x28, 0x4B, 0x87, 0xC2, 0x6C, 0x9A, 0x41, 0xA8, 0x87, 0xF4, 0x10, 0xF9, 0x30, 0xE1, 0xA2];
+/// `EffectGUIDs.ThiefInfiltratorsSignet2`.
+const G_THIEF_INFILTRATORS_SIGNET_2: [u8; 16] = [0x2C, 0x89, 0xA3, 0x9F, 0x7B, 0x88, 0x61, 0x4A, 0xBE, 0xD1, 0x6D, 0x4B, 0x5A, 0x5B, 0xD2, 0xEB];
+/// `EffectGUIDs.ThiefPitfallAoE`.
+const G_THIEF_PITFALL_AO_E: [u8; 16] = [0x73, 0x25, 0xE9, 0xB0, 0xDD, 0x2E, 0x91, 0x4F, 0x98, 0x37, 0xE5, 0xFC, 0xFC, 0x74, 0x0A, 0x95];
+/// `EffectGUIDs.ThiefSealAreaAoE`.
+const G_THIEF_SEAL_AREA_AO_E: [u8; 16] = [0x92, 0xA7, 0x63, 0x4C, 0x2C, 0x7F, 0x27, 0x46, 0xAF, 0xDA, 0x88, 0xE1, 0xAD, 0x9A, 0xE8, 0x86];
+/// `EffectGUIDs.ThiefSignetOfAgility`.
+const G_THIEF_SIGNET_OF_AGILITY: [u8; 16] = [0xBB, 0x54, 0x88, 0x95, 0x1B, 0x60, 0xB5, 0x46, 0xBB, 0x1B, 0xD5, 0x62, 0x6D, 0xAE, 0x83, 0xE1];
+/// `EffectGUIDs.ThiefSignetOfShadows`.
+const G_THIEF_SIGNET_OF_SHADOWS: [u8; 16] = [0x14, 0xA5, 0x98, 0x2D, 0xB2, 0x77, 0x74, 0x4C, 0xB9, 0x28, 0xA4, 0x93, 0x55, 0x55, 0xF5, 0x63];
+/// `EffectGUIDs.ThiefThousandNeedlesAoE1`.
+const G_THIEF_THOUSAND_NEEDLES_AO_E_1: [u8; 16] = [0x9A, 0xF1, 0x03, 0xE3, 0x3F, 0xC2, 0x35, 0x49, 0x81, 0x90, 0x44, 0x8A, 0x94, 0x96, 0xC9, 0x8A];
+/// `EffectGUIDs.ThiefThousandNeedlesAoE2`.
+const G_THIEF_THOUSAND_NEEDLES_AO_E_2: [u8; 16] = [0xB8, 0xDC, 0x8C, 0x67, 0x36, 0xC8, 0xE0, 0x43, 0x92, 0x95, 0xA9, 0xDB, 0xBA, 0xDC, 0x62, 0x96];
+
 pub const FINDERS: &[FinderDef] = &[
+    FinderDef {
+        skill_id: 76909,
+        source: "AntiquaryHelper",
+        trigger: Trigger::Effect { guid: &G_ANTIQUARY_UNSTABLE_SKRITT_BOMB_1, by_dst: false },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76816,
+        source: "AntiquaryHelper",
+        trigger: Trigger::Effect { guid: &G_ANTIQUARY_CHAK_SHIELD_1, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_ANTIQUARY_CHAK_SHIELD_3, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_ANTIQUARY_CHAK_SHIELD_4, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
     FinderDef {
         skill_id: 77230,
         source: "AntiquaryHelper",
@@ -60,6 +105,16 @@ pub const FINDERS: &[FinderDef] = &[
         source: "DaredevilHelper",
         trigger: Trigger::BuffGain { buff_id: 32931 },
         origin: CastOrigin::Trait,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 41372,
+        source: "DeadeyeHelper",
+        trigger: Trigger::Effect { guid: &G_DEADEYE_MERCY, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Deadeye"], base: false, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -131,9 +186,69 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 56911,
+        source: "ThiefHelper",
+        trigger: Trigger::Effect { guid: &G_THIEF_PITFALL_AO_E, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Thief"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 56898,
+        source: "ThiefHelper",
+        trigger: Trigger::Effect { guid: &G_ENEMY_AO_E_2_4_0, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_THIEF_THOUSAND_NEEDLES_AO_E_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 280, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_THIEF_THOUSAND_NEEDLES_AO_E_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 280, epsilon: 150, negated: false },
+            Check::Spec { party: Party::Key, specs: &["Thief"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 13099,
+        source: "ThiefHelper",
+        trigger: Trigger::Effect { guid: &G_THIEF_SEAL_AREA_AO_E, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Thief"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 16435,
         source: "ThiefHelper",
         trigger: Trigger::BuffGain { buff_id: 57031 },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 13064,
+        source: "ThiefHelper",
+        trigger: Trigger::Effect { guid: &G_THIEF_INFILTRATORS_SIGNET_1, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Thief"], base: true, negated: false },
+            Check::SecondaryEffect { guid: &G_THIEF_INFILTRATORS_SIGNET_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 13062,
+        source: "ThiefHelper",
+        trigger: Trigger::Effect { guid: &G_THIEF_SIGNET_OF_AGILITY, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Thief"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 13060,
+        source: "ThiefHelper",
+        trigger: Trigger::Effect { guid: &G_THIEF_SIGNET_OF_SHADOWS, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Thief"], base: true, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
 ];

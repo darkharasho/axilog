@@ -4,6 +4,39 @@
 
 use crate::analysis::instant_cast::model::*;
 
+/// `EffectGUIDs.DruidBloodMoon`.
+const G_DRUID_BLOOD_MOON: [u8; 16] = [0x28, 0x34, 0x6F, 0x32, 0xFD, 0x19, 0x9C, 0x4B, 0x8F, 0x9B, 0x15, 0x43, 0x8F, 0x27, 0xA4, 0x34];
+/// `EffectGUIDs.DruidGlyphOfEquality`.
+const G_DRUID_GLYPH_OF_EQUALITY: [u8; 16] = [0x9B, 0x8A, 0x1B, 0xE5, 0x54, 0x45, 0x0B, 0x48, 0x99, 0xB6, 0x4F, 0x75, 0x79, 0xDF, 0x0A, 0x8C];
+/// `EffectGUIDs.DruidGlyphOfEqualityCA`.
+const G_DRUID_GLYPH_OF_EQUALITY_C_A: [u8; 16] = [0x74, 0x87, 0x05, 0x58, 0xC4, 0x3E, 0x47, 0x47, 0x95, 0x5C, 0x57, 0x3C, 0xAA, 0xC6, 0x30, 0xA7];
+/// `EffectGUIDs.DruidSeedOfLife`.
+const G_DRUID_SEED_OF_LIFE: [u8; 16] = [0x19, 0xC4, 0xFA, 0x17, 0xA3, 0x8E, 0x7E, 0x47, 0x80, 0x72, 0x27, 0x99, 0xB4, 0x8B, 0xF2, 0xBE];
+/// `EffectGUIDs.GaleshotDismissCycloneBow`.
+const G_GALESHOT_DISMISS_CYCLONE_BOW: [u8; 16] = [0x92, 0x42, 0xD1, 0x0B, 0x4F, 0x04, 0x27, 0x4E, 0xB6, 0xE9, 0xEB, 0xCD, 0xB2, 0x26, 0x21, 0x81];
+/// `EffectGUIDs.GaleshotSummonCycloneBow`.
+const G_GALESHOT_SUMMON_CYCLONE_BOW: [u8; 16] = [0xC1, 0xF1, 0xE3, 0x86, 0xCC, 0x1E, 0x0B, 0x44, 0x84, 0x35, 0x26, 0x9D, 0xBB, 0xFB, 0x34, 0xD7];
+/// `EffectGUIDs.RangerLightningReflexes`.
+const G_RANGER_LIGHTNING_REFLEXES: [u8; 16] = [0x3C, 0xF1, 0xD1, 0x22, 0x8C, 0xBC, 0x37, 0x40, 0xAA, 0x33, 0xED, 0xA3, 0x57, 0xEA, 0xBE, 0xD4];
+/// `EffectGUIDs.RangerQuickeningZephyr`.
+const G_RANGER_QUICKENING_ZEPHYR: [u8; 16] = [0xB2, 0x31, 0x57, 0xC5, 0x15, 0x07, 0x2E, 0x46, 0xB5, 0x51, 0x44, 0x19, 0xB0, 0xF9, 0x23, 0xB7];
+/// `EffectGUIDs.RangerSignetOfRenewal`.
+const G_RANGER_SIGNET_OF_RENEWAL: [u8; 16] = [0xEA, 0x98, 0x96, 0xA8, 0x1D, 0xDF, 0x48, 0x43, 0xB1, 0x8D, 0xBF, 0x6E, 0xE4, 0xF2, 0x5E, 0x18];
+/// `EffectGUIDs.RangerSignetOfTheHunt`.
+const G_RANGER_SIGNET_OF_THE_HUNT: [u8; 16] = [0x1A, 0x38, 0xCA, 0xE7, 0x2C, 0x2F, 0x16, 0x4B, 0xA3, 0x81, 0x54, 0x41, 0xCA, 0x64, 0x3A, 0x20];
+/// `EffectGUIDs.SoulbeastEternalBond`.
+const G_SOULBEAST_ETERNAL_BOND: [u8; 16] = [0xBF, 0x0A, 0x5B, 0x11, 0xA4, 0x07, 0x6A, 0x4F, 0x98, 0xC6, 0xE1, 0xD6, 0x55, 0xD5, 0x07, 0xB1];
+/// `EffectGUIDs.UntamedEnvelopingHaze`.
+const G_UNTAMED_ENVELOPING_HAZE: [u8; 16] = [0xF2, 0xB1, 0xB6, 0x19, 0x70, 0xFC, 0x59, 0x41, 0x8A, 0xC0, 0x49, 0xBF, 0x3A, 0x07, 0xFF, 0xD4];
+/// `EffectGUIDs.UntamedMutateConditions`.
+const G_UNTAMED_MUTATE_CONDITIONS: [u8; 16] = [0xD7, 0xDC, 0xD4, 0xAB, 0xF9, 0xE4, 0xA7, 0x49, 0x95, 0x0A, 0xF0, 0x17, 0x5E, 0x02, 0xEA, 0x06];
+/// `EffectGUIDs.UntamedRendingVines`.
+const G_UNTAMED_RENDING_VINES: [u8; 16] = [0x2C, 0x40, 0xB0, 0x74, 0x11, 0x11, 0x44, 0x4F, 0x98, 0x89, 0x5A, 0x65, 0x8A, 0x7F, 0x97, 0x8F];
+/// `EffectGUIDs.UntamedUnnaturalTraversal`.
+const G_UNTAMED_UNNATURAL_TRAVERSAL: [u8; 16] = [0x8D, 0x36, 0x80, 0x6A, 0x69, 0x0A, 0x54, 0x42, 0xA9, 0x83, 0x30, 0x8E, 0xDC, 0xEC, 0xB0, 0x18];
+/// `EffectGUIDs.UntamedVenomousOutburst`.
+const G_UNTAMED_VENOMOUS_OUTBURST: [u8; 16] = [0x60, 0xBE, 0x46, 0x92, 0xA4, 0x55, 0xB1, 0x40, 0xA0, 0x5A, 0xD7, 0x94, 0xBF, 0x47, 0x53, 0xF6];
+
 pub const FINDERS: &[FinderDef] = &[
     FinderDef {
         skill_id: 31869,
@@ -20,10 +53,71 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 31406,
+        source: "DruidHelper",
+        trigger: Trigger::Effect { guid: &G_DRUID_SEED_OF_LIFE, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Druid"], base: false, negated: false },
+        ],
+        min_gw2_build: 135242,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 31658,
         source: "DruidHelper",
         trigger: Trigger::Damage { skill_id: 31658 },
         enable: &[Enable::NoEffectData],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 31401,
+        source: "DruidHelper",
+        trigger: Trigger::Effect { guid: &G_DRUID_GLYPH_OF_EQUALITY_C_A, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Druid"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 31658,
+        source: "DruidHelper",
+        trigger: Trigger::Effect { guid: &G_DRUID_GLYPH_OF_EQUALITY, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Druid"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 31749,
+        source: "DruidHelper",
+        trigger: Trigger::Effect { guid: &G_DRUID_BLOOD_MOON, by_dst: false },
+        origin: CastOrigin::Trait,
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Druid"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76787,
+        source: "GaleshotHelper",
+        trigger: Trigger::Effect { guid: &G_GALESHOT_SUMMON_CYCLONE_BOW, by_dst: false },
+        swap_snap: SwapSnap::Before,
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Galeshot"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 77213,
+        source: "GaleshotHelper",
+        trigger: Trigger::Effect { guid: &G_GALESHOT_DISMISS_CYCLONE_BOW, by_dst: true },
+        swap_snap: SwapSnap::Before,
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Galeshot"], base: false, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -105,6 +199,45 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::BuffGive { buff_id: 34236 },
         not_accurate: true,
         icd: 1100,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 12494,
+        source: "RangerHelper",
+        trigger: Trigger::Effect { guid: &G_RANGER_LIGHTNING_REFLEXES, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Ranger"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 12550,
+        source: "RangerHelper",
+        trigger: Trigger::Effect { guid: &G_RANGER_QUICKENING_ZEPHYR, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Ranger"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 12502,
+        source: "RangerHelper",
+        trigger: Trigger::Effect { guid: &G_RANGER_SIGNET_OF_RENEWAL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Ranger"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 12542,
+        source: "RangerHelper",
+        trigger: Trigger::Effect { guid: &G_RANGER_SIGNET_OF_THE_HUNT, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Ranger"], base: true, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -673,6 +806,16 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 59554,
+        source: "SoulbeastHelper",
+        trigger: Trigger::Effect { guid: &G_SOULBEAST_ETERNAL_BOND, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Soulbeast"], base: false, negated: false },
+        ],
+        min_gw2_build: 135242,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 63344,
         source: "UntamedHelper",
         trigger: Trigger::BuffGain { buff_id: 63145 },
@@ -691,6 +834,47 @@ pub const FINDERS: &[FinderDef] = &[
         origin: CastOrigin::Trait,
         min_gw2_build: START_OF_LIFE,
         max_gw2_build: 182824,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 63256,
+        source: "UntamedHelper",
+        trigger: Trigger::Effect { guid: &G_UNTAMED_MUTATE_CONDITIONS, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Untamed"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 63195,
+        source: "UntamedHelper",
+        trigger: Trigger::Effect { guid: &G_UNTAMED_UNNATURAL_TRAVERSAL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Untamed"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 63209,
+        source: "UntamedHelper",
+        trigger: Trigger::Effect { guid: &G_UNTAMED_VENOMOUS_OUTBURST, by_dst: false },
+        minions: true,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 63258,
+        source: "UntamedHelper",
+        trigger: Trigger::Effect { guid: &G_UNTAMED_RENDING_VINES, by_dst: false },
+        minions: true,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 63094,
+        source: "UntamedHelper",
+        trigger: Trigger::Effect { guid: &G_UNTAMED_ENVELOPING_HAZE, by_dst: false },
+        minions: true,
         ..FinderDef::DEFAULT
     },
 ];

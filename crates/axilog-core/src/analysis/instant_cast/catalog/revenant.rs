@@ -4,6 +4,23 @@
 
 use crate::analysis::instant_cast::model::*;
 
+/// `EffectGUIDs.ConduitFormOfTheDervishScythe`.
+const G_CONDUIT_FORM_OF_THE_DERVISH_SCYTHE: [u8; 16] = [0xB0, 0xCF, 0x63, 0x59, 0xEB, 0xF9, 0xBF, 0x4E, 0xB9, 0x4E, 0x1A, 0x2A, 0x34, 0x7E, 0x5E, 0xCD];
+/// `EffectGUIDs.RenegadeOrdersFromAbove`.
+const G_RENEGADE_ORDERS_FROM_ABOVE: [u8; 16] = [0xB6, 0x3D, 0x19, 0x2D, 0xED, 0x78, 0xB1, 0x48, 0x9D, 0xDB, 0x6E, 0x74, 0x2D, 0x60, 0x3C, 0xE5];
+/// `EffectGUIDs.RenegadeOrdersFromAboveRighteousRebel`.
+const G_RENEGADE_ORDERS_FROM_ABOVE_RIGHTEOUS_REBEL: [u8; 16] = [0xF5, 0x3F, 0x05, 0xF0, 0x41, 0x95, 0x7A, 0x47, 0xAD, 0x62, 0xB5, 0x22, 0xFE, 0x03, 0x04, 0x08];
+/// `EffectGUIDs.RevenantEnergyExpulsion`.
+const G_REVENANT_ENERGY_EXPULSION: [u8; 16] = [0xBE, 0x19, 0x13, 0x81, 0xB1, 0xBC, 0x98, 0x4A, 0x98, 0x9D, 0x94, 0xD2, 0x15, 0xDD, 0xEA, 0x1F];
+/// `EffectGUIDs.RevenantPurifyingEssence`.
+const G_REVENANT_PURIFYING_ESSENCE: [u8; 16] = [0xD2, 0xB3, 0x88, 0xE8, 0xDB, 0x72, 0x15, 0x44, 0xA1, 0x10, 0x97, 0x9C, 0x3A, 0x38, 0x49, 0x77];
+/// `EffectGUIDs.RevenantSpearAbyssalBlitz1`.
+const G_REVENANT_SPEAR_ABYSSAL_BLITZ_1: [u8; 16] = [0x25, 0x90, 0x8E, 0xB4, 0x55, 0x86, 0x3D, 0x43, 0xAE, 0x70, 0xFB, 0x3F, 0x4A, 0x22, 0xD6, 0xE4];
+/// `EffectGUIDs.RevenantSpearBlitzMinesDetonation1`.
+const G_REVENANT_SPEAR_BLITZ_MINES_DETONATION_1: [u8; 16] = [0x40, 0xC9, 0xF5, 0xFE, 0x5B, 0xD3, 0xBD, 0x44, 0x9B, 0x5E, 0x48, 0xDF, 0x1E, 0x5F, 0xD3, 0x48];
+/// `EffectGUIDs.RevenantSpearBlitzMinesDetonation2`.
+const G_REVENANT_SPEAR_BLITZ_MINES_DETONATION_2: [u8; 16] = [0x1B, 0x3A, 0xCE, 0xE3, 0x6F, 0x61, 0xDE, 0x42, 0xAB, 0x1C, 0x24, 0xBD, 0x33, 0xB5, 0xB5, 0xAD];
+
 pub const FINDERS: &[FinderDef] = &[
     FinderDef {
         skill_id: 76610,
@@ -16,6 +33,27 @@ pub const FINDERS: &[FinderDef] = &[
         source: "ConduitHelper",
         trigger: Trigger::Damage { skill_id: 77021 },
         origin: CastOrigin::Unconditional,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76818,
+        source: "ConduitHelper",
+        trigger: Trigger::Effect { guid: &G_CONDUIT_FORM_OF_THE_DERVISH_SCYTHE, by_dst: false },
+        icd: 10,
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::SecondaryEffect { guid: &G_CONDUIT_FORM_OF_THE_DERVISH_SCYTHE, inverted_src: false, type_rel: TypeRel::Inverted, time_offset: 0, epsilon: 150, negated: true },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 77116,
+        source: "ConduitHelper",
+        trigger: Trigger::Effect { guid: &G_CONDUIT_FORM_OF_THE_DERVISH_SCYTHE, by_dst: false },
+        icd: 10,
+        checks: &[
+            Check::AroundDst { negated: true },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -70,6 +108,24 @@ pub const FINDERS: &[FinderDef] = &[
         skill_id: 46849,
         source: "RenegadeHelper",
         trigger: Trigger::Damage { skill_id: 46849 },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 45537,
+        source: "RenegadeHelper",
+        trigger: Trigger::Effect { guid: &G_RENEGADE_ORDERS_FROM_ABOVE_RIGHTEOUS_REBEL, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Renegade"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 45537,
+        source: "RenegadeHelper",
+        trigger: Trigger::Effect { guid: &G_RENEGADE_ORDERS_FROM_ABOVE, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Renegade"], base: false, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -168,6 +224,45 @@ pub const FINDERS: &[FinderDef] = &[
         source: "RevenantHelper",
         trigger: Trigger::ExtHealing { skill_id: 46847 },
         enable: &[Enable::HasExtHealing],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 29197,
+        source: "RevenantHelper",
+        trigger: Trigger::Effect { guid: &G_REVENANT_PURIFYING_ESSENCE, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Revenant"], base: true, negated: false },
+        ],
+        min_gw2_build: 130910,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 29114,
+        source: "RevenantHelper",
+        trigger: Trigger::Effect { guid: &G_REVENANT_ENERGY_EXPULSION, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Revenant"], base: true, negated: false },
+        ],
+        min_gw2_build: 130910,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: ((-39i32) as u32),
+        source: "RevenantHelper",
+        trigger: Trigger::Effect { guid: &G_REVENANT_SPEAR_ABYSSAL_BLITZ_1, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Revenant"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 73149,
+        source: "RevenantHelper",
+        trigger: Trigger::Effect { guid: &G_REVENANT_SPEAR_BLITZ_MINES_DETONATION_1, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_REVENANT_SPEAR_BLITZ_MINES_DETONATION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::Spec { party: Party::Key, specs: &["Revenant"], base: true, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {

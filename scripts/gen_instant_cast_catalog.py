@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate `analysis::instant_cast::catalog` from the GW2EI C# sources.
 
-GW2EI declares 658 `InstantCastFinder`s across ~44 profession-helper
+GW2EI declares 649 `InstantCastFinder`s across ~44 profession-helper
 files. Every one is a constructor plus a builder chain over a fixed
 vocabulary, so they are EXTRACTED rather than hand-transcribed -- the same
 call `gen_damage_mod_catalog.py` makes about the damage-modifier
@@ -84,8 +84,14 @@ for line in _lines("GW2EIEvtcParser/ParserHelpers/GW2Builds.cs"):
         else:
             BUILDS[m.group(1)] = int(v)
 
+# `ArcDPSBuilds` is a NESTED class inside ArcDPSEnums.cs, not a file of
+# its own. Pointing at a non-existent `ArcDPSBuilds.cs` silently left this
+# table empty, which no finder happened to depend on -- no
+# `InstantCastFinder` construction calls `.WithEvtcBuilds(...)` today -- but
+# the first one that did would have been skipped for an "unresolved build
+# symbol" that was really a bad path. The assertion below is the guard.
 ARC_BUILDS = {}
-for line in _lines("GW2EIEvtcParser/ParserHelpers/ArcDPSBuilds.cs"):
+for line in _lines("GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs"):
     m = re.match(r"\s*public const (?:ulong|int|long) (\w+)\s*=\s*(-?\w+)", line)
     if m:
         v = m.group(2)
@@ -110,6 +116,22 @@ for line in _lines("GW2EIEvtcParser/ParserHelpers/IDs/SpeciesIDs.cs"):
     m = re.match(r"\s*(\w+)\s*=\s*(-?\d+),?\s*(?://.*)?$", line)
     if m:
         SPECIES.setdefault(m.group(1), int(m.group(2)))
+
+# Stable 16-byte effect GUIDs, `Name -> bytes`. The hex string is consumed
+# a byte pair at a time in written order (`GUID(ReadOnlySpan<char> hex)`),
+# which is the same order `evtc::guid` lays out `src_agent ++ dst_agent`,
+# so the bytes compare directly with no endianness dance.
+EFFECT_GUIDS = {}
+for line in _lines("GW2EIEvtcParser/ParserHelpers/GUIDs/EffectGUIDs.cs"):
+    m = re.match(r'\s*public static readonly GUID (\w+)\s*=\s*new\("([0-9A-Fa-f]{32})"\)', line)
+    if m:
+        EFFECT_GUIDS[m.group(1)] = bytes.fromhex(m.group(2))
+
+for _name, _table in (("GW2Builds", BUILDS), ("ArcDPSBuilds", ARC_BUILDS),
+                      ("SkillIDs", SKILLS), ("SpeciesIDs", SPECIES),
+                      ("EffectGUIDs", EFFECT_GUIDS)):
+    if not _table:
+        sys.exit(f"{_name} table came back empty -- wrong path or changed syntax")
 
 
 # ----------------------------------------------------------------------
@@ -328,6 +350,22 @@ def resolve_int(expr):
     raise Skip(f"non-literal integer `{expr.strip()}`")
 
 
+def resolve_guid(expr):
+    """An `EffectGUIDs.Name` reference -> its Rust const identifier."""
+    e = expr.strip().split(".")[-1]
+    if e not in EFFECT_GUIDS:
+        raise Skip(f"unresolved effect GUID `{expr.strip()}`")
+    return e
+
+
+def resolve_spec_list(expr):
+    """One `Spec.X` or a `[Spec.X, Spec.Y]` collection expression."""
+    e = expr.strip()
+    m = re.fullmatch(r"(?:new\s+[\w<>\[\], ]*)?[\[\{](.*)[\]\}]", e, re.S)
+    parts = split_top(m.group(1)) if m else [e]
+    return [resolve_spec(p) for p in parts if p.strip()]
+
+
 def resolve_spec(expr):
     e = expr.strip().split(".")[-1]
     if not re.fullmatch(r"\w+", e):
@@ -390,7 +428,27 @@ def _t_minion_spawn(args, named):
     return f"Trigger::MinionSpawn {{ species_ids: &[{body}] }}", rs_id(resolve_id(args[0]))
 
 
+def _t_effect(by_dst):
+    def build(args):
+        if len(args) != 2:
+            raise Skip("EffectCastFinder takes (skillID, effectGUID)")
+        guid = resolve_guid(args[1])
+        return (
+            f"Trigger::Effect {{ guid: &{guid_const(guid)}, "
+            f"by_dst: {str(by_dst).lower()} }}",
+            rs_id(resolve_id(args[0])),
+        )
+    return build
+
+
+def guid_const(name):
+    """The Rust const identifier a GUID symbol is emitted under."""
+    return "G_" + re.sub(r"(?<!^)(?=[A-Z0-9])", "_", name).upper().replace("__", "_")
+
+
 CTORS = {
+    "EffectCastFinder": _t_effect(False),
+    "EffectCastFinderByDst": _t_effect(True),
     "BuffGainCastFinder": _t_buff("BuffGain"),
     "BuffLossCastFinder": _t_buff("BuffLoss"),
     "BuffGiveCastFinder": _t_buff("BuffGive"),
@@ -407,8 +465,6 @@ CTORS = {
 # Subclasses deliberately out of scope, with the reason recorded in the
 # emitted table rather than left implicit.
 UNSUPPORTED = {
-    "EffectCastFinder": "effect events are not decoded by this project",
-    "EffectCastFinderByDst": "effect events are not decoded by this project",
     "MarkerCastFinder": "marker-effect events are not decoded by this project",
     "EXTBarrierCastFinder": "the barrier extension is not decoded by this project",
     "BandTogetherCastFinder": "bespoke subclass with log-specific state",
@@ -416,25 +472,49 @@ UNSUPPORTED = {
 }
 
 # The buff-side checkers name the RECIPIENT (`To`) or the APPLIER (`By`);
-# the effect-side ones name `Dst`/`Src`. `Party::Key` is whichever the
-# subclass's own `GetKeyAgent` returns -- the recipient on a buff apply,
-# the source on an effect -- so `To`/`Src` map to `Key` and `By`/`Dst` to
-# `Other`.
+# the effect-side ones name `Src`/`Dst`. `Party` is a property of the
+# EVENT, not of the finder, so `To`/`Src` map to `Key` and `By`/`Dst` to
+# `Other` regardless of which one the subclass calls its caster.
+#
+# The fourth element is the implied `IsAroundDst` guard: GW2EI's
+# `UsingDst*Checker` bodies all begin `evt.IsAroundDst &&`, because an
+# effect that sits on the ground has no Dst to read a spec off.
 SPEC_CHECKERS = {
-    "UsingToSpecChecker": ("Key", False, False),
-    "UsingToNotSpecChecker": ("Key", False, True),
-    "UsingToBaseSpecChecker": ("Key", True, False),
-    "UsingBySpecChecker": ("Other", False, False),
-    "UsingByNotSpecChecker": ("Other", False, True),
-    "UsingByBaseSpecChecker": ("Other", True, False),
-    "UsingSrcSpecChecker": ("Key", False, False),
-    "UsingSrcNotSpecChecker": ("Key", False, True),
-    "UsingSrcBaseSpecChecker": ("Key", True, False),
-    "UsingSrcNotBaseSpecChecker": ("Key", True, True),
-    "UsingDstSpecChecker": ("Other", False, False),
-    "UsingDstNotSpecChecker": ("Other", False, True),
-    "UsingDstBaseSpecChecker": ("Other", True, False),
-    "UsingDstNotBaseSpecChecker": ("Other", True, True),
+    "UsingToSpecChecker": ("Key", False, False, False),
+    "UsingToNotSpecChecker": ("Key", False, True, False),
+    "UsingToBaseSpecChecker": ("Key", True, False, False),
+    "UsingBySpecChecker": ("Other", False, False, False),
+    "UsingByNotSpecChecker": ("Other", False, True, False),
+    "UsingByBaseSpecChecker": ("Other", True, False, False),
+    "UsingSrcSpecChecker": ("Key", False, False, False),
+    "UsingSrcSpecsChecker": ("Key", False, False, False),
+    "UsingSrcNotSpecChecker": ("Key", False, True, False),
+    "UsingSrcNotSpecsChecker": ("Key", False, True, False),
+    "UsingSrcBaseSpecChecker": ("Key", True, False, False),
+    "UsingSrcNotBaseSpecChecker": ("Key", True, True, False),
+    "UsingDstSpecChecker": ("Other", False, False, True),
+    "UsingDstSpecsChecker": ("Other", False, False, True),
+    "UsingDstNotSpecChecker": ("Other", False, True, True),
+    "UsingDstNotSpecsChecker": ("Other", False, True, True),
+    "UsingDstBaseSpecChecker": ("Other", True, False, True),
+    "UsingDstNotBaseSpecChecker": ("Other", True, True, True),
+}
+
+# The `Using[No]SecondaryEffect*Checker` family: twelve builder methods
+# that differ only in `(inverted_src, type_rel, negated)`.
+SECONDARY_CHECKERS = {
+    "UsingSecondaryEffectSameSrcChecker": (False, "Any", False),
+    "UsingSecondaryEffectInvertedSrcChecker": (True, "Any", False),
+    "UsingSecondaryEffectSameSrcSameTypeChecker": (False, "Same", False),
+    "UsingSecondaryEffectInvertedSrcSameTypeChecker": (True, "Same", False),
+    "UsingSecondaryEffectSameSrcInvertedTypeChecker": (False, "Inverted", False),
+    "UsingSecondaryEffectInvertedSrcInvertedTypeChecker": (True, "Inverted", False),
+    "UsingNoSecondaryEffectSameSrcChecker": (False, "Any", True),
+    "UsingNoSecondaryEffectInvertedSrcChecker": (True, "Any", True),
+    "UsingNoSecondaryEffectSameSrcSameTypeChecker": (False, "Same", True),
+    "UsingNoSecondaryEffectInvertedSrcSameTypeChecker": (True, "Same", True),
+    "UsingNoSecondaryEffectSameSrcInvertedTypeChecker": (False, "Inverted", True),
+    "UsingNoSecondaryEffectInvertedSrcInvertedTypeChecker": (True, "Inverted", True),
 }
 
 
@@ -451,9 +531,15 @@ def analyse(ctor, argstr, chain, named):
         build(args, named) if ctor == "MinionSpawnCastFinder" else build(args)
     )
 
+    is_effect = ctor in ("EffectCastFinder", "EffectCastFinderByDst")
     fields = {}
     checks = []
     enable = []
+    # Every GUID this finder names, so the emitter can declare a const for
+    # each one used in the file rather than inlining 16 bytes per mention.
+    guids = set()
+    if is_effect:
+        guids.add(resolve_guid(args[1]))
     for name, arg in chain:
         parts = split_top(arg)
         if name == "WithBuilds":
@@ -487,16 +573,49 @@ def analyse(ctor, argstr, chain, named):
         elif name == "UsingDisableWithMissileData":
             enable.append("Enable::NoMissileData")
         elif name in SPEC_CHECKERS:
-            party, base, neg = SPEC_CHECKERS[name]
-            spec = resolve_spec(parts[0])
+            party, base, neg, around = SPEC_CHECKERS[name]
+            specs = ", ".join(f'"{s}"' for s in resolve_spec_list(parts[0]))
+            if around:
+                checks.append("Check::AroundDst { negated: false }")
             checks.append(
-                f"Check::Spec {{ party: Party::{party}, spec: \"{spec}\", "
+                f"Check::Spec {{ party: Party::{party}, specs: &[{specs}], "
                 f"base: {str(base).lower()}, negated: {str(neg).lower()} }}"
             )
+        elif name in SECONDARY_CHECKERS:
+            inv, rel, neg = SECONDARY_CHECKERS[name]
+            guid = resolve_guid(parts[0])
+            off = resolve_int(parts[1]) if len(parts) > 1 else 0
+            eps = resolve_int(parts[2]) if len(parts) > 2 else 150
+            checks.append(
+                f"Check::SecondaryEffect {{ guid: &{guid_const(guid)}, "
+                f"inverted_src: {str(inv).lower()}, type_rel: TypeRel::{rel}, "
+                f"time_offset: {off}, epsilon: {eps}, negated: {str(neg).lower()} }}"
+            )
+            guids.add(guid)
+        elif name == "UsingIsAroundDstChecker":
+            checks.append("Check::AroundDst { negated: false }")
+        elif name == "UsingNotIsAroundDstChecker":
+            checks.append("Check::AroundDst { negated: true }")
         elif name == "UsingDurationChecker":
-            dur = resolve_int(parts[0])
-            eps = resolve_int(parts[1]) if len(parts) > 1 else 150
-            checks.append(f"Check::Duration {{ duration: {dur}, epsilon: {eps} }}")
+            if is_effect:
+                # The effect form is exact equality, or an INCLUSIVE
+                # range -- not the buff form's epsilon band. See
+                # `Check::EffectDuration`.
+                lo = resolve_int(parts[0])
+                hi = resolve_int(parts[1]) if len(parts) > 1 else lo
+                checks.append(f"Check::EffectDuration {{ min: {lo}, max: {hi} }}")
+            else:
+                dur = resolve_int(parts[0])
+                eps = resolve_int(parts[1]) if len(parts) > 1 else 150
+                checks.append(f"Check::Duration {{ duration: {dur}, epsilon: {eps} }}")
+        elif name == "UsingNoAnimatedCastChecker":
+            # `CombatData.IsCasting` asks whether the caster's animated
+            # cast WINDOW (start plus actual duration) contains a time.
+            # This project pairs cast starts with stops in
+            # `analysis::rotation`, downstream of here, so the window is
+            # not available -- and dropping the checker would widen the
+            # finder onto casts EI excludes.
+            raise Skip("animated-cast window intersection is not available here")
         elif name == "UsingChecker":
             # An arbitrary closure over the parsed log. Dropping it would
             # WIDEN the finder; see this script's docstring.
@@ -509,7 +628,12 @@ def analyse(ctor, argstr, chain, named):
     if ctor == "EXTHealingCastFinder":
         enable.append("Enable::HasExtHealing")
 
-    return skill_id, trigger, fields, checks, enable
+    # `EffectCastFinder`'s ctor installs `UsingNotAccurate()` and the
+    # `HasEffectData` enable condition. Both are modelled on the TRIGGER
+    # (`Trigger::forces_not_accurate` / `forces_has_effect_data`) rather
+    # than emitted per row, so a hand-edited row cannot lose them.
+
+    return skill_id, trigger, fields, checks, enable, guids
 
 
 # ----------------------------------------------------------------------
@@ -526,8 +650,18 @@ def rs_build(v, lo, hi):
     return str(v)
 
 
+def emit_guid_consts(names):
+    """The `G_*` byte-array consts a catalog file's finders reference."""
+    out = []
+    for n in sorted(names):
+        body = ", ".join(f"0x{b:02X}" for b in EFFECT_GUIDS[n])
+        out.append(f"/// `EffectGUIDs.{n}`.")
+        out.append(f"const {guid_const(n)}: [u8; 16] = [{body}];")
+    return "\n".join(out)
+
+
 def emit_row(rec):
-    skill_id, trigger, fields, checks, enable, source, line = rec
+    skill_id, trigger, fields, checks, enable, _guids, source, line = rec
     out = [f"    FinderDef {{"]
     out.append(f"        skill_id: {skill_id},")
     out.append(f"        source: \"{source}\",")
@@ -589,27 +723,30 @@ def main():
             considered += 1
             per_ctor[ctor] += 1
             try:
-                skill_id, trigger, fields, checks, enable = analyse(
+                skill_id, trigger, fields, checks, enable, guids = analyse(
                     ctor, argstr, chain, named)
             except Skip as e:
                 skipped[str(e)] += 1
                 continue
             kept[group_of(path)].append(
-                (skill_id, trigger, fields, checks, enable, helper, line)
+                (skill_id, trigger, fields, checks, enable, guids, helper, line)
             )
 
     os.makedirs(OUT, exist_ok=True)
     groups = sorted(kept)
     for g in groups:
-        rows = sorted(kept[g], key=lambda r: (r[5], r[6]))
+        rows = sorted(kept[g], key=lambda r: (r[6], r[7]))
         body = "\n".join(emit_row(r) for r in rows)
+        used = set().union(*(r[5] for r in rows)) if rows else set()
+        consts = emit_guid_consts(used)
         with open(os.path.join(OUT, f"{g}.rs"), "w") as fh:
             fh.write(
                 "// @generated by scripts/gen_instant_cast_catalog.py -- do not edit.\n"
                 f"//! Instant-cast finders transcribed from GW2EI's `{g}` profession\n"
                 "//! helpers. See `super`'s module doc for the extraction accounting.\n\n"
                 "use crate::analysis::instant_cast::model::*;\n\n"
-                f"pub const FINDERS: &[FinderDef] = &[\n{body}\n];\n"
+                + (consts + "\n\n" if consts else "")
+                + f"pub const FINDERS: &[FinderDef] = &[\n{body}\n];\n"
             )
 
     total_kept = sum(len(v) for v in kept.values())

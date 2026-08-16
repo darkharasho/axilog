@@ -4,6 +4,49 @@
 
 use crate::analysis::instant_cast::model::*;
 
+/// `EffectGUIDs.RelicOfBloodstone`.
+const G_RELIC_OF_BLOODSTONE: [u8; 16] = [0xAA, 0x9A, 0x51, 0xB9, 0x97, 0x47, 0x6A, 0x4B, 0xB8, 0x03, 0xB1, 0x25, 0x2B, 0x78, 0x24, 0x20];
+/// `EffectGUIDs.RelicOfCerusEye`.
+const G_RELIC_OF_CERUS_EYE: [u8; 16] = [0x10, 0x66, 0xBE, 0xAC, 0xB1, 0x07, 0xC7, 0x43, 0x90, 0x8D, 0x86, 0x0D, 0xA2, 0xD5, 0x97, 0x96];
+/// `EffectGUIDs.RelicOfFireworks`.
+const G_RELIC_OF_FIREWORKS: [u8; 16] = [0x2B, 0xC0, 0x33, 0xD4, 0x0C, 0x0A, 0xEB, 0x40, 0xA7, 0x7E, 0xEF, 0x28, 0xD5, 0x1A, 0xE2, 0x63];
+/// `EffectGUIDs.RelicOfIce`.
+const G_RELIC_OF_ICE: [u8; 16] = [0x54, 0xF2, 0xB4, 0x92, 0x0F, 0x7E, 0x2D, 0x4F, 0xAA, 0x56, 0xCE, 0xD7, 0x39, 0xBA, 0x2C, 0x41];
+/// `EffectGUIDs.RelicOfMountBalrior1`.
+const G_RELIC_OF_MOUNT_BALRIOR_1: [u8; 16] = [0x7C, 0xD8, 0x92, 0xDA, 0xA4, 0x7D, 0x19, 0x4C, 0xA3, 0xFE, 0x96, 0x2A, 0xDE, 0x6F, 0x62, 0x6F];
+/// `EffectGUIDs.RelicOfMountBalrior2`.
+const G_RELIC_OF_MOUNT_BALRIOR_2: [u8; 16] = [0x15, 0x58, 0x62, 0x1A, 0x51, 0xFE, 0x5F, 0x4B, 0x84, 0x8A, 0x8B, 0x25, 0x2A, 0xFE, 0x61, 0x6C];
+/// `EffectGUIDs.RelicOfPeitha`.
+const G_RELIC_OF_PEITHA: [u8; 16] = [0x0C, 0xBF, 0xB7, 0x04, 0x34, 0x66, 0x16, 0x47, 0xB6, 0x80, 0x03, 0xEC, 0xD7, 0x72, 0x07, 0xE6];
+/// `EffectGUIDs.RelicOfSorrow3`.
+const G_RELIC_OF_SORROW_3: [u8; 16] = [0x3D, 0x98, 0x13, 0x97, 0xD9, 0xC6, 0xA4, 0x4B, 0x88, 0x82, 0x12, 0xCE, 0x4E, 0x3F, 0x6F, 0x9A];
+/// `EffectGUIDs.RelicOfTheBeehive1`.
+const G_RELIC_OF_THE_BEEHIVE_1: [u8; 16] = [0x54, 0x23, 0x3E, 0x44, 0xA9, 0x3B, 0xD8, 0x45, 0x89, 0xF7, 0xD0, 0xBE, 0xCC, 0xC8, 0xA5, 0x38];
+/// `EffectGUIDs.RelicOfTheHolosmith`.
+const G_RELIC_OF_THE_HOLOSMITH: [u8; 16] = [0xDF, 0x03, 0xFA, 0xCC, 0x6B, 0xA6, 0x6F, 0x4B, 0xA8, 0x9B, 0xA2, 0x76, 0x36, 0xFB, 0x39, 0xEB];
+/// `EffectGUIDs.RelicOfTheNauticalBeastGround1`.
+const G_RELIC_OF_THE_NAUTICAL_BEAST_GROUND_1: [u8; 16] = [0xB4, 0x4B, 0xAD, 0x99, 0x9B, 0xEB, 0x2D, 0x4D, 0xB2, 0x84, 0x74, 0x58, 0x95, 0xB4, 0x2B, 0xDD];
+/// `EffectGUIDs.RelicOfTheNauticalBeastGround2`.
+const G_RELIC_OF_THE_NAUTICAL_BEAST_GROUND_2: [u8; 16] = [0x10, 0xD6, 0xB2, 0xD4, 0x2D, 0x39, 0x25, 0x4F, 0xB8, 0x66, 0xCE, 0x86, 0xD2, 0x7D, 0x36, 0xAD];
+/// `EffectGUIDs.RelicOfTheSteamshrieker`.
+const G_RELIC_OF_THE_STEAMSHRIEKER: [u8; 16] = [0xC0, 0xB2, 0xEC, 0x5C, 0xAE, 0x1F, 0xF3, 0x46, 0x8F, 0xD5, 0xD6, 0x21, 0x57, 0x62, 0x5E, 0x77];
+/// `EffectGUIDs.RelicOfTheTwinGenerals`.
+const G_RELIC_OF_THE_TWIN_GENERALS: [u8; 16] = [0x40, 0xEC, 0xD5, 0x8F, 0x39, 0xB3, 0x00, 0x41, 0xB3, 0xE6, 0xC7, 0xCE, 0xDB, 0x7C, 0x4D, 0x8C];
+/// `EffectGUIDs.RelicOfTheWizardsTower`.
+const G_RELIC_OF_THE_WIZARDS_TOWER: [u8; 16] = [0x2A, 0x1D, 0x0C, 0x23, 0xF4, 0x48, 0xC3, 0x48, 0xA8, 0x3E, 0x9A, 0x4F, 0x26, 0x69, 0xB7, 0x3F];
+/// `EffectGUIDs.RelicWhiteCircle`.
+const G_RELIC_WHITE_CIRCLE: [u8; 16] = [0x86, 0x63, 0x07, 0xA6, 0xA0, 0xE3, 0x42, 0x42, 0xBD, 0xC3, 0x06, 0x7A, 0xB2, 0x4A, 0x54, 0x9D];
+/// `EffectGUIDs.RuneOfNightmare`.
+const G_RUNE_OF_NIGHTMARE: [u8; 16] = [0x14, 0x9E, 0x61, 0x6E, 0xB4, 0x5B, 0x1E, 0x49, 0x82, 0x30, 0x5B, 0x99, 0xA7, 0x95, 0x2E, 0xA8];
+/// `EffectGUIDs.SkyscaleBlast1`.
+const G_SKYSCALE_BLAST_1: [u8; 16] = [0x4D, 0x30, 0xA7, 0xF3, 0x74, 0xE5, 0x6E, 0x4F, 0x80, 0x64, 0x20, 0xA8, 0x1E, 0xAE, 0xA0, 0x3F];
+/// `EffectGUIDs.SkyscaleBlast2`.
+const G_SKYSCALE_BLAST_2: [u8; 16] = [0xE1, 0x5F, 0xF7, 0xFD, 0x74, 0x2A, 0xA2, 0x4B, 0xB6, 0xC2, 0xBE, 0x38, 0x08, 0x7C, 0xFC, 0x22];
+/// `EffectGUIDs.SkyscaleFireball`.
+const G_SKYSCALE_FIREBALL: [u8; 16] = [0x03, 0x25, 0xD5, 0x5E, 0x6A, 0x77, 0x20, 0x47, 0x98, 0x1F, 0x4E, 0xEA, 0xA5, 0xCA, 0xE5, 0x37];
+/// `EffectGUIDs.SkyscaleLaunch`.
+const G_SKYSCALE_LAUNCH: [u8; 16] = [0xF6, 0xA0, 0x6D, 0x82, 0x22, 0x28, 0x0F, 0x40, 0xB1, 0x7A, 0x69, 0x84, 0xF9, 0xB5, 0x89, 0x4F];
+
 pub const FINDERS: &[FinderDef] = &[
     FinderDef {
         skill_id: ((-32i32) as u32),
@@ -256,6 +299,15 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: ((-26i32) as u32),
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RUNE_OF_NIGHTMARE, by_dst: true },
+        origin: CastOrigin::Gear,
+        min_gw2_build: 93543,
+        max_gw2_build: 150431,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: ((-42i32) as u32),
         source: "ProfHelper",
         trigger: Trigger::MinionSpawn { species_ids: &[21314] },
@@ -381,6 +433,113 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::BuffGive { buff_id: 79435 },
         origin: CastOrigin::Gear,
         icd: 100,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 71252,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_CERUS_EYE, by_dst: false },
+        origin: CastOrigin::Gear,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 71051,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_ICE, by_dst: false },
+        origin: CastOrigin::Gear,
+        icd: 1000,
+        enable: &[Enable::NoMissileData],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 69855,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_FIREWORKS, by_dst: false },
+        origin: CastOrigin::Gear,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 70196,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_PEITHA, by_dst: false },
+        origin: CastOrigin::Gear,
+        enable: &[Enable::NoMissileData],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 70491,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_WHITE_CIRCLE, by_dst: false },
+        origin: CastOrigin::Gear,
+        checks: &[
+            Check::SecondaryEffect { guid: &G_RELIC_OF_THE_WIZARDS_TOWER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 72707,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_THE_TWIN_GENERALS, by_dst: false },
+        origin: CastOrigin::Gear,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 74410,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_SORROW_3, by_dst: false },
+        origin: CastOrigin::Gear,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 74988,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_WHITE_CIRCLE, by_dst: false },
+        origin: CastOrigin::Gear,
+        checks: &[
+            Check::SecondaryEffect { guid: &G_RELIC_OF_THE_BEEHIVE_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 1000, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 74793,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_MOUNT_BALRIOR_1, by_dst: false },
+        origin: CastOrigin::Gear,
+        checks: &[
+            Check::SecondaryEffect { guid: &G_RELIC_OF_MOUNT_BALRIOR_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 75748,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_THE_HOLOSMITH, by_dst: false },
+        origin: CastOrigin::Gear,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: ((-50i32) as u32),
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_THE_STEAMSHRIEKER, by_dst: false },
+        origin: CastOrigin::Gear,
+        icd: 0,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76315,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_BLOODSTONE, by_dst: false },
+        origin: CastOrigin::Gear,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 79489,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_THE_NAUTICAL_BEAST_GROUND_2, by_dst: false },
+        origin: CastOrigin::Gear,
+        checks: &[
+            Check::SecondaryEffect { guid: &G_RELIC_OF_THE_NAUTICAL_BEAST_GROUND_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -515,6 +674,27 @@ pub const FINDERS: &[FinderDef] = &[
         skill_id: 61081,
         source: "ProfHelper",
         trigger: Trigger::BuffGain { buff_id: 60469 },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 55715,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_SKYSCALE_LAUNCH, by_dst: true },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 70431,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_SKYSCALE_FIREBALL, by_dst: false },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 55536,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_SKYSCALE_BLAST_1, by_dst: false },
+        checks: &[
+            Check::SecondaryEffect { guid: &G_SKYSCALE_BLAST_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {

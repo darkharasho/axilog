@@ -4,6 +4,21 @@
 
 use crate::analysis::instant_cast::model::*;
 
+/// `EffectGUIDs.BerserkerKingOfFires`.
+const G_BERSERKER_KING_OF_FIRES: [u8; 16] = [0x5E, 0x77, 0xD6, 0xC9, 0x3F, 0x3D, 0x07, 0x47, 0xB0, 0xB8, 0x11, 0x69, 0xC7, 0xC0, 0xE5, 0x06];
+/// `EffectGUIDs.BerserkerOutrage`.
+const G_BERSERKER_OUTRAGE: [u8; 16] = [0xAC, 0x32, 0xB7, 0xF7, 0xBB, 0x28, 0x1B, 0x4D, 0x94, 0x71, 0x3F, 0x18, 0x0C, 0x44, 0xF3, 0x22];
+/// `EffectGUIDs.BladeswornDragonspikeMine`.
+const G_BLADESWORN_DRAGONSPIKE_MINE: [u8; 16] = [0xB5, 0xBE, 0x54, 0x1D, 0xBF, 0x29, 0x0E, 0x4A, 0xA3, 0x81, 0xE1, 0xE5, 0x2A, 0x2A, 0x35, 0x25];
+/// `EffectGUIDs.ParagonNeverSurrenderInitial`.
+const G_PARAGON_NEVER_SURRENDER_INITIAL: [u8; 16] = [0xCB, 0x23, 0x7E, 0x7C, 0x35, 0xB6, 0x1E, 0x47, 0xA6, 0x76, 0x63, 0xB9, 0x5C, 0xB6, 0xE0, 0x94];
+/// `EffectGUIDs.WarriorDolyakSignet`.
+const G_WARRIOR_DOLYAK_SIGNET: [u8; 16] = [0xD7, 0xF8, 0xFA, 0x56, 0x95, 0xF8, 0x71, 0x4B, 0x99, 0xA5, 0x1E, 0xE7, 0x2E, 0xF6, 0xE1, 0x78];
+/// `EffectGUIDs.WarriorSignetOfMight`.
+const G_WARRIOR_SIGNET_OF_MIGHT: [u8; 16] = [0x75, 0xEF, 0x16, 0x0E, 0xAF, 0xC0, 0x39, 0x4C, 0xAC, 0xC4, 0x36, 0xCF, 0x89, 0x81, 0x91, 0x48];
+/// `EffectGUIDs.WarriorSignetOfStamina`.
+const G_WARRIOR_SIGNET_OF_STAMINA: [u8; 16] = [0x1E, 0x72, 0x0C, 0x4D, 0x42, 0x44, 0x8D, 0x45, 0xBD, 0xCB, 0x63, 0x07, 0x86, 0x9D, 0x3D, 0x66];
+
 pub const FINDERS: &[FinderDef] = &[
     FinderDef {
         skill_id: 31289,
@@ -12,6 +27,25 @@ pub const FINDERS: &[FinderDef] = &[
         origin: CastOrigin::Trait,
         enable: &[Enable::NoEffectData],
         min_gw2_build: 97950,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 31289,
+        source: "BerserkerHelper",
+        trigger: Trigger::Effect { guid: &G_BERSERKER_KING_OF_FIRES, by_dst: false },
+        origin: CastOrigin::Trait,
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Berserker"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 30258,
+        source: "BerserkerHelper",
+        trigger: Trigger::Effect { guid: &G_BERSERKER_OUTRAGE, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Berserker"], base: false, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -49,6 +83,21 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::Damage { skill_id: 62847 },
         origin: CastOrigin::Trait,
         min_gw2_build: 119939,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62960,
+        source: "BladeswornHelper",
+        trigger: Trigger::Effect { guid: &G_BLADESWORN_DRAGONSPIKE_MINE, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Bladesworn"], base: false, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 76769,
+        source: "ParagonHelper",
+        trigger: Trigger::Effect { guid: &G_PARAGON_NEVER_SURRENDER_INITIAL, by_dst: false },
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -101,6 +150,36 @@ pub const FINDERS: &[FinderDef] = &[
         skill_id: 14410,
         source: "WarriorHelper",
         trigger: Trigger::BuffGain { buff_id: 51664 },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 14404,
+        source: "WarriorHelper",
+        trigger: Trigger::Effect { guid: &G_WARRIOR_SIGNET_OF_MIGHT, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Warrior"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 14479,
+        source: "WarriorHelper",
+        trigger: Trigger::Effect { guid: &G_WARRIOR_SIGNET_OF_STAMINA, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Warrior"], base: true, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 14413,
+        source: "WarriorHelper",
+        trigger: Trigger::Effect { guid: &G_WARRIOR_DOLYAK_SIGNET, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Warrior"], base: true, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {

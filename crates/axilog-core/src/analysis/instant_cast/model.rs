@@ -1,7 +1,7 @@
 //! Data model for GW2EI's `InstantCastFinder` subsystem.
 //!
 //! GW2EI expresses each finder as a C# object graph -- an abstract
-//! `InstantCastFinder` subclass carrying closures. Every one of the 658
+//! `InstantCastFinder` subclass carrying closures. Every one of the 649
 //! constructions in `EIData/ProfHelpers` is nevertheless a purely
 //! DECLARATIVE builder chain: a constructor plus a fixed vocabulary of
 //! `.WithBuilds(...)` / `.UsingOrigin(...)` / `.Using*Checker(...)` calls.
@@ -121,6 +121,25 @@ pub enum Trigger {
     /// `DamageCastFinder.cs:23-31`). That is not a transcription slip; it
     /// is reproduced faithfully by [`Trigger::icd_before_checks`].
     ExtHealing { skill_id: u32 },
+    /// `EffectCastFinder` (112) and `EffectCastFinderByDst` (60) -- the
+    /// largest bucket of all. Watches the visual effects the log carries
+    /// (`crate::evtc::effect`), matched by STABLE GUID rather than by the
+    /// session-local effect id the wire actually names.
+    ///
+    /// For a great many traits and sigils the spawned visual is the only
+    /// trace in the log that the thing fired at all, which is why this
+    /// bucket is so large -- and why it stayed unimplemented for so long,
+    /// since it needs the effect decode these finders sit on top of.
+    ///
+    /// `by_dst` selects the `EffectCastFinderByDst` subclass, which swaps
+    /// the two agents: the caster is the agent the effect is ANCHORED to
+    /// rather than the one that spawned it. A ground-anchored effect has
+    /// no such agent, so a `by_dst` finder never fires on one (GW2EI drops
+    /// the group whose key `IsUnknown`).
+    ///
+    /// The ctor forces both `UsingNotAccurate()` and the `HasEffectData`
+    /// enable condition (`EffectCastFinder.cs:39-43`).
+    Effect { guid: &'static [u8; 16], by_dst: bool },
 }
 
 impl Trigger {
@@ -151,8 +170,18 @@ impl Trigger {
     pub fn forces_not_accurate(&self) -> bool {
         matches!(
             self,
-            Trigger::Damage { .. } | Trigger::BreakbarDamage { .. } | Trigger::ExtHealing { .. }
+            Trigger::Damage { .. }
+                | Trigger::BreakbarDamage { .. }
+                | Trigger::ExtHealing { .. }
+                | Trigger::Effect { .. }
         )
+    }
+
+    /// Whether the subclass ctor installs the `HasEffectData` enable
+    /// condition. Modelled here rather than emitted into every effect
+    /// row's [`FinderDef::enable`] so a catalog row cannot omit it.
+    pub fn forces_has_effect_data(&self) -> bool {
+        matches!(self, Trigger::Effect { .. })
     }
 }
 
@@ -201,22 +230,29 @@ pub enum SwapSnap {
     After,
 }
 
-/// Which side of a triggering event a [`Check`] reads.
+/// Which side of a triggering EVENT a [`Check`] reads.
 ///
 /// GW2EI uses two naming pairs for the same idea -- `To`/`By` on buff
-/// events, `Src`/`Dst` on effect and damage events -- where the first
-/// named party is always the one the subclass's `GetKeyAgent` returns.
-/// [`Key`] is that party; [`Other`] is its counterpart.
+/// events, `Src`/`Dst` on effect and damage events. [`Key`] is always the
+/// first of each pair (`To`, `Src`) and [`Other`] the second (`By`,
+/// `Dst`).
+///
+/// Note that this is a property of the EVENT, not of the finder: which of
+/// the two the finder calls its caster is the subclass's business
+/// (`BuffGiveCastFinder` takes the applier, `EffectCastFinderByDst` the
+/// anchor agent), and a checker naming `Src` means `Src` regardless. Two
+/// finders on opposite sides of the same stream therefore agree about
+/// what [`Key`] means, which is what lets them share a collected stream.
 ///
 /// [`Key`]: Party::Key
 /// [`Other`]: Party::Other
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Party {
-    /// The subclass's `GetKeyAgent` -- the buff's RECIPIENT on an apply,
-    /// the damage SOURCE on a hit.
+    /// The buff's RECIPIENT on an apply, the damage SOURCE on a hit, the
+    /// effect's SPAWNER.
     Key,
-    /// The counterpart -- the APPLIER on a buff apply, the victim on a
-    /// hit.
+    /// The APPLIER on a buff apply, the victim on a hit, the agent an
+    /// effect is anchored to.
     Other,
 }
 
@@ -242,10 +278,72 @@ pub enum Check {
     ///
     /// `base` selects GW2EI's `GetBaseSpecAtTime` (the core profession)
     /// over `GetSpecAtTime` (the elite spec when one is equipped).
-    Spec { party: Party, spec: &'static str, base: bool, negated: bool },
+    ///
+    /// `specs` is a SET because GW2EI has both singular and plural forms
+    /// (`UsingSrcSpecChecker` / `UsingSrcSpecsChecker`); a singular check
+    /// is a one-element set. Passing means "the party's spec is in the
+    /// set", XORed with `negated`.
+    Spec { party: Party, specs: &'static [&'static str], base: bool, negated: bool },
     /// `.UsingDurationChecker(duration)` on a buff apply/extend finder:
     /// `|applied - duration| < epsilon` (`BuffGainCastFinder.cs:18-22`).
     Duration { duration: i64, epsilon: i64 },
+    /// `.UsingIsAroundDstChecker()` / `.UsingNotIsAroundDstChecker()`
+    /// (`EffectCastFinder.cs:113-123`) -- whether the effect follows an
+    /// agent or sits at a fixed map position.
+    ///
+    /// Also emitted implicitly alongside every Dst-side [`Check::Spec`] on
+    /// an effect finder, because GW2EI's `UsingDst*SpecChecker` bodies all
+    /// begin `evt.IsAroundDst &&` (`EffectCastFinder.cs:51-55, 88-110`).
+    /// Making that explicit in the catalog keeps the engine from having to
+    /// infer it from the pairing.
+    AroundDst { negated: bool },
+    /// `.UsingDurationChecker(d)` / `.UsingDurationChecker(min, max)` on an
+    /// EFFECT finder (`EffectCastFinder.cs:125-135`).
+    ///
+    /// Deliberately NOT [`Check::Duration`]: the buff form is an epsilon
+    /// band around a target (`|applied - d| < epsilon`), while this one is
+    /// exact equality, or an INCLUSIVE `[min, max]` range in the two-
+    /// argument form. Folding them would quietly widen one or narrow the
+    /// other.
+    EffectDuration { min: i64, max: i64 },
+    /// The `Using[No]SecondaryEffect*Checker` family
+    /// (`EffectCastFinder.cs:137-260`) -- twelve builder methods that are
+    /// one predicate with three independent switches.
+    ///
+    /// "Did another effect with GUID `guid`, belonging to the same caster,
+    /// happen within `epsilon` of `time + time_offset`?" A compound skill
+    /// spawns several visuals at once, and the combination is what
+    /// identifies it; either half alone is ambiguous.
+    SecondaryEffect {
+        guid: &'static [u8; 16],
+        /// Which of the OTHER effect's agents must equal this finder's
+        /// caster: its own key agent (`false`, GW2EI's `GetAgent(other)`)
+        /// or its counterpart (`true`, `GetOtherAgent(other)`).
+        inverted_src: bool,
+        /// Whether the other effect must be anchored the same way as this
+        /// one, the opposite way, or either.
+        type_rel: TypeRel,
+        time_offset: i64,
+        epsilon: i64,
+        /// The `UsingNoSecondaryEffect*` half of the family. Note that a
+        /// negated check passes when the log has NO effects under `guid`
+        /// at all -- GW2EI's `else return true` arm -- which the positive
+        /// form's empty-set `false` mirrors.
+        negated: bool,
+    },
+}
+
+/// How a [`Check::SecondaryEffect`]'s other effect must be anchored
+/// relative to the triggering one -- GW2EI's `IsAroundDst` comparison,
+/// which appears in three forms across the twelve builder methods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeRel {
+    /// No comparison (`UsingSecondaryEffectSameSrcChecker` and friends).
+    Any,
+    /// `evt.IsAroundDst == other.IsAroundDst`.
+    Same,
+    /// `evt.IsAroundDst != other.IsAroundDst`.
+    Inverted,
 }
 
 /// One transcribed `InstantCastFinder`.
@@ -338,6 +436,9 @@ impl FinderDef {
     /// matches GW2EI: its `GetGW2BuildEvent()` synthesises a
     /// `StartOfLife` build event when the log carries none.
     pub fn available(&self, log: &LogCapabilities) -> bool {
+        if self.trigger.forces_has_effect_data() && !log.has_effect_data {
+            return false;
+        }
         if !self.enable.iter().all(|c| log.satisfies(*c)) {
             return false;
         }

@@ -1,6 +1,6 @@
 //! Engine tests for the instant-cast finder port.
 //!
-//! These pin the SEMANTICS the 658-row catalog will be evaluated under --
+//! These pin the SEMANTICS the 565-row catalog is evaluated under --
 //! caster selection, ICD grouping, availability gating and the two
 //! deliberate asymmetries (`Initial` applies, ICD-before-checks). The
 //! catalog's own faithfulness is a separate question, answered by the
@@ -264,13 +264,13 @@ fn a_spec_check_reads_the_party_it_names() {
     ]);
 
     let on_applier = FinderDef {
-        checks: &[Check::Spec { party: Party::Other, spec: "Druid", base: false, negated: false }],
+        checks: &[Check::Spec { party: Party::Other, specs: &["Druid"], base: false, negated: false }],
         ..gain_finder()
     };
     assert_eq!(compute(&log, &e, &[on_applier]).len(), 1);
 
     let on_recipient = FinderDef {
-        checks: &[Check::Spec { party: Party::Key, spec: "Druid", base: false, negated: false }],
+        checks: &[Check::Spec { party: Party::Key, specs: &["Druid"], base: false, negated: false }],
         ..gain_finder()
     };
     assert!(
@@ -286,13 +286,13 @@ fn a_base_spec_check_reads_the_profession_not_the_elite_spec() {
     let e = enc(vec![player_with(1, "Guardian", "Firebrand")]);
 
     let by_base = FinderDef {
-        checks: &[Check::Spec { party: Party::Key, spec: "Guardian", base: true, negated: false }],
+        checks: &[Check::Spec { party: Party::Key, specs: &["Guardian"], base: true, negated: false }],
         ..gain_finder()
     };
     assert_eq!(compute(&log, &e, &[by_base]).len(), 1);
 
     let by_elite = FinderDef {
-        checks: &[Check::Spec { party: Party::Key, spec: "Guardian", base: false, negated: false }],
+        checks: &[Check::Spec { party: Party::Key, specs: &["Guardian"], base: false, negated: false }],
         ..gain_finder()
     };
     assert!(compute(&log, &e, &[by_elite]).is_empty());
@@ -446,7 +446,7 @@ fn the_ext_healing_subclass_applies_its_icd_before_its_checks() {
     // Two events 10ms apart (inside the default ICD). The FIRST fails the
     // spec check, the second would pass it.
     let checks: &[Check] =
-        &[Check::Spec { party: Party::Key, spec: "Druid", base: false, negated: false }];
+        &[Check::Spec { party: Party::Key, specs: &["Druid"], base: false, negated: false }];
 
     let ordinary = FinderDef {
         trigger: Trigger::BuffGain { buff_id: BUFF },
@@ -526,20 +526,368 @@ fn a_before_swap_snap_clamps_a_late_cast_and_leaves_an_early_one() {
 }
 
 // ----------------------------------------------------------------------
+// Effect finders
+// ----------------------------------------------------------------------
+
+const EGUID: [u8; 16] = [
+    0xE7, 0xC5, 0x0E, 0x0E, 0x14, 0x8C, 0xBE, 0x44, 0xBB, 0x27, 0x70, 0xAF, 0x2D, 0x67, 0x50, 0xA4,
+];
+const EGUID2: [u8; 16] = [
+    0x10, 0x87, 0x3B, 0xDE, 0x22, 0xD8, 0x78, 0x45, 0xAA, 0xF0, 0x04, 0xB0, 0xA6, 0x0F, 0xA5, 0x46,
+];
+const EFFECT_ID: u32 = 900;
+const EFFECT_ID2: u32 = 901;
+
+fn id_to_guid(local_id: u32, guid: [u8; 16]) -> RawEvent {
+    RawEvent {
+        is_statechange: sc::ID_TO_GUID,
+        src_agent: u64::from_le_bytes(guid[0..8].try_into().unwrap()),
+        dst_agent: u64::from_le_bytes(guid[8..16].try_into().unwrap()),
+        overstack: 0, // ContentLocal::Effect
+        skillid: local_id,
+        ..base()
+    }
+}
+
+/// One effect create: agent-anchored when `dst` is `Some`, ground-anchored
+/// (no anchor agent, so `IsAroundDst` is false) when it is `None`.
+fn effect(time: u64, effect_id: u32, src: u64, dst: Option<u64>) -> RawEvent {
+    let mut e = base();
+    e.time = time;
+    e.skillid = effect_id;
+    e.src_agent = src;
+    match dst {
+        Some(d) => {
+            e.is_statechange = sc::EFFECT_AGENT_CREATE;
+            e.dst_agent = d;
+        }
+        None => e.is_statechange = sc::EFFECT_GROUND_CREATE,
+    }
+    e
+}
+
+/// Writes the split generations' duration field (wire bytes 48..52).
+fn with_duration(mut e: RawEvent, ms: u32) -> RawEvent {
+    let b = ms.to_le_bytes();
+    e.iff = b[0];
+    e.buff = b[1];
+    e.result = b[2];
+    e.is_activation = b[3];
+    e
+}
+
+/// A log at an arcdps build new enough for `CBTS_IDTOGUID` to be trusted,
+/// with the GUID map decoded the way `decode_raw` would.
+fn raw_fx(agents: Vec<RawAgent>, events: Vec<RawEvent>) -> RawLog {
+    let guid_map = crate::evtc::guid::decode_guid_mappings(&events);
+    RawLog {
+        header: RawHeader { build: "20250101".into(), revision: 1, boss_id: 1 },
+        agents,
+        skills: vec![],
+        events,
+        guid_map,
+    }
+}
+
+fn effect_finder(by_dst: bool) -> FinderDef {
+    FinderDef {
+        skill_id: SKILL,
+        source: "TestHelper",
+        trigger: Trigger::Effect { guid: &EGUID, by_dst },
+        ..FinderDef::DEFAULT
+    }
+}
+
+#[test]
+fn an_effect_credits_its_spawner_and_the_by_dst_subclass_its_anchor() {
+    let log = raw_fx(
+        vec![player_agent(1), player_agent(2)],
+        vec![id_to_guid(EFFECT_ID, EGUID), effect(100, EFFECT_ID, 1, Some(2))],
+    );
+    let e = enc(vec![]);
+    assert_eq!(compute(&log, &e, &[effect_finder(false)])[0].caster, 1);
+    assert_eq!(compute(&log, &e, &[effect_finder(true)])[0].caster, 2);
+}
+
+#[test]
+fn a_by_dst_finder_ignores_a_ground_anchored_effect() {
+    // A ground effect has no anchor agent at all, so GW2EI's group key is
+    // the unknown agent and the whole group is skipped. The plain
+    // subclass still fires on the same row.
+    let log = raw_fx(
+        vec![player_agent(1)],
+        vec![id_to_guid(EFFECT_ID, EGUID), effect(100, EFFECT_ID, 1, None)],
+    );
+    let e = enc(vec![]);
+    assert!(compute(&log, &e, &[effect_finder(true)]).is_empty());
+    assert_eq!(compute(&log, &e, &[effect_finder(false)]).len(), 1);
+}
+
+#[test]
+fn an_effect_finder_needs_the_log_to_carry_effect_data() {
+    // The `HasEffectData` condition comes from the trigger, not from the
+    // row's `enable` list -- so a catalog row cannot forget it.
+    let f = effect_finder(false);
+    assert!(f.enable.is_empty());
+    let no_effects = raw_fx(vec![], vec![id_to_guid(EFFECT_ID, EGUID)]);
+    assert!(!f.available(&capabilities(&no_effects)));
+    let with_effects =
+        raw_fx(vec![], vec![id_to_guid(EFFECT_ID, EGUID), effect(1, EFFECT_ID, 1, None)]);
+    assert!(f.available(&capabilities(&with_effects)));
+}
+
+#[test]
+fn a_guid_this_log_never_mapped_recovers_nothing() {
+    // The effect happened, but nothing ties its session-local id to the
+    // stable GUID the finder names -- so the finder cannot know it fired.
+    let log = raw_fx(vec![player_agent(1)], vec![effect(100, EFFECT_ID, 1, Some(2))]);
+    assert!(compute(&log, &enc(vec![]), &[effect_finder(false)]).is_empty());
+}
+
+#[test]
+fn around_dst_distinguishes_ground_from_agent_anchored_effects() {
+    let log = raw_fx(
+        vec![player_agent(1)],
+        vec![
+            id_to_guid(EFFECT_ID, EGUID),
+            effect(100, EFFECT_ID, 1, Some(2)),
+            effect(2000, EFFECT_ID, 1, None),
+        ],
+    );
+    let e = enc(vec![]);
+    let anchored = FinderDef {
+        checks: &[Check::AroundDst { negated: false }],
+        ..effect_finder(false)
+    };
+    let ground = FinderDef {
+        checks: &[Check::AroundDst { negated: true }],
+        ..effect_finder(false)
+    };
+    assert_eq!(compute(&log, &e, &[anchored])[0].time, 100);
+    assert_eq!(compute(&log, &e, &[ground])[0].time, 2000);
+}
+
+#[test]
+fn effect_duration_is_an_inclusive_range_not_an_epsilon_band() {
+    // Deliberately distinct from `Check::Duration`: the buff form is
+    // `|applied - d| < epsilon`, which would accept 999 and 1001 here.
+    let log = raw_fx(
+        vec![player_agent(1)],
+        vec![
+            id_to_guid(EFFECT_ID, EGUID),
+            with_duration(effect(100, EFFECT_ID, 1, Some(2)), 999),
+            with_duration(effect(2000, EFFECT_ID, 1, Some(2)), 1000),
+            with_duration(effect(4000, EFFECT_ID, 1, Some(2)), 2000),
+            with_duration(effect(6000, EFFECT_ID, 1, Some(2)), 2001),
+        ],
+    );
+    let f = FinderDef {
+        checks: &[Check::EffectDuration { min: 1000, max: 2000 }],
+        ..effect_finder(false)
+    };
+    let times: Vec<u64> = compute(&log, &enc(vec![]), &[f]).iter().map(|c| c.time).collect();
+    assert_eq!(times, vec![2000, 4000]);
+}
+
+#[test]
+fn a_secondary_effect_check_requires_a_companion_effect_from_the_same_caster() {
+    let base_events = vec![id_to_guid(EFFECT_ID, EGUID), id_to_guid(EFFECT_ID2, EGUID2)];
+    let f = FinderDef {
+        checks: &[Check::SecondaryEffect {
+            guid: &EGUID2,
+            inverted_src: false,
+            type_rel: model::TypeRel::Any,
+            time_offset: 0,
+            epsilon: SERVER_DELAY,
+            negated: false,
+        }],
+        ..effect_finder(false)
+    };
+
+    // Companion present, same caster, inside the window.
+    let mut evs = base_events.clone();
+    evs.push(effect(100, EFFECT_ID, 1, Some(2)));
+    evs.push(effect(120, EFFECT_ID2, 1, Some(2)));
+    assert_eq!(compute(&raw_fx(vec![], evs), &enc(vec![]), &[f]).len(), 1);
+
+    // Companion belongs to a DIFFERENT caster.
+    let mut evs = base_events.clone();
+    evs.push(effect(100, EFFECT_ID, 1, Some(2)));
+    evs.push(effect(120, EFFECT_ID2, 9, Some(2)));
+    assert!(compute(&raw_fx(vec![], evs), &enc(vec![]), &[f]).is_empty());
+
+    // Companion too far away in time.
+    let mut evs = base_events.clone();
+    evs.push(effect(100, EFFECT_ID, 1, Some(2)));
+    evs.push(effect(400, EFFECT_ID2, 1, Some(2)));
+    assert!(compute(&raw_fx(vec![], evs), &enc(vec![]), &[f]).is_empty());
+}
+
+#[test]
+fn a_negated_secondary_effect_check_passes_when_the_companion_is_absent() {
+    // GW2EI's `UsingNoSecondaryEffect*` family returns TRUE outright when
+    // the log has no effects under the GUID at all (`else return true`),
+    // which the empty-set case has to reproduce.
+    let f = FinderDef {
+        checks: &[Check::SecondaryEffect {
+            guid: &EGUID2,
+            inverted_src: false,
+            type_rel: model::TypeRel::Any,
+            time_offset: 0,
+            epsilon: SERVER_DELAY,
+            negated: true,
+        }],
+        ..effect_finder(false)
+    };
+    let alone = raw_fx(vec![], vec![id_to_guid(EFFECT_ID, EGUID), effect(100, EFFECT_ID, 1, Some(2))]);
+    assert_eq!(compute(&alone, &enc(vec![]), &[f]).len(), 1);
+
+    let accompanied = raw_fx(
+        vec![],
+        vec![
+            id_to_guid(EFFECT_ID, EGUID),
+            id_to_guid(EFFECT_ID2, EGUID2),
+            effect(100, EFFECT_ID, 1, Some(2)),
+            effect(120, EFFECT_ID2, 1, Some(2)),
+        ],
+    );
+    assert!(compute(&accompanied, &enc(vec![]), &[f]).is_empty());
+}
+
+#[test]
+fn secondary_effect_type_rel_compares_how_the_two_are_anchored() {
+    let evs = |companion_anchored: bool| {
+        vec![
+            id_to_guid(EFFECT_ID, EGUID),
+            id_to_guid(EFFECT_ID2, EGUID2),
+            // The triggering effect is always agent-anchored.
+            effect(100, EFFECT_ID, 1, Some(2)),
+            effect(120, EFFECT_ID2, 1, companion_anchored.then_some(2)),
+        ]
+    };
+    // `FinderDef::checks` is `&'static`, so the three variants have to be
+    // spelled out rather than built in a closure.
+    const fn secondary(rel: model::TypeRel) -> Check {
+        Check::SecondaryEffect {
+            guid: &EGUID2,
+            inverted_src: false,
+            type_rel: rel,
+            time_offset: 0,
+            epsilon: SERVER_DELAY,
+            negated: false,
+        }
+    }
+    const ANY: &[Check] = &[secondary(model::TypeRel::Any)];
+    const SAME: &[Check] = &[secondary(model::TypeRel::Same)];
+    const INVERTED: &[Check] = &[secondary(model::TypeRel::Inverted)];
+
+    let e = enc(vec![]);
+    for (checks, label, same_ok, inverted_ok) in [
+        (ANY, "Any", true, true),
+        (SAME, "Same", true, false),
+        (INVERTED, "Inverted", false, true),
+    ] {
+        let f = FinderDef { checks, ..effect_finder(false) };
+        assert_eq!(
+            !compute(&raw_fx(vec![], evs(true)), &e, &[f]).is_empty(),
+            same_ok,
+            "{label} against an equally-anchored companion"
+        );
+        assert_eq!(
+            !compute(&raw_fx(vec![], evs(false)), &e, &[f]).is_empty(),
+            inverted_ok,
+            "{label} against an oppositely-anchored companion"
+        );
+    }
+}
+
+#[test]
+fn a_spec_check_accepts_a_set_of_specs() {
+    // `UsingSrcSpecsChecker([Spec.Mirage, Spec.Mesmer])` -- the plural
+    // form, which the singular one is a one-element case of.
+    let log = raw_fx(
+        vec![player_agent(1), player_agent(3)],
+        vec![
+            id_to_guid(EFFECT_ID, EGUID),
+            effect(100, EFFECT_ID, 1, Some(2)),
+            effect(2000, EFFECT_ID, 3, Some(2)),
+        ],
+    );
+    let e = enc(vec![
+        player_with(1, "Mesmer", "Mirage"),
+        player_with(3, "Guardian", "Firebrand"),
+    ]);
+    let f = FinderDef {
+        checks: &[Check::Spec {
+            party: Party::Key,
+            specs: &["Mirage", "Mesmer"],
+            base: false,
+            negated: false,
+        }],
+        ..effect_finder(false)
+    };
+    let out = compute(&log, &e, &[f]);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].caster, 1);
+}
+
+#[test]
+fn with_minions_credits_the_owner_of_an_effect_spawned_by_a_pet() {
+    let log = raw_fx(
+        vec![player_agent(1), agent(5, 2000, "Pet")],
+        vec![
+            reg(1, 11),
+            RawEvent { src_agent: 5, src_instid: 55, src_master_instid: 11, ..base() },
+            id_to_guid(EFFECT_ID, EGUID),
+            effect(100, EFFECT_ID, 5, Some(2)),
+        ],
+    );
+    let folded = FinderDef { minions: true, ..effect_finder(false) };
+    assert_eq!(compute(&log, &enc(vec![]), &[folded])[0].caster, 1);
+    // Without `.WithMinions()` the pet keeps the credit -- effect finders
+    // do no folding by default.
+    assert_eq!(compute(&log, &enc(vec![]), &[effect_finder(false)])[0].caster, 5);
+}
+
+#[test]
+fn every_effect_finder_is_not_accurate() {
+    // Forced by the ctor (`EffectCastFinder.cs:40`): the visual appears
+    // some frames after the cast that spawned it.
+    assert!(effect_finder(false).is_not_accurate());
+    assert!(!effect_finder(false).not_accurate);
+}
+
+// ----------------------------------------------------------------------
 // The generated catalog
 // ----------------------------------------------------------------------
 
 /// The extraction accounting, pinned in code so a regenerate that changes
 /// coverage has to change this number deliberately.
 ///
-/// 429 of GW2EI's 649 finder constructions. The 220 skips are all
-/// categorical and all named in `catalog/mod.rs`: 172 effect finders
-/// (this project decodes no effect events), 40 arbitrary
-/// `.UsingChecker(lambda)` predicates, 4 barrier-extension finders and 4
-/// `BandTogetherCastFinder`s.
+/// 565 of GW2EI's 649 finder constructions. The 84 skips are all
+/// categorical and all named in `catalog/mod.rs`: 70 arbitrary
+/// `.UsingChecker(lambda)` predicates, 6 `UsingNoAnimatedCastChecker`
+/// (needs a cast window this module sits upstream of), 4
+/// barrier-extension finders and 4 `BandTogetherCastFinder`s.
 #[test]
 fn the_catalog_carries_every_finder_the_generator_could_transcribe() {
-    assert_eq!(catalog::all().len(), 429);
+    assert_eq!(catalog::all().len(), 565);
+}
+
+/// The effect finders are the largest single bucket, and they are the
+/// reason `evtc::effect` exists -- so pin that they actually made it into
+/// the catalog rather than silently reverting to a skip reason.
+#[test]
+fn the_catalog_carries_the_effect_finders() {
+    let effect = catalog::all()
+        .iter()
+        .filter(|f| matches!(f.trigger, Trigger::Effect { .. }))
+        .count();
+    assert_eq!(effect, 136);
+    // Both subclasses, not just the common one.
+    assert!(catalog::all()
+        .iter()
+        .any(|f| matches!(f.trigger, Trigger::Effect { by_dst: true, .. })));
 }
 
 /// Every spec a checker names must be a real one. A typo here is
@@ -551,8 +899,10 @@ fn every_spec_named_by_a_check_is_a_real_spec() {
         crate::icons::BASE_RES_PROF_ICONS.iter().map(|(n, _)| *n).collect();
     for f in catalog::all() {
         for c in f.checks {
-            if let Check::Spec { spec, .. } = c {
-                assert!(known.contains(spec), "{} names unknown spec `{spec}`", f.source);
+            if let Check::Spec { specs, .. } = c {
+                for spec in *specs {
+                    assert!(known.contains(spec), "{} names unknown spec `{spec}`", f.source);
+                }
             }
         }
     }
@@ -577,17 +927,43 @@ fn no_transcribed_finder_has_an_unsatisfiable_build_range() {
     }
 }
 
-/// The engine cannot evaluate effect triggers, so no transcribed finder
-/// may claim to need effect data. If one ever does, the generator let an
-/// effect subclass through.
+/// `HasEffectData` is forced by the TRIGGER, never carried in a row's
+/// `enable` list -- see `Trigger::forces_has_effect_data`. A row that
+/// spells it out would still work, but it would mean the generator had
+/// started emitting a condition the model already guarantees, and the two
+/// could then drift apart.
 #[test]
-fn no_transcribed_finder_requires_effect_data() {
+fn effect_data_is_a_trigger_property_not_an_enable_entry() {
     for f in catalog::all() {
         assert!(
             !f.enable.contains(&Enable::HasEffectData),
-            "{} needs effect data the engine cannot supply",
+            "{} spells out an enable condition its trigger already forces",
             f.source
         );
+        assert_eq!(
+            f.trigger.forces_has_effect_data(),
+            matches!(f.trigger, Trigger::Effect { .. }),
+            "{} disagrees about needing effect data",
+            f.source
+        );
+    }
+}
+
+/// A `Check::SecondaryEffect` whose GUID no finder can ever resolve is
+/// dead weight, and the likeliest cause is a mis-emitted const. Every
+/// secondary GUID must be 16 non-zero-ish bytes -- an all-zero array is
+/// what a failed hex decode would leave behind.
+#[test]
+fn every_effect_guid_in_the_catalog_is_non_empty() {
+    for f in catalog::all() {
+        if let Trigger::Effect { guid, .. } = f.trigger {
+            assert_ne!(guid, &[0u8; 16], "{} has an empty effect GUID", f.source);
+        }
+        for c in f.checks {
+            if let Check::SecondaryEffect { guid, .. } = c {
+                assert_ne!(*guid, &[0u8; 16], "{} has an empty secondary GUID", f.source);
+            }
+        }
     }
 }
 
