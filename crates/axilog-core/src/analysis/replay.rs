@@ -837,6 +837,46 @@ mod tests {
         }
     }
 
+    /// The entire justification for `dc_open` being a separate slot from
+    /// the down/dead `open` slot: an agent can despawn WHILE dead (no
+    /// intervening `CHANGE_UP`). If a future refactor collapsed the two
+    /// slots, this despawn would either silently drop the still-open dead
+    /// interval or fail to open `dc` at all -- this test pins both outputs
+    /// as genuinely bounded values (not mere non-emptiness) so either
+    /// failure mode is caught.
+    #[test]
+    fn dc_opens_while_dead_is_already_open() {
+        let raw = raw_from(vec![
+            state_event(1_000, 1, sc::CHANGE_DOWN),
+            state_event(1_500, 1, sc::CHANGE_DEAD),
+            state_event(2_000, 1, sc::DESPAWN), // despawns while still dead
+            state_event(3_000, 1, sc::SPAWN),
+            state_event(4_000, 1, sc::CHANGE_UP), // eventual respawn closes dead
+        ]);
+        let addrs: BTreeSet<u64> = [1].into_iter().collect();
+        let (down, dead, dc) = build_intervals(&raw, 0, &addrs);
+        assert_eq!(down, vec![Interval { start_ms: 1_000, end_ms: 1_500 }]);
+        assert_eq!(dead, vec![Interval { start_ms: 1_500, end_ms: 4_000 }]);
+        assert_eq!(dc, vec![Interval { start_ms: 2_000, end_ms: 3_000 }]);
+        // The dc window sits entirely inside the still-open dead window --
+        // exactly the simultaneity a shared slot could not represent.
+        assert!(dc[0].start_ms >= dead[0].start_ms && dc[0].end_ms <= dead[0].end_ms);
+    }
+
+    /// A `dc` interval left open at the end of the log (despawned, never
+    /// re-spawned before the recording ends) is dropped, not synthesized
+    /// with a log-end closing bound -- the same convention already applied
+    /// to unclosed down/dead intervals above.
+    #[test]
+    fn unclosed_dc_interval_at_log_end_is_dropped() {
+        let raw = raw_from(vec![state_event(1_000, 4, sc::DESPAWN)]);
+        let addrs: BTreeSet<u64> = [4].into_iter().collect();
+        let (down, dead, dc) = build_intervals(&raw, 0, &addrs);
+        assert!(down.is_empty());
+        assert!(dead.is_empty());
+        assert!(dc.is_empty(), "an unclosed dc interval must not be synthesized with a log-end bound");
+    }
+
     /// Relog folding: position events and down/dead statechanges from
     /// EITHER of an account's raw addrs must land on the same single
     /// track, exactly like `analysis::analyze` folds damage across

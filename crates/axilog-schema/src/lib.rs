@@ -258,7 +258,8 @@ pub struct ReplayBoundsOut {
 /// that module's doc comment). `samples` are `[t_ms, x, y]` triples, `x`/`y`
 /// rounded to 1 decimal place to keep the embedded JSON small; `t_ms` is
 /// left exact (already an integer grid position, not a lossy float).
-/// `down_intervals`/`dead_intervals` are `[start_ms, end_ms]` pairs.
+/// `down_intervals`/`dead_intervals`/`dc_intervals` are `[start_ms, end_ms]`
+/// pairs.
 #[derive(Serialize)]
 pub struct ReplayTrackOut {
     pub name: String,
@@ -269,12 +270,12 @@ pub struct ReplayTrackOut {
     pub down_intervals: Vec<(u64, u64)>,
     pub dead_intervals: Vec<(u64, u64)>,
     /// Disconnect/not-yet-spawned windows, carried from
-    /// `analysis::replay::Track::dc_intervals`. `#[serde(skip)]` for the
-    /// same legacy-byte-identical reason as `agent_addr` below -- this
-    /// legacy struct predates `dc` tracking and the 1.0 `by_entity` block
-    /// (`v1::blocks::activity::ReplayTrack::dc_intervals`) is where a
-    /// consumer actually reads it.
-    #[serde(skip)]
+    /// `analysis::replay::Track::dc_intervals`. Exposed like its
+    /// `down_intervals`/`dead_intervals` siblings, not hidden --
+    /// `crates/axilog-html/assets/report.js` already reads those two to
+    /// render replay-timeline shading, and skipping `dc_intervals` here
+    /// would make disconnect windows permanently invisible in that viewer
+    /// with nothing marking the gap.
     pub dc_intervals: Vec<(u64, u64)>,
     /// The representative raw agent addr, carried from
     /// `analysis::replay::Track`. `#[serde(skip)]` so the legacy JSON stays
