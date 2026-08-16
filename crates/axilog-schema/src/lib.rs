@@ -258,7 +258,8 @@ pub struct ReplayBoundsOut {
 /// that module's doc comment). `samples` are `[t_ms, x, y]` triples, `x`/`y`
 /// rounded to 1 decimal place to keep the embedded JSON small; `t_ms` is
 /// left exact (already an integer grid position, not a lossy float).
-/// `down_intervals`/`dead_intervals` are `[start_ms, end_ms]` pairs.
+/// `down_intervals`/`dead_intervals`/`dc_intervals` are `[start_ms, end_ms]`
+/// pairs.
 #[derive(Serialize)]
 pub struct ReplayTrackOut {
     pub name: String,
@@ -268,12 +269,34 @@ pub struct ReplayTrackOut {
     pub samples: Vec<(u64, f64, f64)>,
     pub down_intervals: Vec<(u64, u64)>,
     pub dead_intervals: Vec<(u64, u64)>,
+    /// Disconnect/not-yet-spawned windows, carried from
+    /// `analysis::replay::Track::dc_intervals`. `#[serde(skip)]` for the
+    /// same reason as `agent_addr` below: the native format carries this
+    /// data, and the legacy viewer does not render it --
+    /// `crates/axilog-html/assets/report.js` shades only
+    /// `down_intervals`/`dead_intervals`. Wiring a third shading band is a
+    /// viewer feature with its own design surface; re-expose this field if
+    /// and when that lands.
+    #[serde(skip)]
+    pub dc_intervals: Vec<(u64, u64)>,
     /// The representative raw agent addr, carried from
     /// `analysis::replay::Track`. `#[serde(skip)]` so the legacy JSON stays
     /// byte-identical; promoted to the 1.0 `by_entity` key (native format
     /// 1.0, Task 8) -- the legacy shape above has no join key at all.
     #[serde(skip)]
     pub agent_addr: u64,
+    /// GW2EI's `distToCom`, carried from `Replay::distance`. `#[serde(skip)]`
+    /// for the same reason as `agent_addr`: the legacy JSON must stay
+    /// byte-identical, and the 1.0 format publishes this on the replay
+    /// block's always-present per-entity row (`ReplayIntervals`) rather
+    /// than on the `--replay`-gated track, so that "the pass never ran"
+    /// stays expressible as absence. `-1.0` is EI's own "nothing qualified"
+    /// sentinel -- see `axilog_core::analysis::distance`.
+    #[serde(skip)]
+    pub dist_to_com: f64,
+    /// GW2EI's `stackDist`; see [`ReplayTrackOut::dist_to_com`].
+    #[serde(skip)]
+    pub stack_dist: f64,
 }
 
 /// Round to 1 decimal place -- keeps `ReplayTrackOut.samples`' JSON
@@ -302,7 +325,18 @@ pub fn build_replay_out(replay: &Replay) -> ReplayOut {
             samples: t.samples.iter().map(|s| (s.t_ms, round1(s.x), round1(s.y))).collect(),
             down_intervals: t.down_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
             dead_intervals: t.dead_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
+            dc_intervals: t.dc_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
             agent_addr: t.agent_addr,
+            dist_to_com: replay
+                .distance
+                .get(&t.agent_addr)
+                .map(|d| d.dist_to_com)
+                .unwrap_or(axilog_core::analysis::distance::NO_DISTANCE),
+            stack_dist: replay
+                .distance
+                .get(&t.agent_addr)
+                .map(|d| d.stack_dist)
+                .unwrap_or(axilog_core::analysis::distance::NO_DISTANCE),
         })
         .collect();
 
@@ -362,7 +396,17 @@ pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u6
     /// `CBTS_TICK` events -- mirrors `TeamOut.guid`'s omit-when-absent
     /// convention.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tick_rate: Option<TickRateOut> }
+    pub tick_rate: Option<TickRateOut>,
+    /// Wall-clock log start, seconds since the epoch, from arcdps's
+    /// `CBTS_LOGSTART` (Phase B Task 8). `None` when the log carries no
+    /// such event -- absence must stay distinguishable from epoch zero,
+    /// which is why this is not a bare `u64` defaulting to 0. Carried here
+    /// (the legacy/intermediate `Report`) purely so `v1::build_report_v1`
+    /// has a source to read at `v1/mod.rs:477` -- the `--format ei-json`
+    /// renderer (`axilog-ei`) does not reference this field, so its
+    /// goldens are unaffected by this addition.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at_unix: Option<u64> }
 #[derive(Serialize, Clone)]
 pub struct MarkerAssignmentOut { pub agent_addr: u64, pub marker: String, pub time_ms: u64 }
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -400,8 +444,9 @@ pub struct PerEnemyOut { pub enemy_id: u64, pub total: u64 }
 /// (**+56.5%**), far past the ~30% guideline every other block in this
 /// schema was measured against before being gated (see
 /// `crates/axilog-html/tests/golden_html.rs`'s budget comment for that
-/// guideline's own provenance). Sparse though it is, ~50 enemies x 8
-/// fields per player is simply 5x the shape of `DamageOut::per_enemy`.
+/// guideline's own provenance). Sparse though it is, ~50 enemies x 23
+/// fields per player (Phase B widened this from 8) is a real multiple of
+/// the shape of `DamageOut::per_enemy`, which is the gate's justification.
 ///
 /// The underlying pass itself is NOT gated -- `analyze()` computes
 /// `PlayerMetrics::per_target` unconditionally (one shared scan; see
@@ -420,6 +465,54 @@ pub struct PerTargetStatsOut {
     /// arcdps-methodology down-contribution DAMAGE credited to this player
     /// for downs of this specific enemy.
     pub downs_contribution_damage: u64,
+    /// EI's `directDmg` COUNT pair, mirroring `PerTargetOffense::direct_count`.
+    /// NOT the numerator for `direct_damage` below in any EI-key sense --
+    /// see that field's own doc comment for the distinction that matters.
+    pub direct_count: u32,
+    /// EI's `directDmg` -- the damage sum over `is_direct_hit` rows against
+    /// this one target. Deliberately NOT the same quantity as this same
+    /// struct family's `connected_direct_dmg` elsewhere in this file (a
+    /// whole-fight figure derived differently); collapsing the two would
+    /// silently swap in the wrong number under a plausible-looking name.
+    pub direct_damage: u64,
+    /// EI's `criticalRate` numerator for this target, gated behind
+    /// `hit_stats::can_crit` exactly as the whole-fight counter is.
+    pub crit_count: u32,
+    /// EI's `criticalDmg` for this target.
+    pub crit_damage: u64,
+    /// EI's `flankingRate` numerator for this target.
+    pub flank_count: u32,
+    /// EI's `glanceRate` numerator for this target.
+    pub glance_count: u32,
+    /// EI's `criticalRate` DENOMINATOR for this target -- NOT `direct_count`
+    /// above. Native-only: EI never publishes a per-target crit-rate
+    /// denominator, so there is no `statsTargets` key for this field.
+    pub critable_direct_count: u32,
+    /// EI's `againstDownedDamage` -- the damage pair for
+    /// `against_downed_count` above, scoped to this one target.
+    pub against_downed_damage: u64,
+    /// EI's `missed` against this target -- arcdps `BLIND`.
+    pub missed: u32,
+    /// EI's `evaded` against this target -- arcdps `EVADE`.
+    pub evaded: u32,
+    /// EI's `blocked` against this target -- arcdps `BLOCK`.
+    pub blocked: u32,
+    /// EI's `invulned` against this target -- arcdps `ABSORB`/`INVERT`.
+    pub invulned: u32,
+    /// EI's `appliedCrowdControl` against this target. Joined in from
+    /// `PlayerMetrics::cc_per_target` at the build site, not from
+    /// `PerTargetOffense`'s own scan -- see that field's doc comment.
+    pub applied_total: u32,
+    /// EI's `appliedCrowdControlDuration`, ms -- the duration pair for
+    /// `applied_total` above, same join source.
+    pub applied_duration_ms: u64,
+    /// EI's `appliedCrowdControlDownContribution` against this target --
+    /// the CC subset credited inside this target's down-contribution
+    /// windows. Joined from `PlayerMetrics::cc_downs_contribution_per_target`.
+    pub applied_downs_contribution: u32,
+    /// EI's `appliedCrowdControlDurationDownContribution`, ms -- the
+    /// duration pair for `applied_downs_contribution` above.
+    pub applied_duration_downs_contribution_ms: u64,
 }
 /// One skill id's aggregated hit stats within some grouping (M12, Task 1) --
 /// mirrors `axilog_core::analysis::skill_damage::SkillEntry` field-for-field.
@@ -1255,16 +1348,34 @@ pub fn build_report(
                 None
             } else {
                 m.map(|m| {
-                    // Union of the two sparse per-enemy maps: an enemy can
+                    // Union of the four sparse per-enemy maps (Phase B added
+                    // the two CC maps to the original two): an enemy can
                     // appear in the down-contribution map (a credit inside
-                    // its down window) without having taken a HIT from this
-                    // player in the whole fight, and vice versa.
+                    // its down window), or in a CC map (a CC application
+                    // with no accompanying damage, e.g. a pure interrupt),
+                    // without having taken a HIT from this player in the
+                    // whole fight, and vice versa.
                     let mut ids: std::collections::BTreeSet<u64> =
                         m.per_target.keys().copied().collect();
                     ids.extend(m.downs_contribution_per_target.keys().copied());
+                    ids.extend(m.cc_per_target.keys().copied());
+                    ids.extend(m.cc_downs_contribution_per_target.keys().copied());
                     ids.into_iter()
                         .map(|enemy_id| {
                             let o = m.per_target.get(&enemy_id).copied().unwrap_or_default();
+                            let (applied_total, applied_duration_ms) = m
+                                .cc_per_target
+                                .get(&enemy_id)
+                                .copied()
+                                .unwrap_or((0, 0));
+                            let (
+                                applied_downs_contribution,
+                                applied_duration_downs_contribution_ms,
+                            ) = m
+                                .cc_downs_contribution_per_target
+                                .get(&enemy_id)
+                                .copied()
+                                .unwrap_or((0, 0));
                             PerTargetStatsOut {
                                 enemy_id,
                                 connected_hits: o.connected_hits,
@@ -1278,6 +1389,22 @@ pub fn build_report(
                                     .get(&enemy_id)
                                     .copied()
                                     .unwrap_or(0),
+                                direct_count: o.direct_count,
+                                direct_damage: o.direct_damage,
+                                crit_count: o.crit_count,
+                                crit_damage: o.crit_damage,
+                                flank_count: o.flank_count,
+                                glance_count: o.glance_count,
+                                critable_direct_count: o.critable_direct_count,
+                                against_downed_damage: o.against_downed_damage,
+                                missed: o.missed,
+                                evaded: o.evaded,
+                                blocked: o.blocked,
+                                invulned: o.invulned,
+                                applied_total,
+                                applied_duration_ms,
+                                applied_downs_contribution,
+                                applied_duration_downs_contribution_ms,
                             }
                         })
                         .collect()
@@ -1402,7 +1529,8 @@ pub fn build_report(
             recorded_by: enc.recorded_by.clone(),
             teams: enc.teams.iter().map(|t| TeamOut{color:t.color.clone(),team_id:t.team_id,guid:t.guid.clone()}).collect(),
             markers: enc.markers.iter().map(|m| MarkerAssignmentOut{agent_addr:m.agent_addr,marker:m.marker.clone(),time_ms:m.time_ms}).collect(),
-            tick_rate: enc.tick_rate.as_ref().map(|t| TickRateOut{avg:t.avg,min:t.min,per_second:t.per_second.clone()}) },
+            tick_rate: enc.tick_rate.as_ref().map(|t| TickRateOut{avg:t.avg,min:t.min,per_second:t.per_second.clone()}),
+            started_at_unix: enc.started_at_unix },
         players,
         // M10 Task 3 / MROSTER: `enemies` (native/HTML) is filtered to
         // combat participants; `ei_targets` (EI-adapter-only,
@@ -1498,7 +1626,7 @@ mod tests {
                     profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
                     agent_addrs: vec![11] },
             ],
-            markers:vec![], tick_rate:None };
+            markers:vec![], tick_rate:None, started_at_unix: None };
         let m = Metrics { players: vec![],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![]},
             boons: Default::default(), boon_uptime: Default::default(),
@@ -1536,7 +1664,7 @@ mod tests {
                     is_player: false, marker: None, profession: None, elite_spec: None,
                     agent_addrs: vec![9] },
             ],
-            markers:vec![], tick_rate:None };
+            markers:vec![], tick_rate:None, started_at_unix: None };
         let m = Metrics { players: vec![],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![]},
             boons: Default::default(), boon_uptime: Default::default(),
@@ -1554,7 +1682,7 @@ mod tests {
             teams:vec![], players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"".into(),
             team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]}],
-            enemies:vec![], markers:vec![], tick_rate:None };
+            enemies:vec![], markers:vec![], tick_rate:None, started_at_unix: None };
         let m = Metrics { players: vec![PlayerMetrics{agent_addr:1,damage_total:500,
             dps:500.0,..Default::default()}],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![500],
@@ -1594,7 +1722,7 @@ mod tests {
                     profession:"Guardian".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![2]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None };
+            enemies:vec![], markers:vec![], tick_rate:None, started_at_unix: None };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 healing: HealingMetrics { healing_out_total: 500, healing_out_allies: 300,
@@ -1635,7 +1763,7 @@ mod tests {
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None };
+            enemies:vec![], markers:vec![], tick_rate:None, started_at_unix: None };
         let entry = SkillEntry { skill_id: 100, total: 50, hits: 1, min: 50, max: 50, crit_hits: 0, flank_hits: 0 };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
@@ -1684,7 +1812,7 @@ mod tests {
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None };
+            enemies:vec![], markers:vec![], tick_rate:None, started_at_unix: None };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 timeseries: TimeseriesMetrics {
@@ -1744,7 +1872,7 @@ mod tests {
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None };
+            enemies:vec![], markers:vec![], tick_rate:None, started_at_unix: None };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 rotation: vec![SkillRotation { skill_id: 500, casts: vec![
@@ -1800,7 +1928,12 @@ mod tests {
                 ],
                 down_intervals: vec![],
                 dead_intervals: vec![],
+                dc_intervals: vec![],
             }],
+            // This test is about `bounds`; a track with no distance entry
+            // falls back to the `-1` sentinel, which is what a caller
+            // hand-building a `Replay` should get.
+            distance: Default::default(),
         };
         let out = build_replay_out(&replay);
         assert_eq!(out.bounds.min_x, 0.0, "any non-finite bound resets ALL FOUR to the degenerate zero fallback");
@@ -1828,7 +1961,7 @@ mod tests {
         let enc = Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
-            enemies: vec![], markers: vec![], tick_rate: None,
+            enemies: vec![], markers: vec![], tick_rate: None, started_at_unix: None,
         };
         let mut dst = [0u8; 8];
         dst[0..4].copy_from_slice(&123.456f32.to_le_bytes());
@@ -1877,7 +2010,7 @@ mod tests {
         let enc = Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
-            enemies: vec![], markers: vec![], tick_rate: None,
+            enemies: vec![], markers: vec![], tick_rate: None, started_at_unix: None,
         };
         fn missile_ev(time: u64, statechange: u8, src: u64, dst: u64, is_flanking: u8, pad: u32) -> RawEvent {
             RawEvent {

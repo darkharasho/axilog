@@ -250,7 +250,9 @@ impl ReplayBlock {
 
 /// One squad entity's activity intervals: the cheap half of the replay,
 /// carried whether or not positions were requested.
-#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+// `Eq` is gone as of the distance scalars below: they are `f64`, and this
+// type is only ever compared for equality in tests.
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct ReplayIntervals {
     /// This entity's own first-aware time, log-relative ms -- the earliest
     /// event of ANY kind naming it, matching GW2EI's `AgentItem.FirstAware`
@@ -270,6 +272,50 @@ pub struct ReplayIntervals {
     /// transition's own time and is not part of the interval.
     pub down: Vec<(u64, u64)>,
     pub dead: Vec<(u64, u64)>,
+    /// Disconnect/not-yet-spawned windows (`CBTS_DESPAWN` to the matching
+    /// `CBTS_SPAWN`), half-open `[start_ms, end_ms)` like `down`/`dead`
+    /// above. Deliberately diverges from GW2EI's own `dc` export, which uses
+    /// an inclusive sentinel bracket (`[i32::MinValue, FirstAware]`/
+    /// `[LastAware, i32::MaxValue]`) rather than a true half-open interval;
+    /// the cutover report measured that difference at 6 of 6,894 samples
+    /// (0.087%) of axibridge's current distance error, small enough that
+    /// matching this format's own half-open convention throughout was judged
+    /// more valuable than byte-parity with GW2EI's sentinel choice. Not
+    /// mutually exclusive with `down`/`dead` -- an agent can despawn while
+    /// dead.
+    pub dc: Vec<(u64, u64)>,
+    /// EI's `distToCom` -- mean distance to the commander over this actor's
+    /// active polls, in world inches.
+    ///
+    /// **Two-state convention, and it is load-bearing here.** `None` means
+    /// THE PASS NEVER RAN: `--replay` was not passed, no positions were
+    /// decoded, and nothing was measured. `-1.0` means THE PASS RAN AND
+    /// NOTHING QUALIFIED: positions were decoded and this actor had no poll
+    /// that paired with a commander reference. These must never be
+    /// collapsed. A consumer that maps absence to `-1` cannot tell "we did
+    /// not look" from "we looked and this actor was never within reach of a
+    /// commander", and a consumer that maps `-1` to absence loses EI's own
+    /// sentinel, which every EI-shaped reader already rejects by value.
+    ///
+    /// This is the ONE field group on this struct whose presence depends on
+    /// the `--replay` gate; every other field here is computed on every
+    /// parse. That is deliberate: the field lives on the always-present
+    /// per-entity row, rather than beside the position samples in
+    /// [`ReplayTrack`], precisely so that `None` stays reachable and the
+    /// two-state convention stays real -- inside the gated half it could
+    /// only ever be `Some`. The consequence a reader must hold: an
+    /// invariance check of the shape "gating positions on must not change
+    /// this row" applies to the interval fields (`start_ms`, `end_ms`,
+    /// `active_ms`, `down`, `dead`, `dc`) and NOT to these two scalars.
+    /// See `axilog_core::analysis::distance` for the five semantics behind
+    /// the number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dist_to_com: Option<f64>,
+    /// EI's `stackDist` -- the same reduction against the squad centre.
+    /// Same two-state convention, same `--replay` gate dependence, as
+    /// [`ReplayIntervals::dist_to_com`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stack_dist: Option<f64>,
 }
 
 /// The gated half of [`ReplayBlock`]: position tracks and the metadata that
@@ -331,6 +377,11 @@ pub struct ReplayTrack {
     /// currently reads.
     pub down_intervals: Vec<(u64, u64)>,
     pub dead_intervals: Vec<(u64, u64)>,
+    /// Half-open `[start_ms, end_ms)`, same divergence from GW2EI's
+    /// inclusive sentinel bracket as [`ReplayIntervals::dc`] -- see that
+    /// field's doc comment for the citation. Not mutually exclusive with
+    /// `down_intervals`/`dead_intervals`.
+    pub dc_intervals: Vec<(u64, u64)>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -763,10 +814,23 @@ pub fn build_replay(
     activity: Option<&[axilog_core::analysis::replay::ActivityIntervals]>,
 ) -> ReplayBlock {
     let activity = activity.filter(|a| a.len() == report.players.len());
+    // The scalars ride the replay tracks (`#[serde(skip)]` on the legacy
+    // shape) and are re-keyed onto entity ids here, so that a player whose
+    // track is missing gets `None` -- "the pass did not produce this" --
+    // rather than the `-1.0` that means "it did, and nothing qualified".
+    let scalars: std::collections::BTreeMap<u64, (f64, f64)> = report
+        .replay
+        .iter()
+        .flat_map(|r| r.tracks.iter())
+        .filter_map(|t| {
+            index.by_agent_addr(t.agent_addr).map(|id| (u64::from(id), (t.dist_to_com, t.stack_dist)))
+        })
+        .collect();
     let mut intervals = ByEntity::default();
     if let Some(activity) = activity {
         for (p, a) in report.players.iter().zip(activity) {
             let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
+            let scalar = scalars.get(&u64::from(id)).copied();
             intervals.insert(
                 id,
                 ReplayIntervals {
@@ -775,6 +839,9 @@ pub fn build_replay(
                     active_ms: a.active_ms(),
                     down: a.down_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
                     dead: a.dead_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
+                    dc: a.dc_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
+                    dist_to_com: scalar.map(|s| s.0),
+                    stack_dist: scalar.map(|s| s.1),
                 },
             );
         }
@@ -793,6 +860,7 @@ pub fn build_replay(
                     samples: track.samples.clone(),
                     down_intervals: track.down_intervals.clone(),
                     dead_intervals: track.dead_intervals.clone(),
+                    dc_intervals: track.dc_intervals.clone(),
                 },
             );
         }

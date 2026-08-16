@@ -277,6 +277,16 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         .find(|e| e.is_statechange == sc::WVW_TEAMS)
         .map(parse_wvw_teams_event);
 
+    // CBTS_SQCOMBATSTART (sc=9, LOG_START): wall-clock log start (Phase B
+    // Task 8). See `sc::LOG_START`'s doc comment for the payload citation
+    // trail -- `value` is the SERVER unix timestamp, `buff_dmg` the local
+    // one, and the server field is what gets emitted. `as u32` first mirrors
+    // arcdps's own `uint32_t` wire type before widening, matching
+    // `DynamicWvwTeamIds`'s casts just above.
+    enc.started_at_unix = raw.events.iter()
+        .find(|e| e.is_statechange == sc::LOG_START)
+        .map(|e| e.value as u32 as u64);
+
     // CBTS_IDTOGUID (sc=46) TEAM mappings: team id -> stable content GUID
     // (Task 2b). M10 Task 3: `local_id` is already `u32` on `GuidMapping` --
     // this used to truncate it to u16 for no reason (never a real precision
@@ -433,8 +443,12 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         p.guild_id =
             p.agent_addrs.iter().find_map(|addr| guild_by_addr.get(addr)).cloned();
         p.marker = markers::final_marker(&marker_res.open, &p.agent_addrs);
-        p.commander_tag =
-            markers::final_commander_tag(&marker_res.open, &marker_res.ever_commander, &p.agent_addrs);
+        p.commander_tag = markers::final_commander_tag(
+            &marker_res.open,
+            &marker_res.ever_commander,
+            &marker_res.commander_segments,
+            &p.agent_addrs,
+        );
         p.commander = p.commander_tag.is_some();
     }
     for en in &mut enc.enemies {
@@ -518,7 +532,7 @@ mod tests {
         let mut enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:0,
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1"), player(3, ":B.2")],
-            enemies: vec![], markers: vec![], tick_rate: None };
+            enemies: vec![], markers: vec![], tick_rate: None, started_at_unix: None };
         dedupe_players(&mut enc.players);
         assert_eq!(enc.players.len(), 2);
     }
@@ -530,7 +544,7 @@ mod tests {
         let mut enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:0,
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1")],
-            enemies: vec![], markers: vec![], tick_rate: None };
+            enemies: vec![], markers: vec![], tick_rate: None, started_at_unix: None };
         dedupe_players(&mut enc.players);
         assert_eq!(enc.players.len(), 1);
         assert_eq!(enc.players[0].agent_addr, 1);
@@ -824,5 +838,51 @@ mod tests {
         assert_eq!(team_2767.guid.as_deref(), Some("0102030405060708090a0b0c0d0e0f10"));
         let team_433 = enc.teams.iter().find(|t| t.team_id == 433).expect("team 433 present");
         assert_eq!(team_433.guid, None);
+    }
+
+    /// A statechange event carrying none of the payload any particular
+    /// `sc::` constant cares about -- callers fill in only the field(s)
+    /// their statechange actually uses (Phase B Task 8).
+    fn base_state_event(time: u64, is_statechange: u8) -> RawEvent {
+        RawEvent { time, src_agent: 0, dst_agent: 0, value: 0, buff_dmg: 0,
+            overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
+            src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0,
+            is_statechange, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
+    }
+    /// Writes the SERVER unix timestamp onto a `LOG_START` event's payload
+    /// -- `value`, per `sc::LOG_START`'s doc comment (`buff_dmg` carries the
+    /// local/recording-machine timestamp instead). The one place this field
+    /// assignment appears in these tests.
+    fn set_log_start_server_time(ev: &mut RawEvent, unix_seconds: u32) {
+        ev.value = unix_seconds as i32;
+    }
+    fn resolve_encounter_from(events: Vec<RawEvent>) -> Encounter {
+        let raw = RawLog {
+            header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![], events, guid_map: vec![],
+        };
+        crate::model::resolve(&raw)
+    }
+
+    /// arcdps records a wall clock at log start. axilog defined the
+    /// ordinal and never read it, which is why axibridge infers the start
+    /// time from the .zevtc file's mtime -- wrong for any copied or
+    /// restored file.
+    #[test]
+    fn extracts_the_log_start_wall_clock() {
+        let mut ev = base_state_event(0, sc::LOG_START);
+        set_log_start_server_time(&mut ev, 1_760_000_000);
+        let enc = resolve_encounter_from(vec![ev]);
+        assert_eq!(enc.started_at_unix, Some(1_760_000_000));
+    }
+
+    /// Absence is a real state -- a truncated or synthetic log may carry no
+    /// LOG_START at all, and that must stay distinguishable from epoch
+    /// zero.
+    #[test]
+    fn reports_absence_not_zero_without_a_log_start() {
+        let enc = resolve_encounter_from(vec![]);
+        assert_eq!(enc.started_at_unix, None);
     }
 }

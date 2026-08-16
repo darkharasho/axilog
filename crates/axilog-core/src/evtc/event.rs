@@ -20,6 +20,64 @@ pub mod sc {
     pub const CHANGE_UP: u8 = 3;
     pub const CHANGE_DEAD: u8 = 4;
     pub const CHANGE_DOWN: u8 = 5;
+    /// Agent entered tracking (M-phase-B Task 5, `analysis::replay`'s `dc`
+    /// intervals). Verified against the arcdps EVTC reference by
+    /// hand-counting `enum cbtstatechange` from `CBTS_COMBAT = 0`:
+    /// `CBTS_SPAWN` is the 7th entry (index 6), immediately between
+    /// `CBTS_CHANGEDOWN` (5, already used by this project as `CHANGE_DOWN`)
+    /// and `CBTS_DESPAWN` (7, `DESPAWN`) -- a strong internal cross-check.
+    /// Cross-checked against GW2EI's `ArcDPSEnums.StateChange.Spawn = 6`
+    /// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs`). Payload, per the
+    /// arcdps reference: `src_agent`: relates to agent.
+    pub const SPAWN: u8 = 6;
+    /// Agent left tracking (M-phase-B Task 5, `analysis::replay`'s `dc`
+    /// intervals). Same hand-count as `SPAWN` above: `CBTS_DESPAWN` is index
+    /// 7, immediately before `CBTS_HEALTHPCTUPDATE` (8, `HEALTH_UPDATE`,
+    /// already independently verified in `crate::analysis::health`'s module
+    /// doc, which itself cites this ordinal). Cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.Despawn = 7`
+    /// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs`). Payload, per the
+    /// arcdps reference: `src_agent`: relates to agent.
+    pub const DESPAWN: u8 = 7;
+    /// Squad combat start (`CBTS_SQCOMBATSTART`, "first player enter
+    /// combat. previously named log start") -- the wall clock this project
+    /// exposes as `model::Encounter::started_at_unix` (Phase B Task 8,
+    /// `analysis::health`'s module doc's citation-trail form). Ordinal
+    /// already independently verified in `crate::analysis::health`'s module
+    /// doc's hand-count (index 9, immediately after `CBTS_HEALTHPCTUPDATE`
+    /// (8) and before `CBTS_SQCOMBATEND`/`LOG_END` (10)).
+    ///
+    /// Payload, per `curl https://www.deltaconnected.com/arcdps/evtc/
+    /// README.txt` (2026-08-15), the `CBTS_SQCOMBATSTART` block:
+    /// ```text
+    /// CBTS_SQCOMBATSTART, // squad combat start, first player enter combat. previously named log start
+    /// // value: as uint32_t, server unix timestamp
+    /// // buff_dmg: local unix timestamp
+    /// ```
+    /// This is the strongest available source and it is unambiguous on the
+    /// point the payload slot could otherwise be guessed wrong on: `value`
+    /// carries the SERVER timestamp, `buff_dmg` the LOCAL (recording
+    /// machine's) one -- getting these backwards would produce a number
+    /// that still looks like a plausible unix time, silently wrong on any
+    /// log recorded on a machine with clock skew.
+    ///
+    /// Cross-checked against GW2EI's `LogDateEvent` ctor (the shared base
+    /// of its `SquadCombatStartEvent`/`SquadCombatEndEvent`,
+    /// `GW2EIEvtcParser/ParsedData/CombatEvents/MetaDataEvents/Date/
+    /// LogDateEvent.cs`): `ServerUnixTimeStamp = (uint)evtcItem.Value;
+    /// LocalUnixTimeStamp = (uint)evtcItem.BuffDmg;` -- same field
+    /// assignment, independently confirming the README's prose.
+    ///
+    /// Empirically confirmed on the committed `fixtures/wvw-small.anon
+    /// .zevtc`: its one `LOG_START` row decodes to `value = 1_768_702_180`,
+    /// `buff_dmg = 1_768_702_181` -- both plausible recent unix timestamps,
+    /// one second apart (an ordinary clock-sync gap between the arcdps
+    /// server and the recording client), which is consistent with the
+    /// README/GW2EI assignment and would look equally plausible read either
+    /// way -- the citation, not this fixture alone, is what settles which
+    /// field is which. [`model::resolve`](crate::model::resolve) emits the
+    /// server field only: a recording client's clock is a fact about that
+    /// machine, not about the log.
     pub const LOG_START: u8 = 9;
     pub const LOG_END: u8 = 10;
     /// Per-agent health-percentage change (M11 Task 1 -- health tracking +

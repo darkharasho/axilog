@@ -73,6 +73,15 @@ export interface PerEnemyOut {
  * last-hit attributions, matching GW2EI. `downs_contribution_damage` is the
  * arcdps-methodology per-target down-contribution, NOT EI's own
  * 90%-to-downstate-window algorithm.
+ *
+ * Phase B (native-format-gap-closure Task 4) widened this from 8 fields to
+ * 24. `direct_damage` is EI's per-target `directDmg` -- the damage sum
+ * over `is_direct_hit` rows against this one target -- and is NOT the same
+ * quantity as this schema's `connected_direct_dmg` elsewhere (a different,
+ * whole-fight-only figure); collapsing the two would silently substitute
+ * the wrong number under a plausible-looking name. `critable_direct_count`
+ * is native-only: it is `criticalRate`'s denominator, which real EI never
+ * publishes per target, so it has no `statsTargets` counterpart.
  */
 export interface PerTargetStatsOut {
   enemy_id: number
@@ -83,6 +92,22 @@ export interface PerTargetStatsOut {
   killed: number
   interrupts: number
   downs_contribution_damage: number
+  direct_count: number
+  direct_damage: number
+  crit_count: number
+  crit_damage: number
+  flank_count: number
+  glance_count: number
+  critable_direct_count: number
+  against_downed_damage: number
+  missed: number
+  evaded: number
+  blocked: number
+  invulned: number
+  applied_total: number
+  applied_duration_ms: number
+  applied_downs_contribution: number
+  applied_duration_downs_contribution_ms: number
 }
 
 export interface DamageOut {
@@ -579,6 +604,13 @@ export interface EncounterOut {
   markers: MarkerAssignmentOut[]
   /** Omitted entirely (not `null`) when the log has fewer than two `CBTS_TICK` events. */
   tick_rate?: TickRateOut
+  /**
+   * Wall-clock log start, **seconds** since the Unix epoch, from arcdps's
+   * `CBTS_LOGSTART`. Omitted entirely (not `null`) when the log carries no
+   * such event -- absence stays distinguishable from epoch zero, so do not
+   * default it to `0`.
+   */
+  started_at_unix?: number
 }
 
 /** Min/max `x`/`y` observed across every `ReplayOut.tracks[].samples` -- lets a consumer size a viewBox without a second pass over `tracks`. */
@@ -758,6 +790,13 @@ export interface EncounterOutV1 {
   teams: TeamOut[]
   markers: MarkerAssignmentOutV1[]
   tick_rate?: TickRateOut
+  /**
+   * Wall-clock log start, **seconds** since the Unix epoch, from arcdps's
+   * `CBTS_LOGSTART`. Omitted when the log carries no such event -- absence
+   * is deliberately distinguishable from epoch zero, so do not default it
+   * to `0`. Multiply by 1000 for a JS `Date`.
+   */
+  started_at_unix?: number
 }
 
 /**
@@ -769,6 +808,20 @@ export type Role = 'squad' | 'friendly_player' | 'enemy_player' | 'npc'
 export interface CommanderOut {
   variant: string
   guid: string
+  /**
+   * Terminated, half-open `[tag-on, tag-off)` windows in **arcdps session
+   * time** -- the same base as `encounter.markers[].time_ms`, NOT
+   * log-relative and NOT comparable against `encounter.duration_ms`. Do not
+   * clip these to `[0, duration_ms]`; subtract the log's own `t0` first if
+   * you need encounter-relative values.
+   *
+   * Literal per-instance holds, not a coalesced whole-fight span: a
+   * zero-width `[t, t]` pair from a same-timestamp reassignment is normal.
+   * An empty array on a PRESENT `commander` means the tag was detected but
+   * its windows could not be resolved -- not that the player never
+   * commanded.
+   */
+  segments: [number, number][]
 }
 
 /**
@@ -940,6 +993,11 @@ export interface SkillRow {
  * Mirrors the legacy `PerTargetStatsOut` field-for-field, minus `enemy_id`
  * (the enclosing map's key here, as the target's ENTITY id). `interrupts`
  * and `downs_contribution_damage` are not derivable from any other block.
+ *
+ * Phase B (native-format-gap-closure Task 4) widened this from 7 fields to
+ * 23, mirroring `PerTargetStatsOut`'s own widening above -- see that
+ * interface's doc comment for the `direct_damage`/`connected_direct_dmg`
+ * distinction and why `critable_direct_count` has no ei-json counterpart.
  */
 export interface PerTargetDetail {
   connected_hits: number
@@ -953,6 +1011,22 @@ export interface PerTargetDetail {
    * target -- NOT GW2EI's 90%-to-downstate-window algorithm.
    */
   downs_contribution_damage: number
+  direct_count: number
+  direct_damage: number
+  crit_count: number
+  crit_damage: number
+  flank_count: number
+  glance_count: number
+  critable_direct_count: number
+  against_downed_damage: number
+  missed: number
+  evaded: number
+  blocked: number
+  invulned: number
+  applied_total: number
+  applied_duration_ms: number
+  applied_downs_contribution: number
+  applied_duration_downs_contribution_ms: number
 }
 
 /**
@@ -964,7 +1038,7 @@ export interface PerTarget {
   total: number
   /**
    * Grouped under one key rather than flattened so its absence has a
-   * single unambiguous signal instead of seven fabricated zeros.
+   * single unambiguous signal instead of 23 fabricated zeros.
    */
   detail?: PerTargetDetail
   /** Per-(entity, target, skill) outgoing damage, keyed by skill id. */
@@ -1383,6 +1457,11 @@ export interface ReplayTrack {
   samples: [number, number, number][]
   down_intervals: [number, number][]
   dead_intervals: [number, number][]
+  /**
+   * Disconnect/not-yet-spawned windows, half-open like the two above. See
+   * `ReplayIntervals.dc` for the GW2EI divergence and the log-end rule.
+   */
+  dc_intervals: [number, number][]
 }
 
 /**
@@ -1399,6 +1478,34 @@ export interface ReplayIntervals {
   active_ms: number
   down: [number, number][]
   dead: [number, number][]
+  /**
+   * Disconnect/not-yet-spawned windows (`CBTS_DESPAWN` to the matching
+   * `CBTS_SPAWN`), half-open `[start_ms, end_ms)` like `down`/`dead`, and
+   * NOT mutually exclusive with them -- an agent can despawn while dead.
+   *
+   * An agent still disconnected at log end gets **no interval at all** for
+   * that trailing window; it is dropped, not closed at the log's end. So
+   * `end_ms - start_ms` minus summed `dc` over-counts activity for anyone
+   * who disconnects and never returns -- use `active_ms`.
+   */
+  dc: [number, number][]
+  /**
+   * GW2EI's `distToCom` -- mean distance to the commander over this actor's
+   * active polls, in world inches.
+   *
+   * Three states, and the first two must not be collapsed: **absent** means
+   * the position pass never ran (`{ replay: true }` was not passed, nothing
+   * was measured); **`-1`** means the pass ran and nothing qualified (GW2EI's
+   * own sentinel); **`>= 0`** is a real distance (`0` is legitimate -- the
+   * commander's own value).
+   *
+   * These two scalars are the only part of `ReplayBlock.by_entity` that
+   * depends on the `{ replay: true }` gate; every interval field above is
+   * computed on every parse and is identical with and without it.
+   */
+  dist_to_com?: number
+  /** GW2EI's `stackDist`, against the squad centre. Same three states and same gate as `dist_to_com`. */
+  stack_dist?: number
 }
 
 /** The gated half of `ReplayBlock` -- present only under `{ replay: true }`. */

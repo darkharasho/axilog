@@ -1029,19 +1029,43 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
         // one field in this block that is a "closest real EI field for
         // this concept" placement rather than a parity claim.
         //
-        // Everything else real EI carries on `statsTargets[i][0]` (the
-        // full connected*/critable*/flanking/glance/moving family, the
-        // miss/evade/block/invuln outcomes, the per-target
-        // appliedCrowdControl* split, `againstDownedDamage`) is still not
-        // computed per-target here, and stays omitted rather than faked.
+        // Phase B Task 4 (native-format-gap-closure): the 15 EI keys the
+        // axibridge cutover report (`docs/axilog-cutover-report.md` in the
+        // sibling repo) names as `statsTargets`' field-subset gap --
+        // `§4.1`'s "8 filled from a `statsAll[0]` fallback, 7 genuinely
+        // blank" split, both closed here now that `PerTargetDetail` carries
+        // the real per-target numbers. `critable_direct_count`, the 16th
+        // new native field, has NO entry below: it is `criticalRate`'s
+        // DENOMINATOR, which real EI never publishes per target (only
+        // `critableDirectDamageCount` on `statsAll[0]`, the whole-fight
+        // figure) -- inventing a per-target key for it would not be
+        // compatibility, it would be a new field EI itself doesn't have.
+        //
+        // `criticalRate`/`flankingRate`/`glanceRate` are COUNTS, not rates,
+        // matching the `statsAll[0]` mapping above (`crit_count`/
+        // `flank_count`/`glance_count` verbatim) -- the "Rate" naming is
+        // real EI's own, not this adapter's invention.
+        //
+        // `directDmg` is the one that needs care: it is NOT native's
+        // `connected_direct_dmg` (a different, whole-fight-only quantity
+        // the cutover report explicitly flags as a near-miss trap -- see
+        // its §4.1 "faking them from a near-miss field" warning). It is
+        // `direct_damage` from Task 1 of this plan -- the damage sum over
+        // `is_direct_hit` rows against this one target, the actual
+        // definition of EI's per-target `directDmg`.
+        //
+        // Everything else real EI carries on `statsTargets[i][0]` beyond
+        // these and the original seven (the condition/life-leech/above-90
+        // family, `againstMovingRate`, ...) is still not computed
+        // per-target here, and stays omitted rather than faked.
         //
         // Task 13: entirely native. `totalDmg` is the ungated
-        // `PerTarget::total`; the seven gated columns are
-        // `PerTarget::detail`, whose own `Option` is per-ROW. The BRANCH
-        // still has to be per-RUN -- EI emits the seven keys on every
-        // target slot or on none -- so it reads the gate record
-        // (`by_skill`'s presence) and then zero-fills the target rows the
-        // pass produced no detail for, exactly as the legacy path did.
+        // `PerTarget::total`; the 22 gated columns are `PerTarget::detail`,
+        // whose own `Option` is per-ROW. The BRANCH still has to be
+        // per-RUN -- EI emits the same key set on every target slot or on
+        // none -- so it reads the gate record (`by_skill`'s presence) and
+        // then zero-fills the target rows the pass produced no detail for,
+        // exactly as the legacy path did.
         let gated = n_damage.is_some_and(|d| d.by_skill.is_some());
         let stats_targets: Vec<Value> = join.targets().map(|(_, target_id, _)| {
             let pt = n_damage.and_then(|d| d.per_target.get(&target_id));
@@ -1057,6 +1081,29 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
                     ("againstDownedCount", t.map(|t| t.against_downed_count).unwrap_or(0) as u64),
                     ("interrupts", t.map(|t| t.interrupts).unwrap_or(0) as u64),
                     ("downContribution", t.map(|t| t.downs_contribution_damage).unwrap_or(0)),
+                    ("connectedDirectDamageCount", t.map(|t| t.direct_count).unwrap_or(0) as u64),
+                    // NOT `connected_direct_dmg` -- see the comment above
+                    // this loop for why that field would be the wrong one.
+                    ("directDmg", t.map(|t| t.direct_damage).unwrap_or(0)),
+                    ("criticalRate", t.map(|t| t.crit_count).unwrap_or(0) as u64),
+                    ("criticalDmg", t.map(|t| t.crit_damage).unwrap_or(0)),
+                    ("flankingRate", t.map(|t| t.flank_count).unwrap_or(0) as u64),
+                    ("glanceRate", t.map(|t| t.glance_count).unwrap_or(0) as u64),
+                    ("againstDownedDamage", t.map(|t| t.against_downed_damage).unwrap_or(0)),
+                    ("missed", t.map(|t| t.missed).unwrap_or(0) as u64),
+                    ("evaded", t.map(|t| t.evaded).unwrap_or(0) as u64),
+                    ("blocked", t.map(|t| t.blocked).unwrap_or(0) as u64),
+                    ("invulned", t.map(|t| t.invulned).unwrap_or(0) as u64),
+                    ("appliedCrowdControl", t.map(|t| t.applied_total).unwrap_or(0) as u64),
+                    ("appliedCrowdControlDuration", t.map(|t| t.applied_duration_ms).unwrap_or(0)),
+                    (
+                        "appliedCrowdControlDownContribution",
+                        t.map(|t| t.applied_downs_contribution).unwrap_or(0) as u64,
+                    ),
+                    (
+                        "appliedCrowdControlDurationDownContribution",
+                        t.map(|t| t.applied_duration_downs_contribution_ms).unwrap_or(0),
+                    ),
                 ] {
                     obj.insert(k.to_string(), json!(v));
                 }
@@ -2686,6 +2733,7 @@ mod tests {
                 teams: vec![],
                 markers: vec![],
                 tick_rate: None,
+                started_at_unix: None,
             },
             entities: vec![],
             source_order: axilog_schema::v1::SourceOrder::default(),
@@ -2717,7 +2765,7 @@ mod tests {
             // directly; since Task 13 reads `EntityOut::commander` (derived
             // from the TAG alone), the fixture has to be as consistent as
             // the pipeline it stands in for.
-            commander_tag:Some(axilog_core::model::CommanderTag{variant:"blue".into(),guid:"g".into()}),
+            commander_tag:Some(axilog_core::model::CommanderTag{variant:"blue".into(),guid:"g".into(),segments:vec![]}),
             guild_id:None,agent_addrs:vec![1]},
             Player{agent_addr:2,account:":B.2".into(),
             character:"B".into(),profession:"Guardian".into(),elite_spec:"".into(),
@@ -2729,7 +2777,7 @@ mod tests {
             Enemy{id:10,instid:10,name:"Gadget".into(),team:"blue".into(),
             is_player:false,marker:None,profession:None,elite_spec:None,
             agent_addrs:vec![10]}],
-            markers:vec![],tick_rate:None};
+            markers:vec![],tick_rate:None,started_at_unix:None};
         use axilog_core::analysis::contribution::ContributionMetrics;
         let m = Metrics{players:vec![
             PlayerMetrics{agent_addr:1,damage_total:500,dps:500.0,per_enemy:vec![(9,500)],
@@ -2908,7 +2956,7 @@ mod tests {
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"Nim Iss".into(),profession:"Thief".into(),elite_spec:"".into(),
             team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]}],
-            enemies:vec![],markers:vec![],tick_rate:None};
+            enemies:vec![],markers:vec![],tick_rate:None,started_at_unix:None};
         let mut boon_uptime = std::collections::BTreeMap::new();
         // Might (intensity): avg_stacks=3.5, presence_pct=100.0.
         boon_uptime.insert((1u64, buffs::MIGHT), BoonUptime { presence_pct: 100.0, avg_stacks: 3.5 });
@@ -3019,7 +3067,7 @@ mod tests {
         let report = Report {
             schema_version: "0.2", axilog_version: "0.1.0".to_string(),
             encounter: EncounterOut { kind: "wvw".into(), map: "".into(), duration_ms: 10_000,
-                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None },
+                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None, started_at_unix: None },
             players: vec![
                 base_player(":A.1", Some(HealingOut {
                     healing_out_total: 5000, healing_out_allies: 3000, healing_out_self: 2000,
@@ -3098,10 +3146,11 @@ mod tests {
                 end_ms: 10_100,
                 down_intervals: vec![Interval { start_ms: 2_000, end_ms: 3_000 }],
                 dead_intervals: vec![Interval { start_ms: 5_000, end_ms: 5_500 }],
+                dc_intervals: vec![],
             },
             ActivityIntervals {
                 agent_addr: 2, start_ms: 0, end_ms: 1_000,
-                down_intervals: vec![], dead_intervals: vec![],
+                down_intervals: vec![], dead_intervals: vec![], dc_intervals: vec![],
             },
         ];
         let v1 = sample_report_v1_with(&axilog_schema::v1::Passes {
@@ -3162,7 +3211,7 @@ mod tests {
         Report {
             schema_version: "0.2", axilog_version: "0.1.0".to_string(),
             encounter: EncounterOut { kind: "wvw".into(), map: "".into(), duration_ms: 2_000,
-                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None },
+                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None, started_at_unix: None },
             players,
             enemies: vec![],
             ei_targets,

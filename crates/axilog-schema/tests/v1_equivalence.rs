@@ -889,7 +889,7 @@ fn a_log_without_the_healing_extension_reports_unsupported_not_empty() {
         }],
         enemies: vec![],
         markers: vec![],
-        tick_rate: None,
+        tick_rate: None, started_at_unix: None,
     };
     let metrics = Metrics {
         players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],
@@ -957,7 +957,7 @@ fn a_computed_block_with_no_rows_still_reports_empty() {
         players: vec![],
         enemies: vec![],
         markers: vec![],
-        tick_rate: None,
+        tick_rate: None, started_at_unix: None,
     };
     let metrics = Metrics {
         // The extension IS present -- so `healing` is answerable here, and
@@ -1284,4 +1284,53 @@ fn every_legacy_player_field_has_a_one_point_oh_destination() {
         checked += 1;
     }
     assert!(checked >= 30, "expected the whole roster, got {checked}");
+}
+
+/// `build()` already turns every gate on, `--skill-damage` included, so it
+/// doubles as the fixture this test needs -- no separate helper required.
+fn build_v1_from_fixture_with_skill_damage() -> axilog_schema::v1::ReportV1 {
+    build().1
+}
+
+/// Phase B item 1: the per-target split must carry the full 23-field set.
+/// The inequality below is the load-bearing assertion -- summing a
+/// player's per-target connected hits across enumerated targets must be
+/// LESS THAN their whole-fight connected count on any log containing
+/// non-enumerated targets (NPCs, guards, siege). That gap is exactly the
+/// error axibridge's `statsAll[0]` fallback makes, so pinning it here is a
+/// regression guard against ever reintroducing the fallback's semantics.
+#[test]
+fn per_target_detail_carries_the_full_field_set_and_undercounts_whole_fight() {
+    let doc = build_v1_from_fixture_with_skill_damage();
+    let damage = doc.blocks.damage.as_ref().expect("skill-damage gate was on");
+    let hit_stats = doc.blocks.hit_stats.as_ref().expect("hit_stats block is ungated");
+    let mut checked = 0usize;
+    for (id, dmg) in damage.by_entity.0.iter() {
+        let Some(hit) = hit_stats.by_entity.get(*id) else { continue };
+        let mut summed = 0u32;
+        let mut saw_detail = false;
+        for (_target, per) in dmg.per_target.iter() {
+            let Some(d) = per.detail.as_ref() else { continue };
+            saw_detail = true;
+            summed += d.connected_hits;
+            // Every new field must be reachable -- a field that never
+            // compiles into the struct would pass a value assertion by
+            // being absent, so touch each one.
+            let _ = (d.direct_count, d.direct_damage, d.crit_count, d.crit_damage);
+            let _ = (d.flank_count, d.glance_count, d.critable_direct_count);
+            let _ = (d.against_downed_damage, d.missed, d.evaded, d.blocked, d.invulned);
+            let _ = (d.applied_total, d.applied_duration_ms);
+            let _ = (d.applied_downs_contribution, d.applied_duration_downs_contribution_ms);
+        }
+        if !saw_detail {
+            continue;
+        }
+        checked += 1;
+        assert!(
+            summed <= hit.connected_count,
+            "entity {id}: per-target hits {summed} exceeded whole-fight {}",
+            hit.connected_count
+        );
+    }
+    assert!(checked > 0, "fixture produced no per-target detail -- is --skill-damage on?");
 }

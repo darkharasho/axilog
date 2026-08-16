@@ -65,8 +65,9 @@
 //! `statsAll[0].downContribution` mapping already carries.
 
 use crate::analysis::damage::InstidRegistry;
+use crate::analysis::defenses::{classify_outcome, Outcome};
 use crate::analysis::downs::credited_squad_source as downs_credited_source;
-use crate::analysis::hit_stats::classify;
+use crate::analysis::hit_stats::{can_crit, classify};
 use crate::evtc::{result, RawLog};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -83,6 +84,31 @@ pub struct PerTargetOffense {
     /// already resolves), but free here and the natural pair for the count
     /// -- and the invariant that makes the count auditable.
     pub connected_damage: u64,
+    /// EI's `directDmg` count pair. Named to match
+    /// `hit_stats::HitStats::direct_count` so the per-target and
+    /// whole-fight versions of one quantity are recognizably the same
+    /// thing. NOT the same as the schema's `connected_direct_dmg`, which
+    /// measures a different quantity -- see this plan's Task 4.
+    pub direct_count: u32,
+    /// EI's `directDmg`.
+    pub direct_damage: u64,
+    /// EI's `criticalRate` numerator. Gated behind `hit_stats::can_crit`
+    /// exactly as the whole-fight counter is -- GW2EI gates
+    /// `crit_count`/`critable_direct_count` behind `CanCrit` but NOT
+    /// `direct_count`/`flank_count`/`glance_count`.
+    pub crit_count: u32,
+    /// EI's `criticalDmg`.
+    pub crit_damage: u64,
+    /// EI's `flankingRate` numerator.
+    pub flank_count: u32,
+    /// EI's `glanceRate` numerator.
+    pub glance_count: u32,
+    /// EI's `criticalRate` DENOMINATOR -- not `direct_count`. See
+    /// `hit_stats`'s module doc, `critable_direct_count` section.
+    pub critable_direct_count: u32,
+    /// EI's `againstDownedDamage` -- the damage pair for the
+    /// `against_downed_count` this struct already carried.
+    pub against_downed_damage: u64,
     /// EI's `againstDownedCount`.
     pub against_downed_count: u32,
     /// EI's `downed` -- times this player landed the DOWNING blow on this
@@ -93,6 +119,20 @@ pub struct PerTargetOffense {
     pub killed: u32,
     /// EI's `interrupts`.
     pub interrupts: u32,
+    /// EI's `missed` -- arcdps `BLIND`. Comes from `defenses::classify_outcome`,
+    /// not `hit_stats::classify`: the latter returns `None` for every non-hit
+    /// outcome by design (it only ever answers "was this a connected hit?"),
+    /// so the four mitigation outcomes are otherwise invisible to this scan.
+    pub missed: u32,
+    /// EI's `evaded` -- arcdps `EVADE`, an attack dodged outright.
+    pub evaded: u32,
+    /// EI's `blocked` -- arcdps `BLOCK`, stopped by an active defense like
+    /// aegis or a shield skill rather than a dodge.
+    pub blocked: u32,
+    /// EI's `invulned` -- arcdps `ABSORB`/`INVERT`, an attack that landed
+    /// against a target flagged unhittable (e.g. a defiance/invuln buff)
+    /// rather than actively defended against.
+    pub invulned: u32,
 }
 
 impl PerTargetOffense {
@@ -105,6 +145,16 @@ impl PerTargetOffense {
 /// splits over one log. One linear scan, reusing the squad/enemy membership
 /// predicate and `hit_stats::classify` decision every other damage-side
 /// pass already shares.
+///
+/// **There are no `applied_*` (CC) fields on [`PerTargetOffense`].** CC rows
+/// are dispatched by `cc::is_cc`, a wholly different predicate from the
+/// damage/outcome classifiers below, so their per-target accumulation lives
+/// in `cc::apply_cc_with_registry` instead --
+/// `PlayerMetrics::cc_per_target` and
+/// `PlayerMetrics::cc_downs_contribution_per_target`. The schema layer joins
+/// the two sources side by side onto `PerTargetStatsOut`; carrying
+/// permanently-zero mirror fields here would only hand a core-API consumer a
+/// silent `0` where the truth lives one map over.
 pub fn build(
     raw: &RawLog,
     registry: &InstidRegistry,
@@ -163,12 +213,58 @@ pub fn build(
         }
         let src = addr_to_rep.get(&e.src_agent).copied().unwrap_or(e.src_agent);
 
-        let Some(c) = classify(e, post_era) else { continue };
+        // A mitigated attempt is not a hit, so `classify` drops it -- but
+        // GW2EI counts it per target, and a pair the player only ever
+        // whiffed against has no other way to produce a row. Dispatch the
+        // outcome first, then fall through to the hit path.
         let s = out.entry((src, dst)).or_default();
+        match classify_outcome(e, post_era) {
+            Some(Outcome::Blocked) => {
+                s.blocked += 1;
+                continue;
+            }
+            Some(Outcome::Evaded) => {
+                s.evaded += 1;
+                continue;
+            }
+            Some(Outcome::Missed) => {
+                s.missed += 1;
+                continue;
+            }
+            Some(Outcome::Invulned) => {
+                s.invulned += 1;
+                continue;
+            }
+            _ => {}
+        }
+        let Some(c) = classify(e, post_era) else { continue };
         s.connected_hits += 1;
         s.connected_damage += c.dmg;
+        // Mirrors `hit_stats::accumulate`'s direct-hit branch byte for
+        // byte, minus the condition/life-leech/above-90 buckets EI does not
+        // split per target. Keeping the same order and the same `can_crit`
+        // gate is what makes the per-target rows sum to the whole-fight
+        // totals for every enumerated target.
+        if c.is_direct_hit {
+            if can_crit(e.skillid) {
+                s.critable_direct_count += 1;
+                if c.is_crit {
+                    s.crit_count += 1;
+                    s.crit_damage += c.dmg;
+                }
+            }
+            s.direct_count += 1;
+            s.direct_damage += c.dmg;
+            if e.is_flanking != 0 {
+                s.flank_count += 1;
+            }
+            if c.is_glance {
+                s.glance_count += 1;
+            }
+        }
         if c.is_against_downed {
             s.against_downed_count += 1;
+            s.against_downed_damage += c.dmg;
         }
     }
 
@@ -225,14 +321,17 @@ mod tests {
         assert_eq!(
             out[&(1, 9)],
             PerTargetOffense {
-                connected_hits: 1, connected_damage: 100, downed: 1, interrupts: 1,
+                connected_hits: 1, connected_damage: 100, direct_count: 1, direct_damage: 100,
+                critable_direct_count: 1, downed: 1, interrupts: 1,
                 ..Default::default()
             }
         );
         assert_eq!(
             out[&(1, 10)],
             PerTargetOffense {
-                connected_hits: 1, connected_damage: 250, killed: 1, ..Default::default()
+                connected_hits: 1, connected_damage: 250, direct_count: 1, direct_damage: 250,
+                crit_count: 1, crit_damage: 250, critable_direct_count: 1, killed: 1,
+                ..Default::default()
             }
         );
     }
@@ -257,8 +356,9 @@ mod tests {
     #[test]
     fn minion_sourced_markers_credit_the_owner() {
         // Register minion instid 5 -> owner (squad player 1, instid 1).
-        // A BLOCKED row, so the registration itself contributes nothing to
-        // any counter (`classify` returns `None` for it).
+        // A BLOCKED row -- it does not touch `classify`, but as of this
+        // struct's four mitigation counters it now contributes its own
+        // `blocked` count directly, since the owner IS the squad source.
         let mut owner_intro = base(1, 9);
         owner_intro.src_instid = 1;
         owner_intro.result = result::BLOCK;
@@ -277,7 +377,10 @@ mod tests {
         ]);
         assert_eq!(
             out[&(1, 9)],
-            PerTargetOffense { interrupts: 1, downed: 1, killed: 1, ..Default::default() },
+            PerTargetOffense {
+                interrupts: 1, downed: 1, killed: 1, blocked: 1,
+                ..Default::default()
+            },
             "all three of GW2EI's unguarded markers fold onto the owner"
         );
     }
@@ -296,7 +399,14 @@ mod tests {
         hit.result = result::NORMAL;
         hit.value = 100;
         let out = run(vec![owner_intro, hit]);
-        assert!(out.is_empty());
+        // The owner's own BLOCK still produces a row (its `blocked` mitigation
+        // counter), but the minion's ordinary hit must not add to that row's
+        // `connected_hits` -- hit quality stays inside the actor-only guard.
+        assert_eq!(
+            out[&(1, 9)],
+            PerTargetOffense { blocked: 1, ..Default::default() },
+            "the minion's hit is not credited to the owner"
+        );
     }
 
     /// A pair with no qualifying event never appears (the map is sparse --
@@ -312,13 +422,104 @@ mod tests {
     }
 
     /// Non-hit outcomes (block/evade/miss) are not connected hits -- the
-    /// same `classify` decision `hit_stats` already calibrates.
+    /// same `classify` decision `hit_stats` already calibrates. The row
+    /// still exists (via the `blocked` mitigation counter), it just carries
+    /// no hit-quality data.
     #[test]
     fn blocked_events_are_not_connected_hits() {
         let mut e = base(1, 9);
         e.result = result::BLOCK;
         e.value = 0;
         let out = run(vec![e]);
-        assert!(out.is_empty());
+        assert_eq!(
+            out[&(1, 9)],
+            PerTargetOffense { blocked: 1, ..Default::default() },
+            "a block is mitigation, not a connected hit"
+        );
+    }
+
+    /// The eight hit-quality counters must split by target using the same
+    /// `hit_stats::classify` decision the whole-fight totals already use.
+    /// A crit on one target must not inflate the other target's row --
+    /// which is exactly the error axibridge's `statsAll` fallback makes.
+    #[test]
+    fn splits_hit_quality_by_target() {
+        let mut crit9 = base(1, 9);
+        crit9.result = result::CRIT;
+        crit9.value = 300;
+        crit9.is_flanking = 1;
+        let mut glance10 = base(1, 10);
+        glance10.result = result::GLANCE;
+        glance10.value = 50;
+        let out = run(vec![crit9, glance10]);
+
+        let t9 = &out[&(1, 9)];
+        assert_eq!(t9.direct_count, 1);
+        assert_eq!(t9.direct_damage, 300);
+        assert_eq!(t9.crit_count, 1);
+        assert_eq!(t9.crit_damage, 300);
+        assert_eq!(t9.critable_direct_count, 1);
+        assert_eq!(t9.flank_count, 1);
+        assert_eq!(t9.glance_count, 0);
+
+        let t10 = &out[&(1, 10)];
+        assert_eq!(t10.direct_count, 1);
+        assert_eq!(t10.direct_damage, 50);
+        assert_eq!(t10.crit_count, 0, "target 9's crit must not leak onto target 10");
+        assert_eq!(t10.glance_count, 1);
+        assert_eq!(t10.flank_count, 0);
+    }
+
+    /// `against_downed_damage` is the damage pair for the count this struct
+    /// already carries; EI reports both.
+    #[test]
+    fn accumulates_against_downed_damage_per_target() {
+        let mut hit = base(1, 9);
+        hit.result = result::NORMAL;
+        hit.value = 120;
+        hit.is_offcycle = 1;
+        let out = run(vec![hit]);
+        let t = &out[&(1, 9)];
+        assert_eq!(t.against_downed_count, 1);
+        assert_eq!(t.against_downed_damage, 120);
+    }
+
+    /// The four mitigation outcomes are the rows `hit_stats::classify`
+    /// returns `None` for, so they need the widened `defenses` classifier.
+    /// GW2EI reports them per target (`totalDamage: 0, hits: n` rows), and
+    /// without them a target a player only ever whiffed against produces no
+    /// row at all.
+    #[test]
+    fn splits_mitigation_outcomes_by_target() {
+        let mut blocked = base(1, 9);
+        blocked.result = result::BLOCK;
+        let mut evaded = base(1, 9);
+        evaded.result = result::EVADE;
+        let mut blind = base(1, 10);
+        blind.result = result::BLIND;
+        let mut absorb = base(1, 10);
+        absorb.result = result::ABSORB;
+        let out = run(vec![blocked, evaded, blind, absorb]);
+
+        let t9 = &out[&(1, 9)];
+        assert_eq!(t9.blocked, 1);
+        assert_eq!(t9.evaded, 1);
+        assert_eq!(t9.missed, 0);
+        assert_eq!(t9.invulned, 0);
+        assert_eq!(t9.connected_hits, 0, "a mitigated attempt is not a connected hit");
+
+        let t10 = &out[&(1, 10)];
+        assert_eq!(t10.missed, 1, "BLIND is EI's `missed`");
+        assert_eq!(t10.invulned, 1, "ABSORB is EI's `invulned`");
+    }
+
+    /// A pair the player only ever whiffed against must still produce a
+    /// row. `is_empty` drives `retain`, so it has to see the new counters.
+    #[test]
+    fn mitigation_only_pair_still_produces_a_row() {
+        let mut blocked = base(1, 9);
+        blocked.result = result::BLOCK;
+        let out = run(vec![blocked]);
+        assert!(out.contains_key(&(1, 9)), "a blocked-only pair must not be retained away");
     }
 }

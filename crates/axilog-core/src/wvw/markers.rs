@@ -162,6 +162,49 @@ pub(crate) struct MarkerResolution {
     /// reported correctly; this only changes the "silently detected zero
     /// commanders" case.
     pub(crate) ever_commander: BTreeMap<u64, MarkerInstance>,
+    /// Closed `[tag-on, tag-off)` windows per agent, in ms, for
+    /// commander-tag instances only. `open` deliberately drops closed
+    /// instances -- it only ever needed final state -- so this is a
+    /// parallel collection rather than something derivable from it.
+    ///
+    /// **Literal, per-instance segments -- confirmed against GW2EI source**
+    /// (`StatisticsHelper.CalculateCommanderStates`,
+    /// `/var/tmp/gw2ei/GW2EIEvtcParser/EIData/Statistics/StatisticsHelper.cs:308-383`;
+    /// full citations in
+    /// `.superpowers/sdd/2026-08-15-phase-b-native-gap-closure/open-questions-findings.md`,
+    /// Question 1). Three rules, all mirrored below with no invented
+    /// smoothing:
+    ///
+    /// - A segment still open when the raw stream ends is closed at the raw
+    ///   stream's last event time (GW2EI: `Math.Min(markerEvent.EndTime,
+    ///   log.LogData.EvtcLogEnd)` -- an unclosed assign is clamped to the
+    ///   log's real end, because that's the boundary of what we actually
+    ///   observed, not a manufactured extension past it).
+    /// - An unreciprocated REMOVAL -- `value == 0` with nothing open for
+    ///   that agent -- is a silent no-op: GW2EI's own `CombatEventFactory`
+    ///   never even constructs a `MarkerEvent` for it (the `break` at
+    ///   `CombatEventFactory.cs:239` skips the `Add` calls entirely), so it
+    ///   cannot extend, retract, or otherwise touch any segment, closed or
+    ///   open. A commander whose only activity is a sub-second burst of
+    ///   assign/remove pairs (the real-log finding on `ever_commander`
+    ///   above) gets exactly that sub-second segment -- thin coverage, not
+    ///   a bug, and NOT papered over with a threshold or a log-end
+    ///   extension GW2EI itself does not have.
+    /// - No minimum-coverage fallback exists anywhere in this collection or
+    ///   in GW2EI's `distToCom` chain (`GameplayStatistics.cs:64`: zero
+    ///   samples -> sentinel `-1`, never a whole-track fallback). Thin
+    ///   coverage is simply an average over few samples downstream.
+    ///
+    /// Multiple simultaneous commanders are normal in WvW; this map holds
+    /// every one of them and does NOT pick a reference. That choice belongs
+    /// to the consumer (see the distance scalars), which GW2EI resolves by
+    /// pooling every player's segments and sorting by start time --
+    /// **earliest tag-start wins**, truncating a later-starting overlapping
+    /// segment to where the earlier one ends (`StatisticsHelper.cs:351,
+    /// 360-378`) -- not by squad membership or tag duration. This
+    /// collection does not perform that pooling; it is Task 7's job once it
+    /// has the squad roster.
+    pub(crate) commander_segments: BTreeMap<u64, Vec<(u64, u64)>>,
     pub assignments: Vec<MarkerAssignment>,
 }
 
@@ -218,6 +261,7 @@ pub(crate) fn resolve_markers_and_guilds(
 ) -> MarkerResolution {
     let mut open: BTreeMap<u64, Vec<MarkerInstance>> = BTreeMap::new();
     let mut ever_commander: BTreeMap<u64, MarkerInstance> = BTreeMap::new();
+    let mut commander_segments: BTreeMap<u64, Vec<(u64, u64)>> = BTreeMap::new();
     let mut assignments = Vec::new();
     for e in &raw.events {
         // MEIGAP Task 3c: `CBTS_GUILD` rides this scan rather than paying
@@ -238,7 +282,17 @@ pub(crate) fn resolve_markers_and_guilds(
             // instance for this agent, commander tag included. `ever_commander`
             // is deliberately NOT touched here -- see its doc comment on
             // `MarkerResolution`.
-            open.remove(&agent);
+            //
+            // If there is nothing open for this agent, this removal is a
+            // silent no-op (see `commander_segments`'s doc comment) -- the
+            // `BTreeMap::remove` below simply returns `None` and no segment
+            // is pushed, which is exactly GW2EI's behavior for a removal
+            // with nothing to close.
+            if let Some(instances) = open.remove(&agent) {
+                for m in instances.into_iter().filter(|m| m.is_commander) {
+                    commander_segments.entry(agent).or_default().push((m.start_ms, e.time));
+                }
+            }
             continue;
         }
         let local_id = e.value as u32;
@@ -265,11 +319,26 @@ pub(crate) fn resolve_markers_and_guilds(
         // Replace (not stack) a still-open instance of the same marker id;
         // a different id (e.g. commander tag vs. overhead marker) stays
         // open alongside the new instance.
+        for m in slot.iter().filter(|m| m.marker_id == instance.marker_id && m.is_commander) {
+            commander_segments.entry(agent).or_default().push((m.start_ms, e.time));
+        }
         slot.retain(|m| m.marker_id != instance.marker_id);
         slot.push(instance);
         assignments.push(MarkerAssignment { agent_addr: agent, marker: name, time_ms: e.time });
     }
-    MarkerResolution { open, ever_commander, assignments }
+    // Close every commander instance still open when the raw stream ends,
+    // at the raw stream's own last event time -- these are absolute
+    // (not t0-relative) timestamps; the caller in `wvw::apply` rebases if
+    // needed. See `commander_segments`'s doc comment for why this is the
+    // literal log boundary, not a manufactured extension.
+    if let Some(log_end) = raw.events.last().map(|e| e.time) {
+        for (&agent, instances) in &open {
+            for m in instances.iter().filter(|m| m.is_commander) {
+                commander_segments.entry(agent).or_default().push((m.start_ms, log_end));
+            }
+        }
+    }
+    MarkerResolution { open, ever_commander, commander_segments, assignments }
 }
 
 /// Pick the freshest (highest `start_ms`) open marker instance matching
@@ -305,17 +374,31 @@ pub(crate) fn final_marker(open: &BTreeMap<u64, Vec<MarkerInstance>>, agent_addr
 /// observed for this agent, even if since closed with no reassignment --
 /// EI-parity fix, see `MarkerResolution::ever_commander`'s doc comment for
 /// why the fallback is needed at all.
+///
+/// `segments` is filled by merging and sorting `commander_segments` across
+/// every addr in `agent_addrs` -- independent of which addr `m` (the
+/// presence/variant signal) came from, since a relogged account's several
+/// addrs can each contribute segments.
 pub(crate) fn final_commander_tag(
     open: &BTreeMap<u64, Vec<MarkerInstance>>,
     ever_commander: &BTreeMap<u64, MarkerInstance>,
+    commander_segments: &BTreeMap<u64, Vec<(u64, u64)>>,
     agent_addrs: &[u64],
 ) -> Option<CommanderTag> {
     let m = freshest_open(open, agent_addrs, true).or_else(|| {
         agent_addrs.iter().filter_map(|a| ever_commander.get(a)).max_by_key(|m| m.start_ms)
     })?;
+    let mut segments: Vec<(u64, u64)> = agent_addrs
+        .iter()
+        .filter_map(|a| commander_segments.get(a))
+        .flatten()
+        .copied()
+        .collect();
+    segments.sort_unstable();
     Some(CommanderTag {
         variant: m.commander_variant.clone().unwrap_or_default(),
         guid: m.guid_hex.clone().unwrap_or_else(|| m.name.clone()),
+        segments,
     })
 }
 
@@ -471,6 +554,94 @@ mod tests {
         }
     }
 
+    /// Content-local marker ids used only by the `commander_segments`
+    /// tests below -- arbitrary but distinct, no GUID mapping needed since
+    /// `is_commander` comes from `buff`, not from GUID resolution.
+    const COMMANDER_LOCAL_ID: i32 = 3201;
+    const OVERHEAD_LOCAL_ID: i32 = 42;
+
+    /// `marker_event(time, src, local_id, buff)` -- same `CBTS_MARKER` row
+    /// shape as `marker_ev`, named to match the commander-segment tests'
+    /// intent (a marker *event* on an agent, not necessarily an
+    /// assignment: `local_id == 0` is a removal).
+    fn marker_event(time: u64, src: u64, local_id: i32, buff: u8) -> RawEvent {
+        marker_ev(time, src, local_id, buff)
+    }
+
+    /// A commander tag opened and later closed by a removal produces one
+    /// closed segment. Marker resolution discards closed instances today
+    /// ("nothing downstream needs point-in-time history"), which is exactly
+    /// what this changes.
+    #[test]
+    fn commander_segments_capture_a_closed_tag_window() {
+        let raw = raw_from(
+            vec![
+                marker_event(1000, 1, COMMANDER_LOCAL_ID, 1),
+                marker_event(5000, 1, 0, 0), // value == 0: removal
+            ],
+            vec![],
+        );
+        let res = resolve_markers(&raw);
+        assert_eq!(res.commander_segments[&1], vec![(1000, 5000)]);
+    }
+
+    /// A tag still open at the end of the log runs to the log's end, not
+    /// to its own start -- a commander who never un-tagged commanded the
+    /// whole fight.
+    #[test]
+    fn commander_segments_close_an_open_tag_at_log_end() {
+        let raw = raw_from(
+            vec![
+                marker_event(1000, 1, COMMANDER_LOCAL_ID, 1),
+                marker_event(9000, 2, OVERHEAD_LOCAL_ID, 0),
+            ],
+            vec![],
+        );
+        let res = resolve_markers(&raw);
+        assert_eq!(res.commander_segments[&1], vec![(1000, 9000)]);
+    }
+
+    /// An overhead marker on the same agent must not close the commander
+    /// tag -- the arcdps rule mirrored at `resolve_markers_and_guilds`:
+    /// a non-removal assignment only closes an open instance of the SAME
+    /// marker id.
+    #[test]
+    fn overhead_marker_does_not_end_a_commander_segment() {
+        let raw = raw_from(
+            vec![
+                marker_event(1000, 1, COMMANDER_LOCAL_ID, 1),
+                marker_event(2000, 1, OVERHEAD_LOCAL_ID, 0),
+                marker_event(6000, 1, 0, 0),
+            ],
+            vec![],
+        );
+        let res = resolve_markers(&raw);
+        assert_eq!(res.commander_segments[&1], vec![(1000, 6000)]);
+    }
+
+    /// An unreciprocated removal -- `value == 0` with nothing open for that
+    /// agent -- is a silent no-op (GW2EI: the removal never even
+    /// constructs a `MarkerEvent`, so nothing is extended or retracted).
+    /// This would fail under an "unreciprocated removal extends to log
+    /// end" implementation (rejected option (a) in the task-6 open
+    /// question): that reading would fabricate a `(500, 9000)` segment for
+    /// agent 1 from nothing; the literal reading records no segment at all.
+    #[test]
+    fn unreciprocated_removal_is_a_silent_no_op() {
+        let raw = raw_from(
+            vec![
+                marker_event(500, 1, 0, 0), // removal with nothing open
+                marker_event(9000, 2, OVERHEAD_LOCAL_ID, 0),
+            ],
+            vec![],
+        );
+        let res = resolve_markers(&raw);
+        assert!(
+            !res.commander_segments.contains_key(&1),
+            "an unreciprocated removal must not fabricate a segment"
+        );
+    }
+
     /// A recognized squad-marker GUID resolves to its human name, not the
     /// raw hex -- catches a wrong field extraction (e.g. reading `skillid`
     /// instead of `value` for the marker id) immediately, since a wrong id
@@ -534,7 +705,7 @@ mod tests {
             vec![marker_guid_mapping(3201, "1993fadb6fb70e4383a223a54d311f7d")], // PurpleCommanderTag
         );
         let res = resolve_markers(&raw);
-        let tag = final_commander_tag(&res.open, &res.ever_commander, &[1]).expect("commander tag present");
+        let tag = final_commander_tag(&res.open, &res.ever_commander, &res.commander_segments, &[1]).expect("commander tag present");
         assert_eq!(tag.variant, "purple-commander");
         assert_eq!(tag.guid, "1993fadb6fb70e4383a223a54d311f7d");
     }
@@ -548,7 +719,7 @@ mod tests {
             vec![marker_guid_mapping(7, "ca76ab023593b0448f692fe29df03d17")], // RedCatmanderTag
         );
         let res = resolve_markers(&raw);
-        let tag = final_commander_tag(&res.open, &res.ever_commander, &[1]).expect("commander tag present");
+        let tag = final_commander_tag(&res.open, &res.ever_commander, &res.commander_segments, &[1]).expect("commander tag present");
         assert_eq!(tag.variant, "red-catmander");
     }
 
@@ -563,7 +734,7 @@ mod tests {
             vec![marker_guid_mapping(55, "00112233445566778899aabbccddeeff")],
         );
         let res = resolve_markers(&raw);
-        let tag = final_commander_tag(&res.open, &res.ever_commander, &[1]).expect("commander tag present");
+        let tag = final_commander_tag(&res.open, &res.ever_commander, &res.commander_segments, &[1]).expect("commander tag present");
         assert_eq!(tag.variant, "00112233445566778899aabbccddeeff");
     }
 
@@ -576,7 +747,7 @@ mod tests {
             vec![marker_guid_mapping(42, "c3a56f1e045e3848b07cbac5bbdd2c32")],
         );
         let res = resolve_markers(&raw);
-        assert!(final_commander_tag(&res.open, &res.ever_commander, &[1]).is_none());
+        assert!(final_commander_tag(&res.open, &res.ever_commander, &res.commander_segments, &[1]).is_none());
     }
 
     /// Fix round 1 (reviewer-reported bug): a commander gets tagged, then
@@ -611,7 +782,7 @@ mod tests {
         // Both concurrently open: the overhead marker is the "current
         // marker", but the commander tag is NOT wiped out by it.
         assert_eq!(final_marker(&res.open, &[1]).as_deref(), Some("arrow"));
-        let tag = final_commander_tag(&res.open, &res.ever_commander, &[1]).expect("commander tag must survive the overhead assignment");
+        let tag = final_commander_tag(&res.open, &res.ever_commander, &res.commander_segments, &[1]).expect("commander tag must survive the overhead assignment");
         assert_eq!(tag.variant, "purple-commander");
 
         // A removal event ends both `open` instances -- the overhead
@@ -622,7 +793,7 @@ mod tests {
         let raw2 = raw_from(events, raw.guid_map.clone());
         let res2 = resolve_markers(&raw2);
         assert_eq!(final_marker(&res2.open, &[1]), None, "removal must clear the overhead marker");
-        let tag2 = final_commander_tag(&res2.open, &res2.ever_commander, &[1])
+        let tag2 = final_commander_tag(&res2.open, &res2.ever_commander, &res2.commander_segments, &[1])
             .expect("commander tag must still be reported via the ever_commander fallback after removal");
         assert_eq!(tag2.variant, "purple-commander");
     }
@@ -644,7 +815,7 @@ mod tests {
         );
         let res = resolve_markers(&raw);
         assert_eq!(final_marker(&res.open, &[1]).as_deref(), Some("arrow"));
-        let tag = final_commander_tag(&res.open, &res.ever_commander, &[1]).expect("commander tag present");
+        let tag = final_commander_tag(&res.open, &res.ever_commander, &res.commander_segments, &[1]).expect("commander tag present");
         assert_eq!(tag.variant, "purple-commander");
     }
 
@@ -664,7 +835,7 @@ mod tests {
         );
         let res = resolve_markers(&raw);
         assert_eq!(res.open.get(&1).map(|v| v.len()), Some(1), "must not stack two instances of the same marker id");
-        let tag = final_commander_tag(&res.open, &res.ever_commander, &[1]).expect("commander tag present");
+        let tag = final_commander_tag(&res.open, &res.ever_commander, &res.commander_segments, &[1]).expect("commander tag present");
         assert_eq!(tag.variant, "purple-commander");
     }
 

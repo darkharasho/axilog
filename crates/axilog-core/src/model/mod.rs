@@ -81,7 +81,30 @@ pub struct Enemy { pub id: u64, pub instid: u16, pub name: String,
 /// A player's resolved commander-tag colour/variant (Task 7, M2). See
 /// `crate::wvw::markers::COMMANDER_TAG_VARIANTS`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CommanderTag { pub variant: String, pub guid: String }
+pub struct CommanderTag {
+    pub variant: String,
+    pub guid: String,
+    /// Terminated, half-open `[tag-on, tag-off)` windows in **arcdps
+    /// session time** milliseconds -- the same base as
+    /// `MarkerAssignment::time_ms`, NOT log-relative: these are raw event
+    /// timestamps, so they are not comparable against `duration_ms` and
+    /// must not be clipped to `[0, duration_ms]`. Rebase by the log's `t0`
+    /// (see `analysis::distance`) if you want encounter-relative values.
+    /// Merged and sorted across
+    /// every raw addr this player owns (relogs/build-swaps can each carry
+    /// their own commander-tag instances -- see
+    /// `wvw::markers::MarkerResolution::commander_segments`). Literal
+    /// per-instance segments, no coverage threshold, no log-end fallback
+    /// beyond a genuinely still-open instance -- see that field's doc
+    /// comment for the full GW2EI-sourced rationale. Can be empty even
+    /// though `commander_tag` is `Some`: that happens only if
+    /// `final_commander_tag` fell back to `ever_commander` for an addr
+    /// whose segment collection (a separate pass, same source events)
+    /// somehow produced nothing for it -- practically never, but callers
+    /// should treat empty here as "no resolved windows", not "never
+    /// commanded".
+    pub segments: Vec<(u64, u64)>,
+}
 /// One `CBTS_MARKER` assignment (not removal) event, resolved to a display
 /// name (Task 7, M2). `Encounter.markers` holds every one observed in the
 /// log, across all agents (squad, enemy, and NPC/gadget alike -- arcdps
@@ -113,7 +136,16 @@ pub struct Encounter { pub kind: String, pub map: String, pub duration_ms: u64,
     pub markers: Vec<MarkerAssignment>,
     /// Tick-rate telemetry from `CBTS_TICK` (Task 7, M2), `None` when the
     /// log has fewer than two such events.
-    pub tick_rate: Option<TickRate> }
+    pub tick_rate: Option<TickRate>,
+    /// Wall-clock log start, seconds since the epoch, from arcdps's
+    /// `CBTS_SQCOMBATSTART`/`sc::LOG_START` -- see that constant's doc
+    /// comment for the payload citation trail. `None` when the log carries
+    /// no such event (a truncated or synthetic log), which must stay
+    /// distinguishable from epoch zero -- the reason this isn't a bare
+    /// `u64` defaulting to 0. Phase B Task 8: replaces axibridge's
+    /// `.zevtc`-mtime inference, which is wrong for any copied or restored
+    /// file.
+    pub started_at_unix: Option<u64> }
 
 pub fn agent_kind(a: &RawAgent) -> AgentKind {
     if a.is_elite != 0xffff_ffff { AgentKind::Player }
@@ -259,7 +291,7 @@ pub fn resolve(raw: &RawLog) -> Encounter {
         kind: "wvw".into(), map: "World vs World".into(), duration_ms,
         build: raw.header.build.clone(), revision: raw.header.revision,
         recorded_by: None, teams: Vec::new(), players, enemies,
-        markers: Vec::new(), tick_rate: None,
+        markers: Vec::new(), tick_rate: None, started_at_unix: None,
     };
     crate::wvw::apply(&mut enc, raw);
     enc

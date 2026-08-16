@@ -112,6 +112,23 @@ pub struct EntityOut {
 pub struct CommanderOut {
     pub variant: String,
     pub guid: String,
+    /// Terminated, half-open `[tag-on, tag-off)` windows in **arcdps
+    /// session time** -- the same base as `markers[].time_ms`, NOT
+    /// log-relative and NOT clipped to `[0, duration_ms]`. Passed through
+    /// from `model::CommanderTag::segments` with no rebase; a consumer that
+    /// wants encounter-relative values must subtract the log's `t0` itself
+    /// (as `analysis::distance` does). Literal per-instance commander-tag
+    /// holds, not a coalesced whole-fight span (see
+    /// `model::CommanderTag::segments` for the full GW2EI-sourced
+    /// rationale: no coverage threshold, no log-end fallback beyond a
+    /// genuinely still-open instance).
+    ///
+    /// An empty vec on a *present* `CommanderOut` means the tag was
+    /// detected (this player held it at some point) but its windows could
+    /// not be resolved from this map alone -- NOT that the player never
+    /// commanded. `commander` being present at all is the "did they ever
+    /// command" signal; `segments` is "when".
+    pub segments: Vec<(u64, u64)>,
 }
 
 /// Join tables from the two id spaces the analysis layer uses onto entity
@@ -183,6 +200,7 @@ pub fn build_entities(
                 commander: p.commander_tag.as_ref().map(|c| CommanderOut {
                     variant: c.variant.clone(),
                     guid: c.guid.clone(),
+                    segments: c.segments.clone(),
                 }),
                 guild_id: p.guild_id.clone(),
                 marker: p.marker.clone(),
@@ -340,7 +358,7 @@ mod tests {
             players,
             enemies,
             markers: vec![],
-            tick_rate: None,
+            tick_rate: None, started_at_unix: None,
         }
     }
 

@@ -41,6 +41,12 @@ pub struct EncounterOut {
     pub markers: Vec<MarkerAssignmentOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tick_rate: Option<crate::TickRateOut>,
+    /// Wall-clock log start, seconds since the epoch, from arcdps's
+    /// `CBTS_LOGSTART`. `None` when the log carries no such event --
+    /// absence must stay distinguishable from epoch zero, which is why
+    /// this is not a bare `u64` defaulting to 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at_unix: Option<u64>,
 }
 
 /// One `CBTS_MARKER` assignment. `arcdps` does not restrict `CBTS_MARKER`
@@ -484,6 +490,7 @@ pub fn build_report_v1(
             teams: legacy.encounter.teams.clone(),
             markers,
             tick_rate: legacy.encounter.tick_rate.clone(),
+            started_at_unix: legacy.encounter.started_at_unix,
         },
         entities,
         source_order,
@@ -559,7 +566,7 @@ mod tests {
                 // resolves to an entity id.
                 MarkerAssignment { agent_addr: 99, marker: "star".into(), time_ms: 20 },
             ],
-            tick_rate: None,
+            tick_rate: None, started_at_unix: None,
         };
         let metrics = Metrics {
             players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],
@@ -625,7 +632,7 @@ mod tests {
             players: vec![player(1, ":Squaddie.1")],
             enemies: vec![],
             markers: vec![],
-            tick_rate: None,
+            tick_rate: None, started_at_unix: None,
         };
         let metrics = Metrics {
             players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],
@@ -692,7 +699,7 @@ mod tests {
             players: vec![player(1, ":Squaddie.1")],
             enemies: vec![],
             markers: vec![],
-            tick_rate: None,
+            tick_rate: None, started_at_unix: None,
         };
         let metrics = Metrics {
             players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],

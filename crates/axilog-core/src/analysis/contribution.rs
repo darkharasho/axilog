@@ -100,6 +100,11 @@ pub struct ContributionMetrics {
     pub damage: u64,
     /// Count of in-window `cc::is_cc` applications credited.
     pub cc: u32,
+    /// Sum of in-window `cc::is_cc` application DURATIONS credited, in ms
+    /// -- EI's `appliedCrowdControlDurationDownContribution`. The count
+    /// pair (`cc` above) existed from M11; the duration did not, which is
+    /// why that EI field had no source before Phase B.
+    pub cc_duration_ms: u64,
     /// Count of in-window hostile boon-category `BUFFREMOVE_ALL` events
     /// credited (the stability >1-stack carve-out applies here).
     pub strips: u32,
@@ -113,6 +118,7 @@ impl ContributionMetrics {
     fn merge(&mut self, other: ContributionMetrics) {
         self.damage += other.damage;
         self.cc += other.cc;
+        self.cc_duration_ms += other.cc_duration_ms;
         self.strips += other.strips;
         self.movement_impairing += other.movement_impairing;
     }
@@ -343,6 +349,12 @@ pub fn apply_with_registry(
                             .downs_contribution_per_target
                             .entry(target_rep)
                             .or_default() += c.damage;
+                        let t = players[i]
+                            .cc_downs_contribution_per_target
+                            .entry(target_rep)
+                            .or_default();
+                        t.0 += c.cc;
+                        t.1 += c.cc_duration_ms;
                     }
                 }
                 // MEIGAP2 row 1: the same credits split by skill instead.
@@ -520,6 +532,10 @@ fn credit_window<'a>(
                         let entry = out.entry(c).or_default();
                         if cc_row {
                             entry.cc += 1;
+                            // Matches `cc::apply_cc_with_registry`'s own
+                            // duration read exactly -- `value` carries CC
+                            // duration ms on a CC row, never damage.
+                            entry.cc_duration_ms += e.value.max(0) as u64;
                         } else {
                             let dmg =
                                 if e.buff == 1 { e.buff_dmg.max(0) as u64 } else { e.value.max(0) as u64 };
@@ -677,6 +693,15 @@ mod tests {
         e
     }
 
+    /// A CC application row: `value` carries the duration in ms, matching
+    /// `cc::is_cc`'s own contract (`result::CROWD_CONTROL`, `buff == 0`).
+    fn cc_ev(time: u64, src: u64, dst: u64, duration_ms: i32) -> RawEvent {
+        let mut e = base_event(time, src, dst);
+        e.result = result::CROWD_CONTROL;
+        e.value = duration_ms;
+        e
+    }
+
     fn health(time: u64, agent: u64, pct_times_100: u64) -> RawEvent {
         let mut e = base_event(time, agent, 0);
         e.dst_agent = pct_times_100;
@@ -708,7 +733,7 @@ mod tests {
                 marker: None, profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
                 agent_addrs: vec![a],
             }).collect(),
-            markers: vec![], tick_rate: None,
+            markers: vec![], tick_rate: None, started_at_unix: None,
         }
     }
 
@@ -722,6 +747,61 @@ mod tests {
             enc.players.iter().map(|p| PlayerMetrics { agent_addr: p.agent_addr, ..Default::default() }).collect();
         apply(&mut players, &raw, &enc, &squad, &enemies, &addr_to_rep);
         players
+    }
+
+    /// A single ONE enemy whose `agent_addrs` spans multiple raw addresses
+    /// (a relog mid-fight) folding to one representative `id` -- the
+    /// `enc_with`-derived `enemy_addr_to_rep` this needs comes from `apply`
+    /// itself (`enc.enemies.flat_map(|e| e.agent_addrs -> e.id)`, see
+    /// `apply`'s own doc comment), unlike `enc_with` above whose enemies are
+    /// always one address each.
+    fn enc_with_relogged_enemy(squad_addrs: Vec<u64>, enemy_id: u64, enemy_addrs: Vec<u64>) -> Encounter {
+        use crate::model::{Enemy, Player};
+        Encounter {
+            kind: "wvw".into(), map: "".into(), duration_ms: 100_000, build: "".into(),
+            revision: 1, recorded_by: None, teams: vec![],
+            players: squad_addrs.iter().map(|&a| Player {
+                agent_addr: a, account: format!(":P{a}.1"), character: format!("P{a}"),
+                profession: "Thief".into(), elite_spec: "".into(), team: "red".into(),
+                subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
+                agent_addrs: vec![a],
+            }).collect(),
+            enemies: vec![Enemy {
+                id: enemy_id, instid: 0, name: "E".into(), team: "blue".into(), is_player: true,
+                marker: None, profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
+                agent_addrs: enemy_addrs,
+            }],
+            markers: vec![], tick_rate: None, started_at_unix: None,
+        }
+    }
+
+    fn run_relogged(
+        events: Vec<RawEvent>, squad_addrs: Vec<u64>, enemy_id: u64, enemy_addrs: Vec<u64>,
+    ) -> Vec<PlayerMetrics> {
+        let enc = enc_with_relogged_enemy(squad_addrs.clone(), enemy_id, enemy_addrs.clone());
+        let raw = raw_from(events);
+        let squad: BTreeSet<u64> = squad_addrs.into_iter().collect();
+        let enemies: BTreeSet<u64> = enemy_addrs.into_iter().collect();
+        let addr_to_rep: BTreeMap<u64, u64> = squad.iter().map(|&a| (a, a)).collect();
+        let mut players: Vec<PlayerMetrics> =
+            enc.players.iter().map(|p| PlayerMetrics { agent_addr: p.agent_addr, ..Default::default() }).collect();
+        apply(&mut players, &raw, &enc, &squad, &enemies, &addr_to_rep);
+        players
+    }
+
+    /// Runs a single down window against squad attacker 1 / enemy target 9,
+    /// with one in-window `cc::is_cc` application per entry in `durations_ms`
+    /// (each at a distinct, ascending time before the down), and returns the
+    /// resulting `ContributionMetrics`.
+    fn run_window_with_cc(durations_ms: &[i32]) -> ContributionMetrics {
+        let mut events: Vec<RawEvent> = durations_ms
+            .iter()
+            .enumerate()
+            .map(|(i, &dur)| cc_ev(1000 + i as u64, 1, 9, dur))
+            .collect();
+        events.push(down(5000, 1, 9));
+        let players = run(events, vec![1], vec![9]);
+        players[0].downs_contribution
     }
 
     /// Anchor math: no health data for the target at all -> `None` treated
@@ -963,5 +1043,59 @@ mod tests {
         let events = vec![removal, down(5000, 1, 9)];
         let players = run(events, vec![1], vec![9]);
         assert_eq!(players[0].downs_contribution.movement_impairing, 0, "post-era rows never match the pre-era-only predicate");
+    }
+
+    /// EI reports both a COUNT and a DURATION of crowd control credited in
+    /// a down's contribution window. Only the count existed before; the
+    /// duration field is new, so this is the first test that pins it.
+    #[test]
+    fn credits_cc_duration_in_the_down_window() {
+        let m = run_window_with_cc(&[300, 200]);
+        assert_eq!(m.cc, 2);
+        assert_eq!(m.cc_duration_ms, 500);
+    }
+
+    /// `cc_downs_contribution_per_target` (the CC half of the per-target
+    /// down-contribution fold, `apply_with_registry`'s `Direction::Outgoing`
+    /// arm) had no assertion coverage at all before this test -- only the
+    /// scalar `ContributionMetrics::cc`/`cc_duration_ms` were pinned. This
+    /// exercises the map directly: a single down's in-window CC applications
+    /// must land in the map keyed by the downed target's representative id,
+    /// with the count/duration pair matching the scalar exactly (same
+    /// credits, just not collapsed -- the same invariant
+    /// `downs_contribution_per_target` already documents for its damage
+    /// half).
+    #[test]
+    fn credits_cc_downs_contribution_per_target() {
+        let events = vec![cc_ev(1000, 1, 9, 300), cc_ev(2000, 1, 9, 200), down(5000, 1, 9)];
+        let players = run(events, vec![1], vec![9]);
+        assert_eq!(players[0].downs_contribution.cc, 2, "sanity: scalar unaffected by adding the per-target map");
+        assert_eq!(
+            players[0].cc_downs_contribution_per_target[&9], (2, 500),
+            "per-target map must carry the same credits as the scalar, keyed by the target"
+        );
+    }
+
+    /// Relog folding (task-3-brief.md:126/controller ruling, same rule
+    /// `cc_per_target` in `cc.rs` is subject to): a single enemy who
+    /// relogged mid-fight -- down #1 at raw address 9, down #2 at raw
+    /// address 90, both representing the SAME enemy (id 9) -- must produce
+    /// ONE `cc_downs_contribution_per_target` row, not two, with the counts
+    /// summed across both addresses.
+    #[test]
+    fn folds_cc_downs_contribution_per_target_across_relogged_enemy_addresses() {
+        let events = vec![
+            cc_ev(1000, 1, 9, 300),
+            down(5000, 1, 9),        // down #1, enemy's pre-relog address
+            cc_ev(6000, 1, 90, 200),
+            down(9000, 1, 90),       // down #2, enemy's post-relog address -- same enemy
+        ];
+        let players = run_relogged(events, vec![1], 9, vec![9, 90]);
+        assert_eq!(
+            players[0].cc_downs_contribution_per_target.len(),
+            1,
+            "a relogged enemy's two addresses must fold into ONE row, not two"
+        );
+        assert_eq!(players[0].cc_downs_contribution_per_target[&9], (2, 500));
     }
 }

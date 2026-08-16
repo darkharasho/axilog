@@ -72,7 +72,8 @@ inside `blocks` is empty or absent.
   ],
   "markers": [
     { "entity_id": 58, "agent_addr": 9619, "marker": "3cd1c64a...", "time_ms": 33847418 }
-  ]
+  ],
+  "started_at_unix": 1768702180
 }
 ```
 
@@ -82,6 +83,14 @@ inside `blocks` is empty or absent.
 marker's agent resolved to a tracked entity — `arcdps` does not restrict
 `CBTS_MARKER` to squad members, so a marker on untracked friendly siege is
 ordinary and still needs to survive with `agent_addr` alone).
+
+`started_at_unix` is the wall-clock log start, seconds since the epoch, read
+from arcdps's own `CBTS_LOGSTART`/`CBTS_SQCOMBATSTART` event -- the SERVER
+timestamp specifically, not the recording client's local clock (arcdps
+records both; a machine's own clock skew is not a fact about the log).
+Omitted (not `0`) when the log carries no such event, so absence stays
+distinguishable from epoch zero. This replaces inferring the start time from
+the `.zevtc` file's mtime, which breaks for any copied or restored file.
 
 ## `entities[]` and the `role` field
 
@@ -96,7 +105,8 @@ Real rows from the fixture, trimmed to four representative roles:
   { "id": 7, "role": "squad", "account": ":Anon106.4922", "character": "Anon106",
     "profession": "Guardian", "elite_spec": "Dragonhunter", "team": "green",
     "subgroup": 2,
-    "commander": { "variant": "purple-commander", "guid": "1993fadb6fb70e4383a223a54d311f7d" },
+    "commander": { "variant": "purple-commander", "guid": "1993fadb6fb70e4383a223a54d311f7d",
+      "segments": [[33847418, 33847418], [33847418, 33896600]] },
     "guild_id": "00000000-0000-0000-0000-000000000000",
     "agent_addr": 4566, "instid": 3684, "combat_participant": true },
 
@@ -108,6 +118,22 @@ Real rows from the fixture, trimmed to four representative roles:
     "agent_addr": 9718, "instid": 3287, "combat_participant": true }
 ]
 ```
+
+`commander.segments` holds every terminated `[tag-on, tag-off)` window this
+player's commander tag was ever assigned, half-open, in the log's own
+millisecond time base (same base as `markers[].time_ms` above — arcdps
+session time, not encounter-relative). These are LITERAL per-instance
+segments, not a coalesced whole-fight span: entity `7`'s real fixture data
+above shows two, including a zero-width `[33847418, 33847418]` pair from an
+immediate same-timestamp reassignment. There is no minimum-coverage
+threshold and no fallback that extends a segment closed by a removal to the
+log's end — only a segment that is *still open* when the log ends is closed
+there. An unreciprocated removal (nothing open to close) is a silent no-op,
+exactly as GW2EI's own commander-timeline construction treats it — see
+`crate::wvw::markers::MarkerResolution::commander_segments`'s doc comment
+for the full citation. An empty `segments` on a present `commander` means
+the tag was detected but its windows could not be resolved, not that the
+player never commanded.
 
 Absent fields are omitted, never emitted as `null` or `""` — a player entity
 has no `name`, an NPC has no `account`/`character`/`profession`. `id` is a
@@ -598,7 +624,10 @@ expensive half.
       "end_ms": 49266,
       "active_ms": 49263,
       "down": [[12642, 15512]],
-      "dead": []
+      "dead": [],
+      "dc": [],
+      "dist_to_com": 281.37823486328125,
+      "stack_dist": 172.18305969238281
     }
   },
   "tracks": {
@@ -608,14 +637,15 @@ expensive half.
       "0": {
         "samples": [[300, -11097.6, -23619.4], [600, -11156.3, -23711.1], "..."],
         "down_intervals": [[12642, 15512]],
-        "dead_intervals": []
+        "dead_intervals": [],
+        "dc_intervals": []
       }
     }
   }
 }
 ```
 
-Three things a consumer needs to know about that shape:
+Four things a consumer needs to know about that shape:
 
 - **`coverage.replay == "present"` does not mean positions are available.**
   It answers the intervals question, which this block can always answer.
@@ -630,6 +660,87 @@ Three things a consumer needs to know about that shape:
   track would take every enemy player's down/dead history with it. For a
   squad entity the two copies come from the same computation and cannot
   disagree.
+- **`dc`/`dc_intervals` cover disconnect/not-yet-spawned windows
+  (`CBTS_DESPAWN` to the matching `CBTS_SPAWN`), and are not mutually
+  exclusive with `down`/`dead` — an agent can despawn while dead. Every
+  interval in this block is half-open `[start_ms, end_ms)`, which is a
+  deliberate divergence from GW2EI's own `dc` export: GW2EI brackets the
+  pre-spawn/post-despawn ends with an inclusive sentinel
+  (`[i64::MinValue, FirstAware]`/`[LastAware, i64::MaxValue]`) rather than a
+  true half-open interval. The cutover report measured that difference at 6
+  of 6,894 samples (0.087%) of axibridge's current distance error — small
+  enough that matching this format's own half-open convention throughout
+  was judged more valuable than byte-parity with GW2EI's sentinel choice.
+  An agent that is still disconnected at log end gets **no interval at
+  all** for that window — the still-open `dc` is dropped, not closed at the
+  log's end and not emitted unclosed (`build_intervals` discards `dc_open`
+  on scan end; pinned by
+  `unclosed_dc_interval_at_log_end_is_dropped`). That is the honest
+  half-open analogue of GW2EI's sentinel bracketing: GW2EI has no real
+  closing bound there either, it just writes `[LastAware, MaxValue]`.
+  Commander `segments`, by contrast, *are* closed at log end, because
+  GW2EI's `CalculateCommanderStates` explicitly clamps with
+  `Math.Min(markerEvent.EndTime, log.LogData.EvtcLogEnd)` — different
+  upstream rule, deliberately different behaviour. **Consequence:** active
+  time derived as `end_ms - start_ms` minus summed `dc` over-counts for
+  every player who disconnects and never returns; use `active_ms`, or
+  treat a missing trailing `dc` accordingly.
+
+### `dist_to_com` / `stack_dist`
+
+These two are GW2EI's `statsAll[].distToCom` and `.stackDist`, computed
+engine-side: the mean distance, in world inches, from this player to the
+commander and to the squad centre, over the player's own active polls.
+They are **absent unless `--replay` was passed** — they are a reduction over
+the position tracks and cannot exist without them — but they live on the
+always-present `by_entity` row rather than inside `tracks` so that absence
+stays meaningful.
+
+That matters, because there are three states and only two of them look
+alike:
+
+| Value | Meaning |
+|---|---|
+| absent | **The pass never ran.** `--replay` was not passed, so no positions were decoded and nothing was measured. |
+| `-1` | **The pass ran and nothing qualified.** Positions were decoded; this actor had no poll that paired with a reference. GW2EI's own sentinel — it emits `-1`, not `null`, and EI-shaped readers already reject it by value. |
+| `>= 0` | A real mean distance. `0` is reachable and correct: the commander's own `dist_to_com` is exactly `0`. |
+
+Collapsing absent into `-1` (or `-1` into absent) destroys the distinction.
+Treat any negative value as "no answer" and never as a distance.
+
+These two scalars are the **one** part of `by_entity` that depends on the
+`--replay` gate; every other field on that row (`start_ms`, `end_ms`,
+`active_ms`, `down`, `dead`, `dc`) is computed on every parse and is
+byte-identical with and without the gate. If you assert "turning positions
+on must not change the intervals half", scope that assertion to those
+interval fields — the distance scalars are position-derived, so their
+appearing only under `--replay` is the contract, not a violation of it.
+
+The reduction's rules are exacting and are documented in full, with GW2EI
+source citations, on `axilog_core::analysis::distance`. Two are worth
+repeating here because they surprise people reading the numbers:
+
+- **The two references are asymmetric on purpose.** The squad centre is the
+  per-poll mean of every squad player's *active* position, so a downed
+  player drops out of it. The commander reference, separately, is the
+  commanding player's *raw* positions during their tag windows, so a downed
+  commander still anchors the squad. That is GW2EI's behaviour, verified
+  against GW2EI source.
+- **Distance is measured in the XY plane.** Z is discarded, so two players
+  stacked vertically are at distance zero.
+
+This reduction was checked against GW2EI's own exported positions to a
+worst-case error of 0.0104 / 0.0073 inches over 41 actors -- under the
+floor set by that fixture's 3-decimal-place pixel rounding. That check
+directly certifies three of the eight rules the reduction depends on (the
+mean, not median; the squad-centre poll cap; and the squad centre's
+active-position filter, the first half of the asymmetry above). It also
+certifies a fourth, the participation filter, via a separate end-to-end
+check. The remaining rules -- including the commander reference's raw
+positions, the second half of that same asymmetry -- have zero measured
+effect on that particular fixture (no commander in it goes down while
+tagged) and rest instead on their own unit tests in
+`axilog_core::analysis::distance` and on the GW2EI source citations there.
 
 The position track itself is the one exception to the series envelope —
 raw `(t_ms, x, y)` triples rather than a `SeriesOut`. This is deliberate, not an oversight: `SeriesOut` assumes a dense array
@@ -676,6 +787,56 @@ bisecting:
   `--rotation` gate record, and `cast_count` went with it — one key removed.
   The count was exactly `casts.len()`, so keeping it would have meant two
   fields encoding one gate, free to disagree.
+- Phase B (native-format-gap-closure Task 4) widened
+  `blocks.damage.by_entity.<id>.per_target.<id>.detail` from 7 fields to 23,
+  additively — the same `--skill-damage` gate governs the whole group, so
+  no new presence signal was needed. Recorded here (unlike the additive
+  bullet above would otherwise require) because it moved the key-set
+  golden by 16 entries in one commit; a bisect landing between the old and
+  new counts should read this rather than re-deriving it from the diff.
+
+- Phase B final-fix round: `axilog_core::analysis::per_target::PerTargetOffense`
+  lost its four `applied_*` crowd-control fields. They were never written
+  anywhere — the CC per-target accumulation has always lived on
+  `PlayerMetrics::cc_per_target`/`cc_downs_contribution_per_target` — so a
+  core-API consumer reading them got a silent `0`. **No native-format key
+  moved**: `blocks.damage.by_entity.<id>.per_target.<id>.detail` still
+  carries all four, filled by the schema-layer join, and the key-set golden
+  is unchanged. This bullet records a *core Rust API* break, not a wire
+  break.
+
+- Phase B final-fix round: `ReplayTrackOut::dc_intervals` gained
+  `#[serde(skip)]`, so the **legacy** embedded HTML-report JSON no longer
+  carries it (matching `agent_addr`/`dist_to_com`/`stack_dist` on the same
+  struct). `report.js` never read it. Again **no native-format key moved** —
+  `blocks.replay.tracks.by_entity.<id>.dc_intervals` and
+  `blocks.replay.by_entity.<id>.dc` are both untouched.
+
+  The 16 new native fields on `PerTargetDetail` come from **two** core
+  sources, joined side by side by `PerTargetStatsOut` at the schema layer.
+  Twelve mirror `axilog_core::analysis::per_target::PerTargetOffense`
+  field-for-field — `direct_count`, `direct_damage`, `crit_count`,
+  `crit_damage`, `flank_count`, `glance_count`, `critable_direct_count`,
+  `against_downed_damage`, `missed`, `evaded`, `blocked`, `invulned` — and
+  the four `applied_*` crowd-control fields (`applied_total`,
+  `applied_duration_ms`, `applied_downs_contribution`,
+  `applied_duration_downs_contribution_ms`) come instead from
+  `PlayerMetrics::cc_per_target` and
+  `PlayerMetrics::cc_downs_contribution_per_target`, because CC rows are
+  dispatched by a different predicate (`cc::is_cc`) than the damage scan.
+  `PerTargetOffense` deliberately carries no `applied_*` fields; do the same
+  join if you read the core model directly. Of those, `critable_direct_count`
+  is native-only — it is `criticalRate`'s denominator, which real EI never
+  publishes per target, so `to_ei_json`'s `statsTargets` split fills the
+  other 15 under their EI key names (`directDmg`, `criticalRate`,
+  `criticalDmg`, `flankingRate`, `glanceRate`, `connectedDirectDamageCount`,
+  `againstDownedDamage`, `missed`, `evaded`, `blocked`, `invulned`,
+  `appliedCrowdControl`, `appliedCrowdControlDuration`,
+  `appliedCrowdControlDownContribution`,
+  `appliedCrowdControlDurationDownContribution`) and omits the 16th. Note
+  `directDmg` maps to `direct_damage`, not to the pre-existing
+  `connected_direct_dmg` field elsewhere in this schema — the two measure
+  different quantities despite the similar name.
 
 ## The ei-json layer is permanent
 
