@@ -78,7 +78,7 @@ reader rewrite — the owner's, not ours).
 
 ## Do not start without asking
 
-MPROC (skill proc/instant-cast flags — a port of GW2EI's ~616-finder
+MPROC (skill proc/instant-cast flags — a port of GW2EI's 658-finder
 instant-cast subsystem, NOT the catalog the old "Phase C proc flags" wording
 implied; scoped in `docs/ROADMAP.md`), Phase D, a `--compact` CLI flag,
 format-level size work, MOBJ (`wvWMapData` objectives), pre-existing clippy

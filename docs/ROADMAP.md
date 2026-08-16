@@ -205,20 +205,39 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
     `SkillData.cs:44-58` is then a bare `Contains`.
   - **The flag set is LOG-SPECIFIC, so a static id table cannot match EI.** `Available()`
     (`InstantCastFinder.cs:138-150`) gates on the finder's `_enableConditions` plus a GW2 build
-    range plus an evtc build range.
-  - Scale: ~616 finder constructions across ~30 profession-helper files in 8 subclasses
-    (Buff/Damage/Effect/Marker/Minion/Missile/Checked/WeaponSwap). Only 153 declare a non-default
-    origin — 85 `Gear`, 49 `Trait`, 17 `Unconditional`, 2 `Skill` (the default, which sets no flag).
+    range plus an evtc build range. Build ranges alone would still be tabulatable per build pair,
+    but `_enableConditions` are arbitrary `Func<CombatData,bool>` predicates over the parsed log
+    (`UsingEnable`, `InstantCastFinder.cs:81-95` — e.g. `!combatData.HasEffectData`, spec checkers),
+    with **187** `UsingChecker` call sites in `ProfHelpers`. So availability genuinely depends on
+    log contents, not just on the build pair.
+  - Scale (measured in `GW2EIEvtcParser/EIData/ProfHelpers`, 2026-08-16): **658** finder
+    constructions across ~44 profession-helper files in **13** subclasses — `BuffGain` 190,
+    `Effect` 175, `MinionCommand` 86, `Damage` 77, `BuffLoss` 33, `EXTHealing` 32, `BuffGive` 21,
+    `MinionCast` 12, `Missile` 11, `MinionSpawn` 11, `EXTBarrier` 4, `BandTogether` 4,
+    `BreakbarDamage` 2. Gating on top of that: **957** `.WithBuilds(`, 6 `.WithEvtcBuilds(`,
+    187 `.UsingChecker(`. Only 148 `.UsingOrigin(` calls declare a non-default origin
+    (85 `Gear`, 49 `Trait`, 17 `Unconditional`; the 2 `Skill` are the default and set no flag),
+    and 19 `.UsingNotAccurate(`. (An earlier pass said "~616 finders / 153 origins" — same shape,
+    superseded by these directory-scoped counts.)
   - `isGearProc` is the LARGEST bucket, so scope MPROC to the full family, not the three flags
     this roadmap used to name. `analysis/skill_map.rs` already had the complete list; only the
     roadmap summary was short. `isNotAccurate` comes from the same loop (`CombatData.cs:224`)
     and rides along for free.
-  - UNRESOLVED: `isInstantCast` appears nowhere in the parser — almost certainly computed in
-    `GW2EIBuilders`, which is not in the `/var/tmp/gw2ei` sparse checkout. `sparse-checkout add`
-    it before designing.
+  - RESOLVED (was open; `GW2EIBuilders` added to the sparse checkout 2026-08-16):
+    `isInstantCast` is `log.CombatData.GetInstantCastData(skill.ID).Any()`
+    (`GW2EIBuilders/JsonModels/JsonLogBuilder.cs:23`), i.e. "did any `InstantCastEvent` for this
+    skill id actually get emitted in THIS log" — `_instantCastDataByID` lookup,
+    `CombatDataFetchers.cs:634`. **This is a strictly stronger requirement than the four proc
+    flags.** Those are set from finder *availability*; `isInstantCast` needs the finder to have
+    *fired*, so it cannot be shortcut at all — you must run `ComputeInstantCast` for real.
   - Therefore this is a SUBSYSTEM PORT, not a catalog generator — milestone-sized, and the
     roadmap's smallest-looking bullet was hiding that. Real adjacent value: instant-cast events
     would also fill M14's known `rotation` gap, which covers only the `AnimatedCastEvent` pipeline.
+  - Cheap adjacent wins found while reading `JsonLogBuilder.BuildSkillDesc` — NOT part of MPROC,
+    and not currently emitted by ei-json's `skillMap`: `canCrit` is
+    `SkillItemOverrides.NonCritableSkills.TryGetValue(id) → gw2Build < build` (`SkillItem.cs:128`),
+    a small build-gated static table; `isSwap` is a pure id test against weapon-swap / attunement /
+    legend / shroud ids (`SkillItem.cs:28-38`). Both are hours, not a milestone.
   - The cheap alternative, considered and NOT taken: ship the 153 `(skill_id, origin)` pairs as a
     generated catalog and flag referenced ids unconditionally (~a day). It over-flags exactly where
     `Available()` says no, so it would need a documented+ruled exception rather than parity.

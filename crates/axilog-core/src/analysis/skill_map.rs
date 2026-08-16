@@ -21,11 +21,16 @@
 //! NOT need the external database. Those four are a side effect of GW2EI's
 //! instant-cast detection subsystem -- `CombatData.cs:214-244` fills the sets
 //! from each `InstantCastFinder`'s declared `CastOrigin`, and `SkillData.cs`
-//! only does `Contains`. They are reproducible, but the cost is porting ~616
-//! finders, and the answer is LOG-SPECIFIC (finder availability is gated on
-//! GW2/evtc build ranges), so no static table can match EI. Only
-//! `conversionBasedHealing`/`hybridHealing` and the richer names/icon are
-//! genuinely database-backed.
+//! only does `Contains`. They are reproducible, but the cost is porting 658
+//! finders, and the answer is LOG-SPECIFIC (availability is gated on GW2/evtc
+//! build ranges *and* on arbitrary predicates over the parsed log), so no
+//! static table can match EI. `isInstantCast` is stricter still: it asks
+//! whether a finder actually FIRED in this log
+//! (`GW2EIBuilders/JsonModels/JsonLogBuilder.cs:23`), so it cannot be
+//! shortcut at all. Only `conversionBasedHealing`/`hybridHealing` and the
+//! richer names/icon are genuinely database-backed -- and two neighbours in
+//! the same struct, `canCrit` and `isSwap`, are cheap static id tests that
+//! need neither the database nor the finders.
 //! It builds a much smaller, purely-LOG-DERIVED map:
 //!
 //! - `name`: straight from the log's own `cbtskill` table
