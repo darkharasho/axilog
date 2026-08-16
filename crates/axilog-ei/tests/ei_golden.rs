@@ -1086,9 +1086,25 @@ fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
     }
 
     // -- gated on: the full split, summing back to statsAll[0] --
+    //
+    // `dist_outcomes` is passed explicitly (unlike a bare `Default::
+    // default()`) because the Phase B Task 4 review extension below needs
+    // `totalDamageDist`'s `missed`/`evaded`/`blocked`/`invulned` outcome
+    // columns populated -- those ride the SAME `--skill-damage` gate but
+    // are a SEPARATE pass (`SkillRow::outcomes`) that only fills in when
+    // this `Passes` field is actually supplied, same as every other block
+    // built through `Passes`.
+    let dist_outcomes = axilog_core::analysis::dist_outcomes::build(&raw, &enc);
     let full =
         axilog_schema::build_report(&enc, &metrics, "0.0.0-test", None, None, true, false, false, None);
-    let full_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &full, "0.0.0-test", None, &Default::default());
+    let full_v1 = axilog_schema::v1::build_report_v1(
+        &enc,
+        &metrics,
+        &full,
+        "0.0.0-test",
+        None,
+        &axilog_schema::v1::Passes { dist_outcomes: Some(&dist_outcomes), ..Default::default() },
+    );
     let ei = axilog_ei::to_ei_json(&full_v1, None);
     let mut exact_players = 0usize;
     let mut checked = 0usize;
@@ -1128,6 +1144,117 @@ fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
     println!(
         "ei_json_stats_targets_split_is_gated_and_sums_to_stats_all: {checked} column sums \
          checked, {exact_players} players exact"
+    );
+
+    // Phase B Task 4 review finding: nine of the 15 new `statsTargets`
+    // keys have a directly analogous whole-fight counterpart computable
+    // WITHOUT the gitignored local reference export, so a wiring bug in
+    // any of them (crit_count/crit_damage swapped, a CC map misread, ...)
+    // should not pass CI silently the way it did before this extension.
+    //
+    // Five join `statsAll[0]` exactly like the four fields above --
+    // `appliedCrowdControl`/`criticalDmg`/`flankingRate`/`glanceRate`/
+    // `connectedDirectDamageCount` are all plain COUNTS (or a damage sum
+    // for `criticalDmg`) restricted to one enemy, same "same predicate,
+    // narrower domain" relationship as `killed`/`downed`/etc above.
+    // `flankingRate`/`glanceRate` are NOT floating-point rates despite the
+    // name -- confirmed directly against a real EI export
+    // (`fixtures/wvw-small.ei.json`'s `hitStats.criticalRate`/
+    // `flankingRate`/`glanceRate` are plain integers, e.g. 139/51/3, not
+    // percentages), matching this adapter's own `crit_count`/`flank_count`/
+    // `glance_count` mapping, so the same `sum <= whole` count invariant
+    // applies unchanged -- no rate reconstruction needed for these three.
+    //
+    // The other four -- `missed`/`evaded`/`blocked`/`invulned` -- have NO
+    // `statsAll[0]` scalar at all (that block only carries the INCOMING
+    // defense-side counts, `defenses[0].missedCount` etc, a different
+    // quantity). Their genuine whole-fight counterpart is
+    // `totalDamageDist`'s per-skill outcome columns
+    // (`crates/axilog-ei/src/lib.rs:222-225`): both this per-target split
+    // and that per-skill split are filled by the SAME `classify_outcome`
+    // scan over the SAME outgoing event stream (`per_target::build` and
+    // `dist_outcomes::build`'s outgoing pass both import
+    // `defenses::classify_outcome` and dispatch on it identically -- see
+    // `per_target.rs:238-252` vs `dist_outcomes.rs:144-153`), just grouped
+    // by target here instead of by skill. So summing the per-target split
+    // over the curated `statsTargets` roster can only ever be <= the same
+    // field summed over EVERY skill in `totalDamageDist` (which covers
+    // every target, enumerated or not) -- the identical subset argument
+    // the five `statsAll`-based fields above already rely on, with a
+    // different "whole" expression because no single scalar exists for
+    // it.
+    //
+    // Tracked with a PER-FIELD "at least one exact" bar instead of folding
+    // into the single `exact_players` counter above: entangling 13 fields
+    // behind one "some player matches ALL of them" requirement would make
+    // that bar's satisfiability depend on a coincidence of this one
+    // fixture's roster (a player touching zero non-enumerated targets
+    // across nine MORE fields, not just the original four) rather than
+    // meaningfully exercising each field's own split/whole relationship.
+    let mut exact_counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    let mut checked2 = 0usize;
+    for p in ei["players"].as_array().expect("players") {
+        let targets = p["statsTargets"].as_array().expect("statsTargets");
+        for (split_field, all_field) in [
+            ("appliedCrowdControl", "appliedCrowdControl"),
+            ("criticalDmg", "criticalDmg"),
+            ("flankingRate", "flankingRate"),
+            ("glanceRate", "glanceRate"),
+            ("connectedDirectDamageCount", "connectedDirectDamageCount"),
+        ] {
+            let sum: i64 =
+                targets.iter().map(|t| t[0][split_field].as_i64().expect("integer")).sum();
+            let whole = p["statsAll"][0][all_field].as_i64().expect("integer");
+            checked2 += 1;
+            assert!(
+                sum <= whole,
+                "{}: statsTargets sum of {split_field} ({sum}) exceeds statsAll[0].{all_field} \
+                 ({whole}) -- the split can only ever be a subset",
+                p["account"]
+            );
+            if sum == whole {
+                *exact_counts.entry(split_field).or_insert(0) += 1;
+            }
+        }
+
+        let dist = p["totalDamageDist"][0].as_array().expect("totalDamageDist[0]");
+        for field in ["missed", "evaded", "blocked", "invulned"] {
+            let sum: i64 = targets.iter().map(|t| t[0][field].as_i64().expect("integer")).sum();
+            let whole: i64 = dist.iter().map(|r| r[field].as_i64().unwrap_or(0)).sum();
+            checked2 += 1;
+            assert!(
+                sum <= whole,
+                "{}: statsTargets sum of {field} ({sum}) exceeds totalDamageDist's summed \
+                 {field} ({whole}) -- the split can only ever be a subset",
+                p["account"]
+            );
+            if sum == whole {
+                *exact_counts.entry(field).or_insert(0) += 1;
+            }
+        }
+    }
+    assert!(checked2 >= 100, "expected a non-degenerate comparison, checked {checked2}");
+    for field in [
+        "appliedCrowdControl",
+        "criticalDmg",
+        "flankingRate",
+        "glanceRate",
+        "connectedDirectDamageCount",
+        "missed",
+        "evaded",
+        "blocked",
+        "invulned",
+    ] {
+        assert!(
+            exact_counts.get(field).copied().unwrap_or(0) > 0,
+            "expected at least one player whose {field} statsTargets split sums EXACTLY to its \
+             whole-fight counterpart -- zero exact means the split is systematically dropping \
+             events for this field"
+        );
+    }
+    println!(
+        "ei_json_stats_targets_split_extended_invariants: {checked2} column sums checked across \
+         9 new fields, exact-hit counts: {exact_counts:?}"
     );
 }
 

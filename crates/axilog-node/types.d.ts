@@ -73,6 +73,15 @@ export interface PerEnemyOut {
  * last-hit attributions, matching GW2EI. `downs_contribution_damage` is the
  * arcdps-methodology per-target down-contribution, NOT EI's own
  * 90%-to-downstate-window algorithm.
+ *
+ * Phase B (native-format-gap-closure Task 4) widened this from 8 fields to
+ * 24. `direct_damage` is EI's per-target `directDmg` -- the damage sum
+ * over `is_direct_hit` rows against this one target -- and is NOT the same
+ * quantity as this schema's `connected_direct_dmg` elsewhere (a different,
+ * whole-fight-only figure); collapsing the two would silently substitute
+ * the wrong number under a plausible-looking name. `critable_direct_count`
+ * is native-only: it is `criticalRate`'s denominator, which real EI never
+ * publishes per target, so it has no `statsTargets` counterpart.
  */
 export interface PerTargetStatsOut {
   enemy_id: number
@@ -83,6 +92,22 @@ export interface PerTargetStatsOut {
   killed: number
   interrupts: number
   downs_contribution_damage: number
+  direct_count: number
+  direct_damage: number
+  crit_count: number
+  crit_damage: number
+  flank_count: number
+  glance_count: number
+  critable_direct_count: number
+  against_downed_damage: number
+  missed: number
+  evaded: number
+  blocked: number
+  invulned: number
+  applied_total: number
+  applied_duration_ms: number
+  applied_downs_contribution: number
+  applied_duration_downs_contribution_ms: number
 }
 
 export interface DamageOut {
@@ -940,6 +965,11 @@ export interface SkillRow {
  * Mirrors the legacy `PerTargetStatsOut` field-for-field, minus `enemy_id`
  * (the enclosing map's key here, as the target's ENTITY id). `interrupts`
  * and `downs_contribution_damage` are not derivable from any other block.
+ *
+ * Phase B (native-format-gap-closure Task 4) widened this from 7 fields to
+ * 23, mirroring `PerTargetStatsOut`'s own widening above -- see that
+ * interface's doc comment for the `direct_damage`/`connected_direct_dmg`
+ * distinction and why `critable_direct_count` has no ei-json counterpart.
  */
 export interface PerTargetDetail {
   connected_hits: number
@@ -953,6 +983,22 @@ export interface PerTargetDetail {
    * target -- NOT GW2EI's 90%-to-downstate-window algorithm.
    */
   downs_contribution_damage: number
+  direct_count: number
+  direct_damage: number
+  crit_count: number
+  crit_damage: number
+  flank_count: number
+  glance_count: number
+  critable_direct_count: number
+  against_downed_damage: number
+  missed: number
+  evaded: number
+  blocked: number
+  invulned: number
+  applied_total: number
+  applied_duration_ms: number
+  applied_downs_contribution: number
+  applied_duration_downs_contribution_ms: number
 }
 
 /**
@@ -964,7 +1010,7 @@ export interface PerTarget {
   total: number
   /**
    * Grouped under one key rather than flattened so its absence has a
-   * single unambiguous signal instead of seven fabricated zeros.
+   * single unambiguous signal instead of 23 fabricated zeros.
    */
   detail?: PerTargetDetail
   /** Per-(entity, target, skill) outgoing damage, keyed by skill id. */
