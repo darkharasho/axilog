@@ -37,6 +37,14 @@ algorithm arbiter, dev-relayed arcdps methodology is authoritative.
   time-ordered index; flat-Vec registry; healing gate hoist. Fixture pipeline 50.5→28.9ms;
   real 583k-event log 325.5→174.5ms (analyze 2.63×). Output verified byte-identical to
   pre-MPERF main across 30/30 surfaces. docs/BENCHMARKS.md has the full applied/declined record.
+- MSTREAM Streaming ei-json serialization (merged 8977f74, shipped v0.3.0): stream the document
+  instead of materializing the whole `serde_json::Value` tree. On the 583k-event log, matched
+  ei-json surface: peak RSS 2,389 → 117.0 MiB (−95.1%, 20.4x) and wall 3.24 → 2.07 s (−36%);
+  native JSON output untouched. Output byte-identical base → tip across 96/96 flag combinations.
+  Note the baseline is `0a8cf25` (MEIGAP2's merge), not the v0.2.0 tag — MEIGAP/MEIGAP2 had
+  roughly doubled the ei-json document (183 → 366 MB) and pushed the pre-MSTREAM peak from
+  1,281 to 2,389 MiB first. This flipped the one column Elite Insights still won. Caveat kept
+  from docs/BENCHMARKS.md: the EI side was NOT re-run, so those deltas are axilog-vs-axilog.
 - **v0.1.1 RELEASED + npm LIVE**: packages renamed to the @axiapps scope and published —
   `npm install @axiapps/axilog` works from the public registry (install-smoke verified).
   M8-parked publish hardening landed (index.js version-literal guard in check-versions.sh,
@@ -145,7 +153,7 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   (4800x inside tolerance), PRESENCE_TOLERANCE_PP tighten (~0.05pp), boons_golden
   LOCAL_FIXTURE_PATH env-var migration, OffsetBuffExtensionEvents, duration-graph-value latent.
 
-## Queued (autonomous — build in order; reorder only for dependency)
+## Done (analysis milestones)
 - M16 Damage modifiers COMPLETE (merged 1545930, reviewed SHIP): EiInputs refactor; GW2EI-cited
   engine (10 GainComputers, AlwaysMaster); 205-definition catalog regenerable from GW2EI source
   (scripts/gen_damage_mod_catalog.py, regen diff empty; 69/75 reference ids); emission behind
@@ -162,14 +170,17 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   rows 792/958 exact, ids 38/69, all denominator residuals 0.0. 36 local calibration tests now
   run from any worktree via AXILOG_LOCAL_FIXTURES.
 
-## Queued (autonomous)
-- MEIGAP ei-json adapter gap closure for axibridge: the axibridge cutover audit
+## Done (axibridge gap closure)
+- MEIGAP + MEIGAP2 COMPLETE (shipped v0.3.0): the axibridge cutover audit
   (axibridge:docs/axilog-cutover-report.md) found 30 of 118 read fields blank under axilog's
-  ei-json — chiefly the per-player generation attribution arrays (selfBuffs/groupBuffs/
-  squadBuffs — native generation EXISTS since M3, unmapped), targets[].buffs /
-  targets[].totalDamageDist / targets[].damage1S mirrors, and powerDamageTaken1S. Mostly
-  adapter mapping over existing native data. When closed, axibridge flips its parser default
-  from elite-insights to axilog (toggle already shipped).
+  ei-json. All closed — the per-player generation attribution arrays (selfBuffs/groupBuffs/
+  squadBuffs), buffUptimes[].states/.statesPerSource, incoming CC/strips/boonStripsTime, the
+  per-target offensive split in statsTargets, the enemy-side targets[] mirrors (buffs /
+  totalDamageDist / damage1S / dpsAll[0]), powerDamageTaken1S, healing+barrier detail,
+  minions[], guildID, plus MEIGAP2's six open-cheap rows (player-side dist outcome columns,
+  healthPercents, instanceID, boonsStates, breakbarDamage). Per-field parity accounting lives
+  in docs/EI-PARITY.md. axibridge flipping its parser default from elite-insights to axilog is
+  now unblocked and user-gated (see Parked).
 - MINSTID Enemy-player instid regroup (DONE): `wvw::dedupe_enemy_players` now keys on INSTID,
   GW2EI's own non-squad rule (`AgentManipulationHelper.cs:467-474`), instead of the ACCOUNT that
   WvW anonymization leaves empty. Native `enemies[]` 140 -> 125 rows (71 -> 56 enemy players),
@@ -179,7 +190,9 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   damage-CREDIT divergences (allowlisted + diagnosed in `meigap2_ei_golden`) as the one
   follow-up.
 
-## Queued (autonomous — next session)
+## Queued (the only open feature work)
+- Phase C proc flags — see the native-format program above. Still unsourced: no upstream table
+  identified, so this needs a source-triangulation pass before it is implementable.
 - MOBJ wvWMapData objectives: the last whole EI feature surface axilog doesn't emit
   (shard/team ids + GADGETCAPTURE-derived objective ownership timelines; reference shape verified
   — 13 entries on the local export, `{mapID, objectiveID, objectiveType, owners:[[team,time]]}`).
