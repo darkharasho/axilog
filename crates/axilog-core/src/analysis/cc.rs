@@ -620,4 +620,33 @@ mod tests {
         assert_eq!(players[0].cc_per_target[&9], (2, 500));
         assert_eq!(players[0].cc_per_target[&10], (1, 450));
     }
+
+    /// Relog folding (task-3-brief.md:126, controller's prose-wins ruling):
+    /// `cc_per_target` must be keyed by the enemy REPRESENTATIVE id, not the
+    /// raw `dst_agent` address. Two distinct addresses (9 pre-relog, 90
+    /// post-relog) folding to the same representative id must collapse into
+    /// ONE row with counts/duration summed -- not two rows. This is the
+    /// assertion that would fail if the fold were ever reverted to keying
+    /// on `e.dst_agent` directly.
+    #[test]
+    fn folds_cc_per_target_across_relogged_enemy_addresses() {
+        let mut players = two_enemy_player_fixture();
+        let raw = raw_with_cc_on(&[(9, 300), (90, 200)]);
+        let registry = InstidRegistry::build(&raw);
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [9u64, 90].into_iter().collect();
+        let enemy_addr_to_rep: std::collections::BTreeMap<u64, u64> =
+            [(9u64, 9u64), (90u64, 9u64)].into_iter().collect();
+        apply_cc_with_registry(
+            &mut players, &raw, &registry, &squad, &enemies,
+            &std::collections::BTreeMap::new(), &enemy_addr_to_rep,
+        );
+
+        assert_eq!(
+            players[0].cc_per_target.len(),
+            1,
+            "a relogged enemy's two addresses must fold into ONE row, not two"
+        );
+        assert_eq!(players[0].cc_per_target[&9], (2, 500));
+    }
 }
