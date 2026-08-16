@@ -285,23 +285,35 @@ pub struct ReplayIntervals {
     /// dead.
     pub dc: Vec<(u64, u64)>,
     /// EI's `distToCom` -- mean distance to the commander over this actor's
-    /// active polls, in world inches. `-1.0` when no poll qualified. `None`
-    /// when the replay pass did not run: these are TWO DISTINCT STATES and
-    /// must not be collapsed. A consumer that maps absence to `-1` cannot
-    /// tell "we did not look" from "we looked and this actor was never
-    /// within reach of a commander", and a consumer that maps `-1` to
-    /// absence loses EI's own sentinel, which every EI-shaped reader
-    /// already rejects by value.
+    /// active polls, in world inches.
     ///
-    /// Lives here, on the always-present per-entity row, rather than beside
-    /// the position samples in [`ReplayTrack`] precisely so that `None`
-    /// remains reachable -- inside the `--replay`-gated half it could only
-    /// ever be `Some`. See `axilog_core::analysis::distance` for the five
-    /// semantics behind the number.
+    /// **Two-state convention, and it is load-bearing here.** `None` means
+    /// THE PASS NEVER RAN: `--replay` was not passed, no positions were
+    /// decoded, and nothing was measured. `-1.0` means THE PASS RAN AND
+    /// NOTHING QUALIFIED: positions were decoded and this actor had no poll
+    /// that paired with a commander reference. These must never be
+    /// collapsed. A consumer that maps absence to `-1` cannot tell "we did
+    /// not look" from "we looked and this actor was never within reach of a
+    /// commander", and a consumer that maps `-1` to absence loses EI's own
+    /// sentinel, which every EI-shaped reader already rejects by value.
+    ///
+    /// This is the ONE field group on this struct whose presence depends on
+    /// the `--replay` gate; every other field here is computed on every
+    /// parse. That is deliberate: the field lives on the always-present
+    /// per-entity row, rather than beside the position samples in
+    /// [`ReplayTrack`], precisely so that `None` stays reachable and the
+    /// two-state convention stays real -- inside the gated half it could
+    /// only ever be `Some`. The consequence a reader must hold: an
+    /// invariance check of the shape "gating positions on must not change
+    /// this row" applies to the interval fields (`start_ms`, `end_ms`,
+    /// `active_ms`, `down`, `dead`, `dc`) and NOT to these two scalars.
+    /// See `axilog_core::analysis::distance` for the five semantics behind
+    /// the number.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dist_to_com: Option<f64>,
     /// EI's `stackDist` -- the same reduction against the squad centre.
-    /// Same two-state convention as [`ReplayIntervals::dist_to_com`].
+    /// Same two-state convention, same `--replay` gate dependence, as
+    /// [`ReplayIntervals::dist_to_com`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack_dist: Option<f64>,
 }

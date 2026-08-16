@@ -604,6 +604,13 @@ export interface EncounterOut {
   markers: MarkerAssignmentOut[]
   /** Omitted entirely (not `null`) when the log has fewer than two `CBTS_TICK` events. */
   tick_rate?: TickRateOut
+  /**
+   * Wall-clock log start, **seconds** since the Unix epoch, from arcdps's
+   * `CBTS_LOGSTART`. Omitted entirely (not `null`) when the log carries no
+   * such event -- absence stays distinguishable from epoch zero, so do not
+   * default it to `0`.
+   */
+  started_at_unix?: number
 }
 
 /** Min/max `x`/`y` observed across every `ReplayOut.tracks[].samples` -- lets a consumer size a viewBox without a second pass over `tracks`. */
@@ -783,6 +790,13 @@ export interface EncounterOutV1 {
   teams: TeamOut[]
   markers: MarkerAssignmentOutV1[]
   tick_rate?: TickRateOut
+  /**
+   * Wall-clock log start, **seconds** since the Unix epoch, from arcdps's
+   * `CBTS_LOGSTART`. Omitted when the log carries no such event -- absence
+   * is deliberately distinguishable from epoch zero, so do not default it
+   * to `0`. Multiply by 1000 for a JS `Date`.
+   */
+  started_at_unix?: number
 }
 
 /**
@@ -794,6 +808,20 @@ export type Role = 'squad' | 'friendly_player' | 'enemy_player' | 'npc'
 export interface CommanderOut {
   variant: string
   guid: string
+  /**
+   * Terminated, half-open `[tag-on, tag-off)` windows in **arcdps session
+   * time** -- the same base as `encounter.markers[].time_ms`, NOT
+   * log-relative and NOT comparable against `encounter.duration_ms`. Do not
+   * clip these to `[0, duration_ms]`; subtract the log's own `t0` first if
+   * you need encounter-relative values.
+   *
+   * Literal per-instance holds, not a coalesced whole-fight span: a
+   * zero-width `[t, t]` pair from a same-timestamp reassignment is normal.
+   * An empty array on a PRESENT `commander` means the tag was detected but
+   * its windows could not be resolved -- not that the player never
+   * commanded.
+   */
+  segments: [number, number][]
 }
 
 /**
@@ -1429,6 +1457,11 @@ export interface ReplayTrack {
   samples: [number, number, number][]
   down_intervals: [number, number][]
   dead_intervals: [number, number][]
+  /**
+   * Disconnect/not-yet-spawned windows, half-open like the two above. See
+   * `ReplayIntervals.dc` for the GW2EI divergence and the log-end rule.
+   */
+  dc_intervals: [number, number][]
 }
 
 /**
@@ -1445,6 +1478,34 @@ export interface ReplayIntervals {
   active_ms: number
   down: [number, number][]
   dead: [number, number][]
+  /**
+   * Disconnect/not-yet-spawned windows (`CBTS_DESPAWN` to the matching
+   * `CBTS_SPAWN`), half-open `[start_ms, end_ms)` like `down`/`dead`, and
+   * NOT mutually exclusive with them -- an agent can despawn while dead.
+   *
+   * An agent still disconnected at log end gets **no interval at all** for
+   * that trailing window; it is dropped, not closed at the log's end. So
+   * `end_ms - start_ms` minus summed `dc` over-counts activity for anyone
+   * who disconnects and never returns -- use `active_ms`.
+   */
+  dc: [number, number][]
+  /**
+   * GW2EI's `distToCom` -- mean distance to the commander over this actor's
+   * active polls, in world inches.
+   *
+   * Three states, and the first two must not be collapsed: **absent** means
+   * the position pass never ran (`{ replay: true }` was not passed, nothing
+   * was measured); **`-1`** means the pass ran and nothing qualified (GW2EI's
+   * own sentinel); **`>= 0`** is a real distance (`0` is legitimate -- the
+   * commander's own value).
+   *
+   * These two scalars are the only part of `ReplayBlock.by_entity` that
+   * depends on the `{ replay: true }` gate; every interval field above is
+   * computed on every parse and is identical with and without it.
+   */
+  dist_to_com?: number
+  /** GW2EI's `stackDist`, against the squad centre. Same three states and same gate as `dist_to_com`. */
+  stack_dist?: number
 }
 
 /** The gated half of `ReplayBlock` -- present only under `{ replay: true }`. */

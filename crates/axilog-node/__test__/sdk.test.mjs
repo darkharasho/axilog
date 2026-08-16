@@ -199,11 +199,37 @@ test('parseFile: replay opt-in -- intervals always on, positions gated behind { 
   const replay = withReplay.blocks.replay
   assert.ok(replay, 'expected a replay block when { replay: true }')
   assert.equal(withReplay.coverage.replay, 'present')
+  // Turning the position gate on must not change the intervals half.
+  //
+  // Scoped to the INTERVAL fields on purpose. `dist_to_com`/`stack_dist`
+  // also live on this always-present row, but they are position-derived
+  // reductions, so they legitimately appear only when positions were
+  // requested -- that is the documented two-state convention (absent = the
+  // pass never ran; -1 = the pass ran and nothing qualified), and it is the
+  // gate that makes "absent" reachable at all. Comparing whole rows would
+  // assert the opposite of the contract.
+  const INTERVAL_FIELDS = ['start_ms', 'end_ms', 'active_ms', 'down', 'dead', 'dc']
+  const intervalsOf = (byEntity) =>
+    Object.fromEntries(
+      Object.entries(byEntity).map(([id, r]) => [id, Object.fromEntries(INTERVAL_FIELDS.map((k) => [k, r[k]]))]),
+    )
   assert.deepEqual(
-    replay.by_entity,
-    intervalsOnly.by_entity,
+    intervalsOf(replay.by_entity),
+    intervalsOf(intervalsOnly.by_entity),
     'turning the position gate on must not change the intervals half',
   )
+  assert.deepEqual(
+    Object.keys(replay.by_entity).sort(),
+    Object.keys(intervalsOnly.by_entity).sort(),
+    'the gate must not add or drop entity rows either',
+  )
+  // ... and the scalars really are the only difference: absent ungated,
+  // present gated.
+  const gatedRow = replay.by_entity[Object.keys(replay.by_entity)[0]]
+  for (const k of ['dist_to_com', 'stack_dist']) {
+    assert.equal(row[k], undefined, `${k} must be absent when the position pass did not run`)
+    assert.equal(typeof gatedRow[k], 'number', `${k} must be a number once positions were requested`)
+  }
 
   const tracks = replay.tracks
   assert.ok(tracks, 'expected positions under { replay: true }')
@@ -266,10 +292,34 @@ test('parseFile: skillDamage opt-in (M12 Task 1) -- absent by default, present +
   // sum(by_skill[*].total) == damage total exactly (internal invariant).
   const sum = sumBy(Object.values(d0.by_skill), (e) => e.total)
   assert.equal(sum, d0.total, 'sum(by_skill totals) must equal the damage total exactly')
-  // The per-target breakdown gains the same distribution under the flag.
+  // The per-target breakdown gains the same distribution under the flag --
+  // for every entry that has damage to distribute.
+  //
+  // NOT "every entry": the per_target map is keyed by every (player, target)
+  // pair the offensive scan touched, which since Phase B includes pairs the
+  // player only ever whiffed against (a lone `evaded`/`blocked`/`missed`/
+  // `invulned` row) and pairs they only crowd-controlled. Those carry
+  // `total: 0` and have no skill damage to split, so a `by_skill` on them
+  // would be an empty map, and the format omits empty maps. Asserting
+  // presence unconditionally asserted the absence of a real feature.
+  //
+  // The biconditional below is strictly stronger than the old assertion in
+  // the direction that matters: it still fails if a damaging pair loses its
+  // split (the regression the check exists for), AND it now also fails if a
+  // non-damaging pair sprouts one.
   const perTarget = Object.values(d0.per_target)
   assert.ok(perTarget.length > 0, 'expected at least one per-target entry')
-  assert.ok(perTarget.every((t) => t.by_skill), 'per_target entries gain by_skill under the flag')
+  assert.ok(
+    perTarget.some((t) => t.total > 0),
+    'expected at least one per-target entry WITH damage, or the check below is vacuous',
+  )
+  for (const t of perTarget) {
+    assert.equal(
+      Boolean(t.by_skill),
+      t.total > 0,
+      `per_target entries have by_skill exactly when they have damage (total=${t.total})`,
+    )
+  }
 
   // opts.skillDamage: false must behave the same as omitting opts entirely.
   const explicitlyOff = sdk.parseFile(FIXTURE, { skillDamage: false })

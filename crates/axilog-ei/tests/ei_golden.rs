@@ -1281,6 +1281,74 @@ fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
         "ei_json_stats_targets_split_extended_invariants: {checked2} column sums checked across \
          12 new fields, exact-hit counts: {exact_counts:?}"
     );
+    // Round 3 (A7): `directDmg` is the THIRD `statsTargets` key excluded
+    // from the `sum <= whole` pass above, and it needs its own invariant
+    // rather than a bare acknowledgement -- it is the one key the adapter
+    // itself flags as the trap (`lib.rs:1049`: `directDmg` is
+    // `direct_damage`, NOT the similarly-named whole-fight
+    // `connected_direct_dmg`), so it is precisely the key where a
+    // wrong-source wiring bug is plausible.
+    //
+    // Why `sum <= whole` genuinely cannot apply: the adapter emits
+    // `directDmg` on `statsTargets` ONLY, never on `statsAll[0]`, so there
+    // is no whole-fight scalar (and no `totalDamageDist` column either) to
+    // sum against. What DOES apply is a reference-free PER-ROW ordering,
+    // straight from the definitions in `per_target::build`:
+    // `crit_damage` accumulates a subset of the rows `direct_damage` does
+    // (crits are direct hits that additionally passed `can_crit` and
+    // `is_crit`), and `direct_damage` in turn accumulates a subset of the
+    // connected rows `totalDmg` covers. Hence
+    // `criticalDmg <= directDmg <= totalDmg` on every row, with no external
+    // reference needed.
+    //
+    // That chain is what makes this load-bearing: feeding `directDmg` from
+    // `connected_direct_dmg` (the whole-fight near-miss field) breaks the
+    // upper bound on every target the player also hit elsewhere, and
+    // feeding it from a crit-scoped or count-scoped field breaks the lower
+    // bound.
+    let mut direct_rows = 0usize;
+    let mut direct_nonzero = 0usize;
+    for p in ei["players"].as_array().expect("players") {
+        for t in p["statsTargets"].as_array().expect("statsTargets") {
+            let row = t[0].as_object().expect("statsTargets row");
+            // Ungated runs carry `totalDmg` alone; this pass only means
+            // anything on the gated shape.
+            let Some(direct) = row.get("directDmg").and_then(|v| v.as_i64()) else { continue };
+            let crit = row["criticalDmg"].as_i64().expect("criticalDmg is an integer");
+            let total = row["totalDmg"].as_i64().expect("totalDmg is an integer");
+            direct_rows += 1;
+            if direct != 0 {
+                direct_nonzero += 1;
+            }
+            assert!(
+                crit <= direct,
+                "{}: statsTargets criticalDmg ({crit}) exceeds directDmg ({direct}) -- crits are \
+                 a SUBSET of direct hits, so this row's directDmg is fed from the wrong source",
+                p["account"]
+            );
+            assert!(
+                direct <= total,
+                "{}: statsTargets directDmg ({direct}) exceeds totalDmg ({total}) -- direct hits \
+                 are a SUBSET of this target's damage, so this row's directDmg is fed from the \
+                 wrong source (`connected_direct_dmg` is the documented near-miss trap)",
+                p["account"]
+            );
+        }
+    }
+    assert!(
+        direct_rows >= 1_000,
+        "expected the gated statsTargets shape on this fixture, saw only {direct_rows} rows"
+    );
+    assert!(
+        direct_nonzero >= 100,
+        "only {direct_nonzero} of {direct_rows} rows have a nonzero directDmg -- an all-zero \
+         column would satisfy both bounds vacuously"
+    );
+    println!(
+        "ei_json_stats_targets_split_extended_invariants: directDmg ordering checked on \
+         {direct_rows} rows ({direct_nonzero} nonzero)"
+    );
+
     // Round 2: two more `statsTargets` keys were reviewed and are
     // legitimately excluded from the invariant pass above --
     // `appliedCrowdControlDownContribution` and

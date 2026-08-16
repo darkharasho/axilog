@@ -119,7 +119,7 @@ Real rows from the fixture, trimmed to four representative roles:
 ]
 ```
 
-`commander.segments` holds every closed `[tag-on, tag-off)` window this
+`commander.segments` holds every terminated `[tag-on, tag-off)` window this
 player's commander tag was ever assigned, half-open, in the log's own
 millisecond time base (same base as `markers[].time_ms` above — arcdps
 session time, not encounter-relative). These are LITERAL per-instance
@@ -671,9 +671,20 @@ Four things a consumer needs to know about that shape:
   of 6,894 samples (0.087%) of axibridge's current distance error — small
   enough that matching this format's own half-open convention throughout
   was judged more valuable than byte-parity with GW2EI's sentinel choice.
-  An agent that is still disconnected at log end is left with an unclosed
-  `dc` interval (no synthesized closing bound), matching every other
-  interval kind in this block.
+  An agent that is still disconnected at log end gets **no interval at
+  all** for that window — the still-open `dc` is dropped, not closed at the
+  log's end and not emitted unclosed (`build_intervals` discards `dc_open`
+  on scan end; pinned by
+  `unclosed_dc_interval_at_log_end_is_dropped`). That is the honest
+  half-open analogue of GW2EI's sentinel bracketing: GW2EI has no real
+  closing bound there either, it just writes `[LastAware, MaxValue]`.
+  Commander `segments`, by contrast, *are* closed at log end, because
+  GW2EI's `CalculateCommanderStates` explicitly clamps with
+  `Math.Min(markerEvent.EndTime, log.LogData.EvtcLogEnd)` — different
+  upstream rule, deliberately different behaviour. **Consequence:** active
+  time derived as `end_ms - start_ms` minus summed `dc` over-counts for
+  every player who disconnects and never returns; use `active_ms`, or
+  treat a missing trailing `dc` accordingly.
 
 ### `dist_to_com` / `stack_dist`
 
@@ -690,12 +701,20 @@ alike:
 
 | Value | Meaning |
 |---|---|
-| absent | The replay pass did not run. Nothing was measured. |
-| `-1` | The pass ran; this actor had no poll that paired with a reference. GW2EI's own sentinel — it emits `-1`, not `null`, and EI-shaped readers already reject it by value. |
+| absent | **The pass never ran.** `--replay` was not passed, so no positions were decoded and nothing was measured. |
+| `-1` | **The pass ran and nothing qualified.** Positions were decoded; this actor had no poll that paired with a reference. GW2EI's own sentinel — it emits `-1`, not `null`, and EI-shaped readers already reject it by value. |
 | `>= 0` | A real mean distance. `0` is reachable and correct: the commander's own `dist_to_com` is exactly `0`. |
 
 Collapsing absent into `-1` (or `-1` into absent) destroys the distinction.
 Treat any negative value as "no answer" and never as a distance.
+
+These two scalars are the **one** part of `by_entity` that depends on the
+`--replay` gate; every other field on that row (`start_ms`, `end_ms`,
+`active_ms`, `down`, `dead`, `dc`) is computed on every parse and is
+byte-identical with and without the gate. If you assert "turning positions
+on must not change the intervals half", scope that assertion to those
+interval fields — the distance scalars are position-derived, so their
+appearing only under `--replay` is the contract, not a violation of it.
 
 The reduction's rules are exacting and are documented in full, with GW2EI
 source citations, on `axilog_core::analysis::distance`. Two are worth
@@ -776,13 +795,37 @@ bisecting:
   golden by 16 entries in one commit; a bisect landing between the old and
   new counts should read this rather than re-deriving it from the diff.
 
-  The 16 new native fields on `PerTargetDetail` mirror
-  `axilog_core::analysis::per_target::PerTargetOffense` field-for-field:
-  `direct_count`, `direct_damage`, `crit_count`, `crit_damage`,
-  `flank_count`, `glance_count`, `critable_direct_count`,
-  `against_downed_damage`, `missed`, `evaded`, `blocked`, `invulned`,
-  `applied_total`, `applied_duration_ms`, `applied_downs_contribution`,
-  `applied_duration_downs_contribution_ms`. Of those, `critable_direct_count`
+- Phase B final-fix round: `axilog_core::analysis::per_target::PerTargetOffense`
+  lost its four `applied_*` crowd-control fields. They were never written
+  anywhere — the CC per-target accumulation has always lived on
+  `PlayerMetrics::cc_per_target`/`cc_downs_contribution_per_target` — so a
+  core-API consumer reading them got a silent `0`. **No native-format key
+  moved**: `blocks.damage.by_entity.<id>.per_target.<id>.detail` still
+  carries all four, filled by the schema-layer join, and the key-set golden
+  is unchanged. This bullet records a *core Rust API* break, not a wire
+  break.
+
+- Phase B final-fix round: `ReplayTrackOut::dc_intervals` gained
+  `#[serde(skip)]`, so the **legacy** embedded HTML-report JSON no longer
+  carries it (matching `agent_addr`/`dist_to_com`/`stack_dist` on the same
+  struct). `report.js` never read it. Again **no native-format key moved** —
+  `blocks.replay.tracks.by_entity.<id>.dc_intervals` and
+  `blocks.replay.by_entity.<id>.dc` are both untouched.
+
+  The 16 new native fields on `PerTargetDetail` come from **two** core
+  sources, joined side by side by `PerTargetStatsOut` at the schema layer.
+  Twelve mirror `axilog_core::analysis::per_target::PerTargetOffense`
+  field-for-field — `direct_count`, `direct_damage`, `crit_count`,
+  `crit_damage`, `flank_count`, `glance_count`, `critable_direct_count`,
+  `against_downed_damage`, `missed`, `evaded`, `blocked`, `invulned` — and
+  the four `applied_*` crowd-control fields (`applied_total`,
+  `applied_duration_ms`, `applied_downs_contribution`,
+  `applied_duration_downs_contribution_ms`) come instead from
+  `PlayerMetrics::cc_per_target` and
+  `PlayerMetrics::cc_downs_contribution_per_target`, because CC rows are
+  dispatched by a different predicate (`cc::is_cc`) than the damage scan.
+  `PerTargetOffense` deliberately carries no `applied_*` fields; do the same
+  join if you read the core model directly. Of those, `critable_direct_count`
   is native-only — it is `criticalRate`'s denominator, which real EI never
   publishes per target, so `to_ei_json`'s `statsTargets` split fills the
   other 15 under their EI key names (`directDmg`, `criticalRate`,

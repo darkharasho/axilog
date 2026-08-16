@@ -270,12 +270,14 @@ pub struct ReplayTrackOut {
     pub down_intervals: Vec<(u64, u64)>,
     pub dead_intervals: Vec<(u64, u64)>,
     /// Disconnect/not-yet-spawned windows, carried from
-    /// `analysis::replay::Track::dc_intervals`. Exposed like its
-    /// `down_intervals`/`dead_intervals` siblings, not hidden --
-    /// `crates/axilog-html/assets/report.js` already reads those two to
-    /// render replay-timeline shading, and skipping `dc_intervals` here
-    /// would make disconnect windows permanently invisible in that viewer
-    /// with nothing marking the gap.
+    /// `analysis::replay::Track::dc_intervals`. `#[serde(skip)]` for the
+    /// same reason as `agent_addr` below: the native format carries this
+    /// data, and the legacy viewer does not render it --
+    /// `crates/axilog-html/assets/report.js` shades only
+    /// `down_intervals`/`dead_intervals`. Wiring a third shading band is a
+    /// viewer feature with its own design surface; re-expose this field if
+    /// and when that lands.
+    #[serde(skip)]
     pub dc_intervals: Vec<(u64, u64)>,
     /// The representative raw agent addr, carried from
     /// `analysis::replay::Track`. `#[serde(skip)]` so the legacy JSON stays

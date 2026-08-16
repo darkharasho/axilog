@@ -139,6 +139,8 @@ __all__ = [
     "ReplayBounds",
     "ReplayTrack",
     "ReplayBlock",
+    "ReplayIntervals",
+    "ReplayTracks",
     "SquadSeries",
     "TargetSeries",
     "EntitySeries",
@@ -187,9 +189,14 @@ class _EncounterOutRequired(TypedDict):
     markers: List[MarkerAssignmentOut]
 
 class EncounterOut(_EncounterOutRequired, total=False):
-    """`tick_rate` is omitted when the log has fewer than two `CBTS_TICK` events."""
+    """`tick_rate` is omitted when the log has fewer than two `CBTS_TICK`
+    events. `started_at_unix` is the wall-clock log start in SECONDS since
+    the Unix epoch, from arcdps's `CBTS_LOGSTART`; it is omitted (not
+    `None`) when the log carries no such event, so absence stays
+    distinguishable from epoch zero -- do not default it to `0`."""
 
     tick_rate: TickRateOut
+    started_at_unix: int
 
 # --- damage / cc --------------------------------------------------------
 
@@ -800,6 +807,11 @@ class EncounterOutV1(_EncounterOutV1Required, total=False):
 
     recorded_by: int
     tick_rate: TickRateOut
+    #: Wall-clock log start, SECONDS since the Unix epoch, from arcdps's
+    #: `CBTS_LOGSTART`. Omitted (not `None`) when the log carries no such
+    #: event -- absence stays distinguishable from epoch zero, so do not
+    #: default it to `0`.
+    started_at_unix: int
 
 #: What an entity IS -- squad member, non-squad friendly, enemy player, or
 #: NPC/gadget. Declaration order is `entities[]`'s sort order.
@@ -808,6 +820,16 @@ Role = str  # Literal["squad", "friendly_player", "enemy_player", "npc"]
 class CommanderOut(TypedDict):
     variant: str
     guid: str
+    #: Terminated, half-open `[tag-on, tag-off)` windows in ARCDPS SESSION
+    #: TIME -- the same base as `encounter["markers"][i]["time_ms"]`, NOT
+    #: log-relative and NOT comparable against `encounter["duration_ms"]`.
+    #: Do not clip these to `[0, duration_ms]`; subtract the log's own `t0`
+    #: first if you need encounter-relative values. Literal per-instance
+    #: holds, not a coalesced span: a zero-width `[t, t]` pair from a
+    #: same-timestamp reassignment is normal. An empty list on a PRESENT
+    #: `commander` means the tag was detected but its windows could not be
+    #: resolved -- not that the player never commanded.
+    segments: List[List[int]]
 
 class _EntityOutRequired(TypedDict):
     #: Dense index into `entities[]`, from 0. Stable WITHIN a report only --
@@ -1295,17 +1317,70 @@ class ReplayTrack(TypedDict):
     samples: List[List[float]]
     down_intervals: List[List[int]]
     dead_intervals: List[List[int]]
+    #: Disconnect/not-yet-spawned windows, half-open like the two above.
+    #: See `ReplayIntervals.dc` for the GW2EI divergence and the log-end
+    #: rule.
+    dc_intervals: List[List[int]]
 
-class _ReplayBlockRequired(TypedDict):
+class _ReplayIntervalsRequired(TypedDict):
+    start_ms: int
+    end_ms: int
+    #: Subtracts DEAD time only, not down time -- GW2EI's own definition.
+    active_ms: int
+    down: List[List[int]]
+    dead: List[List[int]]
+    #: Disconnect/not-yet-spawned windows (`CBTS_DESPAWN` to the matching
+    #: `CBTS_SPAWN`), half-open and NOT mutually exclusive with
+    #: `down`/`dead`. An agent still disconnected at log end gets NO
+    #: interval for that trailing window -- it is dropped, not closed -- so
+    #: `end_ms - start_ms` minus summed `dc` over-counts activity for anyone
+    #: who disconnects and never returns. Use `active_ms`.
+    dc: List[List[int]]
+
+class ReplayIntervals(_ReplayIntervalsRequired, total=False):
+    """One SQUAD entity's activity window, computed on EVERY parse.
+
+    `dist_to_com`/`stack_dist` are GW2EI's `distToCom`/`stackDist` -- mean
+    distance, in world inches, to the commander and to the squad centre.
+    Three states, and the first two must not be collapsed: OMITTED means the
+    position pass never ran (`replay=True` was not passed, nothing was
+    measured); `-1.0` means the pass ran and nothing qualified (GW2EI's own
+    sentinel); `>= 0.0` is a real distance (`0.0` is legitimate -- the
+    commander's own value).
+
+    These two scalars are the only part of this row that depends on the
+    `replay=True` gate; every interval field above is computed on every
+    parse and is identical with and without it."""
+
+    dist_to_com: float
+    stack_dist: float
+
+class _ReplayTracksRequired(TypedDict):
     #: Shared polling interval for every track.
     poll_ms: int
+    #: Keyed by entity id. WIDER than `ReplayBlock.by_entity`: enemy players
+    #: appear here too.
     by_entity: Dict[str, ReplayTrack]
 
-class ReplayBlock(_ReplayBlockRequired, total=False):
-    """`bounds` is omitted (not `None`) only in the empty-block default
-    case (replay not requested)."""
+class ReplayTracks(_ReplayTracksRequired, total=False):
+    """The gated half of `ReplayBlock` -- present only under
+    `replay=True`. `bounds` is omitted (not `None`) when there is nothing
+    to bound."""
 
     bounds: ReplayBounds
+
+class _ReplayBlockRequired(TypedDict):
+    #: Keyed by entity id. Squad players only.
+    by_entity: Dict[str, ReplayIntervals]
+
+class ReplayBlock(_ReplayBlockRequired, total=False):
+    """Two halves on two different gates -- the only block in the format
+    shaped this way. `by_entity` (down/dead/dc intervals, squad only) is
+    computed on every parse; `tracks` (positions) needs `replay=True`. So
+    `coverage["replay"] == "present"` does NOT mean positions are available
+    -- check for `tracks`."""
+
+    tracks: ReplayTracks
 
 class SquadSeries(TypedDict):
     damage: SeriesOut

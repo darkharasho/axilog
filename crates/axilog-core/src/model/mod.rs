@@ -84,7 +84,13 @@ pub struct Enemy { pub id: u64, pub instid: u16, pub name: String,
 pub struct CommanderTag {
     pub variant: String,
     pub guid: String,
-    /// Closed `[tag-on, tag-off)` windows, in ms, merged and sorted across
+    /// Terminated, half-open `[tag-on, tag-off)` windows in **arcdps
+    /// session time** milliseconds -- the same base as
+    /// `MarkerAssignment::time_ms`, NOT log-relative: these are raw event
+    /// timestamps, so they are not comparable against `duration_ms` and
+    /// must not be clipped to `[0, duration_ms]`. Rebase by the log's `t0`
+    /// (see `analysis::distance`) if you want encounter-relative values.
+    /// Merged and sorted across
     /// every raw addr this player owns (relogs/build-swaps can each carry
     /// their own commander-tag instances -- see
     /// `wvw::markers::MarkerResolution::commander_segments`). Literal

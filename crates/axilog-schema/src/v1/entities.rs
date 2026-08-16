@@ -112,11 +112,16 @@ pub struct EntityOut {
 pub struct CommanderOut {
     pub variant: String,
     pub guid: String,
-    /// Closed `[tag-on, tag-off)` windows, half-open, log-relative
-    /// milliseconds -- literal per-instance commander-tag holds, not a
-    /// coalesced whole-fight span (see `model::CommanderTag::segments` for
-    /// the full GW2EI-sourced rationale: no coverage threshold, no
-    /// log-end fallback beyond a genuinely still-open instance).
+    /// Terminated, half-open `[tag-on, tag-off)` windows in **arcdps
+    /// session time** -- the same base as `markers[].time_ms`, NOT
+    /// log-relative and NOT clipped to `[0, duration_ms]`. Passed through
+    /// from `model::CommanderTag::segments` with no rebase; a consumer that
+    /// wants encounter-relative values must subtract the log's `t0` itself
+    /// (as `analysis::distance` does). Literal per-instance commander-tag
+    /// holds, not a coalesced whole-fight span (see
+    /// `model::CommanderTag::segments` for the full GW2EI-sourced
+    /// rationale: no coverage threshold, no log-end fallback beyond a
+    /// genuinely still-open instance).
     ///
     /// An empty vec on a *present* `CommanderOut` means the tag was
     /// detected (this player held it at some point) but its windows could

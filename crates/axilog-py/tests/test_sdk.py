@@ -252,11 +252,38 @@ class ReplayOptInTests(unittest.TestCase):
         with_replay = axilog.parse_file(FIXTURE, replay=True)
         self.assertEqual(with_replay["coverage"]["replay"], "present")
         replay = with_replay["blocks"]["replay"]
+        # Turning the position gate on must not change the intervals half.
+        #
+        # Scoped to the INTERVAL fields on purpose. `dist_to_com`/`stack_dist`
+        # also live on this always-present row, but they are position-derived
+        # reductions, so they legitimately appear only when positions were
+        # requested -- that is the documented two-state convention (absent =
+        # the pass never ran; -1 = the pass ran and nothing qualified), and it
+        # is the gate that makes "absent" reachable at all. Comparing whole
+        # rows would assert the opposite of the contract.
+        interval_fields = ("start_ms", "end_ms", "active_ms", "down", "dead", "dc")
+
+        def intervals_of(by_entity):
+            return {k: {f: r[f] for f in interval_fields} for k, r in by_entity.items()}
+
         self.assertEqual(
-            replay["by_entity"],
-            intervals_only["by_entity"],
+            intervals_of(replay["by_entity"]),
+            intervals_of(intervals_only["by_entity"]),
             "turning the position gate on must not change the intervals half",
         )
+        self.assertEqual(
+            sorted(replay["by_entity"]),
+            sorted(intervals_only["by_entity"]),
+            "the gate must not add or drop entity rows either",
+        )
+        # ... and the scalars really are the only difference: absent ungated,
+        # present gated.
+        gated_row = next(iter(replay["by_entity"].values()))
+        for k in ("dist_to_com", "stack_dist"):
+            self.assertNotIn(k, row, f"{k} must be absent when the position pass did not run")
+            self.assertIsInstance(
+                gated_row[k], float, f"{k} must be a number once positions were requested"
+            )
 
         tracks = replay["tracks"]
         self.assertIsInstance(tracks["poll_ms"], int)
@@ -316,10 +343,34 @@ class SkillDamageOptInTests(unittest.TestCase):
             self.assertIn(sid, with_it["catalogs"]["skills"], f"skill {sid} missing from catalog")
         # sum(by_skill[*]["total"]) == the damage total exactly (internal invariant).
         self.assertEqual(sum(e["total"] for e in d0["by_skill"].values()), d0["total"])
-        # The per-target breakdown gains the same distribution under the flag.
+        # The per-target breakdown gains the same distribution under the flag
+        # -- for every entry that has damage to distribute.
+        #
+        # NOT "every entry": the per_target map is keyed by every
+        # (player, target) pair the offensive scan touched, which since Phase B
+        # includes pairs the player only ever whiffed against (a lone
+        # evaded/blocked/missed/invulned row) and pairs they only
+        # crowd-controlled. Those carry `total == 0` and have no skill damage
+        # to split, so a `by_skill` on them would be an empty map, and the
+        # format omits empty maps. Asserting presence unconditionally asserted
+        # the absence of a real feature.
+        #
+        # The biconditional below is strictly stronger than the old assertion
+        # in the direction that matters: it still fails if a damaging pair
+        # loses its split (the regression the check exists for), AND it now
+        # also fails if a non-damaging pair sprouts one.
         per_target = list(d0["per_target"].values())
         self.assertGreater(len(per_target), 0, "expected at least one per-target entry")
-        self.assertTrue(all("by_skill" in t for t in per_target))
+        self.assertTrue(
+            any(t["total"] > 0 for t in per_target),
+            "expected at least one per-target entry WITH damage, or the check below is vacuous",
+        )
+        for t in per_target:
+            self.assertEqual(
+                "by_skill" in t,
+                t["total"] > 0,
+                f"per_target entries have by_skill exactly when they have damage (total={t['total']})",
+            )
 
         explicitly_off = axilog.parse_file(FIXTURE, skill_damage=False)
         self.assertNotIn("by_skill", slot(explicitly_off["blocks"]["damage"], any_player))
