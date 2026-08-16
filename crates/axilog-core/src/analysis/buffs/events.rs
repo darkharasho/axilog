@@ -214,7 +214,15 @@ fn is_overstack_or_natural_end(e: &crate::evtc::RawEvent) -> bool {
 /// predicates that must agree is a defect waiting to happen. Behaviourally
 /// inert: this is the extractor's own condition verbatim, and the era
 /// -equivalence tests below pin both callers.
-fn is_pre_era_apply_shaped(e: &crate::evtc::RawEvent) -> bool {
+///
+/// Widened to `pub(crate)` for MPROC: `analysis::instant_cast` classifies
+/// buff rows itself rather than consuming [`BuffEvent`]s, because the
+/// instant-cast finders need two facts this module's output drops --
+/// whether an apply was `Initial` (`BuffGainCastFinder` excludes those),
+/// and the RAW, un-master-resolved applier. That makes it a third caller
+/// of this same classification, which is precisely the duplication the
+/// comment above says to avoid.
+pub(crate) fn is_pre_era_apply_shaped(e: &crate::evtc::RawEvent) -> bool {
     e.is_statechange == 0
         && e.buff != 0
         && e.buff_dmg == 0

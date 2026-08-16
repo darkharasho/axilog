@@ -116,6 +116,15 @@ pub mod skill_map;
 /// `totalDamage`) and the documented gap list.
 pub mod damage_mods;
 
+/// GW2EI's `InstantCastFinder` subsystem (MPROC) -- the machinery behind
+/// `skillMap`'s `isTraitProc` / `isGearProc` / `isUnconditionalProc` /
+/// `isNotAccurate` / `isInstantCast`. Like `damage_mods`, a definition
+/// model plus one engine plus a machine-extracted catalog, and equally
+/// NOT wired into [`analyze`]: it is its own pass over the event stream.
+/// See its module doc for what the five flags actually are (not a skill
+/// database) and for the effect-finder gap.
+pub mod instant_cast;
+
 /// GW2EI's `SkillEvent.ConditionDamageBased` skill-id catalog (MCONDCAT
 /// Task 1) -- the `BuffClassification.Condition` id set that decides the
 /// condition-vs-power bucketing in `hit_stats` (outgoing) and `defenses`
