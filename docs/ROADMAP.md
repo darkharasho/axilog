@@ -233,11 +233,20 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   - Therefore this is a SUBSYSTEM PORT, not a catalog generator — milestone-sized, and the
     roadmap's smallest-looking bullet was hiding that. Real adjacent value: instant-cast events
     would also fill M14's known `rotation` gap, which covers only the `AnimatedCastEvent` pipeline.
-  - Cheap adjacent wins found while reading `JsonLogBuilder.BuildSkillDesc` — NOT part of MPROC,
-    and not currently emitted by ei-json's `skillMap`: `canCrit` is
-    `SkillItemOverrides.NonCritableSkills.TryGetValue(id) → gw2Build < build` (`SkillItem.cs:128`),
-    a small build-gated static table; `isSwap` is a pure id test against weapon-swap / attunement /
-    legend / shroud ids (`SkillItem.cs:28-38`). Both are hours, not a milestone.
+  - CORRECTION (2026-08-16): an earlier pass listed `canCrit`/`isSwap` here as cheap adjacent wins
+    "not currently emitted by ei-json's `skillMap`". **They were already implemented and emitted** —
+    `analysis::skill_map` since M14 Task 2/3, `axilog-ei/src/lib.rs:2526-2527`,
+    `axilog-schema/src/v1/catalogs.rs:60-61`. Neither is MPROC work, and neither is open:
+    - `canCrit` is exact against a real EI export (asserted, not printed, in
+      `skill_map_golden.rs`). EI's `gw2Build < sinceBuild` gate (`SkillItem.cs:128`) is
+      deliberately not reproduced: all 20 thresholds are 2015–2018 patches, far below any build
+      this project parses, so every entry is unconditionally non-critable at the operating range.
+      Documented in `hit_stats.rs:215-235`. Only a pre-2019 log would diverge.
+    - `isSwap` had one real gap — Weaver's `_weaverAttunements` — **now closed**; it is a complete
+      port of `SkillItem.IsSwap`. The gap was skipped in M14 as a "much larger 16-entry table";
+      re-reading the source showed 12 of the 16 are EI-invented pseudo ids (`-5`..`-16`,
+      `SkillIDs.cs:24-35`) and only 4 are real (41166/42264/43470/44857), so the stated reason for
+      skipping did not hold.
   - The cheap alternative, considered and NOT taken: ship the 153 `(skill_id, origin)` pairs as a
     generated catalog and flag referenced ids unconditionally (~a day). It over-flags exactly where
     `Available()` says no, so it would need a documented+ruled exception rather than parity.

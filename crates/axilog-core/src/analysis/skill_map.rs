@@ -42,10 +42,10 @@
 //!   API disambiguation, no proc/instant/accuracy classification.
 //! - `can_crit`: objectively computable from the id alone (see below) --
 //!   NOT part of the name gap, and matches EI exactly.
-//! - `is_swap`: ALSO objectively computable from the id alone, but only a
-//!   NARROWER subset of what real EI flags -- see its own section below for
-//!   a second, separate documented gap this module's own spot-check
-//!   discovered.
+//! - `is_swap`: ALSO objectively computable from the id alone, and as of
+//!   2026-08-16 a COMPLETE port of EI's own `SkillItem.IsSwap` -- see its
+//!   own section below for the per-category citations and for the Weaver
+//!   table that used to be this field's one documented gap.
 //! - `auto_attack`: OMITTED (see its own section below) -- genuinely not
 //!   derivable from this log's own data, so this module refuses to guess.
 //!
@@ -186,20 +186,37 @@
 //!   Ritualist's `EnterRitualistsShroud=77238`/`ExitRitualistsShroud=76933`
 //!   (all 6 ids from the same `SkillIDs.cs`).
 //!
-//! [`is_swap`] implements exactly these 3 categories (18 hardcoded ids
-//! total) plus the pre-existing [`WEAPON_SWAP_SKILL_ID`] sentinel.
-//! **Deliberately still excluded**: `WeaverHelper.IsAttunementSwap` (a
-//! SEPARATE, much larger 16-entry table of Weaver's own dual-attunement
-//! combo skill ids, `GW2EIEvtcParser/EIData/ProfHelpers/Elementalist/
-//! WeaverHelper.cs`) -- the plan brief's own curated category list names
-//! "elementalist attunement swaps" (singular category, the base 4 above),
-//! not Weaver's separate combo table, so this remains a documented,
-//! narrower-than-real-EI gap on Weaver logs specifically.
-//! `skill_map_golden.rs`'s local spot-check documents (does NOT hard-fail
-//! on) any remaining `is_swap` divergence this implementation produces
-//! against a real capture, the same "measure and document, don't silently
-//! under-cite" discipline `analysis::rotation`'s own `InstantCastEvent` gap
-//! already established for this milestone.
+//! ### Weaver's dual-attunement table: the last `is_swap` gap, now closed
+//!
+//! M14 Task 3 deliberately stopped at the 3 categories above, leaving
+//! `WeaverHelper.IsAttunementSwap` (`GW2EIEvtcParser/EIData/ProfHelpers/
+//! Elementalist/WeaverHelper.cs:15-23`, `_weaverAttunements`) as a
+//! documented, narrower-than-real-EI gap, on the grounds that it was a
+//! "much larger 16-entry table". Re-checked 2026-08-16 against the same
+//! checkout: it IS 16 entries, but **12 of them are EI-invented negative
+//! pseudo ids**, exactly like the `WeaponSwap = -2` sentinel this module
+//! already reproduces -- `FireWaterAttunement = -5` through
+//! `EarthAirAttunement = -16` (`GW2EIEvtcParser/ParserHelpers/IDs/
+//! SkillIDs.cs:24-35`). Only the 4 same-element "dual" entries are real
+//! game ids: `DualWaterAttunement = 41166`, `DualAirAttunement = 42264`,
+//! `DualFireAttunement = 43470`, `DualEarthAttunement = 44857` (same file,
+//! lines 2627/2680/2740/2807). So the table is 16 ids but 4 facts, and the
+//! stated reason for skipping it (size) did not survive contact with the
+//! source. [`WEAVER_ATTUNEMENT_SWAP_SKILL_IDS`] now reproduces all 16, and
+//! [`is_swap`] is a COMPLETE port of EI's own `SkillItem.IsSwap` -- every
+//! one of its 11 disjuncts, with no remaining documented exclusion.
+//!
+//! As with the `-2` sentinel, the 12 negative ids can never fire on this
+//! module's own referenced scope (this project never synthesizes Weaver's
+//! cross-element pseudo ids), and the 4 real ones are attunement BUFF ids
+//! -- reachable only if a future milestone widens the referenced set past
+//! damage/rotation/boons. They are implemented for the same reason: cheap,
+//! objectively correct by construction, and shaped for a future caller.
+//! `skill_map_golden.rs`'s local spot-check still documents (does NOT
+//! hard-fail on) any residual `is_swap` divergence against a real capture,
+//! the same "measure and document, don't silently under-cite" discipline
+//! `analysis::rotation`'s own `InstantCastEvent` gap already established
+//! for this milestone.
 //!
 //! # `can_crit`: reused verbatim from M13
 //!
@@ -262,9 +279,10 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const WEAPON_SWAP_SKILL_ID: u32 = (-2i32) as u32;
 
 /// Elementalist attunement-swap skill ids (`ElementalistHelper.
-/// IsAttunementSwap`'s base-4, NOT Weaver's separate 16-combo table) -- see
-/// this module's doc comment's "Extended non-sentinel `is_swap` ids"
-/// section for the full citation.
+/// IsAttunementSwap`'s base-4, distinct from Weaver's own
+/// [`WEAVER_ATTUNEMENT_SWAP_SKILL_IDS`] table) -- see this module's doc
+/// comment's "Extended non-sentinel `is_swap` ids" section for the full
+/// citation.
 const ATTUNEMENT_SWAP_SKILL_IDS: [u32; 4] = [
     5492, // FireAttunementSkill
     5493, // WaterAttunementSkill
@@ -299,16 +317,42 @@ const SHROUD_TRANSFORM_SKILL_IDS: [u32; 6] = [
     76933, // ExitRitualistsShroud (Ritualist)
 ];
 
+/// Weaver's dual-attunement ids (`WeaverHelper.IsAttunementSwap`'s
+/// `_weaverAttunements`) -- 16 entries, but only the 4 same-element "dual"
+/// ones are real game ids; the other 12 are EI-invented negative pseudo ids
+/// (`-5`..`-16`), reinterpreted as `u32` for the same reason
+/// [`WEAPON_SWAP_SKILL_ID`] is. See this module's doc comment's "Weaver's
+/// dual-attunement table" section for the full citation.
+const WEAVER_ATTUNEMENT_SWAP_SKILL_IDS: [u32; 16] = [
+    43470,           // DualFireAttunement
+    (-5i32) as u32,  // FireWaterAttunement
+    (-6i32) as u32,  // FireAirAttunement
+    (-7i32) as u32,  // FireEarthAttunement
+    (-8i32) as u32,  // WaterFireAttunement
+    41166,           // DualWaterAttunement
+    (-9i32) as u32,  // WaterAirAttunement
+    (-10i32) as u32, // WaterEarthAttunement
+    (-11i32) as u32, // AirFireAttunement
+    (-12i32) as u32, // AirWaterAttunement
+    42264,           // DualAirAttunement
+    (-13i32) as u32, // AirEarthAttunement
+    (-14i32) as u32, // EarthFireAttunement
+    (-15i32) as u32, // EarthWaterAttunement
+    (-16i32) as u32, // EarthAirAttunement
+    44857,           // DualEarthAttunement
+];
+
 /// Whether `id` is one of GW2EI's `SkillItem.IsSwap` ids -- the weapon-swap
-/// sentinel plus the 3 curated non-sentinel categories (M14, Task 3, Ruling
-/// B): elementalist attunement swaps, revenant legend swaps (5 variants),
-/// necromancer shroud transforms (3 variants). See this module's doc
-/// comment's "Extended non-sentinel `is_swap` ids" section for the full
-/// per-id citation, and its "still excluded" note for the one remaining
-/// documented gap (Weaver's separate 16-combo attunement table).
+/// sentinel plus the 4 non-sentinel categories: elementalist attunement
+/// swaps, Weaver dual-attunement swaps, revenant legend swaps (5 variants),
+/// necromancer shroud transforms (3 variants). This is a COMPLETE port of
+/// EI's own `SkillItem.IsSwap` -- see this module's doc comment's "Extended
+/// non-sentinel `is_swap` ids" and "Weaver's dual-attunement table"
+/// sections for the full per-id citation.
 pub fn is_swap(id: u32) -> bool {
     id == WEAPON_SWAP_SKILL_ID
         || ATTUNEMENT_SWAP_SKILL_IDS.contains(&id)
+        || WEAVER_ATTUNEMENT_SWAP_SKILL_IDS.contains(&id)
         || LEGEND_SWAP_SKILL_IDS.contains(&id)
         || SHROUD_TRANSFORM_SKILL_IDS.contains(&id)
 }
@@ -327,12 +371,12 @@ pub struct SkillMapEntry {
     /// module's doc comment's "`auto_attack`: OMITTED, not guessed"
     /// section for the full citation.
     pub auto_attack: Option<bool>,
-    /// `true` for [`WEAPON_SWAP_SKILL_ID`] plus the 3 curated non-sentinel
-    /// categories [`is_swap`] checks (elementalist attunement swaps,
-    /// revenant legend swaps, necromancer shroud transforms) -- still a
-    /// NARROWER check than real EI's own `isSwap` (which also covers
-    /// Weaver's separate combo-attunement table). See this module's doc
-    /// comment's "Extended non-sentinel `is_swap` ids" section.
+    /// `true` for [`WEAPON_SWAP_SKILL_ID`] plus the 4 non-sentinel
+    /// categories [`is_swap`] checks (elementalist attunement swaps, Weaver
+    /// dual-attunement swaps, revenant legend swaps, necromancer shroud
+    /// transforms) -- a complete port of real EI's own `isSwap`. See this
+    /// module's doc comment's "Extended non-sentinel `is_swap` ids"
+    /// section.
     pub is_swap: bool,
     /// Reused verbatim from `hit_stats::can_crit` (M13's `NonCritableSkills`
     /// table).
@@ -543,6 +587,35 @@ mod tests {
         let map = build(&raw, &players);
         assert!(map[&28085].is_swap, "28085 (Herald's LegendaryDragonStanceSkill) must be flagged is_swap");
         assert!(map[&62567].is_swap, "62567 (EnterHarbingerShroud) must be flagged is_swap");
+    }
+
+    #[test]
+    fn weaver_dual_attunement_swaps_are_flagged_is_swap() {
+        // The 16-entry `_weaverAttunements` table splits into 4 real game
+        // ids and 12 EI-invented negative pseudo ids; both halves must be
+        // reachable, so spot-check one of each plus the two extremes of
+        // the pseudo range (-5 and -16), which are the ones a sign/cast
+        // slip would silently drop.
+        let raw = raw_with_skills(vec![]);
+        let ids: Vec<u32> = vec![43470, 44857, (-5i32) as u32, (-16i32) as u32];
+        let players = vec![player_referencing(&ids, &[], &[], &[])];
+        let map = build(&raw, &players);
+        assert!(map[&43470].is_swap, "43470 (DualFireAttunement) must be flagged is_swap");
+        assert!(map[&44857].is_swap, "44857 (DualEarthAttunement) must be flagged is_swap");
+        assert!(map[&((-5i32) as u32)].is_swap, "-5 (FireWaterAttunement pseudo id) must be flagged is_swap");
+        assert!(map[&((-16i32) as u32)].is_swap, "-16 (EarthAirAttunement pseudo id) must be flagged is_swap");
+    }
+
+    #[test]
+    fn weaver_pseudo_ids_do_not_swallow_neighbouring_sentinels() {
+        // EI's own SkillIDs block packs the Weaver pseudo range between
+        // `NumberOfBoons = -3`/`NumberOfConditions = -4` above it and
+        // `MirageCloakDodge = -17` below (`SkillIDs.cs:18-38`). None of
+        // those three is an IsSwap id, so a range check written instead of
+        // a membership check would wrongly flag them.
+        assert!(!is_swap((-3i32) as u32), "-3 is not one of EI's IsSwap ids");
+        assert!(!is_swap((-4i32) as u32), "-4 is not one of EI's IsSwap ids");
+        assert!(!is_swap((-17i32) as u32), "-17 is past the Weaver pseudo range");
     }
 
     #[test]
