@@ -290,11 +290,23 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   - The cheap alternative, considered and NOT taken: ship the 153 `(skill_id, origin)` pairs as a
     generated catalog and flag referenced ids unconditionally (~a day). It over-flags exactly where
     `Available()` says no, so it would need a documented+ruled exception rather than parity.
-- MOBJ wvWMapData objectives: the last whole EI feature surface axilog doesn't emit
-  (shard/team ids + GADGETCAPTURE-derived objective ownership timelines; reference shape verified
-  — 13 entries on the local export, `{mapID, objectiveID, objectiveType, owners:[[team,time]]}`).
-  Two attempts died to process exits before producing commits; no partial work exists. Lowest
-  value of the remaining items — nothing consumes it today.
+- ~~MOBJ wvWMapData objectives~~ — **CLOSED 2026-08-16.** Both formats now emit it:
+  `encounter.objectives[]` + `encounter.teams[].shard_id` natively, and a complete
+  `wvWMapData` (`redShardID`/`blueShardID`/`greenShardID` + `objectiveData`) in ei-json.
+  Corrections to the entry this replaced, worth keeping:
+  - The source is `CBTS_WVWOBJECTIVESTATUS` (sc=75), **not** GADGETCAPTURE. The
+    GADGETCAPTURE family (sc=80-83) is replay outline geometry and is unrelated;
+    EI's `WvWObjectiveStatusEvent` reads sc=75 only.
+  - The shard ids were already in the sc=74 payload axilog parses, in the three
+    uint32 slots it skipped as "unused by axilog today". No new event was needed.
+  - An objective's TYPE is not in the log — it comes from a static
+    `(map_id, objective_id)` catalog (`WvWHelper.cs:161-268`, 76 rows over 4 maps),
+    and EI DROPS any status event the catalog can't type. An incomplete catalog
+    silently shortens the output rather than emitting `"Unknown"`, so all 76 rows are
+    transcribed and machine-diffed against the source, not just the mapped fixtures.
+  - The committed fixture (Jan 2026) predates BOTH sc=74 and sc=75, so the key-set
+    golden can't reach these fields; hand-built tests in `axilog-schema`/`axilog-ei`
+    cover the wire shapes instead. Same gap class as `encounter.tick_rate`.
 
 - ~~Pre-existing clippy warnings~~ — CLOSED 2026-08-16; `cargo clippy --workspace
   --all-targets` is now clean. 22 warnings: 13 `\0`-followed-by-a-digit escapes in

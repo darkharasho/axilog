@@ -73,6 +73,17 @@ inside `blocks` is empty or absent.
   "markers": [
     { "entity_id": 58, "agent_addr": 9619, "marker": "3cd1c64a...", "time_ms": 33847418 }
   ],
+  "objectives": [
+    {
+      "map_id": 96,
+      "objective_id": 37,
+      "objective_type": "Keep",
+      "owners": [
+        { "team_id": 433, "time_ms": 0 },
+        { "team_id": 2767, "time_ms": 44684 }
+      ]
+    }
+  ],
   "started_at_unix": 1768702180
 }
 ```
@@ -83,6 +94,25 @@ inside `blocks` is empty or absent.
 marker's agent resolved to a tracked entity — `arcdps` does not restrict
 `CBTS_MARKER` to squad members, so a marker on untracked friendly siege is
 ordinary and still needs to survive with `agent_addr` alone).
+
+`objectives[]` is the WvW objective ownership record, from arcdps's
+`CBTS_WVWOBJECTIVESTATUS`. One entry per objective the log mentions, each
+carrying every ownership observation for it in log order — so a keep that
+changed hands has the flip in its `owners` list, at `time_ms` relative to
+the log start. `objective_type` is one of `Camp`, `Ruins`, `Tower`, `Keep`,
+`Castle`; an objective whose `(map_id, objective_id)` pair is not in the
+static catalog is **dropped**, never emitted with an `"Unknown"` type, which
+matches GW2EI. Repeated identical owner entries are kept rather than
+collapsed, also matching GW2EI — treat the list as an event log, not a
+deduplicated history. The array is always present and is empty for non-WvW
+logs and for logs predating the event.
+
+`teams[].shard_id` (omitted when absent, in the same example above) is the
+world/shard id from `CBTS_WVWTEAMS`. It is *not* the team id: `team_id`
+identifies the colour side within this match, `shard_id` identifies the
+server world playing it. A team can have a `color` and no `shard_id` — the
+colour then came from the static fallback id table rather than from the
+log's own event.
 
 `started_at_unix` is the wall-clock log start, seconds since the epoch, read
 from arcdps's own `CBTS_LOGSTART`/`CBTS_SQCOMBATSTART` event -- the SERVER

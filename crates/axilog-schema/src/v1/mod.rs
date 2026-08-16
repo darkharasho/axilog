@@ -47,6 +47,10 @@ pub struct EncounterOut {
     /// this is not a bare `u64` defaulting to 0.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at_unix: Option<u64>,
+    /// WvW objective ownership timelines (MOBJ). Carried verbatim from the
+    /// legacy shape -- unlike `markers` there is no join key to rekey, an
+    /// objective belongs to the map rather than to an entity.
+    pub objectives: Vec<crate::ObjectiveOut>,
 }
 
 /// One `CBTS_MARKER` assignment. `arcdps` does not restrict `CBTS_MARKER`
@@ -491,6 +495,7 @@ pub fn build_report_v1(
             markers,
             tick_rate: legacy.encounter.tick_rate.clone(),
             started_at_unix: legacy.encounter.started_at_unix,
+            objectives: legacy.encounter.objectives.clone(),
         },
         entities,
         source_order,
@@ -566,7 +571,7 @@ mod tests {
                 // resolves to an entity id.
                 MarkerAssignment { agent_addr: 99, marker: "star".into(), time_ms: 20 },
             ],
-            tick_rate: None, started_at_unix: None,
+            tick_rate: None, objectives: Vec::new(), started_at_unix: None,
         };
         let metrics = Metrics {
             players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],
@@ -632,7 +637,7 @@ mod tests {
             players: vec![player(1, ":Squaddie.1")],
             enemies: vec![],
             markers: vec![],
-            tick_rate: None, started_at_unix: None,
+            tick_rate: None, objectives: Vec::new(), started_at_unix: None,
         };
         let metrics = Metrics {
             players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],
@@ -699,7 +704,7 @@ mod tests {
             players: vec![player(1, ":Squaddie.1")],
             enemies: vec![],
             markers: vec![],
-            tick_rate: None, started_at_unix: None,
+            tick_rate: None, objectives: Vec::new(), started_at_unix: None,
         };
         let metrics = Metrics {
             players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],

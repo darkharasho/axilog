@@ -410,6 +410,7 @@ encounter.markers[].agent_addr
 encounter.markers[].entity_id
 encounter.markers[].marker
 encounter.markers[].time_ms
+encounter.objectives
 encounter.recorded_by
 encounter.revision
 encounter.started_at_unix

@@ -72,12 +72,12 @@ mod tests {
                 revision: 1,
                 recorded_by: Some(":Recorder.1234".into()),
                 teams: vec![
-                    TeamOut { color: "red".into(), team_id: 1, guid: None },
-                    TeamOut { color: "blue".into(), team_id: 2, guid: None },
+                    TeamOut { color: "red".into(), team_id: 1, guid: None, shard_id: None },
+                    TeamOut { color: "blue".into(), team_id: 2, guid: None, shard_id: None },
                 ],
                 markers: vec![],
                 tick_rate: None,
-                started_at_unix: None,
+                objectives: Vec::new(), started_at_unix: None,
             },
             players: vec![PlayerOut {
                 account: ":Player.1234".into(),

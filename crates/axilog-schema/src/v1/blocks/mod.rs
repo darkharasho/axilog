@@ -145,7 +145,7 @@ pub(crate) mod tests_support {
             players: vec![player(1, ":Squaddie.1", true), player(2, ":Pug.2", false)],
             enemies: vec![],
             markers: vec![],
-            tick_rate: None, started_at_unix: None,
+            tick_rate: None, objectives: Vec::new(), started_at_unix: None,
         };
         let metrics = Metrics {
             players: vec![

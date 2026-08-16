@@ -406,7 +406,40 @@ pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u6
     /// renderer (`axilog-ei`) does not reference this field, so its
     /// goldens are unaffected by this addition.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub started_at_unix: Option<u64> }
+    pub started_at_unix: Option<u64>,
+    /// WvW objective ownership timelines from `CBTS_WVWOBJECTIVESTATUS`
+    /// (MOBJ). Empty (not omitted) for non-WvW logs and for logs predating
+    /// the event, consistent with `markers` above. This is the source the
+    /// `ei-json` adapter reads for `wvWMapData.objectiveData`.
+    pub objectives: Vec<ObjectiveOut> }
+/// One WvW objective's ownership timeline.
+///
+/// Field-for-field the same information as EI's `JsonWvWObjectiveData`, but
+/// spelled the native way: snake_case, and `owners` as named records rather
+/// than EI's positional `[teamID, time]` pairs. The pair form is EI's wire
+/// compaction; there are at most a few dozen objectives in a log, so the
+/// bytes it saves do not pay for a reader having to know that slot 0 is a
+/// team and slot 1 is a time.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct ObjectiveOut {
+    pub map_id: i32,
+    pub objective_id: i32,
+    /// `"Camp"`, `"Ruins"`, `"Tower"`, `"Keep"` or `"Castle"` -- EI's
+    /// spelling, from `axilog_core::wvw::objectives::ObjectiveType::name`.
+    /// Never `"Unknown"`: an objective the catalog cannot type is dropped
+    /// upstream rather than emitted untyped.
+    pub objective_type: String,
+    /// Every ownership observation, in log order. Repeats are kept, not
+    /// collapsed -- see `axilog_core::wvw::objectives::ObjectiveStatus::
+    /// owners`.
+    pub owners: Vec<ObjectiveOwnerOut>,
+}
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct ObjectiveOwnerOut {
+    pub team_id: u32,
+    /// Log-relative milliseconds, the project-wide time base.
+    pub time_ms: u64,
+}
 #[derive(Serialize, Clone)]
 pub struct MarkerAssignmentOut { pub agent_addr: u64, pub marker: String, pub time_ms: u64 }
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -421,6 +454,12 @@ pub struct TeamOut {
     /// entirely from the JSON when absent, rather than serialized as null.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guid: Option<String>,
+    /// This team's WvW shard (world) id from `CBTS_WVWTEAMS` (MOBJ), when
+    /// the log names it. Same omit-when-absent convention as `guid`. See
+    /// `axilog_core::model::Team::shard_id` for why a team can have a
+    /// colour but no shard.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shard_id: Option<u32>,
 }
 #[derive(Serialize)]
 pub struct DamageOut { pub total: u64, pub dps: f64, pub per_enemy: Vec<PerEnemyOut> }
@@ -1527,7 +1566,15 @@ pub fn build_report(
         encounter: EncounterOut { kind: enc.kind.clone(), map: enc.map.clone(),
             duration_ms: enc.duration_ms, build: enc.build.clone(), revision: enc.revision,
             recorded_by: enc.recorded_by.clone(),
-            teams: enc.teams.iter().map(|t| TeamOut{color:t.color.clone(),team_id:t.team_id,guid:t.guid.clone()}).collect(),
+            teams: enc.teams.iter().map(|t| TeamOut{color:t.color.clone(),team_id:t.team_id,guid:t.guid.clone(),shard_id:t.shard_id}).collect(),
+            objectives: enc.objectives.iter().map(|o| ObjectiveOut {
+                map_id: o.map_id,
+                objective_id: o.objective_id,
+                objective_type: o.kind.name().to_string(),
+                owners: o.owners.iter()
+                    .map(|&(team_id, time_ms)| ObjectiveOwnerOut { team_id, time_ms })
+                    .collect(),
+            }).collect(),
             markers: enc.markers.iter().map(|m| MarkerAssignmentOut{agent_addr:m.agent_addr,marker:m.marker.clone(),time_ms:m.time_ms}).collect(),
             tick_rate: enc.tick_rate.as_ref().map(|t| TickRateOut{avg:t.avg,min:t.min,per_second:t.per_second.clone()}),
             started_at_unix: enc.started_at_unix },
@@ -1626,7 +1673,7 @@ mod tests {
                     profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
                     agent_addrs: vec![11] },
             ],
-            markers:vec![], tick_rate:None, started_at_unix: None };
+            markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
         let m = Metrics { players: vec![],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![]},
             boons: Default::default(), boon_uptime: Default::default(),
@@ -1650,6 +1697,70 @@ mod tests {
         assert_eq!(v["enemies"].as_array().unwrap().len(), 2);
     }
 
+    /// MOBJ: the serialized native shape of `encounter.objectives` and
+    /// `encounter.teams[].shard_id`.
+    ///
+    /// These two are NOT covered by `tests/v1-keyset.golden.txt`, which is
+    /// generated from `fixtures/wvw-small.anon.zevtc` -- a January 2026
+    /// capture predating both `CBTS_WVWTEAMS` (sc=74) and
+    /// `CBTS_WVWOBJECTIVESTATUS` (sc=75), so it produces an empty
+    /// `objectives` array and no shard on any team. The golden therefore
+    /// records the key `encounter.objectives` and nothing beneath it. Same
+    /// class of gap as `encounter.tick_rate`, which that test's doc comment
+    /// already calls out; this is the hand-built stand-in it suggests.
+    ///
+    /// The 1.0 container carries `crate::ObjectiveOut` itself (`v1::
+    /// EncounterOut::objectives` is a straight clone of this field), so
+    /// pinning the `Serialize` output once here pins it for both formats.
+    #[test]
+    fn objectives_and_shard_ids_serialize_with_their_documented_names() {
+        use axilog_core::model::Team;
+        use axilog_core::wvw::objectives::{ObjectiveStatus, ObjectiveType};
+
+        let enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:1000,
+            build:"".into(), revision:1, recorded_by:None,
+            teams: vec![
+                Team { color: "blue".into(), team_id: 433, guid: None, shard_id: Some(1009) },
+                // A team with no shard: the field must be OMITTED, not null.
+                Team { color: "red".into(), team_id: 705, guid: None, shard_id: None },
+            ],
+            players:vec![], enemies:vec![], markers:vec![], tick_rate:None,
+            objectives: vec![ObjectiveStatus {
+                map_id: 96,
+                objective_id: 37,
+                kind: ObjectiveType::Keep,
+                auto_upgrade_progress: 42,
+                owners: vec![(433, 0), (2767, 44684)],
+            }],
+            started_at_unix: None };
+        let m = Metrics::default();
+        let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
+        let v = serde_json::to_value(&report).unwrap();
+
+        assert_eq!(
+            v["encounter"]["objectives"],
+            serde_json::json!([{
+                "map_id": 96,
+                "objective_id": 37,
+                "objective_type": "Keep",
+                "owners": [
+                    { "team_id": 433, "time_ms": 0 },
+                    { "team_id": 2767, "time_ms": 44684 },
+                ],
+            }]),
+            "native objectives are snake_case with NAMED owner records"
+        );
+        // `auto_upgrade_progress` is parsed but deliberately not on the
+        // wire -- see `wvw::objectives`' module doc.
+        assert!(v["encounter"]["objectives"][0].get("auto_upgrade_progress").is_none());
+
+        assert_eq!(v["encounter"]["teams"][0]["shard_id"], 1009);
+        assert!(
+            v["encounter"]["teams"][1].get("shard_id").is_none(),
+            "an absent shard is omitted, not serialized as null"
+        );
+    }
+
     /// MROSTER: the `enc.kind == "wvw"` guard. GW2EI picks `targets[]` per
     /// `LogLogic`; the enemy-players-only rule is WvW's, so a non-WvW
     /// encounter (none exist today) keeps the full roster rather than
@@ -1664,7 +1775,7 @@ mod tests {
                     is_player: false, marker: None, profession: None, elite_spec: None,
                     agent_addrs: vec![9] },
             ],
-            markers:vec![], tick_rate:None, started_at_unix: None };
+            markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
         let m = Metrics { players: vec![],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![]},
             boons: Default::default(), boon_uptime: Default::default(),
@@ -1682,7 +1793,7 @@ mod tests {
             teams:vec![], players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"".into(),
             team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]}],
-            enemies:vec![], markers:vec![], tick_rate:None, started_at_unix: None };
+            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
         let m = Metrics { players: vec![PlayerMetrics{agent_addr:1,damage_total:500,
             dps:500.0,..Default::default()}],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![500],
@@ -1722,7 +1833,7 @@ mod tests {
                     profession:"Guardian".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![2]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None, started_at_unix: None };
+            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 healing: HealingMetrics { healing_out_total: 500, healing_out_allies: 300,
@@ -1763,7 +1874,7 @@ mod tests {
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None, started_at_unix: None };
+            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
         let entry = SkillEntry { skill_id: 100, total: 50, hits: 1, min: 50, max: 50, crit_hits: 0, flank_hits: 0 };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
@@ -1812,7 +1923,7 @@ mod tests {
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None, started_at_unix: None };
+            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 timeseries: TimeseriesMetrics {
@@ -1872,7 +1983,7 @@ mod tests {
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None, started_at_unix: None };
+            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 rotation: vec![SkillRotation { skill_id: 500, casts: vec![
@@ -1961,7 +2072,7 @@ mod tests {
         let enc = Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
-            enemies: vec![], markers: vec![], tick_rate: None, started_at_unix: None,
+            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None,
         };
         let mut dst = [0u8; 8];
         dst[0..4].copy_from_slice(&123.456f32.to_le_bytes());
@@ -2010,7 +2121,7 @@ mod tests {
         let enc = Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
-            enemies: vec![], markers: vec![], tick_rate: None, started_at_unix: None,
+            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None,
         };
         fn missile_ev(time: u64, statechange: u8, src: u64, dst: u64, is_flanking: u8, pad: u32) -> RawEvent {
             RawEvent {

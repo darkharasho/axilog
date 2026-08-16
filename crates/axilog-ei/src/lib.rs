@@ -2541,10 +2541,49 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
     let wvw_team_id_for = |color: &str| -> u64 {
         wvw_detected.get(color).copied().unwrap_or_else(|| representative_team_id(color))
     };
+    // MOBJ: shard ids and objective timelines complete `wvWMapData`, which
+    // until now carried only the three team ids. Both come off
+    // `report.encounter` for the same reason the team ids do.
+    //
+    // Shards are looked up by COLOUR here, which is safe in a way the core
+    // lookup is not: `TeamOut::shard_id` is already `None` for any team the
+    // sc=74 event did not name (see `wvw::apply`), so a statically-coloured
+    // team contributes nothing and `find_map` falls through to the next.
+    // Absent shards serialize as `0` rather than being omitted, matching
+    // EI's `JsonWvWMapData`, whose `uint` fields are always present.
+    let wvw_shard_id_for = |color: &str| -> u32 {
+        report
+            .encounter
+            .teams
+            .iter()
+            .find_map(|t| (t.color == color).then_some(t.shard_id).flatten())
+            .unwrap_or(0)
+    };
+    // EI's positional `long[2] {TeamID, Time}` owner pairs
+    // (`JsonWvWMapDataBuilder.cs:31`), rebuilt from the native named form.
+    let wvw_objective_data: Vec<Value> = report
+        .encounter
+        .objectives
+        .iter()
+        .map(|o| {
+            json!({
+                "mapID": o.map_id,
+                "objectiveID": o.objective_id,
+                "objectiveType": o.objective_type,
+                "owners": o.owners.iter()
+                    .map(|w| json!([w.team_id, w.time_ms]))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
     let wvw_map_data = json!({
+        "redShardID": wvw_shard_id_for("red"),
+        "blueShardID": wvw_shard_id_for("blue"),
+        "greenShardID": wvw_shard_id_for("green"),
         "redTeamID": wvw_team_id_for("red"),
         "blueTeamID": wvw_team_id_for("blue"),
-        "greenTeamID": wvw_team_id_for("green")
+        "greenTeamID": wvw_team_id_for("green"),
+        "objectiveData": wvw_objective_data
     });
     // `damageModMap` (M16, Task 3): `"d<signed id>"` ->
     // `{ name, icon, description, nonMultiplier, isCounter, skillBased,
@@ -2733,7 +2772,7 @@ mod tests {
                 teams: vec![],
                 markers: vec![],
                 tick_rate: None,
-                started_at_unix: None,
+                objectives: Vec::new(), started_at_unix: None,
             },
             entities: vec![],
             source_order: axilog_schema::v1::SourceOrder::default(),
@@ -2777,7 +2816,7 @@ mod tests {
             Enemy{id:10,instid:10,name:"Gadget".into(),team:"blue".into(),
             is_player:false,marker:None,profession:None,elite_spec:None,
             agent_addrs:vec![10]}],
-            markers:vec![],tick_rate:None,started_at_unix:None};
+            markers:vec![],tick_rate:None,objectives: Vec::new(), started_at_unix:None};
         use axilog_core::analysis::contribution::ContributionMetrics;
         let m = Metrics{players:vec![
             PlayerMetrics{agent_addr:1,damage_total:500,dps:500.0,per_enemy:vec![(9,500)],
@@ -2956,7 +2995,7 @@ mod tests {
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"Nim Iss".into(),profession:"Thief".into(),elite_spec:"".into(),
             team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]}],
-            enemies:vec![],markers:vec![],tick_rate:None,started_at_unix:None};
+            enemies:vec![],markers:vec![],tick_rate:None,objectives: Vec::new(), started_at_unix:None};
         let mut boon_uptime = std::collections::BTreeMap::new();
         // Might (intensity): avg_stacks=3.5, presence_pct=100.0.
         boon_uptime.insert((1u64, buffs::MIGHT), BoonUptime { presence_pct: 100.0, avg_stacks: 3.5 });
@@ -3067,7 +3106,7 @@ mod tests {
         let report = Report {
             schema_version: "0.2", axilog_version: "0.1.0".to_string(),
             encounter: EncounterOut { kind: "wvw".into(), map: "".into(), duration_ms: 10_000,
-                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None, started_at_unix: None },
+                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None },
             players: vec![
                 base_player(":A.1", Some(HealingOut {
                     healing_out_total: 5000, healing_out_allies: 3000, healing_out_self: 2000,
@@ -3211,7 +3250,7 @@ mod tests {
         Report {
             schema_version: "0.2", axilog_version: "0.1.0".to_string(),
             encounter: EncounterOut { kind: "wvw".into(), map: "".into(), duration_ms: 2_000,
-                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None, started_at_unix: None },
+                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None },
             players,
             enemies: vec![],
             ei_targets,
@@ -3243,6 +3282,7 @@ mod tests {
         let mut v1 = empty_report_v1();
         v1.encounter.duration_ms = report.encounter.duration_ms;
         v1.encounter.teams = report.encounter.teams.clone();
+        v1.encounter.objectives = report.encounter.objectives.clone();
         let mut entities: Vec<EntityOut> = Vec::new();
         let mut players: Vec<u32> = Vec::new();
         let mut targets: Vec<u32> = Vec::new();
@@ -3909,5 +3949,63 @@ mod tests {
         };
         let v = to_ei_json(&sample_report_v1(), Some(&replay));
         assert!(v["players"][0]["combatReplayData"].get("positions").is_none());
+    }
+
+    /// MOBJ: `wvWMapData` in full -- the three shard ids and
+    /// `objectiveData`, alongside the team ids it already carried.
+    ///
+    /// Every key here is pinned to EI's own spelling, verified against a
+    /// reference GW2EI export's `wvWMapData` object (its key order is
+    /// exactly `redShardID, blueShardID, greenShardID, redTeamID,
+    /// blueTeamID, greenTeamID, objectiveData`). `owners` is EI's
+    /// POSITIONAL `[teamID, time]` pair, not the native named form -- the
+    /// one place the two formats deliberately disagree, so it is asserted
+    /// as a literal array rather than by field.
+    #[test]
+    fn wvw_map_data_carries_shard_ids_and_objective_timelines() {
+        use axilog_schema::{ObjectiveOut, ObjectiveOwnerOut, TeamOut};
+        let mut v1 = empty_report_v1();
+        v1.encounter.teams = vec![
+            TeamOut { color: "blue".into(), team_id: 433, guid: None, shard_id: Some(1009) },
+            // No shard on this one: EI's `JsonWvWMapData` fields are plain
+            // `uint`s and are always present, so it must surface as 0
+            // rather than being omitted the way the native shape omits it.
+            TeamOut { color: "green".into(), team_id: 2767, guid: None, shard_id: None },
+        ];
+        v1.encounter.objectives = vec![ObjectiveOut {
+            map_id: 96,
+            objective_id: 37,
+            objective_type: "Keep".into(),
+            owners: vec![
+                ObjectiveOwnerOut { team_id: 433, time_ms: 0 },
+                ObjectiveOwnerOut { team_id: 2767, time_ms: 44684 },
+            ],
+        }];
+        let v = to_ei_json(&v1, None);
+        let w = &v["wvWMapData"];
+
+        assert_eq!(w["blueShardID"], 1009);
+        assert_eq!(w["greenShardID"], 0, "a team with no shard reports 0, not null");
+        assert_eq!(w["blueTeamID"], 433);
+        assert_eq!(w["greenTeamID"], 2767);
+        assert_eq!(
+            w["objectiveData"],
+            serde_json::json!([{
+                "mapID": 96,
+                "objectiveID": 37,
+                "objectiveType": "Keep",
+                "owners": [[433, 0], [2767, 44684]],
+            }])
+        );
+    }
+
+    /// A log with no `CBTS_WVWOBJECTIVESTATUS` events still emits the key,
+    /// as an empty array. EI's `ObjectiveData` is an initialized List that
+    /// is always serialized, so absence must not become a missing key --
+    /// which is what a consumer would trip over first.
+    #[test]
+    fn wvw_map_data_objective_data_is_an_empty_array_not_a_missing_key() {
+        let v = to_ei_json(&empty_report_v1(), None);
+        assert_eq!(v["wvWMapData"]["objectiveData"], serde_json::json!([]));
     }
 }

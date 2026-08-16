@@ -185,9 +185,33 @@ class _TeamOutRequired(TypedDict):
     team_id: int
 
 class TeamOut(_TeamOutRequired, total=False):
-    """`guid` is omitted (not `null`) when this team has no known content GUID."""
+    """`guid` is omitted (not `null`) when this team has no known content
+    GUID. `shard_id` is this team's WvW world/shard id from
+    `CBTS_WVWTEAMS`; it is omitted the same way, and is absent for logs
+    predating that event and for any team the event does not name (a team
+    can therefore have a `color` but no `shard_id`)."""
 
     guid: str
+    shard_id: int
+
+class ObjectiveOwnerOut(TypedDict):
+    """One ownership observation. `time_ms` is log-relative milliseconds."""
+
+    team_id: int
+    time_ms: int
+
+class ObjectiveOut(TypedDict):
+    """One WvW objective's ownership timeline, from
+    `CBTS_WVWOBJECTIVESTATUS`. `objective_type` is one of `"Camp"`,
+    `"Ruins"`, `"Tower"`, `"Keep"`, `"Castle"` -- never `"Unknown"`, since
+    an objective the static catalog cannot type is dropped rather than
+    emitted untyped. `owners` keeps repeats rather than collapsing them,
+    matching GW2EI."""
+
+    map_id: int
+    objective_id: int
+    objective_type: str
+    owners: List[ObjectiveOwnerOut]
 
 class _EncounterOutRequired(TypedDict):
     kind: str
@@ -199,6 +223,9 @@ class _EncounterOutRequired(TypedDict):
     recorded_by: Optional[str]
     teams: List[TeamOut]
     markers: List[MarkerAssignmentOut]
+    #: WvW objective ownership timelines. Empty (not omitted) for non-WvW
+    #: logs and for logs predating `CBTS_WVWOBJECTIVESTATUS`.
+    objectives: List[ObjectiveOut]
 
 class EncounterOut(_EncounterOutRequired, total=False):
     """`tick_rate` is omitted when the log has fewer than two `CBTS_TICK`
@@ -810,6 +837,10 @@ class _EncounterOutV1Required(TypedDict):
     revision: int
     teams: List[TeamOut]
     markers: List[MarkerAssignmentOutV1]
+    #: WvW objective ownership timelines -- carried verbatim from the
+    #: legacy shape; an objective belongs to the map, not to an entity, so
+    #: unlike `markers` there is no join key to rekey.
+    objectives: List[ObjectiveOut]
 
 class EncounterOutV1(_EncounterOutV1Required, total=False):
     """The 1.0 encounter envelope -- a reprojection of the legacy

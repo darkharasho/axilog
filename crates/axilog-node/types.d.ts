@@ -58,6 +58,33 @@ export interface TeamOut {
   team_id: number
   /** Stable content GUID for this team, when known (omitted, not null, when absent). */
   guid?: string
+  /**
+   * This team's WvW world/shard id from `CBTS_WVWTEAMS`, omitted the same
+   * way. Absent for logs predating that event and for any team the event
+   * does not name -- a team can have a `color` (resolved from the static
+   * fallback id table) but no `shard_id`.
+   */
+  shard_id?: number
+}
+
+/** One ownership observation. `time_ms` is log-relative milliseconds. */
+export interface ObjectiveOwnerOut {
+  team_id: number
+  time_ms: number
+}
+
+/**
+ * One WvW objective's ownership timeline, from
+ * `CBTS_WVWOBJECTIVESTATUS`. Never carries an `"Unknown"`
+ * `objective_type`: an objective the static catalog cannot type is dropped
+ * rather than emitted untyped. `owners` keeps repeats rather than
+ * collapsing them, matching GW2EI.
+ */
+export interface ObjectiveOut {
+  map_id: number
+  objective_id: number
+  objective_type: 'Camp' | 'Ruins' | 'Tower' | 'Keep' | 'Castle'
+  owners: ObjectiveOwnerOut[]
 }
 
 export interface PerEnemyOut {
@@ -602,6 +629,8 @@ export interface EncounterOut {
   teams: TeamOut[]
   /** Every `CBTS_MARKER` assignment observed in the log, across all agents -- not just squad/enemy players. Always present (possibly empty), never omitted. */
   markers: MarkerAssignmentOut[]
+  /** WvW objective ownership timelines. Empty (not omitted) for non-WvW logs and for logs predating `CBTS_WVWOBJECTIVESTATUS`. */
+  objectives: ObjectiveOut[]
   /** Omitted entirely (not `null`) when the log has fewer than two `CBTS_TICK` events. */
   tick_rate?: TickRateOut
   /**
@@ -789,6 +818,8 @@ export interface EncounterOutV1 {
   recorded_by?: number
   teams: TeamOut[]
   markers: MarkerAssignmentOutV1[]
+  /** Carried verbatim from the legacy shape -- an objective belongs to the map, not to an entity, so unlike `markers` there is no join key to rekey. */
+  objectives: ObjectiveOut[]
   tick_rate?: TickRateOut
   /**
    * Wall-clock log start, **seconds** since the Unix epoch, from arcdps's
