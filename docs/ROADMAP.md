@@ -84,8 +84,12 @@ schedule. Absorption removed ei-json's *private data*, not ei-json.
   readiness only unless the owner says otherwise.
 
 Debt left parked by Phase B, in rough value order:
-- `dc` is empty on all 42 fixture rows, and neither SDK asserts the field is
-  present before comparing — so a rename would pass both suites silently.
+- ~~`dc` rename passes the SDK suites silently~~ — **CLOSED** (`c1ee0ec`). The
+  guard that matters is in the schema: `ReplayIntervals` now asserts its exact
+  serialized key set in both the gated and ungated states, which also pins
+  `-1.0` as serialized rather than skipped. Both SDKs additionally assert
+  presence and type per row. Note the original claim was half wrong: only Node
+  passed silently; Python already failed, just as an opaque `KeyError`.
 - A `markers.rs` tag-colour-swap can emit two overlapping commander segments.
 - `t0` is re-derived in `distance.rs:142`, duplicating `replay.rs:172`.
 - `axilog.pyi` was swept for pre-1.0 staleness only at `PerTargetDetail`.
