@@ -263,6 +263,52 @@ pub mod sc {
     /// decision (fired/hit/not-hit and the reflected-heuristic only -- no
     /// blocked/reflected/destroyed breakdown).
     pub const MISSILE_REMOVE: u8 = 59;
+
+    /// The FIRST-generation combined effect event, `CBTS_EFFECT`
+    /// (`crate::evtc::effect`). One row carries create-or-end for a visual
+    /// effect; `skillid == 0` marks the end form, which arcdps never
+    /// actually emitted for this generation (GW2EI's
+    /// `CombatEventFactory.cs:328-331` returns early on it, "End event, not
+    /// supported for 45").
+    ///
+    /// Ordinal: immediately BEFORE `CBTS_IDTOGUID` (46), which
+    /// [`ID_TO_GUID`] above already verified by a full hand-count of
+    /// `enum cbtstatechange` against the arcdps EVTC reference, and after
+    /// [`EXTENSION`] (40). Cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.Effect_45 = 45` (`ArcDPSEnums.cs:305`).
+    ///
+    /// [`EXTENSION`]: super::sc::EXTENSION
+    pub const EFFECT_45: u8 = 45;
+    /// The SECOND-generation combined effect event, arcdps build
+    /// `Effect2Events = 20230718` onward (GW2EI `ArcDPSEnums.cs:19`).
+    /// Same create-or-end shape as [`EFFECT_45`] but with a real end form:
+    /// `skillid == 0` is an END row carrying only a tracking id, which
+    /// closes the matching create (`CombatEventFactory.cs:335-344`).
+    ///
+    /// Ordinal: two after [`EXTENSION_COMBAT`] (49), itself verified by
+    /// hand-count. This one is NOT bracketed as tightly as the 60-63 block
+    /// below, so it rests mainly on GW2EI's
+    /// `ArcDPSEnums.StateChange.Effect_51 = 51` (`ArcDPSEnums.cs:311`).
+    ///
+    /// [`EXTENSION_COMBAT`]: super::sc::EXTENSION_COMBAT
+    pub const EFFECT_51: u8 = 51;
+    /// The THIRD-generation effect events, which SPLIT create from end and
+    /// ground-anchored from agent-anchored. All four are bracketed tightly:
+    /// they are the four enumerators immediately after
+    /// [`MISSILE_REMOVE`] (59), whose ordinal the missile block above
+    /// verified by a full hand-count, and they run out before
+    /// [`MISSILE_EFFECT`] (79). Cross-checked against GW2EI's
+    /// `ArcDPSEnums.cs:320-323`
+    /// (`EffectGroundCreate`/`EffectGroundRemove`/`EffectAgentCreate`/
+    /// `EffectAgentRemove` = 60/61/62/63).
+    pub const EFFECT_GROUND_CREATE: u8 = 60;
+    /// See [`EFFECT_GROUND_CREATE`].
+    pub const EFFECT_GROUND_REMOVE: u8 = 61;
+    /// See [`EFFECT_GROUND_CREATE`].
+    pub const EFFECT_AGENT_CREATE: u8 = 62;
+    /// See [`EFFECT_GROUND_CREATE`].
+    pub const EFFECT_AGENT_REMOVE: u8 = 63;
+
     /// Apply a visual effect to an in-flight missile (M10 Task 2) --
     /// distinct from `CBTS_EFFECTAGENTCREATE`/`CBTS_EFFECTGROUNDCREATE`
     /// (ordinary agent/ground VFX) and not decoded by this project (no

@@ -28,7 +28,7 @@ pub enum ContentType {
 }
 
 impl ContentType {
-    fn from_u32(v: u32) -> Self {
+    pub fn from_u32(v: u32) -> Self {
         match v {
             0 => ContentType::Effect,
             1 => ContentType::Marker,
