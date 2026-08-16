@@ -36,7 +36,7 @@ axibridge reads native.
 
 That leaves four real items.
 
-## Item 1 — widen `PerTargetDetail` from 7 fields to 22
+## Item 1 — widen `PerTargetDetail` from 7 fields to 23
 
 ### Problem
 
@@ -61,15 +61,26 @@ fields deletes both the wrong numbers and the trap.
 
 ### Decision
 
-Widen `PerTargetDetail` to the 15 additional fields axibridge reads. Not the
-full 38: the remaining 23 appear nowhere in the cutover report's read
-surface, and inventing them is speculative work.
+Widen `PerTargetDetail` to the 15 additional fields axibridge reads, plus
+one supporting field (below). Not the full 38: the remaining fields appear
+nowhere in the cutover report's read surface, and inventing them is
+speculative work.
 
 Existing 7 (unchanged): `connected_hits`, `connected_damage`,
 `against_downed_count`, `downed`, `killed`, `interrupts`,
 `downs_contribution_damage`.
 
-New 15:
+**The 16th field.** `critable_direct_count` is not one of EI's
+`statsTargets` fields, and is added anyway. `hit_stats.rs:472` records that
+GW2EI gates `crit_count` and `critable_direct_count` behind `CanCrit` but
+NOT `direct_count`/`flank_count`/`glance_count` — so EI's crit *rate* is
+`crit_count / critable_direct_count`, not `crit_count / direct_count`.
+Emitting the numerator without its denominator would hand every consumer a
+division that looks obvious and is wrong. The alternative — emitting a
+pre-divided rate — is worse: it is not summable, and every other field here
+is a raw count.
+
+New 16:
 
 | Field | Source |
 |---|---|
@@ -79,7 +90,7 @@ New 15:
 | `crit_damage` | per-target accumulator |
 | `flank_count` | per-target accumulator |
 | `glance_count` | per-target accumulator |
-| `critable_direct_count` | per-target accumulator |
+| `critable_direct_count` | per-target accumulator (the crit-rate denominator; see above) |
 | `against_downed_damage` | per-target accumulator |
 | `applied_crowd_control` | per-target CC accumulator |
 | `applied_crowd_control_duration_ms` | per-target CC accumulator |
@@ -119,14 +130,14 @@ Two facts settle this:
 1. The per-target *pass* is already unconditional. `analyze()` computes
    `PlayerMetrics::per_target` on every parse, one shared scan
    (`axilog-schema/src/lib.rs:406`). The gate is a **serialization gate
-   only**, so all 22 fields cost the same to compute as the current 7:
+   only**, so all 23 fields cost the same to compute as the current 7:
    nothing.
 2. Always-on was measured and rejected. At **8** fields per pair, on the
    committed 41-player WvW fixture, the always-on variant grew the rendered
    HTML report from 260,520 to 407,826 bytes — **+56.5%**, far past the
    ~30% guideline every other block in this schema was measured against
-   (`axilog-schema/src/lib.rs:395-404`). At 22 fields that payload is
-   roughly 2.75× worse.
+   (`axilog-schema/src/lib.rs:395-404`). At 23 fields that payload is
+   roughly 2.9× worse.
 
 The four `dist_outcomes` fields are gated on the same flag, so the gates
 already align — no new presence signal is needed, and `PerTarget.detail`'s
