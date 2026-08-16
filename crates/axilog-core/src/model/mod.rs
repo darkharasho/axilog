@@ -126,6 +126,13 @@ pub struct Team {
     /// hex, no dashes. `None` for logs without the event (arcdps builds
     /// before it existed, or a team id with no GUID mapping emitted).
     pub guid: Option<String>,
+    /// The WvW SHARD this team's world is playing from, when the log
+    /// carries a `CBTS_WVWTEAMS` event (MOBJ). Distinct from `team_id`: the
+    /// team id identifies the colour side within this match, the shard id
+    /// identifies the server/world instance. `None` for logs recorded
+    /// before arcdps emitted the event, and for any team colour the event
+    /// does not name (an id resolved only by the static fallback table).
+    pub shard_id: Option<u32>,
 }
 #[derive(Debug, Clone)]
 pub struct Encounter { pub kind: String, pub map: String, pub duration_ms: u64,
@@ -137,6 +144,14 @@ pub struct Encounter { pub kind: String, pub map: String, pub duration_ms: u64,
     /// Tick-rate telemetry from `CBTS_TICK` (Task 7, M2), `None` when the
     /// log has fewer than two such events.
     pub tick_rate: Option<TickRate>,
+    /// Per-objective WvW ownership timelines from `CBTS_WVWOBJECTIVESTATUS`
+    /// (MOBJ), in first-seen order. Lives here rather than on `Metrics`
+    /// because it is encounter metadata parsed straight from the raw log,
+    /// exactly like `markers`/`teams`/`tick_rate` above -- all four are
+    /// filled by `crate::wvw::apply`. Empty for non-WvW logs, for logs
+    /// predating the event, and for logs whose objectives are all absent
+    /// from `wvw::objectives::OBJECTIVES`.
+    pub objectives: Vec<crate::wvw::objectives::ObjectiveStatus>,
     /// Wall-clock log start, seconds since the epoch, from arcdps's
     /// `CBTS_SQCOMBATSTART`/`sc::LOG_START` -- see that constant's doc
     /// comment for the payload citation trail. `None` when the log carries
@@ -291,7 +306,7 @@ pub fn resolve(raw: &RawLog) -> Encounter {
         kind: "wvw".into(), map: "World vs World".into(), duration_ms,
         build: raw.header.build.clone(), revision: raw.header.revision,
         recorded_by: None, teams: Vec::new(), players, enemies,
-        markers: Vec::new(), tick_rate: None, started_at_unix: None,
+        markers: Vec::new(), tick_rate: None, objectives: Vec::new(), started_at_unix: None,
     };
     crate::wvw::apply(&mut enc, raw);
     enc

@@ -211,13 +211,57 @@ fn team_color(team_id: u32) -> String {
 // slots `[RedShardID, BlueShardID, GreenShardID, RedTeamID, BlueTeamID,
 // GreenTeamID]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DynamicWvwTeamIds { red: u32, blue: u32, green: u32 }
+struct DynamicWvwTeamIds {
+    red: u32,
+    blue: u32,
+    green: u32,
+    /// The first three uint32 slots, `[red, blue, green]` shard ids (MOBJ).
+    /// Decoded alongside the team ids because they are the same six-uint32
+    /// payload; before MOBJ they were skipped as "unused by axilog today",
+    /// which is no longer true -- `wvWMapData`'s `redShardID`/`blueShardID`/
+    /// `greenShardID` are exactly these.
+    red_shard: u32,
+    blue_shard: u32,
+    green_shard: u32,
+}
 
 fn parse_wvw_teams_event(e: &RawEvent) -> DynamicWvwTeamIds {
+    let red_shard = e.src_agent as u32; // uint32[0]
+    let blue_shard = (e.src_agent >> 32) as u32; // uint32[1]
+    let green_shard = e.dst_agent as u32; // uint32[2]
     let red_team = (e.dst_agent >> 32) as u32; // uint32[3]
-    let blue_team = e.value as u32;            // uint32[4]
-    let green_team = e.buff_dmg as u32;        // uint32[5]
-    DynamicWvwTeamIds { red: red_team, blue: blue_team, green: green_team }
+    let blue_team = e.value as u32; // uint32[4]
+    let green_team = e.buff_dmg as u32; // uint32[5]
+    DynamicWvwTeamIds {
+        red: red_team,
+        blue: blue_team,
+        green: green_team,
+        red_shard,
+        blue_shard,
+        green_shard,
+    }
+}
+
+impl DynamicWvwTeamIds {
+    /// The shard id for a TEAM ID this event itself names.
+    ///
+    /// Keyed on the team id and not on the resolved colour string, which
+    /// would be wrong in a real case: `team_color_with` falls back to the
+    /// static id table for any team id this event does not name, so a
+    /// stale-table id could come back `"red"` while this event's own red
+    /// team is a different id -- and would then be handed a shard belonging
+    /// to some other world.
+    fn shard_for_team(&self, team_id: u32) -> Option<u32> {
+        if team_id == self.red {
+            Some(self.red_shard)
+        } else if team_id == self.blue {
+            Some(self.blue_shard)
+        } else if team_id == self.green {
+            Some(self.green_shard)
+        } else {
+            None
+        }
+    }
 }
 
 /// Like `team_color`, but prefers the log's own dynamically-observed
@@ -301,11 +345,18 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
 
     let mut team_ids: Vec<u32> = agent_team.values().copied().collect();
     team_ids.sort_unstable(); team_ids.dedup();
-    enc.teams = team_ids.iter().map(|&id| Team {
-        color: team_color_with(id, dynamic.as_ref()),
-        team_id: id,
-        guid: team_guids.get(&id).cloned(),
+    enc.teams = team_ids.iter().map(|&id| {
+        let color = team_color_with(id, dynamic.as_ref());
+        // Shards come from the same sc=74 event as the dynamic team ids, so
+        // a team whose colour was resolved by the STATIC fallback table
+        // (i.e. the event is absent, or names other ids) gets `None` rather
+        // than a shard belonging to some other match. See `shard_for_team`.
+        let shard_id = dynamic.as_ref().and_then(|d| d.shard_for_team(id));
+        Team { color, team_id: id, guid: team_guids.get(&id).cloned(), shard_id }
     }).collect();
+
+    // CBTS_WVWOBJECTIVESTATUS (sc=75) objective ownership timelines (MOBJ).
+    enc.objectives = objectives::objectives(raw);
 
     // Friend/foe partition (Task 16A calibration fix).
     //
@@ -505,12 +556,24 @@ mod tests {
             src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
             is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: sc::POINT_OF_VIEW, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
     }
-    /// Synthetic CBTS_WVWTEAMS event. Packs (red, blue, green) into the
-    /// same 6xu32 layout `parse_wvw_teams_event` reads back
-    /// (shard ids left as 0 — unused by axilog today).
+    /// Synthetic CBTS_WVWTEAMS event with all-zero shard ids. Most callers
+    /// only care about team ids; see `wvw_teams_event_with_shards` for the
+    /// full 6xu32 payload.
     fn wvw_teams_event(red: u32, blue: u32, green: u32) -> RawEvent {
-        let dst_agent = (red as u64) << 32; // uint32[2]=green_shard(0), uint32[3]=red_team
-        RawEvent { time: 0, src_agent: 0, dst_agent, value: blue as i32, buff_dmg: green as i32,
+        wvw_teams_event_with_shards(red, blue, green, 0, 0, 0)
+    }
+    /// Synthetic CBTS_WVWTEAMS event. Packs all six ids into the same
+    /// `uint32[6]` layout `parse_wvw_teams_event` reads back:
+    /// `[red_shard, blue_shard, green_shard, red_team, blue_team,
+    /// green_team]` spanning `src_agent`(2), `dst_agent`(2), `value`(1),
+    /// `buff_dmg`(1).
+    fn wvw_teams_event_with_shards(
+        red: u32, blue: u32, green: u32,
+        red_shard: u32, blue_shard: u32, green_shard: u32,
+    ) -> RawEvent {
+        let src_agent = red_shard as u64 | ((blue_shard as u64) << 32);
+        let dst_agent = green_shard as u64 | ((red as u64) << 32);
+        RawEvent { time: 0, src_agent, dst_agent, value: blue as i32, buff_dmg: green as i32,
             overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
             src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
             is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: sc::WVW_TEAMS, is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0 }
@@ -535,7 +598,7 @@ mod tests {
         let mut enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:0,
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1"), player(3, ":B.2")],
-            enemies: vec![], markers: vec![], tick_rate: None, started_at_unix: None };
+            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None };
         dedupe_players(&mut enc.players);
         assert_eq!(enc.players.len(), 2);
     }
@@ -547,7 +610,7 @@ mod tests {
         let mut enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:0,
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1")],
-            enemies: vec![], markers: vec![], tick_rate: None, started_at_unix: None };
+            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None };
         dedupe_players(&mut enc.players);
         assert_eq!(enc.players.len(), 1);
         assert_eq!(enc.players[0].agent_addr, 1);
@@ -722,6 +785,71 @@ mod tests {
         assert_eq!(team_5001.color, "green");
         let team_6002 = enc.teams.iter().find(|t| t.team_id == 6002).expect("team 6002 present");
         assert_eq!(team_6002.color, "red");
+    }
+
+    /// MOBJ: the sc=74 payload's first three uint32 slots are the shard
+    /// ids, and each lands on the team the SAME event names -- keyed on
+    /// team id, never on the resolved colour string.
+    #[test]
+    fn wvwteams_shard_ids_attach_to_the_teams_that_event_names() {
+        let raw = RawLog {
+            header: RawHeader { build: "20260701".into(), revision: 1, boss_id: 1 },
+            agents: vec![agent(1, 27, b"Alice\x00:Alice.1234\x005\x00")],
+            skills: vec![],
+            events: vec![
+                point_of_view(1),
+                team_change(1, 5001),
+                // A team id the event does NOT name, but which the STATIC
+                // table calls red (705 is in RED_TEAM_IDS). It must come
+                // back shardless: the event's red shard belongs to 6002.
+                team_change(2, 705),
+                wvw_teams_event_with_shards(
+                    /*red*/ 6002, /*blue*/ 7003, /*green*/ 5001,
+                    /*red_shard*/ 1008, /*blue_shard*/ 1009, /*green_shard*/ 1010,
+                ),
+            ],
+            guid_map: vec![],
+        };
+        let enc = crate::model::resolve(&raw);
+        let team = |id: u32| enc.teams.iter().find(|t| t.team_id == id).expect("team present");
+
+        assert_eq!(team(5001).shard_id, Some(1010), "green team gets the green shard");
+        assert_eq!(
+            (team(705).color.as_str(), team(705).shard_id),
+            ("red", None),
+            "a statically-coloured team the event does not name gets no shard"
+        );
+    }
+
+    /// MOBJ: `apply` fills `enc.objectives` from sc=75, so the ownership
+    /// timelines reach the encounter the same way markers and teams do.
+    /// `wvw::objectives`' own tests cover the merge/catalog rules.
+    #[test]
+    fn apply_fills_objectives_from_status_events() {
+        let status = |map_id: i32, objective_id: u32, team: i32, time: u64| RawEvent {
+            time, src_agent: 0, dst_agent: 0, value: map_id, buff_dmg: team,
+            overstack: 0, skillid: objective_id, src_instid: 0, dst_instid: 0,
+            src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0,
+            is_statechange: sc::WVW_OBJECTIVE_STATUS,
+            is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
+        };
+        let raw = RawLog {
+            header: RawHeader { build: "20260701".into(), revision: 1, boss_id: 1 },
+            agents: vec![agent(1, 27, b"Alice\x00:Alice.1234\x005\x00")],
+            skills: vec![],
+            events: vec![
+                point_of_view(1),
+                team_change(1, 5001),
+                status(96, 37, 433, 0),      // Blue Garrison, first sighting
+                status(96, 37, 2767, 44684), // ... recaptured
+            ],
+            guid_map: vec![],
+        };
+        let enc = crate::model::resolve(&raw);
+        assert_eq!(enc.objectives.len(), 1);
+        assert_eq!(enc.objectives[0].kind, objectives::ObjectiveType::Keep);
+        assert_eq!(enc.objectives[0].owners, vec![(433, 0), (2767, 44684)]);
     }
 
     /// Without a CBTS_WVWTEAMS event, team ids outside the static table

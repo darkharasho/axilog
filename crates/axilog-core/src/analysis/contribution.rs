@@ -734,7 +734,7 @@ mod tests {
                 marker: None, profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
                 agent_addrs: vec![a],
             }).collect(),
-            markers: vec![], tick_rate: None, started_at_unix: None,
+            markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None,
         }
     }
 
@@ -772,7 +772,7 @@ mod tests {
                 marker: None, profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
                 agent_addrs: enemy_addrs,
             }],
-            markers: vec![], tick_rate: None, started_at_unix: None,
+            markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None,
         }
     }
 
