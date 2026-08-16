@@ -400,8 +400,9 @@ pub struct PerEnemyOut { pub enemy_id: u64, pub total: u64 }
 /// (**+56.5%**), far past the ~30% guideline every other block in this
 /// schema was measured against before being gated (see
 /// `crates/axilog-html/tests/golden_html.rs`'s budget comment for that
-/// guideline's own provenance). Sparse though it is, ~50 enemies x 8
-/// fields per player is simply 5x the shape of `DamageOut::per_enemy`.
+/// guideline's own provenance). Sparse though it is, ~50 enemies x 23
+/// fields per player (Phase B widened this from 8) is a real multiple of
+/// the shape of `DamageOut::per_enemy`, which is the gate's justification.
 ///
 /// The underlying pass itself is NOT gated -- `analyze()` computes
 /// `PlayerMetrics::per_target` unconditionally (one shared scan; see
@@ -420,6 +421,54 @@ pub struct PerTargetStatsOut {
     /// arcdps-methodology down-contribution DAMAGE credited to this player
     /// for downs of this specific enemy.
     pub downs_contribution_damage: u64,
+    /// EI's `directDmg` COUNT pair, mirroring `PerTargetOffense::direct_count`.
+    /// NOT the numerator for `direct_damage` below in any EI-key sense --
+    /// see that field's own doc comment for the distinction that matters.
+    pub direct_count: u32,
+    /// EI's `directDmg` -- the damage sum over `is_direct_hit` rows against
+    /// this one target. Deliberately NOT the same quantity as this same
+    /// struct family's `connected_direct_dmg` elsewhere in this file (a
+    /// whole-fight figure derived differently); collapsing the two would
+    /// silently swap in the wrong number under a plausible-looking name.
+    pub direct_damage: u64,
+    /// EI's `criticalRate` numerator for this target, gated behind
+    /// `hit_stats::can_crit` exactly as the whole-fight counter is.
+    pub crit_count: u32,
+    /// EI's `criticalDmg` for this target.
+    pub crit_damage: u64,
+    /// EI's `flankingRate` numerator for this target.
+    pub flank_count: u32,
+    /// EI's `glanceRate` numerator for this target.
+    pub glance_count: u32,
+    /// EI's `criticalRate` DENOMINATOR for this target -- NOT `direct_count`
+    /// above. Native-only: EI never publishes a per-target crit-rate
+    /// denominator, so there is no `statsTargets` key for this field.
+    pub critable_direct_count: u32,
+    /// EI's `againstDownedDamage` -- the damage pair for
+    /// `against_downed_count` above, scoped to this one target.
+    pub against_downed_damage: u64,
+    /// EI's `missed` against this target -- arcdps `BLIND`.
+    pub missed: u32,
+    /// EI's `evaded` against this target -- arcdps `EVADE`.
+    pub evaded: u32,
+    /// EI's `blocked` against this target -- arcdps `BLOCK`.
+    pub blocked: u32,
+    /// EI's `invulned` against this target -- arcdps `ABSORB`/`INVERT`.
+    pub invulned: u32,
+    /// EI's `appliedCrowdControl` against this target. Joined in from
+    /// `PlayerMetrics::cc_per_target` at the build site, not from
+    /// `PerTargetOffense`'s own scan -- see that field's doc comment.
+    pub applied_total: u32,
+    /// EI's `appliedCrowdControlDuration`, ms -- the duration pair for
+    /// `applied_total` above, same join source.
+    pub applied_duration_ms: u64,
+    /// EI's `appliedCrowdControlDownContribution` against this target --
+    /// the CC subset credited inside this target's down-contribution
+    /// windows. Joined from `PlayerMetrics::cc_downs_contribution_per_target`.
+    pub applied_downs_contribution: u32,
+    /// EI's `appliedCrowdControlDurationDownContribution`, ms -- the
+    /// duration pair for `applied_downs_contribution` above.
+    pub applied_duration_downs_contribution_ms: u64,
 }
 /// One skill id's aggregated hit stats within some grouping (M12, Task 1) --
 /// mirrors `axilog_core::analysis::skill_damage::SkillEntry` field-for-field.
@@ -1255,16 +1304,34 @@ pub fn build_report(
                 None
             } else {
                 m.map(|m| {
-                    // Union of the two sparse per-enemy maps: an enemy can
+                    // Union of the four sparse per-enemy maps (Phase B added
+                    // the two CC maps to the original two): an enemy can
                     // appear in the down-contribution map (a credit inside
-                    // its down window) without having taken a HIT from this
-                    // player in the whole fight, and vice versa.
+                    // its down window), or in a CC map (a CC application
+                    // with no accompanying damage, e.g. a pure interrupt),
+                    // without having taken a HIT from this player in the
+                    // whole fight, and vice versa.
                     let mut ids: std::collections::BTreeSet<u64> =
                         m.per_target.keys().copied().collect();
                     ids.extend(m.downs_contribution_per_target.keys().copied());
+                    ids.extend(m.cc_per_target.keys().copied());
+                    ids.extend(m.cc_downs_contribution_per_target.keys().copied());
                     ids.into_iter()
                         .map(|enemy_id| {
                             let o = m.per_target.get(&enemy_id).copied().unwrap_or_default();
+                            let (applied_total, applied_duration_ms) = m
+                                .cc_per_target
+                                .get(&enemy_id)
+                                .copied()
+                                .unwrap_or((0, 0));
+                            let (
+                                applied_downs_contribution,
+                                applied_duration_downs_contribution_ms,
+                            ) = m
+                                .cc_downs_contribution_per_target
+                                .get(&enemy_id)
+                                .copied()
+                                .unwrap_or((0, 0));
                             PerTargetStatsOut {
                                 enemy_id,
                                 connected_hits: o.connected_hits,
@@ -1278,6 +1345,22 @@ pub fn build_report(
                                     .get(&enemy_id)
                                     .copied()
                                     .unwrap_or(0),
+                                direct_count: o.direct_count,
+                                direct_damage: o.direct_damage,
+                                crit_count: o.crit_count,
+                                crit_damage: o.crit_damage,
+                                flank_count: o.flank_count,
+                                glance_count: o.glance_count,
+                                critable_direct_count: o.critable_direct_count,
+                                against_downed_damage: o.against_downed_damage,
+                                missed: o.missed,
+                                evaded: o.evaded,
+                                blocked: o.blocked,
+                                invulned: o.invulned,
+                                applied_total,
+                                applied_duration_ms,
+                                applied_downs_contribution,
+                                applied_duration_downs_contribution_ms,
                             }
                         })
                         .collect()

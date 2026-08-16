@@ -104,12 +104,22 @@ pub struct PerTarget {
     /// review.
     ///
     /// Grouped under ONE optional key rather than flattened onto
-    /// `PerTarget`, deliberately: the seven fields below are computed only
-    /// when `--skill-damage` is on, so flattening them would force this row
-    /// to publish seven fabricated zeros whenever the gate is off --
-    /// exactly the "absent reported as zero" ambiguity `coverage` exists to
-    /// remove, one level down. One `Option` gives that gate a single,
-    /// unambiguous presence signal.
+    /// `PerTarget`, deliberately: the 23 fields of `PerTargetDetail` are
+    /// computed only when `--skill-damage` is on, so flattening them would
+    /// force this row to publish 23 fabricated zeros whenever the gate is
+    /// off -- exactly the "absent reported as zero" ambiguity `coverage`
+    /// exists to remove, one level down. One `Option` gives that gate a
+    /// single, unambiguous presence signal.
+    ///
+    /// The gate itself is unchanged by Phase B's widening: the underlying
+    /// pass (`PlayerMetrics::per_target`) is unconditional -- one shared
+    /// scan computed regardless of the flag -- so `--skill-damage` is a
+    /// SERIALIZATION gate only, same as before. It stays a gate at all
+    /// because always-on was measured at +56.5% on the rendered HTML report
+    /// with the original 8 fields per pair (`crate::PerTargetStatsOut`'s
+    /// doc comment has the numbers); 23 fields is a larger payload for the
+    /// same shape, not a smaller one, so the gate's justification only
+    /// strengthens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<PerTargetDetail>,
     /// Per-`(entity, target, skill)` outgoing damage, keyed by skill id --
@@ -130,6 +140,11 @@ pub struct PerTarget {
 /// `kills_dealt`; `interrupts` and `downs_contribution_damage` are NOT
 /// recoverable from any other block, which is what made dropping this
 /// struct a real data loss rather than a redundancy.
+///
+/// 23 fields total (Phase B widened this from 7): the 22 of
+/// `axilog_core::analysis::per_target::PerTargetOffense`, plus
+/// `downs_contribution_damage` above, which comes from `PlayerMetrics`
+/// rather than that struct -- see its own doc comment.
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct PerTargetDetail {
     pub connected_hits: u32,
@@ -142,6 +157,45 @@ pub struct PerTargetDetail {
     /// for downs of this specific target -- NOT GW2EI's own
     /// 90%-to-downstate-window algorithm. See `crate::PerTargetStatsOut`.
     pub downs_contribution_damage: u64,
+    /// EI's `directDmg` COUNT pair, mirroring `PerTargetOffense::direct_count`.
+    pub direct_count: u32,
+    /// EI's `directDmg` -- the damage sum over `is_direct_hit` rows against
+    /// this one target. Deliberately NOT the same quantity as this crate's
+    /// `connected_direct_dmg` (a whole-fight figure derived differently);
+    /// collapsing the two would silently swap in the wrong number under a
+    /// plausible-looking name. See `crate::PerTargetStatsOut::direct_damage`.
+    pub direct_damage: u64,
+    /// EI's `criticalRate` numerator for this target.
+    pub crit_count: u32,
+    /// EI's `criticalDmg` for this target.
+    pub crit_damage: u64,
+    /// EI's `flankingRate` numerator for this target.
+    pub flank_count: u32,
+    /// EI's `glanceRate` numerator for this target.
+    pub glance_count: u32,
+    /// EI's `criticalRate` DENOMINATOR for this target -- NOT `direct_count`
+    /// above. Native-only: EI never publishes a per-target crit-rate
+    /// denominator, so there is no ei-json key for this field.
+    pub critable_direct_count: u32,
+    /// EI's `againstDownedDamage` -- the damage pair for
+    /// `against_downed_count` above, scoped to this one target.
+    pub against_downed_damage: u64,
+    /// EI's `missed` against this target -- arcdps `BLIND`.
+    pub missed: u32,
+    /// EI's `evaded` against this target -- arcdps `EVADE`.
+    pub evaded: u32,
+    /// EI's `blocked` against this target -- arcdps `BLOCK`.
+    pub blocked: u32,
+    /// EI's `invulned` against this target -- arcdps `ABSORB`/`INVERT`.
+    pub invulned: u32,
+    /// EI's `appliedCrowdControl` against this target.
+    pub applied_total: u32,
+    /// EI's `appliedCrowdControlDuration`, ms.
+    pub applied_duration_ms: u64,
+    /// EI's `appliedCrowdControlDownContribution` against this target.
+    pub applied_downs_contribution: u32,
+    /// EI's `appliedCrowdControlDurationDownContribution`, ms.
+    pub applied_duration_downs_contribution_ms: u64,
 }
 
 /// Mirrors `crate::SkillEntryOut` field-for-field. `min`/`max` are `u64`
@@ -377,6 +431,23 @@ pub fn build_damage(
                     killed: s.killed,
                     interrupts: s.interrupts,
                     downs_contribution_damage: s.downs_contribution_damage,
+                    direct_count: s.direct_count,
+                    direct_damage: s.direct_damage,
+                    crit_count: s.crit_count,
+                    crit_damage: s.crit_damage,
+                    flank_count: s.flank_count,
+                    glance_count: s.glance_count,
+                    critable_direct_count: s.critable_direct_count,
+                    against_downed_damage: s.against_downed_damage,
+                    missed: s.missed,
+                    evaded: s.evaded,
+                    blocked: s.blocked,
+                    invulned: s.invulned,
+                    applied_total: s.applied_total,
+                    applied_duration_ms: s.applied_duration_ms,
+                    applied_downs_contribution: s.applied_downs_contribution,
+                    applied_duration_downs_contribution_ms: s
+                        .applied_duration_downs_contribution_ms,
                 });
             }
         }

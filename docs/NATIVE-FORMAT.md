@@ -676,6 +676,32 @@ bisecting:
   `--rotation` gate record, and `cast_count` went with it — one key removed.
   The count was exactly `casts.len()`, so keeping it would have meant two
   fields encoding one gate, free to disagree.
+- Phase B (native-format-gap-closure Task 4) widened
+  `blocks.damage.by_entity.<id>.per_target.<id>.detail` from 7 fields to 23,
+  additively — the same `--skill-damage` gate governs the whole group, so
+  no new presence signal was needed. Recorded here (unlike the additive
+  bullet above would otherwise require) because it moved the key-set
+  golden by 16 entries in one commit; a bisect landing between the old and
+  new counts should read this rather than re-deriving it from the diff.
+
+  The 16 new native fields on `PerTargetDetail` mirror
+  `axilog_core::analysis::per_target::PerTargetOffense` field-for-field:
+  `direct_count`, `direct_damage`, `crit_count`, `crit_damage`,
+  `flank_count`, `glance_count`, `critable_direct_count`,
+  `against_downed_damage`, `missed`, `evaded`, `blocked`, `invulned`,
+  `applied_total`, `applied_duration_ms`, `applied_downs_contribution`,
+  `applied_duration_downs_contribution_ms`. Of those, `critable_direct_count`
+  is native-only — it is `criticalRate`'s denominator, which real EI never
+  publishes per target, so `to_ei_json`'s `statsTargets` split fills the
+  other 15 under their EI key names (`directDmg`, `criticalRate`,
+  `criticalDmg`, `flankingRate`, `glanceRate`, `connectedDirectDamageCount`,
+  `againstDownedDamage`, `missed`, `evaded`, `blocked`, `invulned`,
+  `appliedCrowdControl`, `appliedCrowdControlDuration`,
+  `appliedCrowdControlDownContribution`,
+  `appliedCrowdControlDurationDownContribution`) and omits the 16th. Note
+  `directDmg` maps to `direct_damage`, not to the pre-existing
+  `connected_direct_dmg` field elsewhere in this schema — the two measure
+  different quantities despite the similar name.
 
 ## The ei-json layer is permanent
 
