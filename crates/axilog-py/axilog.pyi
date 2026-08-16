@@ -996,6 +996,22 @@ class PerTargetDetail(TypedDict):
     #: arcdps-methodology down-contribution DAMAGE for downs of this
     #: specific target -- NOT GW2EI's 90%-to-downstate-window algorithm.
     downs_contribution_damage: int
+    direct_count: int
+    direct_damage: int
+    crit_count: int
+    crit_damage: int
+    flank_count: int
+    glance_count: int
+    critable_direct_count: int
+    against_downed_damage: int
+    missed: int
+    evaded: int
+    blocked: int
+    invulned: int
+    applied_total: int
+    applied_duration_ms: int
+    applied_downs_contribution: int
+    applied_duration_downs_contribution_ms: int
 
 class _PerTargetRequired(TypedDict):
     #: Ungated: the legacy `DamageOut.per_enemy` total.
