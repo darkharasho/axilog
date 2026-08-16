@@ -420,6 +420,7 @@ entities[].character
 entities[].combat_participant
 entities[].commander
 entities[].commander.guid
+entities[].commander.segments
 entities[].commander.variant
 entities[].elite_spec
 entities[].guild_id

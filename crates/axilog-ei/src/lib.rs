@@ -2764,7 +2764,7 @@ mod tests {
             // directly; since Task 13 reads `EntityOut::commander` (derived
             // from the TAG alone), the fixture has to be as consistent as
             // the pipeline it stands in for.
-            commander_tag:Some(axilog_core::model::CommanderTag{variant:"blue".into(),guid:"g".into()}),
+            commander_tag:Some(axilog_core::model::CommanderTag{variant:"blue".into(),guid:"g".into(),segments:vec![]}),
             guild_id:None,agent_addrs:vec![1]},
             Player{agent_addr:2,account:":B.2".into(),
             character:"B".into(),profession:"Guardian".into(),elite_spec:"".into(),

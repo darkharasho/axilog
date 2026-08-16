@@ -96,7 +96,8 @@ Real rows from the fixture, trimmed to four representative roles:
   { "id": 7, "role": "squad", "account": ":Anon106.4922", "character": "Anon106",
     "profession": "Guardian", "elite_spec": "Dragonhunter", "team": "green",
     "subgroup": 2,
-    "commander": { "variant": "purple-commander", "guid": "1993fadb6fb70e4383a223a54d311f7d" },
+    "commander": { "variant": "purple-commander", "guid": "1993fadb6fb70e4383a223a54d311f7d",
+      "segments": [[33847418, 33847418], [33847418, 33896600]] },
     "guild_id": "00000000-0000-0000-0000-000000000000",
     "agent_addr": 4566, "instid": 3684, "combat_participant": true },
 
@@ -108,6 +109,22 @@ Real rows from the fixture, trimmed to four representative roles:
     "agent_addr": 9718, "instid": 3287, "combat_participant": true }
 ]
 ```
+
+`commander.segments` holds every closed `[tag-on, tag-off)` window this
+player's commander tag was ever assigned, half-open, in the log's own
+millisecond time base (same base as `markers[].time_ms` above — arcdps
+session time, not encounter-relative). These are LITERAL per-instance
+segments, not a coalesced whole-fight span: entity `7`'s real fixture data
+above shows two, including a zero-width `[33847418, 33847418]` pair from an
+immediate same-timestamp reassignment. There is no minimum-coverage
+threshold and no fallback that extends a segment closed by a removal to the
+log's end — only a segment that is *still open* when the log ends is closed
+there. An unreciprocated removal (nothing open to close) is a silent no-op,
+exactly as GW2EI's own commander-timeline construction treats it — see
+`crate::wvw::markers::MarkerResolution::commander_segments`'s doc comment
+for the full citation. An empty `segments` on a present `commander` means
+the tag was detected but its windows could not be resolved, not that the
+player never commanded.
 
 Absent fields are omitted, never emitted as `null` or `""` — a player entity
 has no `name`, an NPC has no `account`/`character`/`profession`. `id` is a

@@ -433,8 +433,12 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         p.guild_id =
             p.agent_addrs.iter().find_map(|addr| guild_by_addr.get(addr)).cloned();
         p.marker = markers::final_marker(&marker_res.open, &p.agent_addrs);
-        p.commander_tag =
-            markers::final_commander_tag(&marker_res.open, &marker_res.ever_commander, &p.agent_addrs);
+        p.commander_tag = markers::final_commander_tag(
+            &marker_res.open,
+            &marker_res.ever_commander,
+            &marker_res.commander_segments,
+            &p.agent_addrs,
+        );
         p.commander = p.commander_tag.is_some();
     }
     for en in &mut enc.enemies {

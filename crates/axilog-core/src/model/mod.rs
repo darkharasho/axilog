@@ -81,7 +81,24 @@ pub struct Enemy { pub id: u64, pub instid: u16, pub name: String,
 /// A player's resolved commander-tag colour/variant (Task 7, M2). See
 /// `crate::wvw::markers::COMMANDER_TAG_VARIANTS`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CommanderTag { pub variant: String, pub guid: String }
+pub struct CommanderTag {
+    pub variant: String,
+    pub guid: String,
+    /// Closed `[tag-on, tag-off)` windows, in ms, merged and sorted across
+    /// every raw addr this player owns (relogs/build-swaps can each carry
+    /// their own commander-tag instances -- see
+    /// `wvw::markers::MarkerResolution::commander_segments`). Literal
+    /// per-instance segments, no coverage threshold, no log-end fallback
+    /// beyond a genuinely still-open instance -- see that field's doc
+    /// comment for the full GW2EI-sourced rationale. Can be empty even
+    /// though `commander_tag` is `Some`: that happens only if
+    /// `final_commander_tag` fell back to `ever_commander` for an addr
+    /// whose segment collection (a separate pass, same source events)
+    /// somehow produced nothing for it -- practically never, but callers
+    /// should treat empty here as "no resolved windows", not "never
+    /// commanded".
+    pub segments: Vec<(u64, u64)>,
+}
 /// One `CBTS_MARKER` assignment (not removal) event, resolved to a display
 /// name (Task 7, M2). `Encounter.markers` holds every one observed in the
 /// log, across all agents (squad, enemy, and NPC/gadget alike -- arcdps
