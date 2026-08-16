@@ -616,7 +616,9 @@ expensive half.
       "active_ms": 49263,
       "down": [[12642, 15512]],
       "dead": [],
-      "dc": []
+      "dc": [],
+      "dist_to_com": 281.37823486328125,
+      "stack_dist": 172.18305969238281
     }
   },
   "tracks": {
@@ -663,6 +665,41 @@ Four things a consumer needs to know about that shape:
   An agent that is still disconnected at log end is left with an unclosed
   `dc` interval (no synthesized closing bound), matching every other
   interval kind in this block.
+
+### `dist_to_com` / `stack_dist`
+
+These two are GW2EI's `statsAll[].distToCom` and `.stackDist`, computed
+engine-side: the mean distance, in world inches, from this player to the
+commander and to the squad centre, over the player's own active polls.
+They are **absent unless `--replay` was passed** — they are a reduction over
+the position tracks and cannot exist without them — but they live on the
+always-present `by_entity` row rather than inside `tracks` so that absence
+stays meaningful.
+
+That matters, because there are three states and only two of them look
+alike:
+
+| Value | Meaning |
+|---|---|
+| absent | The replay pass did not run. Nothing was measured. |
+| `-1` | The pass ran; this actor had no poll that paired with a reference. GW2EI's own sentinel — it emits `-1`, not `null`, and EI-shaped readers already reject it by value. |
+| `>= 0` | A real mean distance. `0` is reachable and correct: the commander's own `dist_to_com` is exactly `0`. |
+
+Collapsing absent into `-1` (or `-1` into absent) destroys the distinction.
+Treat any negative value as "no answer" and never as a distance.
+
+The reduction's rules are exacting and are documented in full, with GW2EI
+source citations, on `axilog_core::analysis::distance`. Two are worth
+repeating here because they surprise people reading the numbers:
+
+- **The two references are asymmetric on purpose.** The commander reference
+  is the commanding player's *raw* positions during their tag windows, so a
+  downed commander still anchors the squad; the squad centre is the per-poll
+  mean of every squad player's *active* position, so a downed player drops
+  out of it. That is GW2EI's behaviour, and matching it is what takes the
+  error to zero rather than merely reducing it.
+- **Distance is measured in the XY plane.** Z is discarded, so two players
+  stacked vertically are at distance zero.
 
 The position track itself is the one exception to the series envelope —
 raw `(t_ms, x, y)` triples rather than a `SeriesOut`. This is deliberate, not an oversight: `SeriesOut` assumes a dense array

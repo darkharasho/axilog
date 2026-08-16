@@ -283,6 +283,18 @@ pub struct ReplayTrackOut {
     /// 1.0, Task 8) -- the legacy shape above has no join key at all.
     #[serde(skip)]
     pub agent_addr: u64,
+    /// GW2EI's `distToCom`, carried from `Replay::distance`. `#[serde(skip)]`
+    /// for the same reason as `agent_addr`: the legacy JSON must stay
+    /// byte-identical, and the 1.0 format publishes this on the replay
+    /// block's always-present per-entity row (`ReplayIntervals`) rather
+    /// than on the `--replay`-gated track, so that "the pass never ran"
+    /// stays expressible as absence. `-1.0` is EI's own "nothing qualified"
+    /// sentinel -- see `axilog_core::analysis::distance`.
+    #[serde(skip)]
+    pub dist_to_com: f64,
+    /// GW2EI's `stackDist`; see [`ReplayTrackOut::dist_to_com`].
+    #[serde(skip)]
+    pub stack_dist: f64,
 }
 
 /// Round to 1 decimal place -- keeps `ReplayTrackOut.samples`' JSON
@@ -313,6 +325,16 @@ pub fn build_replay_out(replay: &Replay) -> ReplayOut {
             dead_intervals: t.dead_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
             dc_intervals: t.dc_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
             agent_addr: t.agent_addr,
+            dist_to_com: replay
+                .distance
+                .get(&t.agent_addr)
+                .map(|d| d.dist_to_com)
+                .unwrap_or(axilog_core::analysis::distance::NO_DISTANCE),
+            stack_dist: replay
+                .distance
+                .get(&t.agent_addr)
+                .map(|d| d.stack_dist)
+                .unwrap_or(axilog_core::analysis::distance::NO_DISTANCE),
         })
         .collect();
 
@@ -1895,6 +1917,10 @@ mod tests {
                 dead_intervals: vec![],
                 dc_intervals: vec![],
             }],
+            // This test is about `bounds`; a track with no distance entry
+            // falls back to the `-1` sentinel, which is what a caller
+            // hand-building a `Replay` should get.
+            distance: Default::default(),
         };
         let out = build_replay_out(&replay);
         assert_eq!(out.bounds.min_x, 0.0, "any non-finite bound resets ALL FOUR to the degenerate zero fallback");

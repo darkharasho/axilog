@@ -138,6 +138,9 @@ pub mod per_target;
 /// distributions (MEIGAP2 row 1) -- opt-in, not run by `analyze()`; see
 /// `dist_outcomes`'s module doc.
 pub mod dist_outcomes;
+/// GW2EI's `distToCom`/`stackDist` over the combat replay -- computed by
+/// `replay::build_replay`, not by `analyze()`; see `distance`'s module doc.
+pub mod distance;
 
 use crate::evtc::RawLog;
 use crate::model::Encounter;

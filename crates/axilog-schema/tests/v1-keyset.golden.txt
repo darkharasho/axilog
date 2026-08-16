@@ -260,8 +260,10 @@ blocks.replay.by_entity.<id>
 blocks.replay.by_entity.<id>.active_ms
 blocks.replay.by_entity.<id>.dc
 blocks.replay.by_entity.<id>.dead
+blocks.replay.by_entity.<id>.dist_to_com
 blocks.replay.by_entity.<id>.down
 blocks.replay.by_entity.<id>.end_ms
+blocks.replay.by_entity.<id>.stack_dist
 blocks.replay.by_entity.<id>.start_ms
 blocks.replay.tracks
 blocks.replay.tracks.bounds

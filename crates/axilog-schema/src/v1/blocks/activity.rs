@@ -250,7 +250,9 @@ impl ReplayBlock {
 
 /// One squad entity's activity intervals: the cheap half of the replay,
 /// carried whether or not positions were requested.
-#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+// `Eq` is gone as of the distance scalars below: they are `f64`, and this
+// type is only ever compared for equality in tests.
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct ReplayIntervals {
     /// This entity's own first-aware time, log-relative ms -- the earliest
     /// event of ANY kind naming it, matching GW2EI's `AgentItem.FirstAware`
@@ -282,6 +284,26 @@ pub struct ReplayIntervals {
     /// mutually exclusive with `down`/`dead` -- an agent can despawn while
     /// dead.
     pub dc: Vec<(u64, u64)>,
+    /// EI's `distToCom` -- mean distance to the commander over this actor's
+    /// active polls, in world inches. `-1.0` when no poll qualified. `None`
+    /// when the replay pass did not run: these are TWO DISTINCT STATES and
+    /// must not be collapsed. A consumer that maps absence to `-1` cannot
+    /// tell "we did not look" from "we looked and this actor was never
+    /// within reach of a commander", and a consumer that maps `-1` to
+    /// absence loses EI's own sentinel, which every EI-shaped reader
+    /// already rejects by value.
+    ///
+    /// Lives here, on the always-present per-entity row, rather than beside
+    /// the position samples in [`ReplayTrack`] precisely so that `None`
+    /// remains reachable -- inside the `--replay`-gated half it could only
+    /// ever be `Some`. See `axilog_core::analysis::distance` for the five
+    /// semantics behind the number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dist_to_com: Option<f64>,
+    /// EI's `stackDist` -- the same reduction against the squad centre.
+    /// Same two-state convention as [`ReplayIntervals::dist_to_com`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stack_dist: Option<f64>,
 }
 
 /// The gated half of [`ReplayBlock`]: position tracks and the metadata that
@@ -780,10 +802,23 @@ pub fn build_replay(
     activity: Option<&[axilog_core::analysis::replay::ActivityIntervals]>,
 ) -> ReplayBlock {
     let activity = activity.filter(|a| a.len() == report.players.len());
+    // The scalars ride the replay tracks (`#[serde(skip)]` on the legacy
+    // shape) and are re-keyed onto entity ids here, so that a player whose
+    // track is missing gets `None` -- "the pass did not produce this" --
+    // rather than the `-1.0` that means "it did, and nothing qualified".
+    let scalars: std::collections::BTreeMap<u64, (f64, f64)> = report
+        .replay
+        .iter()
+        .flat_map(|r| r.tracks.iter())
+        .filter_map(|t| {
+            index.by_agent_addr(t.agent_addr).map(|id| (u64::from(id), (t.dist_to_com, t.stack_dist)))
+        })
+        .collect();
     let mut intervals = ByEntity::default();
     if let Some(activity) = activity {
         for (p, a) in report.players.iter().zip(activity) {
             let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
+            let scalar = scalars.get(&u64::from(id)).copied();
             intervals.insert(
                 id,
                 ReplayIntervals {
@@ -793,6 +828,8 @@ pub fn build_replay(
                     down: a.down_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
                     dead: a.dead_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
                     dc: a.dc_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
+                    dist_to_com: scalar.map(|s| s.0),
+                    stack_dist: scalar.map(|s| s.1),
                 },
             );
         }

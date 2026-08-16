@@ -76,7 +76,7 @@
 
 use crate::evtc::{sc, RawEvent, RawLog};
 use crate::model::Encounter;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// GW2EI's own combat-replay polling interval
 /// (`ParserHelper.CombatReplayPollingRate`), used as this project's default
@@ -149,6 +149,16 @@ pub struct Track {
 pub struct Replay {
     pub poll_ms: u64,
     pub tracks: Vec<Track>,
+    /// GW2EI's `distToCom`/`stackDist` per tracked agent, keyed by
+    /// [`Track::agent_addr`] (Phase B Task 7). Rides on the replay rather
+    /// than on `Metrics` because it is a reduction OVER `tracks` and cannot
+    /// be computed without them -- a caller who did not ask for a replay
+    /// cannot have these numbers at all. See
+    /// [`crate::analysis::distance`] for the semantics, which are exacting.
+    ///
+    /// Every track has an entry; a track with no qualifying poll carries
+    /// [`crate::analysis::distance::NO_DISTANCE`], never a missing key.
+    pub distance: BTreeMap<u64, crate::analysis::distance::DistanceScalars>,
 }
 
 /// Build a [`Replay`] from a decoded log. Standalone -- does not read or
@@ -186,7 +196,9 @@ pub fn build_replay(raw: &RawLog, enc: &Encounter, poll_ms: u64) -> Replay {
         };
         tracks.push(build_track(raw, t0, poll_ms, roster));
     }
-    Replay { poll_ms, tracks }
+    let mut replay = Replay { poll_ms, tracks, distance: BTreeMap::new() };
+    replay.distance = crate::analysis::distance::build(raw, &replay, enc);
+    replay
 }
 
 /// Whether a resolved marker name is a commander-tag variant, matching the
