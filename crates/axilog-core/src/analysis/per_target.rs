@@ -66,7 +66,7 @@
 
 use crate::analysis::damage::InstidRegistry;
 use crate::analysis::downs::credited_squad_source as downs_credited_source;
-use crate::analysis::hit_stats::classify;
+use crate::analysis::hit_stats::{can_crit, classify};
 use crate::evtc::{result, RawLog};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -83,6 +83,31 @@ pub struct PerTargetOffense {
     /// already resolves), but free here and the natural pair for the count
     /// -- and the invariant that makes the count auditable.
     pub connected_damage: u64,
+    /// EI's `directDmg` count pair. Named to match
+    /// `hit_stats::HitStats::direct_count` so the per-target and
+    /// whole-fight versions of one quantity are recognizably the same
+    /// thing. NOT the same as the schema's `connected_direct_dmg`, which
+    /// measures a different quantity -- see this plan's Task 4.
+    pub direct_count: u32,
+    /// EI's `directDmg`.
+    pub direct_damage: u64,
+    /// EI's `criticalRate` numerator. Gated behind `hit_stats::can_crit`
+    /// exactly as the whole-fight counter is -- GW2EI gates
+    /// `crit_count`/`critable_direct_count` behind `CanCrit` but NOT
+    /// `direct_count`/`flank_count`/`glance_count`.
+    pub crit_count: u32,
+    /// EI's `criticalDmg`.
+    pub crit_damage: u64,
+    /// EI's `flankingRate` numerator.
+    pub flank_count: u32,
+    /// EI's `glanceRate` numerator.
+    pub glance_count: u32,
+    /// EI's `criticalRate` DENOMINATOR -- not `direct_count`. See
+    /// `hit_stats`'s module doc, `critable_direct_count` section.
+    pub critable_direct_count: u32,
+    /// EI's `againstDownedDamage` -- the damage pair for the
+    /// `against_downed_count` this struct already carried.
+    pub against_downed_damage: u64,
     /// EI's `againstDownedCount`.
     pub against_downed_count: u32,
     /// EI's `downed` -- times this player landed the DOWNING blow on this
@@ -167,8 +192,31 @@ pub fn build(
         let s = out.entry((src, dst)).or_default();
         s.connected_hits += 1;
         s.connected_damage += c.dmg;
+        // Mirrors `hit_stats::accumulate`'s direct-hit branch byte for
+        // byte, minus the condition/life-leech/above-90 buckets EI does not
+        // split per target. Keeping the same order and the same `can_crit`
+        // gate is what makes the per-target rows sum to the whole-fight
+        // totals for every enumerated target.
+        if c.is_direct_hit {
+            if can_crit(e.skillid) {
+                s.critable_direct_count += 1;
+                if c.is_crit {
+                    s.crit_count += 1;
+                    s.crit_damage += c.dmg;
+                }
+            }
+            s.direct_count += 1;
+            s.direct_damage += c.dmg;
+            if e.is_flanking != 0 {
+                s.flank_count += 1;
+            }
+            if c.is_glance {
+                s.glance_count += 1;
+            }
+        }
         if c.is_against_downed {
             s.against_downed_count += 1;
+            s.against_downed_damage += c.dmg;
         }
     }
 
@@ -225,14 +273,17 @@ mod tests {
         assert_eq!(
             out[&(1, 9)],
             PerTargetOffense {
-                connected_hits: 1, connected_damage: 100, downed: 1, interrupts: 1,
+                connected_hits: 1, connected_damage: 100, direct_count: 1, direct_damage: 100,
+                critable_direct_count: 1, downed: 1, interrupts: 1,
                 ..Default::default()
             }
         );
         assert_eq!(
             out[&(1, 10)],
             PerTargetOffense {
-                connected_hits: 1, connected_damage: 250, killed: 1, ..Default::default()
+                connected_hits: 1, connected_damage: 250, direct_count: 1, direct_damage: 250,
+                crit_count: 1, crit_damage: 250, critable_direct_count: 1, killed: 1,
+                ..Default::default()
             }
         );
     }
@@ -320,5 +371,51 @@ mod tests {
         e.value = 0;
         let out = run(vec![e]);
         assert!(out.is_empty());
+    }
+
+    /// The eight hit-quality counters must split by target using the same
+    /// `hit_stats::classify` decision the whole-fight totals already use.
+    /// A crit on one target must not inflate the other target's row --
+    /// which is exactly the error axibridge's `statsAll` fallback makes.
+    #[test]
+    fn splits_hit_quality_by_target() {
+        let mut crit9 = base(1, 9);
+        crit9.result = result::CRIT;
+        crit9.value = 300;
+        crit9.is_flanking = 1;
+        let mut glance10 = base(1, 10);
+        glance10.result = result::GLANCE;
+        glance10.value = 50;
+        let out = run(vec![crit9, glance10]);
+
+        let t9 = &out[&(1, 9)];
+        assert_eq!(t9.direct_count, 1);
+        assert_eq!(t9.direct_damage, 300);
+        assert_eq!(t9.crit_count, 1);
+        assert_eq!(t9.crit_damage, 300);
+        assert_eq!(t9.critable_direct_count, 1);
+        assert_eq!(t9.flank_count, 1);
+        assert_eq!(t9.glance_count, 0);
+
+        let t10 = &out[&(1, 10)];
+        assert_eq!(t10.direct_count, 1);
+        assert_eq!(t10.direct_damage, 50);
+        assert_eq!(t10.crit_count, 0, "target 9's crit must not leak onto target 10");
+        assert_eq!(t10.glance_count, 1);
+        assert_eq!(t10.flank_count, 0);
+    }
+
+    /// `against_downed_damage` is the damage pair for the count this struct
+    /// already carries; EI reports both.
+    #[test]
+    fn accumulates_against_downed_damage_per_target() {
+        let mut hit = base(1, 9);
+        hit.result = result::NORMAL;
+        hit.value = 120;
+        hit.is_offcycle = 1;
+        let out = run(vec![hit]);
+        let t = &out[&(1, 9)];
+        assert_eq!(t.against_downed_count, 1);
+        assert_eq!(t.against_downed_damage, 120);
     }
 }
