@@ -8,6 +8,9 @@ pub mod markers;
 /// URLs and combat-replay geometry, all transcribed from GW2EI. axilog's
 /// single source of truth for all three; see [`maps`]' module doc.
 pub mod maps;
+/// The static WvW objective catalog and `CBTS_WVWOBJECTIVESTATUS` (sc=75)
+/// ownership timelines (MOBJ). See [`objectives`]' module doc.
+pub mod objectives;
 pub mod guilds;
 
 /// Collapse relog/build-swap duplicates: one Player per account (fallback character).

@@ -119,6 +119,15 @@ pub mod sc {
     /// index 74 in `enum cbtstatechange`. Cross-checked against GW2EI's
     /// `ArcDPSEnums.StateChange.WvWTeams = 74`.
     pub const WVW_TEAMS: u8 = 74;
+    /// WvW objective status: one update of one objective's owning team
+    /// (MOBJ). Ordinal verified the same way -- `CBTS_WVWOBJECTIVESTATUS`
+    /// is index 75 in `enum cbtstatechange`, immediately after
+    /// `CBTS_WVWTEAMS` (74, already independently verified above) -- and
+    /// cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.WvWObjectiveStatus = 75`
+    /// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:335`). Payload
+    /// mapping is documented on `crate::wvw::objectives`.
+    pub const WVW_OBJECTIVE_STATUS: u8 = 75;
     /// Stun-break notification ("disable stopped early" per the arcdps
     /// reference comment). Verified against the arcdps EVTC reference the
     /// same way: `CBTS_STUNBREAK` is index 56 in `enum cbtstatechange`.
