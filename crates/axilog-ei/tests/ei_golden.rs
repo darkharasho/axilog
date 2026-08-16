@@ -1201,6 +1201,26 @@ fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
             ("flankingRate", "flankingRate"),
             ("glanceRate", "glanceRate"),
             ("connectedDirectDamageCount", "connectedDirectDamageCount"),
+            // Round 2: `criticalRate` is `criticalDmg`'s exact sibling --
+            // per-target source `crit_count` (`lib.rs:1088`), whole-fight
+            // counterpart `n_hit_stats.crit_count` (`lib.rs:924`). This is
+            // the count-versus-count comparison that would actually catch a
+            // `crit_count`/`crit_damage` transposition at the mapping site;
+            // `criticalDmg`'s own sum<=whole check would NOT catch that
+            // (see the transposition experiment recorded in the round-2
+            // report), because a small count still satisfies `<=` a large
+            // damage total.
+            ("criticalRate", "criticalRate"),
+            // Round 2: per-target source `against_downed_damage`
+            // (`lib.rs:1091`), whole-fight counterpart
+            // `n_hit_stats.against_downed_damage` (`lib.rs:937`). Same
+            // "same predicate, narrower domain" relationship as the fields
+            // above.
+            ("againstDownedDamage", "againstDownedDamage"),
+            // Round 2: per-target source `applied_duration_ms`
+            // (`lib.rs:1098`), whole-fight counterpart
+            // `n_cc.applied_duration_ms` (`lib.rs:909`).
+            ("appliedCrowdControlDuration", "appliedCrowdControlDuration"),
         ] {
             let sum: i64 =
                 targets.iter().map(|t| t[0][split_field].as_i64().expect("integer")).sum();
@@ -1244,6 +1264,11 @@ fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
         "evaded",
         "blocked",
         "invulned",
+        // Round 2 additions -- see the field list above for the source/
+        // counterpart citation for each.
+        "criticalRate",
+        "againstDownedDamage",
+        "appliedCrowdControlDuration",
     ] {
         assert!(
             exact_counts.get(field).copied().unwrap_or(0) > 0,
@@ -1254,8 +1279,21 @@ fn ei_json_stats_targets_split_is_gated_and_sums_to_stats_all() {
     }
     println!(
         "ei_json_stats_targets_split_extended_invariants: {checked2} column sums checked across \
-         9 new fields, exact-hit counts: {exact_counts:?}"
+         12 new fields, exact-hit counts: {exact_counts:?}"
     );
+    // Round 2: two more `statsTargets` keys were reviewed and are
+    // legitimately excluded from the invariant pass above --
+    // `appliedCrowdControlDownContribution` and
+    // `appliedCrowdControlDurationDownContribution` have NO `statsAll[0]`
+    // counterpart at all (verified: no such keys exist in the `stats_all`
+    // block, `lib.rs:895-970` -- that block carries `appliedCrowdControl`/
+    // `appliedCrowdControlDuration` but nothing down-contribution-shaped).
+    // Unlike `missed`/`evaded`/`blocked`/`invulned` above, there is also no
+    // `totalDamageDist`-style alternate whole to fall back to: down
+    // contribution isn't tracked per-skill anywhere in the EI adapter's
+    // output, only per-target. There is currently no independently
+    // computable whole-fight total to check either field's split against
+    // without the gitignored local reference export.
 }
 
 /// MEIGAP Task 2, committed-fixture structural gate: the three `targets[]`
