@@ -209,6 +209,26 @@ test('parseFile: replay opt-in -- intervals always on, positions gated behind { 
   // gate that makes "absent" reachable at all. Comparing whole rows would
   // assert the opposite of the contract.
   const INTERVAL_FIELDS = ['start_ms', 'end_ms', 'active_ms', 'down', 'dead', 'dc']
+  // Assert the fields EXIST before comparing projections of them. The
+  // comparison below is blind to a field missing on both sides: `r[k]` is
+  // `undefined` for each, so the two projections stay deepEqual and the test
+  // stays green. That is not hypothetical for `dc` -- it is `[]` on every row
+  // of every committed fixture, so the equality half is vacuous for it, and
+  // renaming the Rust field would pass this suite silently. Presence and type
+  // are what actually pin the field name here.
+  for (const [source, byEntity] of [
+    ['ungated', intervalsOnly.by_entity],
+    ['gated', replay.by_entity],
+  ]) {
+    for (const [id, r] of Object.entries(byEntity)) {
+      for (const k of INTERVAL_FIELDS) {
+        assert.ok(Object.hasOwn(r, k), `${source} by_entity row ${id} is missing the ${k} field`)
+      }
+      for (const k of ['down', 'dead', 'dc']) {
+        assert.ok(Array.isArray(r[k]), `${source} by_entity row ${id} field ${k} must be an array`)
+      }
+    }
+  }
   const intervalsOf = (byEntity) =>
     Object.fromEntries(
       Object.entries(byEntity).map(([id, r]) => [id, Object.fromEntries(INTERVAL_FIELDS.map((k) => [k, r[k]]))]),

@@ -916,6 +916,52 @@ mod tests {
     }
 
     #[test]
+    fn replay_interval_rows_serialize_exactly_the_documented_field_names() {
+        // These names ARE the wire contract: the Node and Python suites read
+        // them by string and axibridge joins on them. Nothing else pins them.
+        // The SDK invariance tests project each row down to the interval
+        // fields and compare the projections, which is blind to a rename --
+        // both sides lose the field together and stay equal. And `dc` is `[]`
+        // on every row of every committed fixture, so no data-bearing
+        // assertion reaches it either. This test is the guard.
+        //
+        // Sorted because serde_json's map is a BTreeMap here (no
+        // `preserve_order` feature), so serialization order is alphabetical
+        // and not itself part of the contract.
+        let keys = |row: &ReplayIntervals| -> Vec<String> {
+            let value = serde_json::to_value(row).expect("serializable");
+            let mut keys: Vec<String> =
+                value.as_object().expect("a row is a JSON object").keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(
+            keys(&ReplayIntervals::default()),
+            ["active_ms", "dc", "dead", "down", "end_ms", "start_ms"],
+            "the ungated row: the distance scalars are absent when the position pass never ran"
+        );
+        assert_eq!(
+            keys(&ReplayIntervals {
+                dist_to_com: Some(-1.0),
+                stack_dist: Some(-1.0),
+                ..Default::default()
+            }),
+            [
+                "active_ms",
+                "dc",
+                "dead",
+                "dist_to_com",
+                "down",
+                "end_ms",
+                "stack_dist",
+                "start_ms"
+            ],
+            "the gated row: -1.0 must serialize -- it is EI's 'nothing qualified' \
+             sentinel, which is a measurement, not absence"
+        );
+    }
+
+    #[test]
     fn rotation_casts_reference_skill_ids_and_register_them() {
         let (report, index) = fixture_report();
         let mut cats = crate::v1::catalogs::CatalogBuilder::default();

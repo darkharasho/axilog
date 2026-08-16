@@ -262,6 +262,27 @@ class ReplayOptInTests(unittest.TestCase):
         # is the gate that makes "absent" reachable at all. Comparing whole
         # rows would assert the opposite of the contract.
         interval_fields = ("start_ms", "end_ms", "active_ms", "down", "dead", "dc")
+        # Assert the fields EXIST before comparing projections of them. `dc`
+        # is `[]` on every row of every committed fixture, so the equality
+        # half below is vacuous for it -- it compares [] to []. A rename does
+        # get caught here, but only as an opaque `KeyError: 'dc'` raised from
+        # inside the `intervals_of` comprehension; this loop turns that into a
+        # located failure naming the row, and adds the type check the
+        # comprehension never made. The Node suite's equivalent loop is doing
+        # heavier lifting: there a missing key projects to `undefined` on both
+        # sides and the comparison stays deepEqual, so a rename passed
+        # silently until it was added.
+        for source, by_entity in (
+            ("ungated", intervals_only["by_entity"]),
+            ("gated", replay["by_entity"]),
+        ):
+            for entity_id, r in by_entity.items():
+                for f in interval_fields:
+                    self.assertIn(f, r, f"{source} by_entity row {entity_id} is missing {f}")
+                for f in ("down", "dead", "dc"):
+                    self.assertIsInstance(
+                        r[f], list, f"{source} by_entity row {entity_id} field {f}"
+                    )
 
         def intervals_of(by_entity):
             return {k: {f: r[f] for f in interval_fields} for k, r in by_entity.items()}
