@@ -211,6 +211,17 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     /// documented divergence `downs_contribution` itself already carries;
     /// see `contribution`'s module doc.
     pub downs_contribution_per_target: BTreeMap<u64, u64>,
+    /// Applied crowd control split by the enemy it landed on, keyed by
+    /// enemy representative id -- EI's `appliedCrowdControl` and
+    /// `appliedCrowdControlDuration` in `statsTargets`. `(count,
+    /// duration_ms)`, the same pair `CcEntity` carries whole-fight.
+    pub cc_per_target: BTreeMap<u64, (u32, u64)>,
+    /// The CC half of the down-contribution split, keyed by the DOWNED
+    /// enemy's representative id -- EI's
+    /// `appliedCrowdControlDownContribution` and its duration pair.
+    /// `(count, duration_ms)`. The damage half is
+    /// `downs_contribution_per_target` above.
+    pub cc_downs_contribution_per_target: BTreeMap<u64, (u32, u64)>,
     /// The same credits again, split by SKILL id instead of by target
     /// (MEIGAP2 row 1) -- GW2EI's `totalDamageDist[][].downContribution`
     /// (`JsonDamageDistBuilder.cs:44-47`, fed by
@@ -576,7 +587,7 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             per_enemy: per.into_iter().collect(), ..Default::default() }
     }).collect();
     downs::apply_with_registry(&mut players, enc, raw, &registry, &squad, &enemies, &addr_to_rep);
-    cc::apply_cc_with_registry(&mut players, raw, &registry, &squad, &enemies, &addr_to_rep);
+    cc::apply_cc_with_registry(&mut players, raw, &registry, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep);
     support::apply(&mut players, raw, enc, &enemies, &addr_to_rep);
     // M11 Task 2: the arcdps-methodology contribution family
     // (downs_contribution/downed_by) -- see `contribution`'s module doc.

@@ -190,7 +190,7 @@ pub(crate) fn is_cc(e: &crate::evtc::RawEvent, post_era: bool) -> bool {
 /// check but were never "CC applied to an enemy" and aren't in EI's count.
 /// Restricting to `enemies` drops those and reproduces the golden fixture
 /// exactly (34 / 50460ms, not just within tolerance).
-fn pet_credit_cc_events(
+pub(crate) fn pet_credit_cc_events(
     raw: &RawLog,
     registry: &InstidRegistry,
     squad: &BTreeSet<u64>,
@@ -221,6 +221,7 @@ pub fn apply_cc(
     squad: &BTreeSet<u64>,
     enemies: &BTreeSet<u64>,
     addr_to_rep: &std::collections::BTreeMap<u64, u64>,
+    enemy_addr_to_rep: &std::collections::BTreeMap<u64, u64>,
 ) {
     apply_cc_with_registry(
         players,
@@ -229,6 +230,7 @@ pub fn apply_cc(
         squad,
         enemies,
         addr_to_rep,
+        enemy_addr_to_rep,
     );
 }
 
@@ -244,19 +246,29 @@ pub fn apply_cc_with_registry(
     squad: &BTreeSet<u64>,
     enemies: &BTreeSet<u64>,
     addr_to_rep: &std::collections::BTreeMap<u64, u64>,
+    enemy_addr_to_rep: &std::collections::BTreeMap<u64, u64>,
 ) {
     use std::collections::BTreeMap;
     let idx: BTreeMap<u64, usize> =
         players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
     let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
+    // Enemy relog fold for `cc_per_target`'s key -- must match
+    // `PerTargetOffense`'s own key (`per_target::build`'s `dst`) so a
+    // relogged enemy doesn't split into two rows here while collapsing to
+    // one everywhere else.
+    let enemy_rep = |addr: u64| enemy_addr_to_rep.get(&addr).copied().unwrap_or(addr);
     let post_era = raw.header.is_post_buff_rework();
 
     // Direct (player-sourced) CC applied to an enemy.
     for e in &raw.events {
         if is_cc(e, post_era) && squad.contains(&e.src_agent) && enemies.contains(&e.dst_agent) {
             if let Some(&i) = idx.get(&rep(e.src_agent)) {
+                let dur = e.value.max(0) as u64;
                 players[i].cc_applied += 1;
-                players[i].cc_duration_ms += e.value.max(0) as u64;
+                players[i].cc_duration_ms += dur;
+                let t = players[i].cc_per_target.entry(enemy_rep(e.dst_agent)).or_default();
+                t.0 += 1;
+                t.1 += dur;
             }
         }
     }
@@ -265,12 +277,15 @@ pub fn apply_cc_with_registry(
     // `pet_credit_cc_events` docs — required to match EI).
     let (agent_team, recorded_by) = crate::wvw::resolve_teams(raw);
     let friendly_team = recorded_by.and_then(|addr| agent_team.get(&addr).copied());
-    for (owner, _dst, duration_ms) in
+    for (owner, dst, duration_ms) in
         pet_credit_cc_events(raw, registry, squad, enemies, friendly_team, &agent_team)
     {
         if let Some(&i) = idx.get(&rep(owner)) {
             players[i].cc_applied += 1;
             players[i].cc_duration_ms += duration_ms;
+            let t = players[i].cc_per_target.entry(enemy_rep(dst)).or_default();
+            t.0 += 1;
+            t.1 += duration_ms;
         }
     }
 
@@ -380,7 +395,7 @@ mod tests {
         let raw = raw_from(vec![cc_ev(100, 1, 9, 1500), cc_ev(200, 1, 9, 500)]);
         let mut players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
         let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
-        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep);
+        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep, &std::collections::BTreeMap::new());
         assert_eq!(players[0].cc_applied, 2);
         assert_eq!(players[0].cc_duration_ms, 2000);
     }
@@ -393,7 +408,7 @@ mod tests {
         let raw = raw_from(vec![dmg(50, 1, 9, 999), cc_ev(100, 1, 2, 1500)]);
         let mut players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
         let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
-        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep);
+        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep, &std::collections::BTreeMap::new());
         assert_eq!(players[0].cc_applied, 0);
         assert_eq!(players[0].cc_duration_ms, 0);
     }
@@ -420,7 +435,7 @@ mod tests {
         ]);
         let mut players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
         let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
-        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep);
+        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep, &std::collections::BTreeMap::new());
         assert_eq!(players[0].cc_applied, 1);
         assert_eq!(players[0].cc_duration_ms, 800);
     }
@@ -436,7 +451,7 @@ mod tests {
         let raw = raw_from(vec![sb1, sb2]);
         let mut players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
         let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
-        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep);
+        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep, &std::collections::BTreeMap::new());
         assert_eq!(players[0].stun_breaks, 2);
         assert_eq!(players[0].removed_stun_duration_ms, 1000);
     }
@@ -464,7 +479,7 @@ mod tests {
         let raw = raw_from(vec![e]); // pre-era header (empty build)
         let mut players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
         let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
-        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep);
+        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep, &std::collections::BTreeMap::new());
         assert_eq!(players[0].cc_applied, 0, "pre-era buff==1 CC-shaped row must not be counted");
         assert_eq!(players[0].cc_duration_ms, 0);
     }
@@ -485,7 +500,7 @@ mod tests {
         let raw = raw_post(vec![e]);
         let mut players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
         let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
-        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep);
+        apply_cc(&mut players, &raw, &squad, &enemies, &addr_to_rep, &std::collections::BTreeMap::new());
         assert_eq!(players[0].cc_applied, 1, "post-era buff==1 CC-shaped row must be counted");
         assert_eq!(players[0].cc_duration_ms, 1500);
     }
@@ -502,8 +517,8 @@ mod tests {
         let mut pre_players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
         let mut post_players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
         let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
-        apply_cc(&mut pre_players, &pre, &squad, &enemies, &addr_to_rep);
-        apply_cc(&mut post_players, &post, &squad, &enemies, &addr_to_rep);
+        apply_cc(&mut pre_players, &pre, &squad, &enemies, &addr_to_rep, &std::collections::BTreeMap::new());
+        apply_cc(&mut post_players, &post, &squad, &enemies, &addr_to_rep, &std::collections::BTreeMap::new());
         assert_eq!(pre_players[0].cc_applied, post_players[0].cc_applied);
         assert_eq!(pre_players[0].cc_duration_ms, post_players[0].cc_duration_ms);
         assert_eq!(post_players[0].cc_applied, 1);
@@ -556,12 +571,53 @@ mod tests {
 
         let mut pre_players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
         let addr_to_rep: std::collections::BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();
-        apply_cc(&mut pre_players, &raw_from(events.clone()), &squad, &enemies, &addr_to_rep);
+        apply_cc(&mut pre_players, &raw_from(events.clone()), &squad, &enemies, &addr_to_rep, &std::collections::BTreeMap::new());
         assert_eq!(pre_players[0].cc_applied, 0, "pre-era buff==1 pet CC must not be credited");
 
         let mut post_players = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
-        apply_cc(&mut post_players, &raw_post(events), &squad, &enemies, &addr_to_rep);
+        apply_cc(&mut post_players, &raw_post(events), &squad, &enemies, &addr_to_rep, &std::collections::BTreeMap::new());
         assert_eq!(post_players[0].cc_applied, 1, "post-era buff==1 pet CC must be credited to owner");
         assert_eq!(post_players[0].cc_duration_ms, 800);
+    }
+
+    /// A single squad player (agent 1) with two known enemies (9, 10) --
+    /// the minimal roster `splits_applied_cc_by_target` needs.
+    fn two_enemy_player_fixture() -> Vec<PlayerMetrics> {
+        vec![PlayerMetrics { agent_addr: 1, ..Default::default() }]
+    }
+
+    /// A `RawLog` with one direct CC application per `(dst, duration_ms)`
+    /// pair, all sourced from squad agent 1 -- the shape
+    /// `splits_applied_cc_by_target` needs to exercise per-target
+    /// accumulation without also exercising the pet-credit path.
+    fn raw_with_cc_on(hits: &[(u64, i32)]) -> RawLog {
+        let events = hits
+            .iter()
+            .enumerate()
+            .map(|(i, &(dst, duration_ms))| cc_ev(100 + i as u64, 1, dst, duration_ms))
+            .collect();
+        raw_from(events)
+    }
+
+    /// EI's `appliedCrowdControl`/`appliedCrowdControlDuration` split by
+    /// target. The whole-fight versions already exist on `CcEntity`; this
+    /// is the same accumulation additionally keyed by the enemy.
+    #[test]
+    fn splits_applied_cc_by_target() {
+        // Two CC applications on enemy 9 (300ms, 200ms) and one on 10 (450ms).
+        let mut players = two_enemy_player_fixture();
+        let raw = raw_with_cc_on(&[(9, 300), (9, 200), (10, 450)]);
+        let registry = InstidRegistry::build(&raw);
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [9u64, 10].into_iter().collect();
+        apply_cc_with_registry(
+            &mut players, &raw, &registry, &squad, &enemies,
+            &std::collections::BTreeMap::new(), &std::collections::BTreeMap::new(),
+        );
+
+        assert_eq!(players[0].cc_applied, 3, "whole-fight total is unchanged");
+        assert_eq!(players[0].cc_duration_ms, 950);
+        assert_eq!(players[0].cc_per_target[&9], (2, 500));
+        assert_eq!(players[0].cc_per_target[&10], (1, 450));
     }
 }

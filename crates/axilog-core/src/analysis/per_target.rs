@@ -133,6 +133,26 @@ pub struct PerTargetOffense {
     /// against a target flagged unhittable (e.g. a defiance/invuln buff)
     /// rather than actively defended against.
     pub invulned: u32,
+    /// EI's `appliedCrowdControl` for this target. Unlike every field
+    /// above, this is NOT filled by this module's own scan: CC rows are
+    /// dispatched by `cc::is_cc`, a wholly different predicate from the
+    /// damage/outcome classifiers `build` already runs, so its per-target
+    /// accumulation lives in `cc::apply_cc_with_registry` instead
+    /// (`PlayerMetrics::cc_per_target`) and is joined in here at the
+    /// schema layer (Task 4).
+    pub applied_total: u32,
+    /// EI's `appliedCrowdControlDuration`, ms. Same source and join point
+    /// as `applied_total` above.
+    pub applied_duration_ms: u64,
+    /// EI's `appliedCrowdControlDownContribution` -- the CC subset credited
+    /// inside this target's down-contribution windows, i.e. the CC half of
+    /// `contribution::ContributionMetrics` rather than this module's own
+    /// scan. Source: `PlayerMetrics::cc_downs_contribution_per_target`,
+    /// joined in at the schema layer (Task 4), same as `applied_total`.
+    pub applied_downs_contribution: u32,
+    /// EI's `appliedCrowdControlDurationDownContribution`, ms. The duration
+    /// pair for `applied_downs_contribution` above.
+    pub applied_duration_downs_contribution_ms: u64,
 }
 
 impl PerTargetOffense {
@@ -145,6 +165,13 @@ impl PerTargetOffense {
 /// splits over one log. One linear scan, reusing the squad/enemy membership
 /// predicate and `hit_stats::classify` decision every other damage-side
 /// pass already shares.
+///
+/// **The four `applied_*` (CC) fields on [`PerTargetOffense`] are left at
+/// zero here.** They are not derived from this scan at all -- CC rows are
+/// dispatched by `cc::is_cc`, a different predicate from the damage/outcome
+/// classifiers below -- and are instead joined in at the schema layer from
+/// `PlayerMetrics::cc_per_target`/`cc_downs_contribution_per_target`. Do not
+/// go looking for their accumulation in this function.
 pub fn build(
     raw: &RawLog,
     registry: &InstidRegistry,
