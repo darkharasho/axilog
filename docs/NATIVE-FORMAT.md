@@ -696,10 +696,21 @@ repeating here because they surprise people reading the numbers:
   is the commanding player's *raw* positions during their tag windows, so a
   downed commander still anchors the squad; the squad centre is the per-poll
   mean of every squad player's *active* position, so a downed player drops
-  out of it. That is GW2EI's behaviour, and matching it is what takes the
-  error to zero rather than merely reducing it.
+  out of it. That is GW2EI's behaviour, verified against GW2EI source and
+  pinned by a dedicated unit test.
 - **Distance is measured in the XY plane.** Z is discarded, so two players
   stacked vertically are at distance zero.
+
+This reduction was checked against GW2EI's own exported positions to a
+worst-case error of 0.0104 / 0.0073 inches over 41 actors -- under the
+floor set by that fixture's 3-decimal-place pixel rounding. That check
+directly certifies three of the eight rules the reduction depends on (the
+mean, not median; the squad-centre poll cap; the centre's active-vs-raw
+split against the commander reference) plus a fourth, the participation
+filter, via a separate end-to-end check. The remaining rules -- including
+the raw/active asymmetry above -- have zero measured effect on that
+particular fixture and rest instead on their own unit tests in
+`axilog_core::analysis::distance` and on the GW2EI source citations there.
 
 The position track itself is the one exception to the series envelope —
 raw `(t_ms, x, y)` triples rather than a `SeriesOut`. This is deliberate, not an oversight: `SeriesOut` assumes a dense array

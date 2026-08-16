@@ -21,12 +21,32 @@
 //!   back through the Alpine Borderlands transform, along with GW2EI's own
 //!   `down`/`dead`/`dc` windows. Everything but the reduction is then
 //!   GW2EI's, so any disagreement is a semantic one. Residual: **0.0104 /
-//!   0.0073 world inches, worst case over 41 actors**, which is the floor
-//!   set by the fixture's positions being rounded to three decimal places
-//!   in map-pixel space (one such unit is ~0.117 inches on the x axis).
-//!   There is no room under that floor for a wrong semantic: dropping any
-//!   single one of the rules moves the number by 1 to 30 inches, and each
-//!   of those is pinned by its own unit test in `analysis::distance`.
+//!   0.0073 world inches, worst case over 41 actors**, which is under the
+//!   floor set by the fixture's positions being rounded to three decimal
+//!   places in map-pixel space (one such unit is ~0.117 inches on the x
+//!   axis; `PIXEL_ROUNDING_FLOOR` below asserts against `0.02`, roughly 2x
+//!   that measured residual, deliberately with headroom rather than tuned
+//!   to it).
+//!
+//!   This gate does not certify all eight semantics equally. Directly, on
+//!   this fixture, it certifies three: mean-not-median, the squad-centre
+//!   `sampleCount - 1` poll cap, and the squad centre's active-vs-raw
+//!   split against the commander reference -- each moves this number by
+//!   0.4 to 103 inches when dropped, far above the floor. A fourth, the
+//!   `activePlayers` participation filter, is certified by the end-to-end
+//!   test instead (its effect here is a 262% swing, not visible against
+//!   this exact-position gate at all, because the one non-participating
+//!   player in the fixture never has a `down`/`dead`/`dc` window that this
+//!   test's inputs would expose). The remaining rules -- the active-poll
+//!   boundary/merge rule, the commander-overlap resolution, the `dc`
+//!   contribution, and the float widths -- move this number by exactly
+//!   `0.000000` on this fixture, because it does not exercise the cases
+//!   they govern (only 2 of 41 players have a `down` window, none have
+//!   `dead`, and the fixture's `dc` arrays hold only GW2EI's clamped
+//!   pre-spawn/post-despawn bookends). Those rules rest on their own unit
+//!   tests in `analysis::distance` and on the GW2EI source citations there,
+//!   not on this gate -- each unit test has been independently verified to
+//!   fail under the mutation it exists to catch.
 //!
 //! - [`distance_from_a_decoded_log_beats_the_side_channel_derivation`] runs
 //!   the whole pipeline from the committed `.zevtc` and pins the end-to-end
@@ -64,12 +84,18 @@ const LOG_END_MS: u64 = 49285;
 const POLL_MS: u64 = 300;
 
 /// Worst-case world-inch disagreement the fixture's 3-decimal map-pixel
-/// rounding can produce, with headroom. One pixel unit at the third decimal
-/// is 61440/523/1000 = 0.117 inches on x and 86016/750/1000 = 0.115 on y,
-/// so a single reconstructed separation carries up to ~0.08 inches of
-/// error; averaged over a 164-poll track that lands two orders of magnitude
-/// lower, and the measured worst case is 0.0104. This is NOT a semantic
-/// tolerance -- see this file's module doc.
+/// rounding can produce, with headroom -- this constant is `0.02`, roughly
+/// 2x the measured worst case below, not a value tuned to match it. One
+/// pixel unit at the third decimal is 61440/523/1000 = 0.117 inches on x
+/// and 86016/750/1000 = 0.115 on y, which is the per-coordinate half-unit;
+/// a single two-point separation carries up to ~2x that, ~0.16 inches, of
+/// worst-case error, and averaged over a 164-poll track the measured worst
+/// case is 0.0104. Independently re-derived from `wvw::maps.rs:153` +
+/// `analysis::ei_replay.rs:582` rather than from this test's own
+/// arithmetic, that bound comes out to ~0.013 inches -- bracketing the
+/// measured 0.0104 and confirming the floor is real, not an artefact of
+/// how this file computed it. This is NOT a semantic tolerance -- see this
+/// file's module doc.
 const PIXEL_ROUNDING_FLOOR: f64 = 0.02;
 
 fn read_golden() -> serde_json::Value {
