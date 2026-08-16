@@ -484,6 +484,150 @@ fn a_log_without_a_build_row_still_runs_unbounded_finders() {
     assert!(compute(&log, &enc(vec![]), &[gated]).is_empty());
 }
 
+/// Leaving a shroud or stowing a tome forces a weapon swap, and the two
+/// rows arrive in no guaranteed order. `SwapSnap::Before` is
+/// `min(swap - 1, time)` (`InstantCastFinder.cs:125`), so it is a
+/// one-directional CLAMP, not a magnet: it only moves a cast that landed
+/// on the wrong side of the swap, and never pushes one later.
+#[test]
+fn a_before_swap_snap_clamps_a_late_cast_and_leaves_an_early_one() {
+    let swap = |time: u64, who: u64| RawEvent {
+        time,
+        src_agent: who,
+        is_statechange: sc::WEAPON_SWAP,
+        ..base()
+    };
+    let f = FinderDef {
+        trigger: Trigger::BuffLoss { buff_id: BUFF },
+        swap_snap: SwapSnap::Before,
+        ..gain_finder()
+    };
+
+    // The loss landed AFTER the swap: clamped back to just before it.
+    let late = raw(vec![player_agent(1)], vec![swap(990, 1), remove_all(1000, BUFF, 1)]);
+    assert_eq!(compute(&late, &enc(vec![]), &[f])[0].time, 989);
+
+    // The loss already precedes the swap: left alone. `min` is the whole
+    // reason -- a symmetric "snap to the swap" would move this to 1019.
+    let early = raw(vec![player_agent(1)], vec![remove_all(1000, BUFF, 1), swap(1020, 1)]);
+    assert_eq!(compute(&early, &enc(vec![]), &[f])[0].time, 1000);
+
+    // A swap 200ms earlier is outside the +-75ms window.
+    let far = raw(vec![player_agent(1)], vec![swap(800, 1), remove_all(1000, BUFF, 1)]);
+    assert_eq!(compute(&far, &enc(vec![]), &[f])[0].time, 1000);
+
+    // A swap by a DIFFERENT agent must not move this player's cast.
+    let other = raw(vec![player_agent(1)], vec![swap(990, 2), remove_all(1000, BUFF, 1)]);
+    assert_eq!(compute(&other, &enc(vec![]), &[f])[0].time, 1000);
+
+    // Without the flag the swap is ignored entirely.
+    let plain = FinderDef { swap_snap: SwapSnap::None, ..f };
+    assert_eq!(compute(&late, &enc(vec![]), &[plain])[0].time, 1000);
+}
+
+// ----------------------------------------------------------------------
+// The generated catalog
+// ----------------------------------------------------------------------
+
+/// The extraction accounting, pinned in code so a regenerate that changes
+/// coverage has to change this number deliberately.
+///
+/// 429 of GW2EI's 649 finder constructions. The 220 skips are all
+/// categorical and all named in `catalog/mod.rs`: 172 effect finders
+/// (this project decodes no effect events), 40 arbitrary
+/// `.UsingChecker(lambda)` predicates, 4 barrier-extension finders and 4
+/// `BandTogetherCastFinder`s.
+#[test]
+fn the_catalog_carries_every_finder_the_generator_could_transcribe() {
+    assert_eq!(catalog::all().len(), 429);
+}
+
+/// Every spec a checker names must be a real one. A typo here is
+/// invisible at runtime -- the check simply never matches, and the finder
+/// silently stops firing -- so it is worth a compile-time-adjacent guard.
+#[test]
+fn every_spec_named_by_a_check_is_a_real_spec() {
+    let known: std::collections::BTreeSet<&str> =
+        crate::icons::BASE_RES_PROF_ICONS.iter().map(|(n, _)| *n).collect();
+    for f in catalog::all() {
+        for c in f.checks {
+            if let Check::Spec { spec, .. } = c {
+                assert!(known.contains(spec), "{} names unknown spec `{spec}`", f.source);
+            }
+        }
+    }
+}
+
+/// A build range with `min >= max` can never be satisfied, so a finder
+/// carrying one is dead code -- and the most likely cause is a swapped
+/// argument pair in extraction.
+#[test]
+fn no_transcribed_finder_has_an_unsatisfiable_build_range() {
+    for f in catalog::all() {
+        assert!(
+            f.min_gw2_build < f.max_gw2_build,
+            "{} has an empty GW2 build range",
+            f.source
+        );
+        assert!(
+            f.min_evtc_build < f.max_evtc_build,
+            "{} has an empty evtc build range",
+            f.source
+        );
+    }
+}
+
+/// The engine cannot evaluate effect triggers, so no transcribed finder
+/// may claim to need effect data. If one ever does, the generator let an
+/// effect subclass through.
+#[test]
+fn no_transcribed_finder_requires_effect_data() {
+    for f in catalog::all() {
+        assert!(
+            !f.enable.contains(&Enable::HasEffectData),
+            "{} needs effect data the engine cannot supply",
+            f.source
+        );
+    }
+}
+
+/// The whole catalog runs over a log without panicking, and an
+/// event-less log recovers nothing -- the cheapest guard against an
+/// indexing or grouping mistake in a 429-finder sweep.
+#[test]
+fn the_whole_catalog_runs_and_an_empty_log_recovers_nothing() {
+    let finders: Vec<FinderDef> = catalog::all().into_iter().copied().collect();
+    let empty = raw(vec![], vec![]);
+    assert!(compute(&empty, &enc(vec![]), &finders).is_empty());
+
+    // One buff apply, against every finder at once.
+    let log = raw(vec![player_agent(1)], vec![apply(100, BUFF, 1, 2, 5000)]);
+    let out = compute(&log, &enc(vec![]), &finders);
+    assert!(out.iter().all(|e| e.caster == 1 || e.caster == 2), "{out:?}");
+}
+
+/// The proc-flag sets over the real catalog are non-empty and disjoint
+/// from each other -- GW2EI files each finder under exactly one origin.
+#[test]
+fn the_catalog_yields_the_three_disjoint_proc_sets() {
+    let finders: Vec<FinderDef> = catalog::all().into_iter().copied().collect();
+    let log = raw(vec![player_agent(1)], vec![apply(100, BUFF, 1, 2, 5000)]);
+    let (traits, gear, uncond, not_acc) = available_flags(&log, &finders);
+
+    assert!(!traits.is_empty(), "trait procs");
+    assert!(!gear.is_empty(), "gear procs");
+    assert!(!not_acc.is_empty(), "not-accurate skills");
+    // `uncond` is the smallest bucket (17 `.UsingOrigin(Unconditional)`
+    // call sites in GW2EI), and some of those are effect finders that
+    // this catalog skips -- so it is allowed to be empty, but if it is
+    // not, it must not overlap the other two.
+    for (a, b, name) in
+        [(&traits, &gear, "trait/gear"), (&traits, &uncond, "trait/uncond"), (&gear, &uncond, "gear/uncond")]
+    {
+        assert!(a.is_disjoint(b), "{name} proc sets overlap");
+    }
+}
+
 /// Two finders for the same skill on the same event must not double-count
 /// it -- GW2EI's `SkillID` is a set key, and the ei-json `rotation` this
 /// feeds would otherwise show a phantom second cast.

@@ -105,6 +105,28 @@ pub mod sc {
     /// GW2BuildEvent.cs:12-15` (`return evtcItem.SrcAgent`). GW2EI treats a
     /// zero build as absent (`EvtcParser.cs:881`).
     pub const GW2_BUILD: u8 = 15;
+    /// A player swapped weapon sets (MPROC). Ordinal verified the same way
+    /// as its neighbours: `CBTS_WEAPSWAP` is index 11 in
+    /// `enum cbtstatechange`, immediately after `CBTS_SQUADCOMBATEND`
+    /// (10, this project's [`LOG_END`]) and before `CBTS_MAXHEALTHUPDATE`
+    /// (12, [`MAX_HEALTH`]) -- both already independently verified above,
+    /// which brackets this one exactly. Cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.WeaponSwap = 11`
+    /// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:271`).
+    ///
+    /// Payload, per GW2EI's `WeaponSwapEvent`: `src_agent` is the
+    /// swapping player and `dst_agent` is the set swapped TO (its
+    /// `SwappedTo = (int)evtcItem.DstAgent`). `value` carries the set
+    /// swapped FROM, but only from arcdps build
+    /// `WeaponSwapValueIsPrevious_CrowdControlEvents_GliderEvents`
+    /// onward -- before it the field is unused, so anything reading it
+    /// must gate on the build.
+    ///
+    /// Decoded for `analysis::instant_cast`'s weapon-swap time snapping
+    /// (`InstantCastFinder.GetTime`), which 28 finders request. NOT wired
+    /// into `analysis::rotation`, which still has its own documented gap
+    /// about EI's `WeaponSwap = -2` pseudo-cast rows.
+    pub const WEAPON_SWAP: u8 = 11;
     pub const TEAM_CHANGE: u8 = 22;
     pub const MAP_ID: u8 = 25;
     /// Content-local-id -> stable-GUID association (Task 2b). Verified

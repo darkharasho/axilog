@@ -179,6 +179,28 @@ pub enum Enable {
     HasExtHealing,
 }
 
+/// `.UsingBeforeWeaponSwap()` / `.UsingAfterWeaponSwap()`
+/// (`InstantCastFinder.cs:103-115`), consumed by `GetTime` (`:117-129`).
+///
+/// A skill that forces a weapon/bundle swap -- leaving a shroud, stowing
+/// a tome, sheathing a gunsaber -- produces its trace and its swap within
+/// a few frames of each other, in an order the wire does not guarantee.
+/// These pull the emitted cast to the correct SIDE of the swap so the
+/// rotation reads in the order the player actually played it.
+///
+/// The snap applies only when a swap by the same caster falls inside
+/// `ServerDelayConstant / 2` of the candidate time; otherwise the time is
+/// unchanged. 28 finders request it, all `Before`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwapSnap {
+    /// No snapping -- the GW2EI default.
+    None,
+    /// `min(swap_time - 1, time)`.
+    Before,
+    /// `max(swap_time + 1, time)`.
+    After,
+}
+
 /// Which side of a triggering event a [`Check`] reads.
 ///
 /// GW2EI uses two naming pairs for the same idea -- `To`/`By` on buff
@@ -260,6 +282,8 @@ pub struct FinderDef {
     pub icd: i64,
     /// `.UsingTimeOffset(offset)` -- added to the triggering event's time.
     pub time_offset: i64,
+    /// Weapon-swap time snapping; see [`SwapSnap`].
+    pub swap_snap: SwapSnap,
     /// ANDed log-level preconditions.
     pub enable: &'static [Enable],
     /// ANDed per-event predicates.
@@ -288,6 +312,7 @@ impl FinderDef {
         minions: false,
         icd: DEFAULT_ICD,
         time_offset: 0,
+        swap_snap: SwapSnap::None,
         enable: &[],
         checks: &[],
         min_gw2_build: START_OF_LIFE,

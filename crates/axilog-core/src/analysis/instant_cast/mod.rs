@@ -58,13 +58,15 @@
 //!   swap by one account, where GW2EI's per-addr agents make the
 //!   distinction moot as well.
 
+pub mod catalog;
 pub mod model;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use model::{
-    CastOrigin, Check, Enable, FinderDef, InstantCastEvent, LogCapabilities, Party, Trigger,
-    DEFAULT_ICD, END_OF_LIFE, EVTC_END_OF_LIFE, EVTC_START_OF_LIFE, SERVER_DELAY, START_OF_LIFE,
+    CastOrigin, Check, Enable, FinderDef, InstantCastEvent, LogCapabilities, Party, SwapSnap,
+    Trigger, DEFAULT_ICD, END_OF_LIFE, EVTC_END_OF_LIFE, EVTC_START_OF_LIFE, SERVER_DELAY,
+    START_OF_LIFE,
 };
 
 use crate::analysis::damage::{is_health_damage_result, InstidRegistry};
@@ -197,10 +199,15 @@ impl Trigger {
     }
 }
 
-/// GW2EI `SkillIDs.MinionCommandBuff` -- the shared buff every
-/// `MinionCommandCastFinder` watches, with the commanded minion's SPECIES
-/// doing the narrowing.
-pub const MINION_COMMAND_BUFF: u32 = 45781;
+/// GW2EI `SkillIDs.MinionCommandBuff` (`SkillIDs.cs:3578`) -- the shared
+/// buff every `MinionCommandCastFinder` watches, with the commanded
+/// minion's SPECIES doing the narrowing.
+///
+/// The source comment is worth carrying: "applied to minion, from player
+/// for necro/ele, from pet for ranger, not used for mechanist". So the
+/// APPLIER is not reliably the commander, which is exactly why the finder
+/// credits the recipient's master instead.
+pub const MINION_COMMAND_BUFF: u32 = 59536;
 
 /// Everything the engine needs about the log, resolved once.
 struct Ctx<'a> {
@@ -212,6 +219,11 @@ struct Ctx<'a> {
     /// addr -> owning player's representative addr, for the agents that
     /// have a master. Absent for masterless agents.
     master: BTreeMap<u64, u64>,
+    /// Weapon-swap times per agent, in event (chronological) order --
+    /// what `GetTime`'s snapping arm searches. Empty for a log with no
+    /// `CBTS_WEAPSWAP` rows, which makes the snap inert rather than
+    /// wrong.
+    swaps: BTreeMap<u64, Vec<u64>>,
     post_era: bool,
 }
 
@@ -220,6 +232,26 @@ impl Ctx<'_> {
     /// minion/pet, or the agent itself when it has no master.
     fn final_master(&self, addr: u64) -> u64 {
         *self.master.get(&addr).unwrap_or(&addr)
+    }
+
+    /// `InstantCastFinder.GetTime` (`:117-129`): the offset time, pulled
+    /// to the requested side of a nearby weapon swap by the same caster.
+    ///
+    /// GW2EI takes the FIRST swap within `ServerDelayConstant / 2`
+    /// (`wepSwaps[0]`), not the nearest -- reproduced, because with two
+    /// swaps in a 75ms window the two rules disagree.
+    fn snap(&self, caster: u64, time: u64, snap: SwapSnap) -> u64 {
+        if snap == SwapSnap::None {
+            return time;
+        }
+        let window = (SERVER_DELAY / 2) as u64;
+        let Some(swaps) = self.swaps.get(&caster) else { return time };
+        let Some(&s) = swaps.iter().find(|&&s| s.abs_diff(time) < window) else { return time };
+        match snap {
+            SwapSnap::Before => time.min(s.saturating_sub(1)),
+            SwapSnap::After => time.max(s.saturating_add(1)),
+            SwapSnap::None => time,
+        }
     }
 }
 
@@ -317,9 +349,15 @@ fn build_ctx<'a>(raw: &'a RawLog, enc: &Encounter) -> Ctx<'a> {
         }
     }
 
+    let mut swaps: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    for e in raw.events.iter().filter(|e| e.is_statechange == sc::WEAPON_SWAP) {
+        swaps.entry(e.src_agent).or_default().push(e.time);
+    }
+
     Ctx {
         raw,
         specs: spec_index(enc),
+        swaps,
         species,
         master,
         post_era: raw.header.is_post_buff_rework(),
@@ -482,13 +520,19 @@ fn collect_streams(
 /// agent to actually HAVE a master, because a masterless one has no owner
 /// to credit the cast to (`MinionCommandCastFinder.cs:22`,
 /// `MinionCastCastFinder.cs:20`, `MinionSpawnCastFinder.cs:30`).
-fn caster_for(ctx: &Ctx<'_>, f: &FinderDef, hit: &TriggerHit) -> Option<u64> {
-    // `BuffGiveCastFinder.GetKeyAgent` is the APPLIER, not the recipient
-    // the shared apply stream keys on.
-    let base = match f.trigger {
+/// The subclass's `GetKeyAgent(evt)`, un-folded.
+///
+/// `BuffGiveCastFinder` overrides it to the APPLIER, not the recipient
+/// the shared apply stream keys on.
+fn key_agent_of(f: &FinderDef, hit: &TriggerHit) -> u64 {
+    match f.trigger {
         Trigger::BuffGive { .. } => hit.other,
         _ => hit.key,
-    };
+    }
+}
+
+fn caster_for(ctx: &Ctx<'_>, f: &FinderDef, hit: &TriggerHit) -> Option<u64> {
+    let base = key_agent_of(f, hit);
     if !(f.minions || f.trigger.forces_minions()) {
         return Some(base);
     }
@@ -573,13 +617,17 @@ fn emit_for_finder(
         }
         last.insert(caster, hit.time);
         out.push(InstantCastEvent {
-            // `GetTime` (`InstantCastFinder.cs:117-129`). The weapon-swap
-            // snapping arm of that method is unreachable here: this
-            // project decodes no weapon-swap events, and no ProfHelper
-            // finder that MPROC transcribes sets the flag (the 29
-            // `.UsingBeforeWeaponSwap()` call sites in those files all
-            // belong to damage modifiers, not finders).
-            time: hit.time.saturating_add_signed(f.time_offset),
+            // `GetTime` (`InstantCastFinder.cs:117-129`): offset first,
+            // then snapped to the requested side of a nearby swap.
+            // GW2EI passes `GetKeyAgent(evt)` here, NOT the (possibly
+            // minion-folded) caster it files the event under -- so the
+            // swap being searched for is the one on the agent that
+            // actually swapped.
+            time: ctx.snap(
+                key_agent_of(f, hit),
+                hit.time.saturating_add_signed(f.time_offset),
+                f.swap_snap,
+            ),
             skill_id: f.skill_id,
             caster,
         });
