@@ -235,6 +235,41 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   follow-up.
 
 ## Queued (the only open feature work)
+- ~~MPROC skill proc/instant-cast flags~~ — **DONE 2026-08-16** (`c6dc134`, `324a1e5`,
+  `a620c3c`). All five flags are computed and emitted in both formats. The scoping below
+  held up in full: it is a subsystem port, not a catalog generator, and `isInstantCast`
+  genuinely required running the finders. Shipped as
+  `analysis::instant_cast` (model + one engine, mirroring `damage_mods`) plus
+  `scripts/gen_instant_cast_catalog.py`, which extracts **429 of GW2EI's 649** finder
+  constructions with a named reason for each of the 220 skips.
+
+  Four corrections to the scoping below, all found by machine accounting rather than by
+  reading:
+  - The count is **649**, not 658. The earlier number came from a grep that also matched
+    commented-out code; `GuardianHelper.cs:25-27` alone carries three dead finders in an
+    obsolete 3-argument form.
+  - `EffectCastFinderByDst` is a 60-construction subclass the first extraction regex
+    (`\w*CastFinder`, no suffix) could not see at all — neither transcribed nor skipped,
+    so the accounting balanced while under-counting the source by 10%.
+  - `.UsingBeforeWeaponSwap()` is a FINDER method with 28 real call sites, not a
+    damage-modifier one. Rather than skip those finders, `CBTS_WEAPSWAP` (statechange 11)
+    is now decoded and the snap implemented — a one-directional clamp, `min(swap-1, time)`.
+  - `MinionCommandBuff` is `59536`, not the value a first pass guessed.
+
+  Remaining gap, deliberate: the **172 effect-keyed finders** are not evaluated, because
+  this project decodes no effect events (only their `CBTS_IDTOGUID` mappings). They are
+  gated on `HasEffectData`, so `isInstantCast` UNDER-COUNTS on a log carrying effect
+  events. Closing it means decoding statechanges 45/51/60/62 and is the natural follow-on.
+  The complementary `.UsingDisableWithEffectData()` finders — the ones that matter on
+  effect-less logs — do run.
+
+  Also still open: the **`rotation` fill** the entry below calls out as adjacent value.
+  Instant casts are computed but are NOT merged into `PlayerMetrics::rotation`, which
+  remains `AnimatedCastEvent`-only. That is a behavioural change to an existing block
+  (cast counts move, ei-json `rotation[]` moves), so it was kept separate from the flag
+  work rather than bundled into it.
+
+  Original scoping, retained because it is what made the work tractable:
 - MPROC skill proc/instant-cast flags (`skillMap[].isTraitProc`/`isGearProc`/
   `isUnconditionalProc`/`isNotAccurate`/`isInstantCast`) — split out of Phase C 2026-08-16. Scoped by a
   source-triangulation spike, which OVERTURNED the "needs a GW2 skill database" premise:

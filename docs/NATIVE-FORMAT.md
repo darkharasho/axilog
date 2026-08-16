@@ -211,7 +211,9 @@ not one single one:
 ```json
 {
   "skills": {
-    "736": { "name": "Bleeding", "is_swap": false, "can_crit": true }
+    "736": { "name": "Bleeding", "is_swap": false, "can_crit": true },
+    "9284": { "name": "Flame Blast", "is_swap": false, "can_crit": false,
+              "is_gear_proc": true, "is_not_accurate": true, "is_instant_cast": true }
   },
   "buffs": {
     "717": { "name": "Protection", "kind": "boon", "stacking": "duration", "max_stacks": 5 },
@@ -243,6 +245,25 @@ the omit-when-absent convention — the default `--format json` run above
 never populates it, since damage-modifier attribution needs `--modifiers`.
 `skills`/`buffs` are always present, even when empty, since they are plain
 `BTreeMap` fields with no `skip_serializing_if`.
+
+A skill entry's five MPROC flags — `is_trait_proc`, `is_gear_proc`,
+`is_unconditional_proc`, `is_not_accurate`, `is_instant_cast` — are
+**omitted when `false`**, unlike their `is_swap`/`can_crit` neighbours.
+Absence means `false`, not "unknown". They are rare (on the committed
+fixture 9 of 368 skills carry any of them), and emitting ~370 × 5 literal
+`false`s cost 16% of the rendered report.
+
+Two properties worth knowing before consuming them:
+
+- **They are log-specific, not build-specific.** They come from GW2EI's
+  `InstantCastFinder` availability, which is gated on predicates over the
+  log's own contents as well as on build ranges. Two logs recorded at the
+  same GW2 build can legitimately disagree.
+- **`is_instant_cast` is strictly stronger than the other four.** Those
+  four say a finder for this skill was AVAILABLE; `is_instant_cast` says
+  one actually FIRED in this log. It currently UNDER-counts on logs
+  carrying effect events, because the 172 effect-keyed finders are not
+  evaluated — see `analysis::instant_cast`'s module doc.
 
 The map key's SIGN encodes direction: negative ids (like `-428` above) are
 incoming modifiers, positive ids outgoing — matching `-428`'s description

@@ -87,10 +87,19 @@ reader rewrite — the owner's, not ours).
 
 ## Do not start without asking
 
-MPROC (skill proc/instant-cast flags — a port of GW2EI's 658-finder
-instant-cast subsystem, NOT the catalog the old "Phase C proc flags" wording
-implied; scoped in `docs/ROADMAP.md`), Phase D, a `--compact` CLI flag,
-format-level size work. (MOBJ was on this list; it landed 2026-08-16.)
+Phase D, a `--compact` CLI flag, format-level size work. (MOBJ and MPROC
+were both on this list; both landed 2026-08-16.)
+
+MPROC's two deliberate leftovers, either of which is a sensible next task:
+
+- **Effect events are still not decoded** (statechanges 45/51/60/62). That
+  is what blocks the 172 effect-keyed instant-cast finders, so
+  `isInstantCast` under-counts on any log carrying effect data. It would
+  also unlock the replay eye-candy backlog (dev-notes #6/#8).
+- **`rotation` is still `AnimatedCastEvent`-only.** The instant casts
+  exist (`analysis::instant_cast::compute`) but are not merged in.
+  Merging them moves cast counts and the ei-json `rotation[]`, so it is a
+  behavioural change, not an additive one.
 
 ---
 
