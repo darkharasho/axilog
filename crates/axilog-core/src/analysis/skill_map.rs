@@ -9,12 +9,23 @@
 //! Major/Superior Sigil of Fire)"` for skill id 9284, vs whatever shorter
 //! string arcdps itself wrote into the log's skill table for that id, if
 //! any), a render.guildwars2.com icon URL, and several per-skill classifier
-//! flags this project cannot reproduce at all without that same external
-//! database (`isInstantCast`, `isTraitProc`, `isUnconditionalProc`,
+//! flags (`isInstantCast`, `isTraitProc`, `isUnconditionalProc`,
 //! `isGearProc`, `isNotAccurate`, `conversionBasedHealing`, `hybridHealing`
 //! -- see a real dps.report export's `skillMap[*]` shape, spot-checked
 //! against `fixtures/local/wvw-postrework.ei.json` by this module's own
 //! golden test). **This module deliberately does NOT attempt any of that.**
+//!
+//! One correction to the sentence above, established by a 2026-08-16 spike
+//! (recorded in `docs/ROADMAP.md` under MPROC): the proc/instant family
+//! (`isTraitProc`/`isGearProc`/`isUnconditionalProc`/`isNotAccurate`) does
+//! NOT need the external database. Those four are a side effect of GW2EI's
+//! instant-cast detection subsystem -- `CombatData.cs:214-244` fills the sets
+//! from each `InstantCastFinder`'s declared `CastOrigin`, and `SkillData.cs`
+//! only does `Contains`. They are reproducible, but the cost is porting ~616
+//! finders, and the answer is LOG-SPECIFIC (finder availability is gated on
+//! GW2/evtc build ranges), so no static table can match EI. Only
+//! `conversionBasedHealing`/`hybridHealing` and the richer names/icon are
+//! genuinely database-backed.
 //! It builds a much smaller, purely-LOG-DERIVED map:
 //!
 //! - `name`: straight from the log's own `cbtskill` table

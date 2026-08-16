@@ -82,12 +82,16 @@ schedule. Absorption removed ei-json's *private data*, not ei-json.
   `markers[].time_ms` are in **arcdps session time**, not log-relative; and a
   distance scalar of `None` means the position pass never ran while `-1.0`
   means it ran and nothing qualified — never collapse the two.
-- **Phase C — icons DONE, proc flags open.** Two generated catalogs ship:
+- **Phase C — DONE (icons).** Two generated catalogs ship:
   `analysis::skill_icons` (GW2 `/v2/skills`, 4,656 entries, plus `autoAttack`
   from `slot == "Weapon_1"`) and `analysis::buff_icons` (GW2EI's `new Buff(...)`
   table, 2,267 entries). Fixture coverage 329/368; the 39 misses are internal
-  damage-proc ids neither source has art for — a floor, not a gap. Proc flags
-  still unsourced.
+  damage-proc ids neither source has art for — a floor, not a gap. Both are
+  wired into the NATIVE catalogs (`axilog-schema/src/v1/catalogs.rs:185-197`);
+  ei-json's `skillMap` still omits `icon`/`autoAttack` by choice.
+  Proc flags were split out of this phase as **MPROC** (see Queued) once a
+  spike falsified the premise they were filed under — they are not a skill-database
+  problem at all.
 - **Phase D — the axibridge-side reader rewrite. NOT ours**: axilog-side
   readiness only unless the owner says otherwise.
 
@@ -191,8 +195,33 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   follow-up.
 
 ## Queued (the only open feature work)
-- Phase C proc flags — see the native-format program above. Still unsourced: no upstream table
-  identified, so this needs a source-triangulation pass before it is implementable.
+- MPROC skill proc/instant-cast flags (`skillMap[].isTraitProc`/`isGearProc`/
+  `isUnconditionalProc`/`isNotAccurate`/`isInstantCast`) — split out of Phase C 2026-08-16. Scoped by a
+  source-triangulation spike, which OVERTURNED the "needs a GW2 skill database" premise:
+  - No GW2 API involvement. The flags are a SIDE EFFECT of GW2EI's instant-cast detection
+    subsystem. `CombatData.ComputeInstantCastEventsFromFinders` (`CombatData.cs:214-244`) walks
+    every `InstantCastFinder` and, for each one whose `Available(this)` holds, adds its skill id
+    to a `TraitProc`/`GearProc`/`UnconditionalProc` set by the finder's declared `CastOrigin`.
+    `SkillData.cs:44-58` is then a bare `Contains`.
+  - **The flag set is LOG-SPECIFIC, so a static id table cannot match EI.** `Available()`
+    (`InstantCastFinder.cs:138-150`) gates on the finder's `_enableConditions` plus a GW2 build
+    range plus an evtc build range.
+  - Scale: ~616 finder constructions across ~30 profession-helper files in 8 subclasses
+    (Buff/Damage/Effect/Marker/Minion/Missile/Checked/WeaponSwap). Only 153 declare a non-default
+    origin — 85 `Gear`, 49 `Trait`, 17 `Unconditional`, 2 `Skill` (the default, which sets no flag).
+  - `isGearProc` is the LARGEST bucket, so scope MPROC to the full family, not the three flags
+    this roadmap used to name. `analysis/skill_map.rs` already had the complete list; only the
+    roadmap summary was short. `isNotAccurate` comes from the same loop (`CombatData.cs:224`)
+    and rides along for free.
+  - UNRESOLVED: `isInstantCast` appears nowhere in the parser — almost certainly computed in
+    `GW2EIBuilders`, which is not in the `/var/tmp/gw2ei` sparse checkout. `sparse-checkout add`
+    it before designing.
+  - Therefore this is a SUBSYSTEM PORT, not a catalog generator — milestone-sized, and the
+    roadmap's smallest-looking bullet was hiding that. Real adjacent value: instant-cast events
+    would also fill M14's known `rotation` gap, which covers only the `AnimatedCastEvent` pipeline.
+  - The cheap alternative, considered and NOT taken: ship the 153 `(skill_id, origin)` pairs as a
+    generated catalog and flag referenced ids unconditionally (~a day). It over-flags exactly where
+    `Available()` says no, so it would need a documented+ruled exception rather than parity.
 - MOBJ wvWMapData objectives: the last whole EI feature surface axilog doesn't emit
   (shard/team ids + GADGETCAPTURE-derived objective ownership timelines; reference shape verified
   — 13 entries on the local export, `{mapID, objectiveID, objectiveType, owners:[[team,time]]}`).

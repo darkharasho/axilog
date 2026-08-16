@@ -26,7 +26,7 @@ Two standing rulings from the owner:
    `docs/NATIVE-FORMAT.md` §"1.x compatibility rules". Don't stop to ask.
 
 Phases: container DONE → A (side-channel absorption) DONE → **B DONE** →
-C (skill/buff metadata; icons DONE, proc flags unsourced) → D (axibridge-side
+**C DONE** (icons; proc flags split out as MPROC) → D (axibridge-side
 reader rewrite — the owner's, not ours).
 
 ## Facts that cost real time to learn
@@ -78,8 +78,11 @@ reader rewrite — the owner's, not ours).
 
 ## Do not start without asking
 
-Phase C proc flags, Phase D, a `--compact` CLI flag, format-level size work,
-MOBJ (`wvWMapData` objectives), pre-existing clippy warnings.
+MPROC (skill proc/instant-cast flags — a port of GW2EI's ~616-finder
+instant-cast subsystem, NOT the catalog the old "Phase C proc flags" wording
+implied; scoped in `docs/ROADMAP.md`), Phase D, a `--compact` CLI flag,
+format-level size work, MOBJ (`wvWMapData` objectives), pre-existing clippy
+warnings.
 
 ---
 
