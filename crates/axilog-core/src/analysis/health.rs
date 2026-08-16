@@ -243,7 +243,7 @@ pub fn ei_health_percents(raw: &RawLog, enc: &Encounter) -> BTreeMap<u64, Vec<(u
     // `log_start_ms`/`log_end_ms`): GW2EI shifts its whole event stream so
     // that `LogData.LogStart == 0`, and this project keeps arcdps absolute
     // times and subtracts at the adapter boundary instead.
-    let log_start = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let log_start = raw.log_start_ms();
     let log_end = raw.events.last().map(|e| e.time).unwrap_or(log_start);
     let addr_to_rep: BTreeMap<u64, u64> = enc
         .players

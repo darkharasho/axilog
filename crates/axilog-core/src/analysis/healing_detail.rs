@@ -252,7 +252,7 @@ pub fn build_with_registry(
         enc.players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
     let n = enc.players.len();
     let buckets = ei_grid(enc.duration_ms);
-    let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let t0 = raw.log_start_ms();
 
     let mut out: HealingDetail = (0..n)
         .map(|_| PlayerHealingDetail {

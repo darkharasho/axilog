@@ -46,15 +46,18 @@ reader rewrite — the owner's, not ours).
 
 ## Known debt, deliberately parked
 
-- `t0` is re-derived in `distance.rs:142`, duplicating `replay.rs:172`.
+- ~~`t0` re-derived in `distance.rs`/`replay.rs`~~ — CLOSED 2026-08-16. It was
+  16 call sites, not 2; all now call `RawLog::log_start_ms()`.
 - `axilog.pyi` beyond `PerTargetDetail` was not swept for pre-1.0 staleness.
 - `dc` is empty on all 42 fixture rows, so that leg of the SDK comparison is
   vacuous; neither SDK asserts `dc`'s presence before comparing, so a rename
   would pass silently.
 - A `markers.rs` tag-colour-swap can produce two overlapping segments.
-- Windows CI `LNK1201`: the CLI bin and the Python cdylib are both named
-  `axilog`, so their PDBs collide. Root-caused, not fixed; a rerun usually goes
-  green. Real fix is renaming one. **Not a Phase B regression.**
+- ~~Windows CI `LNK1201`~~ — CLOSED 2026-08-16 (fix itself landed `db34709`,
+  2026-08-15). The old "rename one of the two `axilog` targets" plan was both
+  impossible (each name is public API) and unnecessary: the Windows leg now
+  builds with no debuginfo, so no PDB is opened. See `docs/ROADMAP.md` for the
+  verification. Don't reopen this on the strength of an old comment.
 
 ## Working here
 

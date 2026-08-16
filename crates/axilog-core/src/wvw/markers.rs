@@ -436,7 +436,7 @@ pub(crate) fn resolve_tick_rate(raw: &RawLog, duration_ms: u64) -> Option<TickRa
     if ticks.len() < 2 {
         return None;
     }
-    let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let t0 = raw.log_start_ms();
     let res = 1000u64;
     let buckets = ((duration_ms / res) + 1) as usize;
     let mut per_second = vec![0.0f64; buckets];

@@ -674,7 +674,7 @@ fn process_skill(skill_id: u32, items: &[Item], log_end_rel: i64) -> Vec<CastAcc
 /// `addr_to_rep` (i.e. every squad player, account-folded onto its
 /// representative addr -- see the module doc's "Account folding" section).
 pub fn build(raw: &RawLog, addr_to_rep: &BTreeMap<u64, u64>) -> BTreeMap<u64, RotationMetrics> {
-    let t0 = raw.events.first().map(|e| e.time).unwrap_or(0) as i64;
+    let t0 = raw.log_start_ms() as i64;
     let log_end_rel = raw.events.last().map(|e| e.time as i64 - t0).unwrap_or(0);
     let post_era = raw.header.is_post_buff_rework();
 

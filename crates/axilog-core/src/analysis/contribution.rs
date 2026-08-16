@@ -245,7 +245,7 @@ pub fn apply_with_registry(
     let health = HealthTracker::build(raw);
     let post_era = raw.header.is_post_buff_rework();
     let boon_ids: BTreeSet<u32> = BOON_IDS.iter().map(|&(id, _, _)| id).collect();
-    let log_start = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let log_start = raw.log_start_ms();
 
     // Per-target downstate-invuln reset floor (methodology-normative) --
     // kept HERE, not in `health.rs` (which stays a pure query module).

@@ -442,7 +442,7 @@ pub fn simulate_boons_with_inputs(
 /// and not `Encounter::duration_ms` (which is start-relative).
 pub fn simulate_boon_uptimes(raw: &RawLog, enc: &Encounter) -> BTreeMap<(u64, u32), BoonUptime> {
     let boons = simulate_boons(raw, enc);
-    let log_start_ms = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let log_start_ms = raw.log_start_ms();
     let log_end_ms = raw.events.last().map(|e| e.time).unwrap_or(0);
     boons
         .iter()

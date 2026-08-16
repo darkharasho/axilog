@@ -52,6 +52,34 @@ pub struct RawLog {
     pub guid_map: Vec<GuidMapping>,
 }
 
+impl RawLog {
+    /// The log-start anchor: the absolute arcdps timestamp that every
+    /// log-relative time in this project is measured from.
+    ///
+    /// This one expression -- `events.first().time`, or `0` for an empty
+    /// log -- was open-coded at 16 call sites across `analysis` and `wvw`
+    /// under four different local names (`t0`, `t0_ms`, `log_start`,
+    /// `log_start_ms`), which is what made the duplication invisible: the
+    /// two sites the roadmap happened to name (`distance.rs`/`replay.rs`)
+    /// were not a pair, they were 2 of 16. Centralised 2026-08-16.
+    ///
+    /// Deliberately NOT `header.log_start` or any encounter-start notion:
+    /// this is the first event in the file, which is what the whole
+    /// timeline convention is anchored to (`analysis::rotation`,
+    /// `analysis::timeseries`, `analysis::replay` and `buffs` all document
+    /// the same `t0`). The `unwrap_or(0)` branch is reachable only for a
+    /// log with no events at all, where every relative time is trivially
+    /// `0` and any anchor would do.
+    ///
+    /// Note the two lookalikes that are NOT this: `buffs::generation` and
+    /// `buffs::simulator` each start a clock from `events.first()` on a
+    /// FILTERED local slice, not on `self.events`. Those are per-series
+    /// start times and must not be folded in here.
+    pub fn log_start_ms(&self) -> u64 {
+        self.events.first().map(|e| e.time).unwrap_or(0)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EvtcError {
     #[error("buffer too short: need {need} bytes at offset {at}, have {have}")]
@@ -62,4 +90,47 @@ pub enum EvtcError {
     UnsupportedRevision(u8),
     #[error("zevtc container error: {0}")]
     Container(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::evtc::header::RawHeader;
+
+    fn at(time: u64) -> RawEvent {
+        RawEvent {
+            time,
+            src_agent: 0, dst_agent: 0, value: 0, buff_dmg: 0, overstack: 0,
+            skillid: 0, src_instid: 0, dst_instid: 0, src_master_instid: 0,
+            dst_master_instid: 0, iff: 0, buff: 0, result: 0, is_activation: 0,
+            is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0,
+            is_statechange: 0, is_flanking: 0, is_shields: 0, is_offcycle: 0,
+            pad: 0,
+        }
+    }
+
+    fn log(events: Vec<RawEvent>) -> RawLog {
+        RawLog {
+            header: RawHeader { build: String::new(), revision: 1, boss_id: 1 },
+            agents: vec![],
+            skills: vec![],
+            events,
+            guid_map: vec![],
+        }
+    }
+
+    #[test]
+    fn log_start_is_the_first_events_time_not_the_smallest() {
+        // arcdps writes events in capture order, so `first()` IS the
+        // anchor -- but this must stay a positional read, not a `min()`.
+        // The 16 call sites this method replaced all relied on that, and a
+        // "safer" min() would silently re-anchor every relative time in the
+        // project if a log ever carried an out-of-order row.
+        assert_eq!(log(vec![at(33847418), at(33847000), at(33848000)]).log_start_ms(), 33847418);
+    }
+
+    #[test]
+    fn log_start_of_an_empty_log_is_zero() {
+        assert_eq!(log(vec![]).log_start_ms(), 0);
+    }
 }

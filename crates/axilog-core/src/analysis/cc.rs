@@ -30,7 +30,7 @@ pub fn timeline_with_registry(
     let mut squad_damage = vec![0u64; buckets];
     let mut cc_applied = vec![0u32; buckets];
     let mut downs = vec![0u32; buckets];
-    let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let t0 = raw.log_start_ms();
     // M4 Task 2: era-gate `is_cc` (see its doc comment) -- post-rework logs
     // route genuine CC through `buff == 1` rows too, via the shared
     // `DamageResult` enum.

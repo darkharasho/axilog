@@ -689,7 +689,7 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // rather than via `buffs::simulate_boon_uptimes` (which exists as a
     // standalone convenience for callers that only want uptimes) to avoid
     // re-running the simulator a second time.
-    let log_start_ms = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let log_start_ms = raw.log_start_ms();
     let log_end_ms = raw.events.last().map(|e| e.time).unwrap_or(0);
     let boon_uptime = boons
         .iter()

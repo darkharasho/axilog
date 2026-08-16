@@ -286,7 +286,7 @@ pub fn resolve(raw: &RawLog) -> Encounter {
         }
     }
     let duration_ms = raw.events.last().map(|e| e.time).unwrap_or(0)
-        .saturating_sub(raw.events.first().map(|e| e.time).unwrap_or(0));
+        .saturating_sub(raw.log_start_ms());
     let mut enc = Encounter {
         kind: "wvw".into(), map: "World vs World".into(), duration_ms,
         build: raw.header.build.clone(), revision: raw.header.revision,

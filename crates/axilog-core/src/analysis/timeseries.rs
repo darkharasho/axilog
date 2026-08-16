@@ -337,7 +337,7 @@ pub fn build_with_registry(
     agent_team: &BTreeMap<u64, u32>,
 ) -> BTreeMap<u64, TimeseriesMetrics> {
     let buckets = ei_grid(enc.duration_ms);
-    let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let t0 = raw.log_start_ms();
     let bucket_of = |t: u64| -> Option<usize> { ei_bucket(t, t0, buckets) };
 
     // Per-bucket DELTAS, keyed by raw addr first (folded to account/enemy
@@ -555,7 +555,7 @@ pub fn build_enemy_series(
     enemy_addr_to_rep: &BTreeMap<u64, u64>,
 ) -> BTreeMap<u64, EnemySeries> {
     let buckets = ei_grid(enc.duration_ms);
-    let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let t0 = raw.log_start_ms();
 
     let mut dmg: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
     let mut power: BTreeMap<u64, Vec<u64>> = BTreeMap::new();

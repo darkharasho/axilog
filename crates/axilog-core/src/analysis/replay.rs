@@ -169,7 +169,7 @@ pub struct Replay {
 /// forever); pass [`DEFAULT_POLL_MS`] to match GW2EI's own polling rate.
 pub fn build_replay(raw: &RawLog, enc: &Encounter, poll_ms: u64) -> Replay {
     let poll_ms = poll_ms.max(1);
-    let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let t0 = raw.log_start_ms();
 
     let mut tracks = Vec::with_capacity(enc.players.len() + enc.enemies.len());
     for p in &enc.players {
@@ -429,7 +429,7 @@ impl ActivityIntervals {
 /// events plus the existing [`build_intervals`] down/dead scan -- safe to
 /// call unconditionally (M11 Task 3), unlike [`build_replay`].
 pub fn build_activity_intervals(raw: &RawLog, enc: &Encounter) -> Vec<ActivityIntervals> {
-    let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let t0 = raw.log_start_ms();
     enc.players
         .iter()
         .map(|p| {

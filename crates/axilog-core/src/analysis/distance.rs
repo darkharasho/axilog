@@ -139,7 +139,7 @@ type Reference = BTreeMap<u64, (f32, f32)>;
 ///   between a squad centre and a squad centre dragged 600 inches sideways
 ///   by one AFK player parked 22,000 inches away.
 pub fn build(raw: &RawLog, replay: &Replay, enc: &Encounter) -> BTreeMap<u64, DistanceScalars> {
-    let t0_ms = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let t0_ms = raw.log_start_ms();
     let active = participants(raw, enc);
     let squad = squad_tracks(replay, enc, &active);
     let centre = squad_centre(&squad, enc.duration_ms, replay.poll_ms);

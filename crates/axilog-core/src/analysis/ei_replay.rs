@@ -915,7 +915,7 @@ pub fn build_ei_replay_auto(raw: &RawLog, enc: &Encounter) -> EiReplay {
 /// chicken-and-egg (`CombatReplayMap.ComputeBoundingBox` reads
 /// `p.GetCombatReplayPolledPositions(log)`).
 pub fn build_world_tracks(raw: &RawLog, enc: &Encounter) -> Vec<WorldTrack> {
-    let t0 = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let t0 = raw.log_start_ms();
     let log_duration = enc.duration_ms as i64;
 
     let mut out = Vec::with_capacity(enc.players.len() + enc.enemies.len());

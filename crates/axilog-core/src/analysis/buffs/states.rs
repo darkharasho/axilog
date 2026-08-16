@@ -205,7 +205,7 @@ pub fn build(
     enc: &Encounter,
     boons: &BTreeMap<(u64, u32), BoonTimeline>,
 ) -> BoonStates {
-    let log_start = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let log_start = raw.log_start_ms();
 
     let is_intensity = |buff_id: u32| {
         BOON_IDS.iter().any(|&(id, _, intensity)| id == buff_id && intensity)

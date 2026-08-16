@@ -167,7 +167,7 @@ pub fn build_with_registry(
         grouped.entry((rep, e.buff_id)).or_default().push(e);
     }
 
-    let log_start = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let log_start = raw.log_start_ms();
     let log_end = raw.events.last().map(|e| e.time).unwrap_or(0);
 
     let mut out: TargetConditionStates = BTreeMap::new();

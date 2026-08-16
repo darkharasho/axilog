@@ -931,7 +931,7 @@ pub fn rollup_with_waste(
 /// for standalone callers.
 pub fn simulate_boon_generation(raw: &RawLog, enc: &Encounter) -> BTreeMap<(u64, u32), GenerationStats> {
     let target_gen = simulate_boon_generation_ms(raw, enc);
-    let log_start_ms = raw.events.first().map(|e| e.time).unwrap_or(0);
+    let log_start_ms = raw.log_start_ms();
     let log_end_ms = raw.events.last().map(|e| e.time).unwrap_or(0);
     rollup(&target_gen, enc, log_start_ms, log_end_ms)
 }

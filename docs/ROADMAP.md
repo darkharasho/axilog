@@ -103,11 +103,30 @@ Debt left parked by Phase B, in rough value order:
   presence and type per row. Note the original claim was half wrong: only Node
   passed silently; Python already failed, just as an opaque `KeyError`.
 - A `markers.rs` tag-colour-swap can emit two overlapping commander segments.
-- `t0` is re-derived in `distance.rs:142`, duplicating `replay.rs:172`.
+- ~~`t0` is re-derived in `distance.rs:142`, duplicating `replay.rs:172`~~ —
+  CLOSED 2026-08-16, and it was 8× larger than recorded: `events.first().time`
+  was open-coded at **16** call sites across `analysis` and `wvw`, under four
+  different local names (`t0`, `t0_ms`, `log_start`, `log_start_ms`), which is
+  exactly why only one pair of them was ever noticed. Now `RawLog::log_start_ms()`
+  (`evtc/mod.rs`), with the convention documented once and two unit tests
+  pinning it (positional `first()`, NOT `min()`; empty log → 0). Two lookalikes
+  in `buffs::generation`/`buffs::simulator` were deliberately left alone — they
+  clock a filtered local slice, not `raw.events`.
 - `axilog.pyi` was swept for pre-1.0 staleness only at `PerTargetDetail`.
-- Windows CI `LNK1201`: the CLI bin and the Python cdylib are both named
-  `axilog`, so their PDBs collide. Root-caused, not fixed — a rerun usually
-  goes green; the real fix is renaming one. Predates Phase B.
+- ~~Windows CI `LNK1201`~~ — CLOSED, and the standing description of it was
+  wrong. It was recorded as "the CLI bin and the Python cdylib are both named
+  `axilog`, so their PDBs collide; the real fix is renaming one." Renaming
+  either is impossible anyway (`axilog` is the published CLI command name AND
+  the Python import name, which must match the `#[pymodule]` fn), but no rename
+  is needed: `db34709` (2026-08-15) stopped the Windows leg emitting PDBs at
+  all, via per-OS `CARGO_PROFILE_{DEV,TEST}_DEBUG` matrix keys. With no `/DEBUG`
+  there is no PDB to contend over, so every candidate cause (disk, path,
+  privilege, a Defender scan mid-write) is moot at once. Verified 2026-08-16:
+  the last LNK1201 failure was run 31910071414 on `cbcf427`, which predates
+  `db34709` by 9 minutes; all 10+ Windows runs since — including PR #5 and the
+  `971b5c9` push — are green. Release builds were never exposed (cargo's release
+  profile has `debug = false`). Residual cost, Windows-only and CI-only: a
+  panicking test there gets an unsymbolized backtrace.
 
 Two rules that hold across the whole program: the ei-json translation layer is
 **permanent** (a thin translation over the native document — do not propose
