@@ -52,7 +52,10 @@ reader rewrite — the owner's, not ours).
 - `dc` is empty on all 42 fixture rows, so that leg of the SDK comparison is
   vacuous; neither SDK asserts `dc`'s presence before comparing, so a rename
   would pass silently.
-- A `markers.rs` tag-colour-swap can produce two overlapping segments.
+- ~~A `markers.rs` tag-colour-swap can produce two overlapping segments~~ —
+  CLOSED 2026-08-16 by porting EI's per-player cutoff (`break` at the first
+  commander window with `EndNotSet`). The between-player overlap rule in
+  `distance.rs` was already correct.
 - ~~Windows CI `LNK1201`~~ — CLOSED 2026-08-16 (fix itself landed `db34709`,
   2026-08-15). The old "rename one of the two `axilog` targets" plan was both
   impossible (each name is public API) and unnecessary: the Windows leg now

@@ -102,7 +102,16 @@ Debt left parked by Phase B, in rough value order:
   `-1.0` as serialized rather than skipped. Both SDKs additionally assert
   presence and type per row. Note the original claim was half wrong: only Node
   passed silently; Python already failed, just as an opaque `KeyError`.
-- A `markers.rs` tag-colour-swap can emit two overlapping commander segments.
+- ~~A `markers.rs` tag-colour-swap can emit two overlapping commander segments~~
+  — CLOSED 2026-08-16. Root cause: post-`NewMarkerEventBehavior` (arcdps build
+  20240418) a non-end marker only closes an open marker with the SAME id, and
+  two tag colours are two ids, so both stayed open and both were closed at log
+  end. The missing rule was GW2EI's per-player cutoff — `CalculateCommanderStates`
+  `break`s at the first commander window with `EndNotSet` (`StatisticsHelper.cs:322-325`),
+  so one player contributes at most one open-ended window and nothing after it.
+  Ported as `markers::truncate_at_first_unclosed`. Note the pooled BETWEEN-player
+  overlap rule was never missing — `distance::commander_positions` already
+  mirrors "previous tag has priority" exactly.
 - ~~`t0` is re-derived in `distance.rs:142`, duplicating `replay.rs:172`~~ —
   CLOSED 2026-08-16, and it was 8× larger than recorded: `events.first().time`
   was open-coded at **16** call sites across `analysis` and `wvw`, under four

@@ -190,6 +190,11 @@ pub(crate) struct MarkerResolution {
     ///   above) gets exactly that sub-second segment -- thin coverage, not
     ///   a bug, and NOT papered over with a threshold or a log-end
     ///   extension GW2EI itself does not have.
+    /// - At most ONE still-open window per agent, and nothing after it: EI
+    ///   `break`s out of its per-player loop at the first commander marker
+    ///   with `EndNotSet` (`StatisticsHelper.cs:322-325`). Added 2026-08-16;
+    ///   see [`truncate_at_first_unclosed`], which also explains the
+    ///   tag-colour-swap overlap this closes.
     /// - No minimum-coverage fallback exists anywhere in this collection or
     ///   in GW2EI's `distToCom` chain (`GameplayStatistics.cs:64`: zero
     ///   samples -> sentinel `-1`, never a whole-track fallback). Thin
@@ -261,7 +266,11 @@ pub(crate) fn resolve_markers_and_guilds(
 ) -> MarkerResolution {
     let mut open: BTreeMap<u64, Vec<MarkerInstance>> = BTreeMap::new();
     let mut ever_commander: BTreeMap<u64, MarkerInstance> = BTreeMap::new();
-    let mut commander_segments: BTreeMap<u64, Vec<(u64, u64)>> = BTreeMap::new();
+    // `bool` = "explicitly closed", i.e. this window ended because a real
+    // event ended it, not because the log ran out. Dropped again before
+    // return; see `truncate_at_first_unclosed` for why it has to be carried
+    // this far rather than inferred from the end time.
+    let mut commander_segments: BTreeMap<u64, Vec<(u64, u64, bool)>> = BTreeMap::new();
     let mut assignments = Vec::new();
     for e in &raw.events {
         // MEIGAP Task 3c: `CBTS_GUILD` rides this scan rather than paying
@@ -290,7 +299,7 @@ pub(crate) fn resolve_markers_and_guilds(
             // with nothing to close.
             if let Some(instances) = open.remove(&agent) {
                 for m in instances.into_iter().filter(|m| m.is_commander) {
-                    commander_segments.entry(agent).or_default().push((m.start_ms, e.time));
+                    commander_segments.entry(agent).or_default().push((m.start_ms, e.time, true));
                 }
             }
             continue;
@@ -320,7 +329,7 @@ pub(crate) fn resolve_markers_and_guilds(
         // a different id (e.g. commander tag vs. overhead marker) stays
         // open alongside the new instance.
         for m in slot.iter().filter(|m| m.marker_id == instance.marker_id && m.is_commander) {
-            commander_segments.entry(agent).or_default().push((m.start_ms, e.time));
+            commander_segments.entry(agent).or_default().push((m.start_ms, e.time, true));
         }
         slot.retain(|m| m.marker_id != instance.marker_id);
         slot.push(instance);
@@ -334,11 +343,57 @@ pub(crate) fn resolve_markers_and_guilds(
     if let Some(log_end) = raw.events.last().map(|e| e.time) {
         for (&agent, instances) in &open {
             for m in instances.iter().filter(|m| m.is_commander) {
-                commander_segments.entry(agent).or_default().push((m.start_ms, log_end));
+                commander_segments.entry(agent).or_default().push((m.start_ms, log_end, false));
             }
         }
     }
+    let commander_segments = commander_segments
+        .into_iter()
+        .map(|(agent, segs)| (agent, truncate_at_first_unclosed(segs)))
+        .filter(|(_, segs)| !segs.is_empty())
+        .collect();
     MarkerResolution { open, ever_commander, commander_segments, assignments }
+}
+
+/// GW2EI's per-player commander-segment cutoff, ported.
+///
+/// `StatisticsHelper.CalculateCommanderStates` walks one player's marker
+/// events IN EVENT ORDER, appends each commander-tag window, and `break`s
+/// at the first one whose end was never set (`StatisticsHelper.cs:322-325`
+/// -- the `if (markerEvent.EndNotSet) break;` immediately after the `Add`).
+/// So a single player can contribute AT MOST ONE open-ended window, and
+/// nothing after it.
+///
+/// Without that cutoff a commander-tag COLOUR SWAP produced two overlapping
+/// segments: post-`NewMarkerEventBehavior` (`ArcDPSEnums.cs:25`, build
+/// 20240418) a non-end marker only closes a previously-open marker with the
+/// SAME marker id (`CombatEventFactory.cs:241-254`), and two tag colours are
+/// two different ids -- so both stayed open and both got closed at log end,
+/// yielding `(t_blue, log_end)` and `(t_red, log_end)` for one agent.
+///
+/// The truncation is INCLUSIVE: the first unclosed window is kept (EI adds
+/// it before breaking), everything after it is dropped. Sorting by start
+/// first reproduces EI's event order, since markers are recorded in event
+/// order and a window's start IS its event's time.
+///
+/// Note this cannot be inferred from the end time alone -- a window
+/// explicitly closed by a removal that happens to land on the log's last
+/// event is closed, and must not truncate the rest. Hence the carried flag.
+///
+/// Overlap BETWEEN players is a different rule and is not applied here:
+/// EI resolves that when pooling the whole squad ("previous tag has
+/// priority", `StatisticsHelper.cs:363-367`), which this project does in
+/// `analysis::distance::commander_positions`.
+fn truncate_at_first_unclosed(mut segs: Vec<(u64, u64, bool)>) -> Vec<(u64, u64)> {
+    segs.sort_unstable();
+    let mut out = Vec::with_capacity(segs.len());
+    for (start, end, closed) in segs {
+        out.push((start, end));
+        if !closed {
+            break;
+        }
+    }
+    out
 }
 
 /// Pick the freshest (highest `start_ms`) open marker instance matching
@@ -640,6 +695,51 @@ mod tests {
             !res.commander_segments.contains_key(&1),
             "an unreciprocated removal must not fabricate a segment"
         );
+    }
+
+    /// A second commander-tag COLOUR (a different marker id, still
+    /// `buff == 1`) used to leave BOTH tags open, so both were closed at log
+    /// end and the agent reported two overlapping windows,
+    /// `(1000, 9000)` and `(4000, 9000)`. EI cannot produce that: it stops
+    /// at the first commander marker whose end was never set
+    /// (`StatisticsHelper.cs:322-325`), so only the earlier window survives.
+    #[test]
+    fn a_tag_colour_swap_does_not_produce_two_overlapping_segments() {
+        const OTHER_COMMANDER_LOCAL_ID: i32 = 3202;
+        let raw = raw_from(
+            vec![
+                marker_event(1000, 1, COMMANDER_LOCAL_ID, 1),
+                marker_event(4000, 1, OTHER_COMMANDER_LOCAL_ID, 1),
+                marker_event(9000, 2, OVERHEAD_LOCAL_ID, 0),
+            ],
+            vec![],
+        );
+        let res = resolve_markers(&raw);
+        assert_eq!(
+            res.commander_segments[&1],
+            vec![(1000, 9000)],
+            "a colour swap must yield ONE window, the earlier one -- not two overlapping ones"
+        );
+    }
+
+    /// The cutoff must not fire on a window that a real removal happened to
+    /// close ON the log's last event: that window IS explicitly closed, so
+    /// everything after it still counts. Distinguishing this from the case
+    /// above is why the "explicitly closed" flag is carried rather than
+    /// inferred from `end == log_end`.
+    #[test]
+    fn a_removal_landing_on_the_last_event_does_not_truncate_later_windows() {
+        let raw = raw_from(
+            vec![
+                marker_event(1000, 1, COMMANDER_LOCAL_ID, 1),
+                marker_event(4000, 1, 0, 0), // removal closes the first window
+                marker_event(4000, 1, COMMANDER_LOCAL_ID, 1), // re-tag, still open
+                marker_event(4000, 2, OVERHEAD_LOCAL_ID, 0), // log ends here
+            ],
+            vec![],
+        );
+        let res = resolve_markers(&raw);
+        assert_eq!(res.commander_segments[&1], vec![(1000, 4000), (4000, 4000)]);
     }
 
     /// A recognized squad-marker GUID resolves to its human name, not the
