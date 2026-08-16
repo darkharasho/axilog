@@ -20,6 +20,25 @@ pub mod sc {
     pub const CHANGE_UP: u8 = 3;
     pub const CHANGE_DEAD: u8 = 4;
     pub const CHANGE_DOWN: u8 = 5;
+    /// Agent entered tracking (M-phase-B Task 5, `analysis::replay`'s `dc`
+    /// intervals). Verified against the arcdps EVTC reference by
+    /// hand-counting `enum cbtstatechange` from `CBTS_COMBAT = 0`:
+    /// `CBTS_SPAWN` is the 7th entry (index 6), immediately between
+    /// `CBTS_CHANGEDOWN` (5, already used by this project as `CHANGE_DOWN`)
+    /// and `CBTS_DESPAWN` (7, `DESPAWN`) -- a strong internal cross-check.
+    /// Cross-checked against GW2EI's `ArcDPSEnums.StateChange.Spawn = 6`
+    /// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs`). Payload, per the
+    /// arcdps reference: `src_agent`: relates to agent.
+    pub const SPAWN: u8 = 6;
+    /// Agent left tracking (M-phase-B Task 5, `analysis::replay`'s `dc`
+    /// intervals). Same hand-count as `SPAWN` above: `CBTS_DESPAWN` is index
+    /// 7, immediately before `CBTS_HEALTHPCTUPDATE` (8, `HEALTH_UPDATE`,
+    /// already independently verified in `crate::analysis::health`'s module
+    /// doc, which itself cites this ordinal). Cross-checked against GW2EI's
+    /// `ArcDPSEnums.StateChange.Despawn = 7`
+    /// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs`). Payload, per the
+    /// arcdps reference: `src_agent`: relates to agent.
+    pub const DESPAWN: u8 = 7;
     pub const LOG_START: u8 = 9;
     pub const LOG_END: u8 = 10;
     /// Per-agent health-percentage change (M11 Task 1 -- health tracking +

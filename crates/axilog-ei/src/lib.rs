@@ -3145,10 +3145,11 @@ mod tests {
                 end_ms: 10_100,
                 down_intervals: vec![Interval { start_ms: 2_000, end_ms: 3_000 }],
                 dead_intervals: vec![Interval { start_ms: 5_000, end_ms: 5_500 }],
+                dc_intervals: vec![],
             },
             ActivityIntervals {
                 agent_addr: 2, start_ms: 0, end_ms: 1_000,
-                down_intervals: vec![], dead_intervals: vec![],
+                down_intervals: vec![], dead_intervals: vec![], dc_intervals: vec![],
             },
         ];
         let v1 = sample_report_v1_with(&axilog_schema::v1::Passes {

@@ -268,6 +268,14 @@ pub struct ReplayTrackOut {
     pub samples: Vec<(u64, f64, f64)>,
     pub down_intervals: Vec<(u64, u64)>,
     pub dead_intervals: Vec<(u64, u64)>,
+    /// Disconnect/not-yet-spawned windows, carried from
+    /// `analysis::replay::Track::dc_intervals`. `#[serde(skip)]` for the
+    /// same legacy-byte-identical reason as `agent_addr` below -- this
+    /// legacy struct predates `dc` tracking and the 1.0 `by_entity` block
+    /// (`v1::blocks::activity::ReplayTrack::dc_intervals`) is where a
+    /// consumer actually reads it.
+    #[serde(skip)]
+    pub dc_intervals: Vec<(u64, u64)>,
     /// The representative raw agent addr, carried from
     /// `analysis::replay::Track`. `#[serde(skip)]` so the legacy JSON stays
     /// byte-identical; promoted to the 1.0 `by_entity` key (native format
@@ -302,6 +310,7 @@ pub fn build_replay_out(replay: &Replay) -> ReplayOut {
             samples: t.samples.iter().map(|s| (s.t_ms, round1(s.x), round1(s.y))).collect(),
             down_intervals: t.down_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
             dead_intervals: t.dead_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
+            dc_intervals: t.dc_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
             agent_addr: t.agent_addr,
         })
         .collect();
@@ -1883,6 +1892,7 @@ mod tests {
                 ],
                 down_intervals: vec![],
                 dead_intervals: vec![],
+                dc_intervals: vec![],
             }],
         };
         let out = build_replay_out(&replay);

@@ -135,6 +135,10 @@ pub struct Track {
     pub samples: Vec<Sample>,
     pub down_intervals: Vec<Interval>,
     pub dead_intervals: Vec<Interval>,
+    /// Disconnect/not-yet-spawned windows (`CBTS_DESPAWN` to the matching
+    /// `CBTS_SPAWN`). Not mutually exclusive with `down_intervals`/
+    /// `dead_intervals` -- an agent can despawn while dead.
+    pub dc_intervals: Vec<Interval>,
 }
 
 /// A full combat replay: every squad player's track plus every
@@ -241,9 +245,19 @@ fn build_track(raw: &RawLog, t0: u64, poll_ms: u64, roster: RosterEntry<'_>) -> 
         .min();
 
     let samples = downsample(&positions, first_aware_t, poll_ms);
-    let (down_intervals, dead_intervals) = build_intervals(raw, t0, &addr_set);
+    let (down_intervals, dead_intervals, dc_intervals) = build_intervals(raw, t0, &addr_set);
 
-    Track { agent_addr, name, team, commander, is_squad, samples, down_intervals, dead_intervals }
+    Track {
+        agent_addr,
+        name,
+        team,
+        commander,
+        is_squad,
+        samples,
+        down_intervals,
+        dead_intervals,
+        dc_intervals,
+    }
 }
 
 /// Decode a `CBTS_POSITION` event's packed payload (see this module's doc
@@ -348,6 +362,9 @@ pub struct ActivityIntervals {
     pub end_ms: u64,
     pub down_intervals: Vec<Interval>,
     pub dead_intervals: Vec<Interval>,
+    /// Disconnect/not-yet-spawned windows -- see [`Track::dc_intervals`]'s
+    /// doc comment for the separate-slot rationale.
+    pub dc_intervals: Vec<Interval>,
 }
 
 impl ActivityIntervals {
@@ -416,18 +433,39 @@ pub fn build_activity_intervals(raw: &RawLog, enc: &Encounter) -> Vec<ActivityIn
             if start_ms == u64::MAX {
                 start_ms = 0; // no events at all for this player -- degenerate, avoid u64::MAX leaking out
             }
-            let (down_intervals, dead_intervals) = build_intervals(raw, t0, &addr_set);
-            ActivityIntervals { agent_addr, start_ms, end_ms, down_intervals, dead_intervals }
+            let (down_intervals, dead_intervals, dc_intervals) = build_intervals(raw, t0, &addr_set);
+            ActivityIntervals {
+                agent_addr,
+                start_ms,
+                end_ms,
+                down_intervals,
+                dead_intervals,
+                dc_intervals,
+            }
         })
         .collect()
 }
 
-/// Build down/dead intervals for one agent (folded across `addr_set`) from
-/// `CBTS_CHANGEDOWN`/`CBTS_CHANGEDEAD`/`CBTS_CHANGEUP`, per this module's
-/// doc comment. Events across all of `addr_set` are merged and
-/// time-sorted first, so a relog mid-down (a genuinely obscure edge case)
-/// still closes correctly.
-fn build_intervals(raw: &RawLog, t0: u64, addr_set: &BTreeSet<u64>) -> (Vec<Interval>, Vec<Interval>) {
+/// Build down/dead/dc intervals for one agent (folded across `addr_set`)
+/// from `CBTS_CHANGEDOWN`/`CBTS_CHANGEDEAD`/`CBTS_CHANGEUP`/`CBTS_SPAWN`/
+/// `CBTS_DESPAWN`, per this module's doc comment. Events across all of
+/// `addr_set` are merged and time-sorted first, so a relog mid-down (a
+/// genuinely obscure edge case) still closes correctly.
+///
+/// `dc` (disconnect/not-yet-spawned) tracking uses its own `dc_open` slot,
+/// separate from the down/dead state machine's `open` slot -- an agent can
+/// despawn while dead (dead THEN disconnect, without an intervening
+/// `CHANGE_UP`), and collapsing both into one slot would silently drop
+/// whichever interval was still open. A `dc` interval still open when the
+/// event scan ends (the agent never re-spawned before the log ended) is
+/// left unclosed rather than clamped to the log's last event time: the
+/// caller already knows the log duration, and a clamped interval would be
+/// indistinguishable from a real one that happened to end exactly there.
+fn build_intervals(
+    raw: &RawLog,
+    t0: u64,
+    addr_set: &BTreeSet<u64>,
+) -> (Vec<Interval>, Vec<Interval>, Vec<Interval>) {
     #[derive(Clone, Copy, PartialEq)]
     enum Kind {
         Down,
@@ -438,7 +476,10 @@ fn build_intervals(raw: &RawLog, t0: u64, addr_set: &BTreeSet<u64>) -> (Vec<Inte
         .iter()
         .filter(|e| addr_set.contains(&e.src_agent))
         .filter(|e| {
-            matches!(e.is_statechange, sc::CHANGE_DOWN | sc::CHANGE_DEAD | sc::CHANGE_UP)
+            matches!(
+                e.is_statechange,
+                sc::CHANGE_DOWN | sc::CHANGE_DEAD | sc::CHANGE_UP | sc::SPAWN | sc::DESPAWN
+            )
         })
         .map(|e| (e.time.saturating_sub(t0), e.is_statechange))
         .collect();
@@ -446,7 +487,9 @@ fn build_intervals(raw: &RawLog, t0: u64, addr_set: &BTreeSet<u64>) -> (Vec<Inte
 
     let mut down_intervals = Vec::new();
     let mut dead_intervals = Vec::new();
+    let mut dc_intervals = Vec::new();
     let mut open: Option<(Kind, u64)> = None;
+    let mut dc_open: Option<u64> = None;
     for (t, kind) in events {
         match kind {
             sc::CHANGE_DOWN => {
@@ -466,10 +509,20 @@ fn build_intervals(raw: &RawLog, t0: u64, addr_set: &BTreeSet<u64>) -> (Vec<Inte
                     }
                 }
             }
+            sc::DESPAWN => {
+                if dc_open.is_none() {
+                    dc_open = Some(t);
+                }
+            }
+            sc::SPAWN => {
+                if let Some(start) = dc_open.take() {
+                    dc_intervals.push(Interval { start_ms: start, end_ms: t });
+                }
+            }
             _ => unreachable!(),
         }
     }
-    (down_intervals, dead_intervals)
+    (down_intervals, dead_intervals, dc_intervals)
 }
 
 #[cfg(test)]
@@ -686,7 +739,7 @@ mod tests {
             state_event(15_512, 7, sc::CHANGE_UP),
         ]);
         let addrs: BTreeSet<u64> = [7].into_iter().collect();
-        let (down, dead) = build_intervals(&raw, 0, &addrs);
+        let (down, dead, _dc) = build_intervals(&raw, 0, &addrs);
         assert_eq!(down, vec![Interval { start_ms: 12_642, end_ms: 15_512 }]);
         assert!(dead.is_empty());
     }
@@ -702,7 +755,7 @@ mod tests {
             state_event(310_123, 3, sc::CHANGE_UP),
         ]);
         let addrs: BTreeSet<u64> = [3].into_iter().collect();
-        let (down, dead) = build_intervals(&raw, 0, &addrs);
+        let (down, dead, _dc) = build_intervals(&raw, 0, &addrs);
         assert_eq!(down, vec![Interval { start_ms: 300_150, end_ms: 304_801 }]);
         assert_eq!(dead, vec![Interval { start_ms: 304_801, end_ms: 310_123 }]);
     }
@@ -719,7 +772,7 @@ mod tests {
             state_event(199_231, 9, sc::CHANGE_UP),
         ]);
         let addrs: BTreeSet<u64> = [9].into_iter().collect();
-        let (down, dead) = build_intervals(&raw, 0, &addrs);
+        let (down, dead, _dc) = build_intervals(&raw, 0, &addrs);
         assert_eq!(
             down,
             vec![
@@ -739,9 +792,49 @@ mod tests {
     fn unclosed_interval_at_log_end_is_dropped() {
         let raw = raw_from(vec![state_event(1_000, 4, sc::CHANGE_DOWN)]);
         let addrs: BTreeSet<u64> = [4].into_iter().collect();
-        let (down, dead) = build_intervals(&raw, 0, &addrs);
+        let (down, dead, _dc) = build_intervals(&raw, 0, &addrs);
         assert!(down.is_empty());
         assert!(dead.is_empty());
+    }
+
+    /// A `dc` interval covers the window an agent was not trackable --
+    /// both the pre-spawn head of the log and any mid-fight despawn gap.
+    /// EI's distance metrics null out positions across exactly these
+    /// windows, which is why the replay block has to export them.
+    #[test]
+    fn build_intervals_reports_despawn_gaps_as_dc() {
+        let events = vec![
+            state_event(1000, 1, sc::DESPAWN),
+            state_event(4000, 1, sc::SPAWN),
+        ];
+        let raw = raw_from(events);
+        let addrs: BTreeSet<u64> = [1u64].into_iter().collect();
+        let (down, dead, dc) = build_intervals(&raw, 0, &addrs);
+        assert!(down.is_empty());
+        assert!(dead.is_empty());
+        assert_eq!(dc, vec![Interval { start_ms: 1000, end_ms: 4000 }]);
+    }
+
+    /// `dc` must not overlap `down` or `dead` -- a consumer intersecting
+    /// the three to find "active" polls depends on them being disjoint.
+    #[test]
+    fn dc_does_not_overlap_down_or_dead() {
+        let events = vec![
+            state_event(1000, 1, sc::CHANGE_DOWN),
+            state_event(2000, 1, sc::CHANGE_UP),
+            state_event(3000, 1, sc::DESPAWN),
+            state_event(5000, 1, sc::SPAWN),
+        ];
+        let raw = raw_from(events);
+        let addrs: BTreeSet<u64> = [1u64].into_iter().collect();
+        let (down, _dead, dc) = build_intervals(&raw, 0, &addrs);
+        assert_eq!(down, vec![Interval { start_ms: 1000, end_ms: 2000 }]);
+        assert_eq!(dc, vec![Interval { start_ms: 3000, end_ms: 5000 }]);
+        for d in &down {
+            for c in &dc {
+                assert!(d.end_ms <= c.start_ms || c.end_ms <= d.start_ms, "overlap");
+            }
+        }
     }
 
     /// Relog folding: position events and down/dead statechanges from
@@ -873,6 +966,7 @@ mod tests {
             end_ms: 1000,
             down_intervals: vec![Interval { start_ms: 200, end_ms: 400 }],
             dead_intervals: vec![Interval { start_ms: 600, end_ms: 700 }],
+            dc_intervals: vec![],
         };
         assert_eq!(iv.active_ms(), 900, "1000 - 100 dead, down NOT subtracted");
     }
@@ -885,6 +979,7 @@ mod tests {
             end_ms: 49_266,
             down_intervals: vec![Interval { start_ms: 12_642, end_ms: 15_512 }],
             dead_intervals: vec![],
+            dc_intervals: vec![],
         };
         // Matches the real EI golden finding cited in `active_ms`'s doc
         // comment (`Anon130.5810`: end-start with no dead == activeTimes

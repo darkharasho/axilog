@@ -258,6 +258,7 @@ blocks.replay
 blocks.replay.by_entity
 blocks.replay.by_entity.<id>
 blocks.replay.by_entity.<id>.active_ms
+blocks.replay.by_entity.<id>.dc
 blocks.replay.by_entity.<id>.dead
 blocks.replay.by_entity.<id>.down
 blocks.replay.by_entity.<id>.end_ms
@@ -270,6 +271,7 @@ blocks.replay.tracks.bounds.min_x
 blocks.replay.tracks.bounds.min_y
 blocks.replay.tracks.by_entity
 blocks.replay.tracks.by_entity.<id>
+blocks.replay.tracks.by_entity.<id>.dc_intervals
 blocks.replay.tracks.by_entity.<id>.dead_intervals
 blocks.replay.tracks.by_entity.<id>.down_intervals
 blocks.replay.tracks.by_entity.<id>.samples

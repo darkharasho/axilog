@@ -270,6 +270,18 @@ pub struct ReplayIntervals {
     /// transition's own time and is not part of the interval.
     pub down: Vec<(u64, u64)>,
     pub dead: Vec<(u64, u64)>,
+    /// Disconnect/not-yet-spawned windows (`CBTS_DESPAWN` to the matching
+    /// `CBTS_SPAWN`), half-open `[start_ms, end_ms)` like `down`/`dead`
+    /// above. Deliberately diverges from GW2EI's own `dc` export, which uses
+    /// an inclusive sentinel bracket (`[i32::MinValue, FirstAware]`/
+    /// `[LastAware, i32::MaxValue]`) rather than a true half-open interval;
+    /// the cutover report measured that difference at 6 of 6,894 samples
+    /// (0.087%) of axibridge's current distance error, small enough that
+    /// matching this format's own half-open convention throughout was judged
+    /// more valuable than byte-parity with GW2EI's sentinel choice. Not
+    /// mutually exclusive with `down`/`dead` -- an agent can despawn while
+    /// dead.
+    pub dc: Vec<(u64, u64)>,
 }
 
 /// The gated half of [`ReplayBlock`]: position tracks and the metadata that
@@ -331,6 +343,11 @@ pub struct ReplayTrack {
     /// currently reads.
     pub down_intervals: Vec<(u64, u64)>,
     pub dead_intervals: Vec<(u64, u64)>,
+    /// Half-open `[start_ms, end_ms)`, same divergence from GW2EI's
+    /// inclusive sentinel bracket as [`ReplayIntervals::dc`] -- see that
+    /// field's doc comment for the citation. Not mutually exclusive with
+    /// `down_intervals`/`dead_intervals`.
+    pub dc_intervals: Vec<(u64, u64)>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -775,6 +792,7 @@ pub fn build_replay(
                     active_ms: a.active_ms(),
                     down: a.down_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
                     dead: a.dead_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
+                    dc: a.dc_intervals.iter().map(|i| (i.start_ms, i.end_ms)).collect(),
                 },
             );
         }
@@ -793,6 +811,7 @@ pub fn build_replay(
                     samples: track.samples.clone(),
                     down_intervals: track.down_intervals.clone(),
                     dead_intervals: track.dead_intervals.clone(),
+                    dc_intervals: track.dc_intervals.clone(),
                 },
             );
         }

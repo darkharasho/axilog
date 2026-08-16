@@ -598,7 +598,8 @@ expensive half.
       "end_ms": 49266,
       "active_ms": 49263,
       "down": [[12642, 15512]],
-      "dead": []
+      "dead": [],
+      "dc": []
     }
   },
   "tracks": {
@@ -608,14 +609,15 @@ expensive half.
       "0": {
         "samples": [[300, -11097.6, -23619.4], [600, -11156.3, -23711.1], "..."],
         "down_intervals": [[12642, 15512]],
-        "dead_intervals": []
+        "dead_intervals": [],
+        "dc_intervals": []
       }
     }
   }
 }
 ```
 
-Three things a consumer needs to know about that shape:
+Four things a consumer needs to know about that shape:
 
 - **`coverage.replay == "present"` does not mean positions are available.**
   It answers the intervals question, which this block can always answer.
@@ -630,6 +632,20 @@ Three things a consumer needs to know about that shape:
   track would take every enemy player's down/dead history with it. For a
   squad entity the two copies come from the same computation and cannot
   disagree.
+- **`dc`/`dc_intervals` cover disconnect/not-yet-spawned windows
+  (`CBTS_DESPAWN` to the matching `CBTS_SPAWN`), and are not mutually
+  exclusive with `down`/`dead` — an agent can despawn while dead. Every
+  interval in this block is half-open `[start_ms, end_ms)`, which is a
+  deliberate divergence from GW2EI's own `dc` export: GW2EI brackets the
+  pre-spawn/post-despawn ends with an inclusive sentinel
+  (`[i64::MinValue, FirstAware]`/`[LastAware, i64::MaxValue]`) rather than a
+  true half-open interval. The cutover report measured that difference at 6
+  of 6,894 samples (0.087%) of axibridge's current distance error — small
+  enough that matching this format's own half-open convention throughout
+  was judged more valuable than byte-parity with GW2EI's sentinel choice.
+  An agent that is still disconnected at log end is left with an unclosed
+  `dc` interval (no synthesized closing bound), matching every other
+  interval kind in this block.
 
 The position track itself is the one exception to the series envelope —
 raw `(t_ms, x, y)` triples rather than a `SeriesOut`. This is deliberate, not an oversight: `SeriesOut` assumes a dense array
