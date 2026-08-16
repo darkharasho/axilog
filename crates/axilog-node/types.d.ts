@@ -583,6 +583,17 @@ export interface SkillMapEntryOut {
   auto_attack?: boolean
   is_swap: boolean
   can_crit: boolean
+  /**
+   * MPROC. All five are OMITTED when false -- a proc flag is rare, and
+   * emitting ~370 x 5 literal `false`s cost 16% of the report. Absence
+   * means false, not unknown. `is_instant_cast` is the strong one: a
+   * finder actually fired in this log, not merely that one was available.
+   */
+  is_trait_proc?: boolean
+  is_gear_proc?: boolean
+  is_unconditional_proc?: boolean
+  is_not_accurate?: boolean
+  is_instant_cast?: boolean
 }
 
 export interface EnemyOut {
@@ -905,6 +916,17 @@ export interface SkillEntry {
   is_swap: boolean
   can_crit: boolean
   auto_attack?: boolean
+  /**
+   * MPROC. All five are OMITTED when false -- a proc flag is rare, and
+   * emitting ~370 x 5 literal `false`s cost 16% of the report. Absence
+   * means false, not unknown. `is_instant_cast` is the strong one: a
+   * finder actually fired in this log, not merely that one was available.
+   */
+  is_trait_proc?: boolean
+  is_gear_proc?: boolean
+  is_unconditional_proc?: boolean
+  is_not_accurate?: boolean
+  is_instant_cast?: boolean
 }
 
 /**

@@ -2509,12 +2509,20 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
     // render.guildwars2.com URL) and `autoAttack` (needs the external GW2
     // API, this project's `auto_attack` is always `None` -- see that
     // module's doc comment's "`auto_attack`: OMITTED, not guessed"
-    // section) -- as well as `isInstantCast`/`isTraitProc`/
-    // `isUnconditionalProc`/`isGearProc`/`isNotAccurate`/
-    // `conversionBasedHealing`/`hybridHealing` (all needing the same
-    // external DB) are NOT computed anywhere in this project, so they're
-    // omitted rather than faked, same "don't fake absent data" convention
+    // section) -- as well as `conversionBasedHealing`/`hybridHealing`
+    // (which genuinely do need that external DB) are NOT computed
+    // anywhere in this project, so they're omitted rather than faked,
+    // same "don't fake absent data" convention
     // `statsTargets`/`support`/`extHealingStats` above already follow.
+    //
+    // MPROC (2026-08-16) moved five fields this comment used to list as
+    // database-backed OUT of that omitted set:
+    // `isTraitProc`/`isGearProc`/`isUnconditionalProc`/`isNotAccurate`/
+    // `isInstantCast`. They never needed the database -- they are a side
+    // effect of GW2EI's instant-cast finder subsystem, now ported in
+    // `axilog_core::analysis::instant_cast`. That module documents the
+    // one real remaining gap: effect-keyed finders are not evaluated, so
+    // `isInstantCast` under-counts on a log carrying effect events.
     // Side-channel absorption, Task 3: sourced from
     // `report.catalogs.skills`, which now carries the whole always-on
     // `Metrics::skill_map` rather than referenced ids alone -- see
@@ -2525,6 +2533,11 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
             "name": e.name,
             "isSwap": e.is_swap,
             "canCrit": e.can_crit,
+            "isTraitProc": e.is_trait_proc,
+            "isGearProc": e.is_gear_proc,
+            "isUnconditionalProc": e.is_unconditional_proc,
+            "isNotAccurate": e.is_not_accurate,
+            "isInstantCast": e.is_instant_cast,
         }))
     }).collect();
     // `wvWMapData` (Task 3 of the side-channel absorption): sourced from
@@ -3701,12 +3714,22 @@ mod tests {
             auto_attack: None,
             is_swap: true,
             can_crit: false,
+            is_trait_proc: false,
+            is_gear_proc: false,
+            is_unconditional_proc: false,
+            is_not_accurate: false,
+            is_instant_cast: false,
         });
         report.skill_map.insert(5008, SkillMapEntryOut {
             name: "Skill 5008".into(),
             auto_attack: None,
             is_swap: false,
             can_crit: true,
+            is_trait_proc: false,
+            is_gear_proc: false,
+            is_unconditional_proc: false,
+            is_not_accurate: false,
+            is_instant_cast: false,
         });
 
         // Task 3 moved `skillMap` onto `report.catalogs.skills`, so the
@@ -3715,15 +3738,23 @@ mod tests {
         // `build_report_v1`: this test is about the adapter's key spelling
         // and field omission, and a synthetic catalog keeps it that way.
         let mut v1 = empty_report_v1();
-        for (id, name, is_swap, can_crit) in
-            [(5492u32, "Fire Attunement", true, false), (5008, "Skill 5008", false, true)]
-        {
+        // 5492 additionally stands in for a gear proc that fired, so the
+        // MPROC flags are exercised in both states across the two rows.
+        for (id, name, is_swap, can_crit, proc) in [
+            (5492u32, "Fire Attunement", true, false, true),
+            (5008, "Skill 5008", false, true, false),
+        ] {
             v1.catalogs.skills.insert(id, axilog_schema::v1::catalogs::SkillEntry {
                 name: name.into(),
                 icon: None,
                 is_swap,
                 can_crit,
                 auto_attack: None,
+                is_trait_proc: false,
+                is_gear_proc: proc,
+                is_unconditional_proc: false,
+                is_not_accurate: proc,
+                is_instant_cast: proc,
             });
         }
 
@@ -3736,11 +3767,25 @@ mod tests {
         assert_eq!(v["skillMap"]["s5008"]["name"], "Skill 5008");
         assert_eq!(v["skillMap"]["s5008"]["isSwap"], false);
         assert_eq!(v["skillMap"]["s5008"]["canCrit"], true);
-        // Real EI's `icon`/`autoAttack` (and every proc/instant/accuracy
-        // classifier) are never computed by this project -- must be
-        // omitted, not faked as `null`/`false`.
+        // MPROC: the five proc/accuracy/instant classifiers ARE computed
+        // now (`analysis::instant_cast`), so they must be emitted under
+        // EI's own spellings, in BOTH states.
+        for (key, want) in [
+            ("isTraitProc", false),
+            ("isGearProc", true),
+            ("isUnconditionalProc", false),
+            ("isNotAccurate", true),
+            ("isInstantCast", true),
+        ] {
+            assert_eq!(v["skillMap"]["s5492"][key], want, "s5492.{key}");
+            assert_eq!(v["skillMap"]["s5008"][key], false, "s5008.{key}");
+        }
+        // Real EI's `icon`/`autoAttack` (and `conversionBasedHealing`/
+        // `hybridHealing`) still need the external skill database, so
+        // they must stay omitted rather than faked as `null`/`false`.
         assert!(v["skillMap"]["s5492"].get("icon").is_none());
         assert!(v["skillMap"]["s5492"].get("autoAttack").is_none());
+        assert!(v["skillMap"]["s5492"].get("conversionBasedHealing").is_none());
     }
 
     /// M14 Task 3: `skillMap` is present (as an empty object, not omitted)

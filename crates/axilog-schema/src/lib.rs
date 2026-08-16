@@ -158,6 +158,21 @@ pub struct SkillMapEntryOut {
     pub auto_attack: Option<bool>,
     pub is_swap: bool,
     pub can_crit: bool,
+    /// MPROC. The four proc/accuracy flags below come from
+    /// `InstantCastFinder` AVAILABILITY; `is_instant_cast` needs a finder
+    /// to have actually fired. See
+    /// `axilog_core::analysis::instant_cast` -- notably that these are
+    /// log-specific, so two logs of the same build can disagree.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_trait_proc: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_gear_proc: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_unconditional_proc: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_not_accurate: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_instant_cast: bool,
 }
 /// Native-only opt-in missile analytics (M10, Task 2) -- see
 /// `axilog_core::analysis::missiles`'s module doc for exactly what each
@@ -1614,7 +1629,10 @@ pub fn build_report(
             .skill_map
             .iter()
             .map(|(&id, e)| {
-                (id, SkillMapEntryOut { name: e.name.clone(), auto_attack: e.auto_attack, is_swap: e.is_swap, can_crit: e.can_crit })
+                (id, SkillMapEntryOut { name: e.name.clone(), auto_attack: e.auto_attack, is_swap: e.is_swap, can_crit: e.can_crit,
+                    is_trait_proc: e.is_trait_proc, is_gear_proc: e.is_gear_proc,
+                    is_unconditional_proc: e.is_unconditional_proc,
+                    is_not_accurate: e.is_not_accurate, is_instant_cast: e.is_instant_cast })
             })
             .collect(),
         // M16 Task 3: scoped to the ids the engine actually emitted -- the
@@ -1695,6 +1713,66 @@ mod tests {
         assert!(v.get("ei_targets").is_none(), "ei_targets must not appear in the serialized JSON");
         assert!(v.get("all_enemies").is_none(), "the pre-MROSTER field name must not reappear either");
         assert_eq!(v["enemies"].as_array().unwrap().len(), 2);
+    }
+
+    /// MPROC: the five proc/accuracy/instant flags are omitted when
+    /// `false` and present when `true`.
+    ///
+    /// The key-set golden reaches four of the five on the committed
+    /// fixture (5 trait procs, 2 gear procs, 7 not-accurate, 9 instant
+    /// casts over its 368 skills) but never `is_unconditional_proc`, and
+    /// by construction it can never record the ABSENT state at all -- the
+    /// walk only sees keys that were emitted. Both halves matter here,
+    /// because absence is what carries `false`: a consumer reading a
+    /// missing key as "unknown" would be wrong.
+    #[test]
+    fn proc_flags_serialize_only_when_true() {
+        let off = SkillMapEntryOut {
+            name: "Plain".into(),
+            auto_attack: None,
+            is_swap: false,
+            can_crit: true,
+            is_trait_proc: false,
+            is_gear_proc: false,
+            is_unconditional_proc: false,
+            is_not_accurate: false,
+            is_instant_cast: false,
+        };
+        let v = serde_json::to_value(&off).expect("serializes");
+        let obj = v.as_object().expect("object");
+        for key in [
+            "is_trait_proc",
+            "is_gear_proc",
+            "is_unconditional_proc",
+            "is_not_accurate",
+            "is_instant_cast",
+        ] {
+            assert!(!obj.contains_key(key), "`{key}` must be omitted when false");
+        }
+        // The two neighbours stay unconditional even when false, which is
+        // the distinction the field docs claim.
+        assert_eq!(obj["is_swap"], serde_json::json!(false));
+        assert_eq!(obj["can_crit"], serde_json::json!(true));
+
+        let on = SkillMapEntryOut {
+            name: "Procced".into(),
+            is_trait_proc: true,
+            is_gear_proc: true,
+            is_unconditional_proc: true,
+            is_not_accurate: true,
+            is_instant_cast: true,
+            ..off
+        };
+        let v = serde_json::to_value(&on).expect("serializes");
+        for key in [
+            "is_trait_proc",
+            "is_gear_proc",
+            "is_unconditional_proc",
+            "is_not_accurate",
+            "is_instant_cast",
+        ] {
+            assert_eq!(v[key], serde_json::json!(true), "`{key}` must be present when true");
+        }
     }
 
     /// MOBJ: the serialized native shape of `encounter.objectives` and

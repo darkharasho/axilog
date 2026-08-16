@@ -119,8 +119,12 @@ pub mod damage_mods;
 /// GW2EI's `InstantCastFinder` subsystem (MPROC) -- the machinery behind
 /// `skillMap`'s `isTraitProc` / `isGearProc` / `isUnconditionalProc` /
 /// `isNotAccurate` / `isInstantCast`. Like `damage_mods`, a definition
-/// model plus one engine plus a machine-extracted catalog, and equally
-/// NOT wired into [`analyze`]: it is its own pass over the event stream.
+/// model plus one engine plus a machine-extracted catalog -- but UNLIKE
+/// `damage_mods` it IS wired into [`analyze`], through `skill_map::build`.
+/// The five flags are `skillMap` fields, which `analyze` already emits,
+/// and the pass is one scan over the event stream plus a per-finder walk
+/// of the few streams the catalog names -- not `damage_mods`' whole
+/// catalogue crossed with every damage event.
 /// See its module doc for what the five flags actually are (not a skill
 /// database) and for the effect-finder gap.
 pub mod instant_cast;
@@ -761,7 +765,7 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // `rotation` (both already populated on `players` above) actually
     // referenced, plus the always-tracked boon ids -- see `skill_map`'s
     // module doc.
-    let skill_map = skill_map::build(raw, &players);
+    let skill_map = skill_map::build(raw, enc, &players);
     // MEIGAP2 row 3: `instanceID`, read off the registry built at the top
     // of this function -- no extra scan (see `Metrics::instance_ids`).
     let instance_ids: BTreeMap<u64, u16> = enc

@@ -536,7 +536,19 @@ class _SkillMapEntryOutRequired(TypedDict):
 class SkillMapEntryOut(_SkillMapEntryOutRequired, total=False):
     """`auto_attack` is omitted (not `null`) when unknown -- currently ALWAYS
     omitted (the heuristic is refused rather than guessed, per
-    `axilog_core::analysis::skill_map`'s doc comment)."""
+    `axilog_core::analysis::skill_map`'s doc comment).
+
+    MPROC: the five proc/accuracy/instant flags are omitted when FALSE --
+    a proc flag is rare, and emitting ~370 x 5 literal `false`s cost 16%
+    of the report. Absence means false, not unknown. `is_instant_cast` is
+    the strong one: a finder actually fired in this log, not merely that
+    one was available."""
+
+    is_trait_proc: bool
+    is_gear_proc: bool
+    is_unconditional_proc: bool
+    is_not_accurate: bool
+    is_instant_cast: bool
 
     auto_attack: bool
 
@@ -916,6 +928,9 @@ class SkillEntry(_SkillEntryRequired, total=False):
     """Definition metadata for one referenced skill id. `auto_attack` is
     omitted (not `None`) when unknown.
 
+    MPROC: see `SkillMapEntryOut` -- the five proc flags are omitted
+    when false.
+
     `icon` (Phase C) is a render-service or wiki URL, resolved from
     `skill_icons` (the GW2 API) first and `buff_icons` (GW2EI's own table)
     second; omitted when neither knows the id. Buff ids resolve here too --
@@ -923,6 +938,11 @@ class SkillEntry(_SkillEntryRequired, total=False):
 
     icon: str
     auto_attack: bool
+    is_trait_proc: bool
+    is_gear_proc: bool
+    is_unconditional_proc: bool
+    is_not_accurate: bool
+    is_instant_cast: bool
 
 class _BuffEntryRequired(TypedDict):
     name: str

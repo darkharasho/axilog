@@ -61,6 +61,34 @@ pub struct SkillEntry {
     pub can_crit: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_attack: Option<bool>,
+    /// MPROC -- see [`crate::SkillMapEntryOut`]'s fields of the same
+    /// names. Carried on the catalog entry rather than on a block row
+    /// because they are properties of the SKILL, not of any one player's
+    /// use of it, which is exactly what this catalog is for.
+    ///
+    /// **All five are omitted when `false`**, unlike their `is_swap` /
+    /// `can_crit` neighbours. A proc flag is rare -- on the committed
+    /// fixture nearly every one of the ~370 skills is false on all five
+    /// -- so serializing them unconditionally cost 46,048 bytes, +16.3%
+    /// of the whole HTML report, for almost no information. `is_swap` and
+    /// `can_crit` are informative in BOTH states and stay unconditional.
+    /// Absence therefore means `false`, not "unknown"; the schema test
+    /// `proc_flags_serialize_only_when_true` pins both states.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_trait_proc: bool,
+    /// See [`SkillEntry::is_trait_proc`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_gear_proc: bool,
+    /// See [`SkillEntry::is_trait_proc`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_unconditional_proc: bool,
+    /// See [`SkillEntry::is_trait_proc`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_not_accurate: bool,
+    /// See [`SkillEntry::is_trait_proc`]. Unlike its four neighbours this
+    /// one required the finders to actually run.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_instant_cast: bool,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -195,6 +223,14 @@ impl CatalogBuilder {
                         auto_attack: entry
                             .and_then(|e| e.auto_attack)
                             .or_else(|| axilog_core::analysis::skill_icons::auto_attack(id)),
+                        // MPROC. An id the skill map never covered gets
+                        // `false` rather than a guess: no finder claimed
+                        // it, which is what `false` means here.
+                        is_trait_proc: entry.is_some_and(|e| e.is_trait_proc),
+                        is_gear_proc: entry.is_some_and(|e| e.is_gear_proc),
+                        is_unconditional_proc: entry.is_some_and(|e| e.is_unconditional_proc),
+                        is_not_accurate: entry.is_some_and(|e| e.is_not_accurate),
+                        is_instant_cast: entry.is_some_and(|e| e.is_instant_cast),
                     },
                 )
             })
@@ -300,6 +336,11 @@ mod tests {
                 auto_attack: None,
                 is_swap: false,
                 can_crit: true,
+                is_trait_proc: false,
+                is_gear_proc: false,
+                is_unconditional_proc: false,
+                is_not_accurate: false,
+                is_instant_cast: false,
             },
         );
         m.skill_map.insert(
@@ -309,6 +350,11 @@ mod tests {
                 auto_attack: None,
                 is_swap: false,
                 can_crit: true,
+                is_trait_proc: false,
+                is_gear_proc: false,
+                is_unconditional_proc: false,
+                is_not_accurate: false,
+                is_instant_cast: false,
             },
         );
         m

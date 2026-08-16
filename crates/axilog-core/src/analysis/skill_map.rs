@@ -381,6 +381,29 @@ pub struct SkillMapEntry {
     /// Reused verbatim from `hit_stats::can_crit` (M13's `NonCritableSkills`
     /// table).
     pub can_crit: bool,
+    /// `SkillData.cs:44-58` -- this id belongs to an AVAILABLE
+    /// `InstantCastFinder` whose declared origin is `Trait`. See
+    /// `analysis::instant_cast` for why this is not a lookup table:
+    /// availability depends on the log's contents, so the same skill can
+    /// be a trait proc in one log and not in another.
+    pub is_trait_proc: bool,
+    /// As [`SkillMapEntry::is_trait_proc`], for origin `Gear`. The
+    /// largest of the three buckets.
+    pub is_gear_proc: bool,
+    /// As [`SkillMapEntry::is_trait_proc`], for origin `Unconditional`.
+    pub is_unconditional_proc: bool,
+    /// An available finder for this id declared `UsingNotAccurate()`, or
+    /// belongs to a subclass whose ctor forces it (every damage- and
+    /// healing-derived finder). The recovered cast time is an upper
+    /// bound, not the cast instant.
+    pub is_not_accurate: bool,
+    /// A finder for this id actually FIRED in this log
+    /// (`JsonLogBuilder.cs:23`: `GetInstantCastData(skill.ID).Any()`).
+    ///
+    /// Strictly stronger than the four flags above, which need only
+    /// availability -- which is exactly why the finders have to be run
+    /// rather than tabulated.
+    pub is_instant_cast: bool,
 }
 
 /// Full best-effort skillMap: skill id -> [`SkillMapEntry`], scoped to only
@@ -438,12 +461,30 @@ fn referenced_skill_ids(players: &[PlayerMetrics]) -> BTreeSet<u32> {
 /// `rotation`) has already populated `players` -- mirrors
 /// `Metrics::combat_participant_enemies`'s "computed from already-finished
 /// per-player data" placement in `analyze()`.
-pub fn build(raw: &RawLog, players: &[PlayerMetrics]) -> SkillMap {
+pub fn build(
+    raw: &RawLog,
+    enc: &crate::model::Encounter,
+    players: &[PlayerMetrics],
+) -> SkillMap {
     let ids = referenced_skill_ids(players);
     // Last-wins on a duplicate id (never observed in practice -- arcdps
     // writes one skill-table row per unique id -- but a plain `BTreeMap`
     // collect needs a defined tie-break rule regardless).
     let names: BTreeMap<u32, &str> = raw.skills.iter().map(|s| (s.id, s.name.as_str())).collect();
+
+    // MPROC. The four proc/accuracy flags come from finder AVAILABILITY
+    // and cost only a build/capability probe; `is_instant_cast` needs the
+    // finders to have actually fired, so it pays for a real pass. Both
+    // are computed once for the whole map rather than per id.
+    let finders: Vec<super::instant_cast::FinderDef> =
+        super::instant_cast::catalog::all().into_iter().copied().collect();
+    let (trait_procs, gear_procs, uncond_procs, not_accurate) =
+        super::instant_cast::available_flags(raw, &finders);
+    let fired: BTreeSet<u32> = super::instant_cast::compute(raw, enc, &finders)
+        .into_iter()
+        .map(|e| e.skill_id)
+        .collect();
+
     ids.into_iter()
         .map(|id| {
             let entry = SkillMapEntry {
@@ -451,6 +492,11 @@ pub fn build(raw: &RawLog, players: &[PlayerMetrics]) -> SkillMap {
                 auto_attack: None,
                 is_swap: is_swap(id),
                 can_crit: hit_stats::can_crit(id),
+                is_trait_proc: trait_procs.contains(&id),
+                is_gear_proc: gear_procs.contains(&id),
+                is_unconditional_proc: uncond_procs.contains(&id),
+                is_not_accurate: not_accurate.contains(&id),
+                is_instant_cast: fired.contains(&id),
             };
             (id, entry)
         })
@@ -471,6 +517,20 @@ mod tests {
     fn cast(cast_time_ms: i64) -> Cast {
         Cast { cast_time_ms, duration_ms: 100, time_gained_ms: 0, quickness: 0.0,
             status: crate::analysis::rotation::AnimationStatus::Full }
+    }
+
+    /// The instant-cast pass needs an encounter only for its spec index
+    /// (`Check::Spec`). These fixtures carry no players and no finder
+    /// -triggering events, so an empty one is exact rather than a stub:
+    /// with no spec to read, every spec-checked finder correctly fails.
+    fn empty_enc() -> crate::model::Encounter {
+        crate::model::Encounter {
+            kind: "wvw".into(), map: String::new(), duration_ms: 0,
+            build: String::new(), revision: 1, recorded_by: None,
+            teams: Vec::new(), players: Vec::new(), enemies: Vec::new(),
+            markers: Vec::new(), tick_rate: None, objectives: Vec::new(),
+            started_at_unix: None,
+        }
     }
 
     fn raw_with_skills(skills: Vec<RawSkill>) -> RawLog {
@@ -499,7 +559,7 @@ mod tests {
     fn named_skill_resolves_from_log_table() {
         let raw = raw_with_skills(vec![RawSkill { id: 5000, name: "Fireball".into() }]);
         let players = vec![player_referencing(&[5000], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert_eq!(map[&5000].name, "Fireball");
     }
 
@@ -507,7 +567,7 @@ mod tests {
     fn empty_name_falls_back_to_skill_id() {
         let raw = raw_with_skills(vec![RawSkill { id: 5001, name: "".into() }]);
         let players = vec![player_referencing(&[5001], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert_eq!(map[&5001].name, "Skill 5001");
     }
 
@@ -515,7 +575,7 @@ mod tests {
     fn whitespace_only_name_falls_back_to_skill_id() {
         let raw = raw_with_skills(vec![RawSkill { id: 5002, name: "   ".into() }]);
         let players = vec![player_referencing(&[5002], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert_eq!(map[&5002].name, "Skill 5002");
     }
 
@@ -524,7 +584,7 @@ mod tests {
         // arcdps sometimes writes a bare numeric placeholder string.
         let raw = raw_with_skills(vec![RawSkill { id: 5003, name: "27725".into() }]);
         let players = vec![player_referencing(&[5003], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert_eq!(map[&5003].name, "Skill 5003");
     }
 
@@ -533,7 +593,7 @@ mod tests {
         // Referenced (via rotation) but absent from `raw.skills` entirely.
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[], &[], &[], &[6000])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert_eq!(map[&6000].name, "Skill 6000");
     }
 
@@ -541,7 +601,7 @@ mod tests {
     fn name_is_trimmed() {
         let raw = raw_with_skills(vec![RawSkill { id: 5004, name: "  Meteor Shower  ".into() }]);
         let players = vec![player_referencing(&[5004], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert_eq!(map[&5004].name, "Meteor Shower");
     }
 
@@ -549,7 +609,7 @@ mod tests {
     fn weapon_swap_sentinel_is_flagged_is_swap() {
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[WEAPON_SWAP_SKILL_ID], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert!(map[&WEAPON_SWAP_SKILL_ID].is_swap);
     }
 
@@ -557,7 +617,7 @@ mod tests {
     fn ordinary_skill_is_not_flagged_is_swap() {
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[5005], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert!(!map[&5005].is_swap);
     }
 
@@ -571,7 +631,7 @@ mod tests {
         // both land correctly, independently of each other.
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[5492], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert!(map[&5492].is_swap, "5492 (FireAttunementSkill) must be flagged is_swap");
         assert!(!map[&5492].can_crit, "5492 (FireAttunementSkill) must remain non-critable");
     }
@@ -584,7 +644,7 @@ mod tests {
         // Revenant/Necromancer entries.
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[28085, 62567], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert!(map[&28085].is_swap, "28085 (Herald's LegendaryDragonStanceSkill) must be flagged is_swap");
         assert!(map[&62567].is_swap, "62567 (EnterHarbingerShroud) must be flagged is_swap");
     }
@@ -599,7 +659,7 @@ mod tests {
         let raw = raw_with_skills(vec![]);
         let ids: Vec<u32> = vec![43470, 44857, (-5i32) as u32, (-16i32) as u32];
         let players = vec![player_referencing(&ids, &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert!(map[&43470].is_swap, "43470 (DualFireAttunement) must be flagged is_swap");
         assert!(map[&44857].is_swap, "44857 (DualEarthAttunement) must be flagged is_swap");
         assert!(map[&((-5i32) as u32)].is_swap, "-5 (FireWaterAttunement pseudo id) must be flagged is_swap");
@@ -624,7 +684,7 @@ mod tests {
         // NON_CRITABLE_SKILLS`'s 20 entries.
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[9292], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert!(!map[&9292].can_crit);
     }
 
@@ -632,7 +692,7 @@ mod tests {
     fn ordinary_skill_can_crit() {
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[5006], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert!(map[&5006].can_crit);
     }
 
@@ -640,7 +700,7 @@ mod tests {
     fn auto_attack_is_always_omitted() {
         let raw = raw_with_skills(vec![RawSkill { id: 5007, name: "Slash".into() }]);
         let players = vec![player_referencing(&[5007], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert_eq!(map[&5007].auto_attack, None);
     }
 
@@ -648,7 +708,7 @@ mod tests {
     fn scoping_covers_outgoing_taken_per_target_rotation_and_boons() {
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[1], &[2], &[(9, &[3])], &[4])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert!(map.contains_key(&1), "outgoing skill id missing");
         assert!(map.contains_key(&2), "taken skill id missing");
         assert!(map.contains_key(&3), "per_target skill id missing");
@@ -668,7 +728,7 @@ mod tests {
             RawSkill { id: 999_999, name: "NeverTouched".into() },
         ]);
         let players = vec![player_referencing(&[1], &[], &[], &[])];
-        let map = build(&raw, &players);
+        let map = build(&raw, &empty_enc(), &players);
         assert!(map.contains_key(&1));
         assert!(!map.contains_key(&999_999));
     }
@@ -676,7 +736,7 @@ mod tests {
     #[test]
     fn empty_players_still_includes_the_12_boon_ids_only() {
         let raw = raw_with_skills(vec![]);
-        let map = build(&raw, &[]);
+        let map = build(&raw, &empty_enc(), &[]);
         assert_eq!(map.len(), super::super::buffs::BOON_IDS.len());
     }
 }
