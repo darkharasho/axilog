@@ -48,7 +48,10 @@ reader rewrite — the owner's, not ours).
 
 - ~~`t0` re-derived in `distance.rs`/`replay.rs`~~ — CLOSED 2026-08-16. It was
   16 call sites, not 2; all now call `RawLog::log_start_ms()`.
-- `axilog.pyi` beyond `PerTargetDetail` was not swept for pre-1.0 staleness.
+- ~~`axilog.pyi` beyond `PerTargetDetail` was not swept~~ — CLOSED 2026-08-16.
+  BOTH SDK stubs were stale (9 Python types, 8 TypeScript types). Now guarded
+  by `crates/axilog-schema/tests/v1_sdk_stubs.rs`, which fails if a field in
+  the key-set golden is absent from either stub.
 - `dc` is empty on all 42 fixture rows, so that leg of the SDK comparison is
   vacuous; neither SDK asserts `dc`'s presence before comparing, so a rename
   would pass silently.

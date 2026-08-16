@@ -864,6 +864,13 @@ export interface EntityOut {
 /** Definition metadata for one referenced skill id. */
 export interface SkillEntry {
   name: string
+  /**
+   * Render-service or wiki URL (Phase C), resolved from `skill_icons` (the
+   * GW2 API) first and `buff_icons` (GW2EI's own table) second; omitted
+   * when neither knows the id. Buff ids resolve here too -- there is no
+   * separate icon field on `BuffEntry`.
+   */
+  icon?: string
   is_swap: boolean
   can_crit: boolean
   auto_attack?: boolean
@@ -883,8 +890,26 @@ export interface BuffEntry {
 /** Definition metadata for one referenced damage-modifier id. */
 export interface DamageModEntry {
   name: string
-  kind: string
-  approximate: boolean
+  icon?: string
+  /**
+   * EI's full tooltip, including its derived `<br>Applied on ...` /
+   * `<br>Counter` / `<br>Approximate` suffixes.
+   */
+  description?: string
+  non_multiplier?: boolean
+  is_counter?: boolean
+  skill_based?: boolean
+  approximate?: boolean
+}
+
+/**
+ * Definition metadata for one minion group referenced by `MinionsBlock`.
+ * Identity lives here rather than on the row, like every other catalog in
+ * this format.
+ */
+export interface MinionEntry {
+  species_id: number
+  name: string
 }
 
 /**
@@ -897,6 +922,8 @@ export interface Catalogs {
   buffs: Record<string, BuffEntry>
   /** Omitted entirely (not `{}`) when no damage-modifier id was referenced (e.g. `modifiers` was not requested). */
   damage_mods?: Record<string, DamageModEntry>
+  /** Omitted entirely (not `{}`) when no minion id was referenced (e.g. `skillDamage` was not requested). */
+  minions?: Record<string, MinionEntry>
 }
 
 /**
@@ -982,11 +1009,55 @@ export interface DamageSquad {
  */
 export interface SkillRow {
   total: number
-  hits: number
+  /**
+   * CONTRIBUTING (`dmg > 0`) row count. Present on player rows, ABSENT on
+   * enemy rows -- those come from a different pass that never computes it,
+   * so nothing divides `total` by a fabricated denominator.
+   */
+  hits?: number
+  /**
+   * `HasHit` row count -- GW2EI's `connectedHits`, which counts a
+   * connecting hit that dealt zero health damage and excludes the
+   * blocked/evaded/missed/invulned cases. A THIRD distinct quantity from
+   * `hits` and `outcomes.attempt_hits`; they are separate fields so a
+   * consumer cannot divide by the wrong denominator.
+   */
+  connected_hits?: number
   min: number
   max: number
+  /** Hit COUNTS, not damage sums. */
   crit_hits: number
   flank_hits: number
+  /**
+   * Present on PLAYER rows when `skillDamage` is on, absent on enemy rows.
+   * Absent means "this pass did not measure this row", never "every
+   * attempt connected".
+   */
+  outcomes?: SkillOutcomeCols
+}
+
+/**
+ * The hit-OUTCOME breakdown of one `SkillRow`.
+ *
+ * `glance`/`missed`/`evaded`/`blocked` are zero on a condition skill (EI
+ * zeroes them inside its `if (!IndirectDamage)` guard); `invulned` is NOT,
+ * because a condition tick can land on an invulnerable target and EI
+ * counts it.
+ */
+export interface SkillOutcomeCols {
+  /** GW2EI's own `hits`: every row that is not one of its no-damage markers. */
+  attempt_hits: number
+  glance: number
+  missed: number
+  evaded: number
+  blocked: number
+  invulned: number
+  interrupted: number
+  /**
+   * This skill produced at least one non-direct (condition) damage row.
+   * Every strike-damage surface downstream uses it as a skip filter.
+   */
+  indirect: boolean
 }
 
 /**
@@ -1057,6 +1128,12 @@ export interface DamageEntity {
   downs_dealt: number
   /** Enemy players this entity landed the KILLING blow on. */
   kills_dealt: number
+  /**
+   * Breakbar damage this entity DEALT. Outgoing, hence here rather than on
+   * `defenses`, whose `breakbar_count`/`breakbar_damage` are its INCOMING
+   * mirror. Feeds ei-json's `dpsAll[0].breakbarDamage`.
+   */
+  breakbar_damage_dealt: number
   /**
    * Keyed by the TARGET's entity id. Sparse; omitted when empty. A UNION of
    * three legacy per-enemy families, so a target can appear with `detail`
@@ -1272,6 +1349,51 @@ export interface ConditionsBlock {
   by_entity: ByEntity<Record<string, ConditionRow>>
 }
 
+/**
+ * Per-player minion damage-TAKEN rollups, gated on `{ skillDamage: true }`.
+ * One entry per player that HAS minions -- a player with none is absent
+ * rather than carrying an empty array.
+ */
+export interface MinionsBlock {
+  by_entity: ByEntity<MinionRow[]>
+}
+
+/**
+ * One minion group belonging to one player. `minion_id` resolves through
+ * `Catalogs.minions`, which carries the species id and name -- identity
+ * lives there because no block in this format inlines a readable name.
+ */
+export interface MinionRow {
+  minion_id: number
+  /** The damage this species took, keyed by skill id. */
+  taken: Record<string, MinionSkillTakenRow>
+}
+
+/**
+ * One minion group's damage-taken row for one skill.
+ *
+ * Deliberately NOT a `SkillRow`: that row carries `crit_hits`/`flank_hits`,
+ * which a damage-taken rollup does not have, while this one carries the
+ * outcome counters inline rather than nested in `outcomes`.
+ */
+export interface MinionSkillTakenRow {
+  total: number
+  /** Attempts, marker rows excluded. */
+  hits: number
+  /** `HasHit` rows only. */
+  connected_hits: number
+  min: number
+  max: number
+  blocked: number
+  evaded: number
+  glance: number
+  missed: number
+  invulned: number
+  interrupted: number
+  /** Condition damage rather than strike damage. */
+  indirect: boolean
+}
+
 /** Mirrors the legacy `SupportOut` field-for-field. */
 export interface SupportEntity {
   cleanses: number
@@ -1318,6 +1440,70 @@ export interface HealingEntity {
   outgoing_self: number
   barrier_out: number
   downed_healing_out: number
+  /**
+   * The per-ally / per-skill breakdowns. Omitted when that pass did not
+   * run -- the "not measured" signal, as distinct from a measured zero.
+   *
+   * Note the cumulative healing SERIES is not here; it lives at
+   * `EntitySeries.healing_1s`, because what a field belongs to in this
+   * format is its grid and its gate, not its subject matter.
+   */
+  detail?: HealingDetailCols
+}
+
+/**
+ * The three per-ally / per-skill breakdowns of one entity's outgoing
+ * healing and barrier.
+ */
+export interface HealingDetailCols {
+  /**
+   * Keyed by the ALLY's entity id (EI's positional
+   * `outgoingHealingAllies`/`outgoingBarrierAllies` over `log.Friendlies`).
+   * Within a PRESENT map, an absent ally is a MEASURED zero; the optional
+   * `HealingEntity.detail` one level up carries "not measured". The healer
+   * appears at its own id -- self-healing is one of these cells, exactly as
+   * in GW2EI, not a separate scalar.
+   */
+  by_ally: Record<string, AllyHealingRow>
+  /** EI's `totalHealingDist`, keyed by skill id. */
+  by_skill: Record<string, HealSkillRow>
+  /**
+   * EI's `totalBarrierDist`, keyed by skill id. A separate map rather than
+   * a column on `by_skill`: a skill can appear in one and not the other,
+   * and merging them would force every healing row to publish a barrier it
+   * never measured.
+   */
+  barrier_by_skill: Record<string, HealSkillRow>
+}
+
+/** One cell of `HealingDetailCols.by_ally`. */
+export interface AllyHealingRow {
+  healing: number
+  /** The subset of `healing` that landed while the ally was downed. */
+  downed_healing: number
+  barrier: number
+}
+
+/**
+ * One skill's row of EI's `totalHealingDist` / `totalBarrierDist`.
+ *
+ * `hits`/`min`/`max` count EVERY event in the group -- GW2EI's healing dist
+ * has no `HasHit` gate, unlike its damage dist, which is why this row
+ * carries one hit count where `SkillRow` carries three.
+ */
+export interface HealSkillRow {
+  total: number
+  /**
+   * EI's `totalDownedHealing`. Omitted when zero, which is ALWAYS on a
+   * barrier row: `EXTJsonBarrierDist` has no downed field at all, so a zero
+   * there would invent a measurement GW2EI never makes.
+   */
+  total_downed?: number
+  hits: number
+  min: number
+  max: number
+  /** The group contains at least one healing-over-time tick. */
+  indirect: boolean
 }
 
 export interface HealingBlock {
@@ -1545,9 +1731,31 @@ export interface TargetSeries {
 /** Mirrors the legacy `PlayerPerSecondOut` field-for-field. `per_target` is keyed by the TARGET's entity id. */
 export interface EntitySeries {
   damage: SeriesOut
+  /**
+   * The non-condition half of OUTGOING `damage`. In practice present only
+   * on ENEMY rows: no pass computes an outgoing power split for players.
+   * Absent means "no pass measured this", which a zero-filled series would
+   * misreport as "measured, and it was all condition damage".
+   */
+  power_damage?: SeriesOut
   damage_taken: SeriesOut
   power_damage_taken: SeriesOut
   per_target?: Record<string, TargetSeries>
+  /**
+   * `[[time_ms, percent], ...]` -- a STEP function, which is why this is a
+   * plain pair list rather than a `SeriesOut`: re-sampling it onto a fixed
+   * grid would either invent readings between updates or lose updates
+   * inside a bucket. A value holds until the next pair. Absent when the
+   * entity emitted no health updates at all (EI omits `healthPercents` for
+   * such a player rather than writing `[]`).
+   */
+  health_percents?: Array<[number, number]>
+  /**
+   * Cumulative outgoing healing from the arcdps healing extension -- EI's
+   * `extHealingStats.healing1S`. Absent for enemies, and for everyone on a
+   * log with no healing extension.
+   */
+  healing_1s?: SeriesOut
 }
 
 /**
@@ -1579,10 +1787,7 @@ export interface Blocks {
   replay?: ReplayBlock
   series?: SeriesBlock
   conditions?: ConditionsBlock
-  // NOTE: `minions` (a real block since absorption Task 6) has no entry
-  // here yet -- `MinionsBlock`/`MinionRow`/`MinionSkillTakenRow` are not
-  // transcribed in this file. Pre-existing gap, not introduced by the
-  // conditions work above.
+  minions?: MinionsBlock
 }
 
 /**

@@ -121,7 +121,19 @@ Debt left parked by Phase B, in rough value order:
   pinning it (positional `first()`, NOT `min()`; empty log → 0). Two lookalikes
   in `buffs::generation`/`buffs::simulator` were deliberately left alone — they
   clock a filtered local slice, not `raw.events`.
-- `axilog.pyi` was swept for pre-1.0 staleness only at `PerTargetDetail`.
+- ~~`axilog.pyi` was swept for pre-1.0 staleness only at `PerTargetDetail`~~ —
+  CLOSED 2026-08-16, and it was not just Python. Audited by binding a real
+  `--all` document to each stub's declared types: **9** Python TypedDicts and
+  **8** TypeScript interfaces were missing fields, including two whole blocks
+  (`conditions`, `minions`) the Python stub still called "reserved for spec #2,
+  always `not_computed`", and a stale `DamageModEntry.kind` that the schema no
+  longer has. `minions` was self-documented as a known gap in `types.d.ts`.
+  Both stubs now transcribe the full 1.0 surface, and
+  `crates/axilog-schema/tests/v1_sdk_stubs.rs` keeps them honest: every field
+  name in `v1-keyset.golden.txt` must appear in both, so a new field cannot
+  land without the stubs following. The check is name-level, not type-level --
+  it catches "nobody transcribed this" (the failure that actually happened),
+  not a name put on the wrong type; that limit is documented in the test.
 - ~~Windows CI `LNK1201`~~ — CLOSED, and the standing description of it was
   wrong. It was recorded as "the CLI bin and the Python cdylib are both named
   `axilog`, so their PDBs collide; the real fix is renaming one." Renaming

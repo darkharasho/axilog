@@ -101,7 +101,10 @@ __all__ = [
     "SkillEntry",
     "BuffEntry",
     "DamageModEntry",
+    "MinionEntry",
     "Catalogs",
+    "StateTimeline",
+    "PerSourceStates",
     "SeriesOut",
     "CoverageState",
     "Coverage",
@@ -109,6 +112,7 @@ __all__ = [
     "DamageSquad",
     "PerTarget",
     "SkillRow",
+    "SkillOutcomeCols",
     "DamageEntity",
     "DamageBlock",
     "DefensesEntity",
@@ -127,7 +131,15 @@ __all__ = [
     "ContributionEntity",
     "ContributionBlock",
     "HealingEntity",
+    "HealingDetailCols",
+    "AllyHealingRow",
+    "HealSkillRow",
     "HealingBlock",
+    "ConditionRow",
+    "ConditionsBlock",
+    "MinionSkillTakenRow",
+    "MinionRow",
+    "MinionsBlock",
     "CastRow",
     "RotationEntity",
     "RotationBlock",
@@ -871,8 +883,14 @@ class _SkillEntryRequired(TypedDict):
 
 class SkillEntry(_SkillEntryRequired, total=False):
     """Definition metadata for one referenced skill id. `auto_attack` is
-    omitted (not `None`) when unknown."""
+    omitted (not `None`) when unknown.
 
+    `icon` (Phase C) is a render-service or wiki URL, resolved from
+    `skill_icons` (the GW2 API) first and `buff_icons` (GW2EI's own table)
+    second; omitted when neither knows the id. Buff ids resolve here too --
+    there is no separate icon field on `BuffEntry`."""
+
+    icon: str
     auto_attack: bool
 
 class _BuffEntryRequired(TypedDict):
@@ -889,12 +907,31 @@ class BuffEntry(_BuffEntryRequired, total=False):
 
     max_stacks: int
 
-class DamageModEntry(TypedDict):
-    """Definition metadata for one referenced damage-modifier id."""
-
+class _DamageModEntryRequired(TypedDict):
     name: str
-    kind: str
+
+class DamageModEntry(_DamageModEntryRequired, total=False):
+    """Definition metadata for one referenced damage-modifier id. Only
+    `name` is guaranteed; every descriptive field is omitted (not `None`)
+    when the catalog does not carry it.
+
+    `description` is EI's full tooltip, including its derived
+    `<br>Applied on ...` / `<br>Counter` / `<br>Approximate` suffixes."""
+
+    icon: str
+    description: str
+    non_multiplier: bool
+    is_counter: bool
+    skill_based: bool
     approximate: bool
+
+class MinionEntry(TypedDict):
+    """Definition metadata for one minion group referenced by
+    `MinionsBlock`. Identity lives here rather than on the row, like every
+    other catalog in this format."""
+
+    species_id: int
+    name: str
 
 class _CatalogsRequired(TypedDict):
     skills: Dict[str, SkillEntry]
@@ -903,11 +940,36 @@ class _CatalogsRequired(TypedDict):
 class Catalogs(_CatalogsRequired, total=False):
     """Definition metadata for every id any block references. No
     human-readable name appears outside `catalogs` or `entities`. Keys
-    serialize as decimal strings. `damage_mods` is omitted entirely (not
-    `{}`) when no damage-modifier id was referenced (e.g. `modifiers` was
-    not requested)."""
+    serialize as decimal strings. `damage_mods` and `minions` are each
+    omitted entirely (not `{}`) when no id of that kind was referenced
+    (e.g. `modifiers`/`skill_damage` was not requested)."""
 
     damage_mods: Dict[str, DamageModEntry]
+    minions: Dict[str, MinionEntry]
+
+# --- shared buff-timeline types (native 1.0) -------------------------------
+
+#: `[[time_ms, stacks], ...]` -- a buff's stack count as a STEP function:
+#: each pair holds until the next one. Duration-type buffs are clamped to
+#: 0/1 upstream so the graph matches GW2EI's; intensity-type buffs carry
+#: their real stack count.
+StateTimeline = List[List[int]]
+
+class _PerSourceStatesRequired(TypedDict):
+    #: Keyed by the APPLYING entity's id (not by character name, which is
+    #: what both underlying passes key on -- a name is identity data and
+    #: two players can share one).
+    by_source: Dict[str, StateTimeline]
+
+class PerSourceStates(_PerSourceStatesRequired, total=False):
+    """A buff's stack timeline split by who applied it.
+
+    `unresolved` merges every applier that resolves to no `entities[]` row
+    at all -- the honest spelling of GW2EI's `UNKNOWN` key, and a genuine
+    remainder rather than EI's much larger "not a squad player" bucket,
+    since native resolves every applier it can. Omitted when empty."""
+
+    unresolved: StateTimeline
 
 class SeriesOut(TypedDict):
     """One time series in the format's single series envelope. `enc` is
@@ -943,9 +1005,12 @@ CoverageState = str  # Literal["present", "not_computed", "empty", "unsupported"
 #: ``"defenses"``, ``"hit_stats"``, ``"cc"``, ``"boons"``, ``"support"``,
 #: ``"contribution"``, ``"healing"``, ``"rotation"``, ``"damage_mods"``,
 #: ``"missiles"``, ``"replay"``, ``"series"``, ``"conditions"``,
-#: ``"minions"``). Always names every known block, even ones this schema
-#: version never computes (``"conditions"``/``"minions"``, reserved for
-#: spec #2, always ``"not_computed"``).
+#: ``"minions"``). Always names every known block.
+#:
+#: NOTE ``"conditions"``/``"minions"`` are REAL blocks now -- an earlier
+#: version of this stub described them as reserved for spec #2 and "always
+#: not_computed", which stopped being true when the side-channel absorption
+#: phase landed them. See ``ConditionsBlock``/``MinionsBlock``.
 Coverage = Dict[str, CoverageState]
 
 class _WarningOutRequired(TypedDict):
@@ -968,18 +1033,56 @@ class DamageSquad(TypedDict):
     total: int
     dps: float
 
-class SkillRow(TypedDict):
-    """Mirrors the legacy `SkillEntryOut` field-for-field (minus `skill_id`,
-    which is the map key here). `hits`/`min`/`max` count only CONTRIBUTING
-    (`dmg > 0`) events. `crit_hits`/`flank_hits` are hit COUNTS, not damage
-    sums."""
+class SkillOutcomeCols(TypedDict):
+    """The hit-OUTCOME breakdown of one `SkillRow`.
 
+    THREE different hit counts exist across this row and its parent, and
+    they are separate fields precisely so a consumer cannot divide by the
+    wrong denominator: `attempt_hits` here is GW2EI's own `hits` (every
+    non-marker row), `SkillRow["hits"]` is CONTRIBUTING rows (`dmg > 0`),
+    and `SkillRow["connected_hits"]` is `HasHit` rows.
+
+    `glance`/`missed`/`evaded`/`blocked` are zero on a condition skill (EI
+    zeroes them inside its `if (!IndirectDamage)` guard); `invulned` is
+    NOT, because a condition tick can land on an invulnerable target and EI
+    counts it."""
+
+    attempt_hits: int
+    glance: int
+    missed: int
+    evaded: int
+    blocked: int
+    invulned: int
+    interrupted: int
+    #: This skill produced at least one non-direct (condition) damage row.
+    #: Every strike-damage surface downstream uses it as a skip filter.
+    indirect: bool
+
+class _SkillRowRequired(TypedDict):
     total: int
-    hits: int
     min: int
     max: int
+    #: Hit COUNTS, not damage sums.
     crit_hits: int
     flank_hits: int
+
+class SkillRow(_SkillRowRequired, total=False):
+    """Mirrors the legacy `SkillEntryOut` (minus `skill_id`, the map key).
+
+    `hits` (CONTRIBUTING rows, `dmg > 0`) is present on player rows and
+    absent on ENEMY rows, which come from a different pass that never
+    computes it -- absent rather than `0`, so nothing divides `total` by a
+    fabricated denominator. `connected_hits` (`HasHit` rows, GW2EI's
+    `connectedHits`) is the converse-ish case: it is what axibridge's
+    mitigation math divides by.
+
+    `outcomes` is present on PLAYER rows when `skill_damage=True` and
+    absent on enemy rows -- absent means "this pass did not measure this
+    row", never "every attempt connected"."""
+
+    hits: int
+    connected_hits: int
+    outcomes: SkillOutcomeCols
 
 class PerTargetDetail(TypedDict):
     """Mirrors the legacy `PerTargetStatsOut` field-for-field, minus
@@ -1039,6 +1142,10 @@ class _DamageEntityRequired(TypedDict):
     downs_dealt: int
     #: Enemy players this entity landed the KILLING blow on.
     kills_dealt: int
+    #: Breakbar damage this entity DEALT. Outgoing, hence here rather than
+    #: on `defenses`, whose `breakbar_count`/`breakbar_damage` are its
+    #: INCOMING mirror. Feeds ei-json's `dpsAll[0].breakbarDamage`.
+    breakbar_damage_dealt: int
 
 class DamageEntity(_DamageEntityRequired, total=False):
     """`per_target` (keyed by the TARGET's entity id) and the two per-skill
@@ -1167,9 +1274,17 @@ class _BoonRowRequired(TypedDict):
 class BoonRow(_BoonRowRequired, total=False):
     """Mirrors the legacy `BoonOut` field-for-field, minus `id` (the map
     key) and `name` (resolve via `Catalogs.buffs`). `avg_stacks` is
-    omitted for duration-type boons."""
+    omitted for duration-type boons.
+
+    `states`/`per_source` are what make `boons` a TWO-GATE block like
+    `replay`: the uptime numbers above are computed on every parse, these
+    two need `timeseries=True`. So `coverage["boons"]` answers the uptime
+    question only and is NOT a statement about whether the timelines are
+    here -- check for these keys."""
 
     avg_stacks: float
+    states: StateTimeline
+    per_source: PerSourceStates
 
 class BoonsBlock(TypedDict):
     """entity id -> buff id -> row. Two levels of real ids, no positional joins."""
@@ -1211,17 +1326,131 @@ class ContributionEntity(TypedDict):
 class ContributionBlock(TypedDict):
     by_entity: Dict[str, ContributionEntity]
 
-class HealingEntity(TypedDict):
-    """Mirrors the legacy `HealingOut` field-for-field."""
+class AllyHealingRow(TypedDict):
+    """One cell of `HealingDetailCols["by_ally"]`. The healer appears at
+    its OWN entity id -- self-healing is one of these cells, exactly as in
+    GW2EI, not a separate scalar."""
 
+    healing: int
+    #: The subset of `healing` that landed while the ally was downed.
+    downed_healing: int
+    barrier: int
+
+class _HealSkillRowRequired(TypedDict):
+    total: int
+    #: Counts EVERY event in the group -- GW2EI's healing dist has no
+    #: `HasHit` gate, unlike its damage dist, which is why this row carries
+    #: one hit count where `SkillRow` carries three.
+    hits: int
+    min: int
+    max: int
+    #: The group contains at least one healing-over-time tick.
+    indirect: bool
+
+class HealSkillRow(_HealSkillRowRequired, total=False):
+    """One skill's row of EI's `totalHealingDist` / `totalBarrierDist`.
+
+    `total_downed` is omitted when zero, which is ALWAYS on a barrier row:
+    `EXTJsonBarrierDist` has no downed field at all, so a zero there would
+    invent a measurement GW2EI never makes."""
+
+    total_downed: int
+
+class HealingDetailCols(TypedDict):
+    """The three per-ally / per-skill breakdowns of one entity's outgoing
+    healing and barrier.
+
+    `by_ally` is keyed by the ALLY's entity id (EI's positional
+    `outgoingHealingAllies`/`outgoingBarrierAllies` over `log.Friendlies`).
+    Within a PRESENT map, an absent ally is a MEASURED zero; the `Option`
+    one level up (`HealingEntity["detail"]` itself) is what carries "not
+    measured".
+
+    `barrier_by_skill` is a separate map rather than a column on
+    `by_skill`: a skill can appear in one and not the other, and merging
+    them would force every healing row to publish a barrier it never
+    measured."""
+
+    by_ally: Dict[str, AllyHealingRow]
+    by_skill: Dict[str, HealSkillRow]
+    barrier_by_skill: Dict[str, HealSkillRow]
+
+class _HealingEntityRequired(TypedDict):
     outgoing_total: int
     outgoing_allies: int
     outgoing_self: int
     barrier_out: int
     downed_healing_out: int
 
+class HealingEntity(_HealingEntityRequired, total=False):
+    """Mirrors the legacy `HealingOut`, plus the gated `detail`
+    breakdowns. `detail` is omitted when that pass did not run.
+
+    Note the cumulative healing SERIES is not here -- it lives at
+    `EntitySeries["healing_1s"]`, because what a field belongs to in this
+    format is its grid and its gate, not its subject matter."""
+
+    detail: HealingDetailCols
+
 class HealingBlock(TypedDict):
     by_entity: Dict[str, HealingEntity]
+
+# --- conditions / minions blocks (native 1.0) ------------------------------
+
+class ConditionRow(TypedDict):
+    """One condition on one ENEMY entity: who applied it, and when it was
+    up.
+
+    There is deliberately no sibling `states` total here, unlike
+    `BoonRow`: the enemy-side pass computes only the source split, and
+    summing the sources would NOT reconstruct a fused total (two appliers
+    holding the same duration condition overlap rather than stack)."""
+
+    per_source: PerSourceStates
+
+class ConditionsBlock(TypedDict):
+    """enemy entity id -> condition buff id -> row. The condition id
+    resolves through `Catalogs["buffs"]`."""
+
+    by_entity: Dict[str, Dict[str, ConditionRow]]
+
+class MinionSkillTakenRow(TypedDict):
+    """One minion group's damage-TAKEN row for one skill.
+
+    Deliberately NOT a `SkillRow`: that row carries `crit_hits`/
+    `flank_hits`, which a damage-taken rollup does not have, while this one
+    carries the outcome counters inline rather than nested."""
+
+    total: int
+    #: Attempts, marker rows excluded.
+    hits: int
+    #: `HasHit` rows only.
+    connected_hits: int
+    min: int
+    max: int
+    blocked: int
+    evaded: int
+    glance: int
+    missed: int
+    invulned: int
+    interrupted: int
+    #: Condition damage rather than strike damage.
+    indirect: bool
+
+class MinionRow(TypedDict):
+    """One minion group belonging to one player. `minion_id` resolves
+    through `Catalogs["minions"]`, which carries the species id and name."""
+
+    minion_id: int
+    #: The damage this species took, keyed by skill id.
+    taken: Dict[str, MinionSkillTakenRow]
+
+class MinionsBlock(TypedDict):
+    """Per-player minion damage-taken rollups, gated on
+    `skill_damage=True`. One entry per player that HAS minions -- a player
+    with none is absent rather than carrying an empty list."""
+
+    by_entity: Dict[str, List[MinionRow]]
 
 # --- rotation / damage_mods / missiles / replay / series blocks (1.0) ------
 
@@ -1416,11 +1645,31 @@ class _EntitySeriesRequired(TypedDict):
     power_damage_taken: SeriesOut
 
 class EntitySeries(_EntitySeriesRequired, total=False):
-    """Mirrors the legacy `PlayerPerSecondOut` field-for-field.
+    """Mirrors the legacy `PlayerPerSecondOut`, plus three optional series.
     `per_target` is keyed by the TARGET's entity id, omitted (not `{}`)
-    when empty."""
+    when empty.
+
+    `power_damage` is the non-condition half of OUTGOING `damage`. In
+    practice it is present only on ENEMY rows: no pass computes an outgoing
+    power split for players. Absent means "no pass measured this", which a
+    zero-filled series would misreport as "measured, and it was all
+    condition damage".
+
+    `healing_1s` is cumulative outgoing healing (EI's
+    `extHealingStats.healing1S`). Absent for enemies, and for everyone on a
+    log with no healing extension.
+
+    `health_percents` is `[[time_ms, percent], ...]` -- a STEP function,
+    which is why it is a plain pair list rather than a `SeriesOut`:
+    re-sampling it onto a fixed grid would either invent readings between
+    updates or lose updates inside a bucket. A value holds until the next
+    pair. Absent when the entity emitted no health updates at all (EI omits
+    `healthPercents` for such a player rather than writing `[]`)."""
 
     per_target: Dict[str, TargetSeries]
+    power_damage: SeriesOut
+    health_percents: List[List[float]]
+    healing_1s: SeriesOut
 
 class SeriesBlock(TypedDict):
     """`squad` is REQUIRED (see `MissilesBlock`). The squad series is
@@ -1448,6 +1697,8 @@ class Blocks(TypedDict, total=False):
     missiles: MissilesBlock
     replay: ReplayBlock
     series: SeriesBlock
+    conditions: ConditionsBlock
+    minions: MinionsBlock
 
 class _ReportV1Required(TypedDict):
     axilog: AxilogMeta
