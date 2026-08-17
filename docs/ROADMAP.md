@@ -384,8 +384,18 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
 ## Parked (user-gated — do NOT do autonomously)
 - axibridge's actual cutover from EI CLI to the axilog SDK (both registries now live, so this is
   unblocked whenever the user wants it).
-- Replay eye-candy backlog (dev-notes #6/#8: mounts/glider via TRANSFORMATION/GLIDER, capping via
-  GADGETCAPTURE) — cosmetic; do only if a milestone naturally reaches it.
+- ~~Replay eye-candy backlog (dev-notes #6/#8)~~ — **DONE 2026-08-16**, user-approved with the
+  decoration layer explicitly in scope. Four new core modules (`analysis::agent_states`,
+  `gadget_capture`, `decorations`, `replay_extras`), four new optional arrays on `blocks.replay`.
+  Three findings worth keeping:
+  - GLIDER (55) and TRANSFORMATION (73) are parsed-but-unconsumed in GW2EI, so this half is
+    original output with no parity reference and nothing in ei-json.
+  - GADGETCAPTURE (80–83) needs arcdps build `20260602`; the committed fixture is `20260114` and
+    carries zero rows, so it is covered by hand-built wire tests, not a golden diff.
+  - `analysis::decorations` is the first decoration container in the tree. It is deliberately
+    narrow — fixed world anchors, three shape kinds, no metadata dedupe, no map projection — and
+    `ei_replay::MapTransform`'s "decoration/viewpoint machinery is out of scope" note still holds
+    for everything beyond it.
 
 ## Cross-cutting invariants (every milestone)
 - All existing calibration exact; no PII committed (raw .zevtc gitignored; anon fixtures only);

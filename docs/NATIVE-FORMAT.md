@@ -889,6 +889,47 @@ bisecting:
   `connected_direct_dmg` field elsewhere in this schema — the two measure
   different quantities despite the similar name.
 
+- Replay eye candy (arcdps-dev-notes #6/#8): `blocks.replay` gained four
+  optional arrays — `gliding`, `transformations`, `captures`,
+  `decorations`. **Purely additive on the wire**; the key-set golden moved
+  by five entries, all under `blocks.replay.gliding`, because the committed
+  fixture is the only family it can exercise (see below). Each array is
+  omitted rather than emitted empty.
+
+  Three things a consumer should know about this group:
+
+  1. **It rides neither replay gate.** The four arrays are computed on
+     every parse, like `blocks.replay.by_entity` and unlike
+     `blocks.replay.tracks`. `coverage.replay` still answers the intervals
+     question and says nothing about these — check the arrays.
+  2. **`gliding`/`transformations` are original axilog output, not
+     parity.** GW2EI parses both families and has no consumer for either
+     (`GetGliderEvents` / `GetTransformationEvents` are fetched by nothing),
+     so there is no EI field these correspond to and the ei-json layer emits
+     nothing for them.
+  3. **`captures`/`decorations` need arcdps build `20260602` or newer.**
+     `CBTS_GADGETCAPTURE*` does not exist before it, so both arrays are
+     absent on every older log — including the committed fixture, which is
+     why their shape is pinned by
+     `crates/axilog-schema/tests/v1_replay_extras.rs` rather than by a
+     golden diff.
+
+  `decorations` is the renderable projection of `captures` and is carried
+  alongside it rather than instead of it: a decoration has lost which wrbg
+  owner index it came from (it carries an `rgba` string, and `unknown_<n>`
+  folds to white in the palette), while a capture has no lifespan
+  resolution, anchor, or anchor-relative geometry. Neither reconstructs the
+  other.
+
+  `DecorationOut.start_ms`/`end_ms` are **signed**, uniquely in this format:
+  the capture-progress splitter synthesizes a sample at `time - 1`, which is
+  `-1` for a transition landing on log-relative 0.
+
+- Same change, **core Rust API only**: `axilog_schema::v1::Passes` gained a
+  `replay_extras` field. `Passes` is `Default`-able, so `..Default::default()`
+  call sites are unaffected; an exhaustive struct initializer needs the new
+  field. **No native-format key moved** by this.
+
 ## The ei-json layer is permanent
 
 The side-channel absorption work moves data *into* this format and makes

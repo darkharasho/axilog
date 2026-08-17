@@ -98,9 +98,11 @@ MPROC's leftovers:
   `EffectEvent`. The catalog went 429 → 565 of 649 finders, and
   `isInstantCast` on the committed fixture went 9 → 84 distinct skills.
   The decoder is general (position, orientation, scale, dynamic end
-  times), so the replay eye-candy backlog can build on it — but note the
-  replay items themselves (dev-notes #6/#8) are TRANSFORMATION / GLIDER /
-  GADGETCAPTURE statechanges, not effects; they are still open.
+  times). The replay items themselves (dev-notes #6/#8) were TRANSFORMATION
+  / GLIDER / GADGETCAPTURE statechanges, not effects, and are now **CLOSED
+  2026-08-16** — see `docs/ROADMAP.md`'s parked section and
+  `docs/NATIVE-FORMAT.md`'s 1.x rules. They did not build on the effect
+  decoder in the end.
 - **`rotation` is still `AnimatedCastEvent`-only.** The instant casts
   exist (`analysis::instant_cast::compute`) but are not merged in.
   Merging them moves cast counts and the ei-json `rotation[]`, so it is a
