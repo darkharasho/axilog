@@ -65,6 +65,7 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
     // Task 11: ungated, like every real caller -- `blocks.replay.by_entity`
     // is the always-on half of that block.
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
     // Task 12: the two name-keyed passes, now keyed by source ADDRESS at
     // the source and by source ENTITY ID once native reprojects them.
     let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
@@ -96,6 +97,7 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
             activity: Some(&activity),
+            replay_extras: Some(&replay_extras),
             boon_states: Some(&boon_states),
             target_conditions: Some(&target_conditions),
         },

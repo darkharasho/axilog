@@ -63,6 +63,7 @@ fn render_both(flags: Flags) -> (String, String) {
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = build_activity_intervals(&raw, &enc);
+    let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
 
     let ei_replay_data = flags
         .replay
@@ -126,6 +127,7 @@ fn render_both(flags: Flags) -> (String, String) {
         &enc, &metrics, &report, "0.0.0-test", None,
         &axilog_schema::v1::Passes {
             activity: Some(&activity),
+            replay_extras: Some(&replay_extras),
             damage_mods: damage_mods.as_ref(),
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),

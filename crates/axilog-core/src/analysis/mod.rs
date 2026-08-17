@@ -16,6 +16,22 @@ pub mod replay;
 /// GW2EI's own polling grid, plus `dc` sentinel bracketing). Standalone
 /// from [`analyze`], same as `replay`; see `ei_replay::build_ei_replay`.
 pub mod ei_replay;
+/// Glider (`CBTS_GLIDER`) and transformation (`CBTS_TRANSFORMATION`) state
+/// intervals -- the replay eye-candy backlog's agent-scoped half. Standalone
+/// from [`analyze`], like `replay` above; see `agent_states`'s module doc for
+/// why this is decoded despite GW2EI having no consumer for either family.
+pub mod agent_states;
+/// Capture-point areas (`CBTS_GADGETCAPTURE*`) and the environment combat-
+/// replay decorations built from them -- the replay eye-candy backlog's
+/// world-scoped half. Standalone from [`analyze`]; see `gadget_capture` and
+/// `decorations`.
+pub mod gadget_capture;
+/// The combat-replay decoration container: shapes with a lifespan, a colour
+/// and a world anchor. See `decorations`'s module doc for its scope.
+pub mod decorations;
+/// The one-call bundle over `agent_states`/`gadget_capture`/`decorations`,
+/// for callers that want all three (the CLI and both SDKs do).
+pub mod replay_extras;
 /// Opt-in missile (projectile) analytics (M10 Task 2) -- standalone from
 /// [`analyze`]; see `missiles::build_missiles`.
 pub mod missiles;

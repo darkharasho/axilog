@@ -153,6 +153,14 @@ __all__ = [
     "ReplayBlock",
     "ReplayIntervals",
     "ReplayTracks",
+    "GliderOut",
+    "TransformationOut",
+    "CaptureOut",
+    "CaptureShapeOut",
+    "OwnerStateOut",
+    "ProgressStateOut",
+    "DecorationOut",
+    "DecorationShapeOut",
     "SquadSeries",
     "TargetSeries",
     "EntitySeries",
@@ -1674,9 +1682,154 @@ class ReplayBlock(_ReplayBlockRequired, total=False):
     shaped this way. `by_entity` (down/dead/dc intervals, squad only) is
     computed on every parse; `tracks` (positions) needs `replay=True`. So
     `coverage["replay"] == "present"` does NOT mean positions are available
-    -- check for `tracks`."""
+    -- check for `tracks`.
+
+    The four eye-candy families below (`gliding`, `transformations`,
+    `captures`, `decorations`) ride NEITHER gate -- they are computed on
+    every parse and are simply omitted when the log has none."""
 
     tracks: ReplayTracks
+    #: Glider deploy/stow windows. A flat list rather than an entity-keyed
+    #: map: `CBTS_GLIDER` is not restricted to the squad, so a window can
+    #: belong to an agent that never becomes a tracked entity. `agent_addr`
+    #: is always present, `entity_id` only when the join resolves.
+    gliding: List[GliderOut]
+    #: Transformation (mount/tonic/form) windows. Same shape rules as
+    #: `gliding`.
+    transformations: List[TransformationOut]
+    #: Capture-point areas as decoded. Absent on every log written before
+    #: arcdps build 20260602, which does not emit the family at all.
+    captures: List[CaptureOut]
+    #: The renderable projection of `captures`. Neither form reconstructs
+    #: the other.
+    decorations: List[DecorationOut]
+
+class _GliderOutRequired(TypedDict):
+    agent_addr: int
+    start_ms: int
+
+class GliderOut(_GliderOutRequired, total=False):
+    """One glider deployment. A MISSING `end_ms` means the glider was still
+    deployed at the last event in the log -- not that it closed at log
+    end."""
+
+    entity_id: int
+    end_ms: int
+
+class _TransformationOutRequired(TypedDict):
+    agent_addr: int
+    #: The arcdps SESSION-LOCAL id -- meaningless across logs on its own.
+    #: `guid` is the portable identity.
+    transformation_id: int
+    start_ms: int
+
+class TransformationOut(_TransformationOutRequired, total=False):
+    """One transformation window. `guid` is omitted when the log carried no
+    `CBTS_IDTOGUID` mapping for this id."""
+
+    entity_id: int
+    guid: str
+    end_ms: int
+
+#: The arcdps "wrbg" capture owner: `"white"` (unowned), `"red"`, `"blue"`,
+#: `"green"`. An owner index arcdps adds later serializes as `"unknown_<n>"`
+#: rather than folding into `"white"`, which is why this is open `str` and
+#: not a closed literal set.
+CaptureOwner = str
+
+class _CaptureOutRequired(TypedDict):
+    agent_addr: int
+    start_ms: int
+    original_owner: CaptureOwner
+    owner_states: List[OwnerStateOut]
+    progress_states: List[ProgressStateOut]
+
+class CaptureOut(_CaptureOutRequired, total=False):
+    """One capture-point area over its lifetime.
+
+    `entity_id` almost never resolves -- a capture point is a gadget, not a
+    tracked entity. `end_ms` is omitted when the area never got a hide row
+    and no later show superseded it; that is deliberately NOT defaulted to
+    the gadget's last-aware time here, because the substitution is a
+    rendering decision and is made in `DecorationOut`. `shape` is omitted
+    when no geometry row ever arrived, and such an area produces no
+    decoration."""
+
+    entity_id: int
+    end_ms: int
+    shape: CaptureShapeOut
+
+class CaptureShapeOut(TypedDict, total=False):
+    """The capture area's geometry, in WORLD coordinates -- the decoration
+    form carries polygon vertices relative to the anchor instead.
+
+    `kind` selects which of the other two keys is present: `"circle"` gives
+    `radius` (the arcdps single-point overload -- a radius around the
+    gadget, NOT a degenerate polygon), `"polygon"` gives `points` as
+    `[x, y]` pairs."""
+
+    kind: str  # Literal["circle", "polygon"]
+    radius: float
+    points: List[List[float]]
+
+#: At `time_ms` the area was held by `from` and being taken by `by`.
+#:
+#: Declared with the functional `TypedDict` syntax because `from` is a
+#: Python keyword and cannot be a class-body field name. Read it as
+#: `state["from"]`.
+OwnerStateOut = TypedDict(
+    "OwnerStateOut", {"time_ms": int, "from": CaptureOwner, "by": CaptureOwner}
+)
+
+#: A run of progress samples sharing one owner pair. `decaying` means `by`
+#: is nobody, so the bar is falling back toward `from` rather than being
+#: captured. `progress` is `[time_ms, percent]` pairs, percent in 0..100 at
+#: 2 decimal places. Same `from`-is-a-keyword note as `OwnerStateOut`.
+ProgressStateOut = TypedDict(
+    "ProgressStateOut",
+    {
+        "from": CaptureOwner,
+        "by": CaptureOwner,
+        "decaying": bool,
+        "progress": List[List[float]],
+    },
+)
+
+class _DecorationOutRequired(TypedDict):
+    kind: str  # Literal["capture_outline", "capture_progress"]
+    #: Log-relative ms, SIGNED. Unlike every other time in this format this
+    #: can be negative by exactly one millisecond: the capture-progress
+    #: splitter synthesizes a sample at `time - 1`.
+    start_ms: int
+    end_ms: int
+    #: World-space `[x, y]` the shape is drawn around.
+    anchor: List[float]
+    #: CSS `rgba(...)`. For a progress bar the two colour slots do NOT have
+    #: fixed owner roles: capturing puts the capper here, decaying the
+    #: holder.
+    color: str
+    shape: DecorationShapeOut
+
+class DecorationOut(_DecorationOutRequired, total=False):
+    """One drawable environment decoration."""
+
+    secondary_color: str
+
+class DecorationShapeOut(TypedDict, total=False):
+    """A decoration's geometry, RELATIVE to `DecorationOut["anchor"]` --
+    unlike `CaptureShapeOut`, which is in world coordinates.
+
+    `kind` selects which of the other keys are present: `"circle"` gives
+    `radius`/`filled`, `"polygon"` gives `points`/`filled`, and
+    `"progress_bar"` gives `width`/`height`/`progress`."""
+
+    kind: str  # Literal["circle", "polygon", "progress_bar"]
+    radius: float
+    points: List[List[float]]
+    filled: bool
+    width: int
+    height: int
+    progress: List[List[float]]
 
 class SquadSeries(TypedDict):
     damage: SeriesOut

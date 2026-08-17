@@ -141,6 +141,30 @@ pub mod sc {
     /// index 74 in `enum cbtstatechange`. Cross-checked against GW2EI's
     /// `ArcDPSEnums.StateChange.WvWTeams = 74`.
     pub const WVW_TEAMS: u8 = 74;
+    /// Transformation start/end on an agent (mount, tonic, bundle-form,
+    /// Metamorphosis, ...). Verified the same way: `CBTS_TRANSFORMATION` is
+    /// index 73 in `enum cbtstatechange`, immediately BEFORE
+    /// [`WVW_TEAMS`] (74, independently verified above). Cross-checked
+    /// against GW2EI's `ArcDPSEnums.StateChange.Transformation = 73`
+    /// (`ArcDPSEnums.cs:333`).
+    ///
+    /// Payload, per the arcdps reference:
+    /// ```text
+    /// CBTS_TRANSFORMATION, // transformation
+    /// // src_agent: related to agent
+    /// // skillid: transformation id (0 if untransformed)
+    /// // value: duration
+    /// // is_shields: undocumented server data
+    /// // is_offcycle: undocumented server data
+    /// ```
+    /// `skillid` is a content-local id (`n_contentlocal` TRANSFORMATION = 6),
+    /// resolved to a stable GUID via `CBTS_IDTOGUID` -- the same mechanism
+    /// [`MARKER`] uses, and already modelled as
+    /// [`crate::evtc::guid::ContentType::Transformation`]. `value` (duration)
+    /// is deliberately NOT used to close an interval: GW2EI's
+    /// `TransformationEvent` ignores it too, and the observed close is the
+    /// `skillid == 0` row. See [`crate::analysis::agent_states`].
+    pub const TRANSFORMATION: u8 = 73;
     /// WvW objective status: one update of one objective's owning team
     /// (MOBJ). Ordinal verified the same way -- `CBTS_WVWOBJECTIVESTATUS`
     /// is index 75 in `enum cbtstatechange`, immediately after
@@ -160,6 +184,26 @@ pub mod sc {
     /// duration in ms that was cancelled by the break (0 if none is
     /// reported).
     pub const STUN_BREAK: u8 = 56;
+    /// Glider deploy/stow on an agent. Verified against the arcdps EVTC
+    /// reference (`curl https://www.deltaconnected.com/arcdps/evtc/README.txt`,
+    /// 2026-08-16) by hand-counting `enum cbtstatechange` from
+    /// `CBTS_COMBAT = 0`: `CBTS_GLIDER` is index 55, immediately BEFORE
+    /// [`STUN_BREAK`] (56, independently verified above). Cross-checked
+    /// against GW2EI's `ArcDPSEnums.StateChange.Glider = 55`
+    /// (`GW2EIEvtcParser/ParserHelpers/ArcDPSEnums.cs:315`).
+    ///
+    /// Payload, per the arcdps reference:
+    /// ```text
+    /// CBTS_GLIDER, // glider status change
+    /// // src_agent: related to agent
+    /// // value: 1 deployed, 0 stowed
+    /// ```
+    /// Decoded by [`crate::analysis::agent_states`] into deploy/stow
+    /// intervals. GW2EI's `GliderEvent` carries exactly the same single bit
+    /// (`GliderDeployed = evtcItem.Value == 1`) and has NO consumer anywhere
+    /// in that codebase -- see the module doc on `analysis::agent_states` for
+    /// why this project decodes it anyway.
+    pub const GLIDER: u8 = 55;
     /// Missile creation (M10 Task 2). Verified against the arcdps EVTC
     /// reference (`curl https://www.deltaconnected.com/arcdps/evtc/README.txt`,
     /// 2026-08-09) by a full line-by-line hand-count of every `CBTS_*`
@@ -327,6 +371,70 @@ pub mod sc {
     /// count table below requires it) but not consumed anywhere in this
     /// project's analysis -- purely cosmetic VFX, no analytic content.
     pub const MISSILE_EFFECT: u8 = 79;
+
+    /// Capture-point outline SHOW -- the row that CREATES a capture area.
+    /// The four `CBTS_GADGETCAPTURE*` enumerators are bracketed tightly by
+    /// two ordinals this module already verified independently: they are the
+    /// four entries immediately after [`MISSILE_EFFECT`] (79) and immediately
+    /// before [`TICK`] (84). Cross-checked against GW2EI's
+    /// `ArcDPSEnums.cs:340-343` (`GadgetCaptureOutlineShow`/
+    /// `GadgetCaptureSplitPercent`/`GadgetCaptureOutlineHide`/
+    /// `GadgetCaptureOutlinePoint` = 80/81/82/83).
+    ///
+    /// Payload, per the arcdps reference:
+    /// ```text
+    /// CBTS_GADGETCAPTUREOUTLINESHOW, // gadget capture point show outline
+    /// // src_agent: relates to agent
+    /// // buff: wrbg colour
+    /// ```
+    /// `buff` is the "wrbg" (white/red/blue/green) owner index -- 0 white
+    /// (unowned), 1 red, 2 blue, 3 green. GW2EI's `GadgetCaptureEvent`
+    /// reads it as `OriginalOwner = evtcItem.IsBuff`.
+    ///
+    /// **Build gate.** arcdps only emits this family from build
+    /// `20260602` onward (GW2EI records the same threshold as
+    /// `ArcDPSBuilds.GadgetCapturesAdded = 20260602`). The committed WvW
+    /// fixture is build `20260114` and therefore carries ZERO rows of any
+    /// of the four -- which is why [`crate::analysis::gadget_capture`] is
+    /// covered by hand-built wire-shape tests rather than a golden diff.
+    pub const GADGET_CAPTURE_OUTLINE_SHOW: u8 = 80;
+    /// Capture-point progress sample. See
+    /// [`GADGET_CAPTURE_OUTLINE_SHOW`] for the ordinal verification and the
+    /// build gate.
+    ///
+    /// ```text
+    /// CBTS_GADGETCAPTURESPLITPERCENT, // gadget capture point percent split
+    /// // src_agent: relates to agent
+    /// // value: *(float*)&ev->value percent (1.0 - 0.0)
+    /// // buff: wrbg capping from
+    /// // result: wrbg capping by
+    /// ```
+    /// `value` is a `f32` bit-punned into the `i32` field, in 0.0-1.0, NOT
+    /// a percent despite the enumerator's name. `buff` is the owner being
+    /// capped FROM, `result` the owner capping BY; `result == 0` (white,
+    /// nobody) is GW2EI's `IsDecaying`.
+    pub const GADGET_CAPTURE_SPLIT_PERCENT: u8 = 81;
+    /// Capture-point outline HIDE -- the row that ENDS a capture area. See
+    /// [`GADGET_CAPTURE_OUTLINE_SHOW`] for the ordinal verification and the
+    /// build gate. Carries no payload beyond `src_agent` and its own time.
+    pub const GADGET_CAPTURE_OUTLINE_HIDE: u8 = 82;
+    /// Capture-point outline GEOMETRY -- one vertex of the capture area.
+    /// See [`GADGET_CAPTURE_OUTLINE_SHOW`] for the ordinal verification and
+    /// the build gate.
+    ///
+    /// ```text
+    /// CBTS_GADGETCAPTUREOUTLINEPOINT, // gadget capture point point data
+    /// // src_agent: relates to agent
+    /// // dst_agent: point index
+    /// // value: *(float*)&ev->value x
+    /// // buff_dmg: *(float*)&ev->buff_dmg y
+    /// // overstack_value: point count for this agent. if count is 1, shape is a circle around agent with radius x
+    /// ```
+    /// The circle case is the trap: with a single point the payload is not
+    /// a vertex at all, it is a RADIUS in `value` (`y` unused). GW2EI
+    /// encodes the same overload -- `IsCircle => _points.Length == 1`,
+    /// `Radius => _points[0].X`.
+    pub const GADGET_CAPTURE_OUTLINE_POINT: u8 = 83;
     /// Above-target squad marker assignment/removal on an agent (Task 7,
     /// M2 -- arcdps-dev guidance items 4/5). Verified against the arcdps
     /// EVTC reference by hand-counting `enum cbtstatechange` from

@@ -235,17 +235,188 @@ pub struct ReplayBlock {
     /// Present only under `--replay`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tracks: Option<ReplayTracks>,
+    /// Glider deploy/stow windows -- see
+    /// [`axilog_core::analysis::agent_states`], including why this data
+    /// exists in axilog and not in GW2EI's output.
+    ///
+    /// A flat list rather than a `ByEntity` map, and that is not an
+    /// oversight: `CBTS_GLIDER` is not restricted to the squad, so a glider
+    /// window can belong to an agent that never becomes a tracked entity.
+    /// This follows `MarkerAssignmentOut`'s precedent exactly -- always
+    /// carry `agent_addr`, carry `entity_id` only when the join resolves --
+    /// because the alternative is silently dropping every non-roster row.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gliding: Vec<GliderOut>,
+    /// Transformation (mount/tonic/form) windows. Same flat-list rationale
+    /// as [`Self::gliding`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub transformations: Vec<TransformationOut>,
+    /// Capture-point areas as DECODED: who held each point, who was taking
+    /// it, and the progress timeline. See [`Self::decorations`] for why both
+    /// forms are carried.
+    ///
+    /// Empty on every log written before arcdps build `20260602`, which does
+    /// not emit the family at all.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub captures: Vec<CaptureOut>,
+    /// Capture-point areas as RENDERABLE environment decorations -- the port
+    /// of GW2EI's only consumer of this family
+    /// (`LogLogic.ComputeEnvironmentCombatReplayDecorations`).
+    ///
+    /// Derived from [`Self::captures`], and carried alongside it rather than
+    /// instead of it: see
+    /// [`axilog_core::analysis::replay_extras::ReplayExtras::decorations`]
+    /// for why neither form reconstructs the other.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub decorations: Vec<DecorationOut>,
 }
 
 impl ReplayBlock {
-    /// See [`super::damage::DamageBlock::is_empty`]. Either half alone is
+    /// See [`super::damage::DamageBlock::is_empty`]. Any one half alone is
     /// enough to make this block non-empty: on a log parsed with `--replay`
     /// but no activity pass the intervals map is bare and the tracks still
-    /// are not, and reporting that `Empty` would claim nobody moved.
+    /// are not, and reporting that `Empty` would claim nobody moved. The
+    /// same argument extends to the eye-candy families, which are populated
+    /// independently of both gates.
     pub fn is_empty(&self) -> bool {
         self.by_entity.is_empty()
             && self.tracks.as_ref().map_or(true, |t| t.by_entity.is_empty())
+            && self.gliding.is_empty()
+            && self.transformations.is_empty()
+            && self.captures.is_empty()
+            && self.decorations.is_empty()
     }
+}
+
+/// One glider deployment. `end_ms` absent means the glider was still
+/// deployed at the last event in the log -- NOT that it closed at log end.
+/// See [`axilog_core::analysis::agent_states::GliderInterval::end_ms`].
+#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+pub struct GliderOut {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity_id: Option<u32>,
+    pub agent_addr: u64,
+    pub start_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u64>,
+}
+
+/// One transformation window.
+#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+pub struct TransformationOut {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity_id: Option<u32>,
+    pub agent_addr: u64,
+    /// The arcdps SESSION-LOCAL id. Meaningless across logs on its own --
+    /// [`Self::guid`] is the portable identity, and is absent when the log
+    /// carried no `CBTS_IDTOGUID` mapping for this id.
+    pub transformation_id: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
+    pub start_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u64>,
+}
+
+/// One capture-point area over its lifetime.
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
+pub struct CaptureOut {
+    /// The capture gadget. Almost never resolves to a tracked entity -- a
+    /// capture point is a gadget, and `wvw::apply` retains only enemies that
+    /// took a hostile hit -- but the slot is carried for the same reason
+    /// [`GliderOut::entity_id`] is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity_id: Option<u32>,
+    pub agent_addr: u64,
+    /// Log-relative ms. Signed throughout this family; see
+    /// [`DecorationOut::start_ms`].
+    pub start_ms: i64,
+    /// Absent when the area never got a hide row and no later show
+    /// superseded it. Deliberately NOT defaulted to the gadget's last-aware
+    /// time here -- that substitution is a rendering decision and is made in
+    /// [`DecorationOut`], where a finite lifespan is actually required.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<i64>,
+    /// The arcdps "wrbg" owner, as a name: `white` (unowned), `red`, `blue`
+    /// or `green`. An owner index arcdps adds later serializes as
+    /// `unknown_<n>` rather than folding into `white`, so a new value stays
+    /// visible instead of reading as neutral.
+    pub original_owner: String,
+    /// Absent when no geometry row ever arrived, which is GW2EI's `IsValid`
+    /// being false. Such an area produces no decoration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<CaptureShapeOut>,
+    pub owner_states: Vec<OwnerStateOut>,
+    pub progress_states: Vec<ProgressStateOut>,
+}
+
+/// The capture area's geometry, in WORLD coordinates (the decoration form
+/// carries polygon vertices relative to the anchor instead).
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CaptureShapeOut {
+    /// A circle centred on the gadget. Note this is the arcdps single-point
+    /// overload, not a degenerate polygon -- see
+    /// [`axilog_core::analysis::gadget_capture::CaptureShape`].
+    Circle { radius: f32 },
+    Polygon { points: Vec<(f32, f32)> },
+}
+
+/// One owner transition: at `time_ms` the area was held by `from` and being
+/// taken by `by`. Both use the same owner naming as
+/// [`CaptureOut::original_owner`].
+#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+pub struct OwnerStateOut {
+    pub time_ms: i64,
+    pub from: String,
+    pub by: String,
+}
+
+/// A run of progress samples sharing one owner pair.
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
+pub struct ProgressStateOut {
+    pub from: String,
+    pub by: String,
+    /// `by` is nobody (white), so the bar is falling back toward `from`
+    /// rather than being captured. Carried rather than left to the reader to
+    /// derive from `by == "white"`, because that derivation is exactly the
+    /// kind of implicit rule that goes wrong once a new owner index exists.
+    pub decaying: bool,
+    /// `(time_ms, percent)`, percent in `0.0..=100.0` at 2 decimal places.
+    pub progress: Vec<(i64, f64)>,
+}
+
+/// One drawable environment decoration.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct DecorationOut {
+    /// `capture_outline` or `capture_progress`.
+    pub kind: String,
+    /// Log-relative ms, SIGNED. Unlike every other time in this format this
+    /// can be negative by exactly one millisecond: the capture-progress
+    /// splitter synthesizes a sample at `time - 1`, which underflows for a
+    /// transition landing on log-relative 0. Clamping it to 0 would silently
+    /// reorder that sample after the run it closes.
+    pub start_ms: i64,
+    pub end_ms: i64,
+    /// World-space `(x, y)` the shape is drawn around.
+    pub anchor: (f32, f32),
+    /// CSS `rgba(...)`. For a progress bar the two colour slots do NOT have
+    /// fixed owner roles -- see
+    /// [`axilog_core::analysis::decorations::Decoration::color`].
+    pub color: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secondary_color: Option<String>,
+    pub shape: DecorationShapeOut,
+}
+
+/// A decoration's geometry, relative to [`DecorationOut::anchor`].
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DecorationShapeOut {
+    Circle { radius: f32, filled: bool },
+    /// Vertices RELATIVE to the anchor, unlike [`CaptureShapeOut::Polygon`].
+    Polygon { points: Vec<(f32, f32)>, filled: bool },
+    ProgressBar { width: u32, height: u32, progress: Vec<(i64, f64)> },
 }
 
 /// One squad entity's activity intervals: the cheap half of the replay,
@@ -812,6 +983,7 @@ pub fn build_replay(
     report: &crate::Report,
     index: &EntityIndex,
     activity: Option<&[axilog_core::analysis::replay::ActivityIntervals]>,
+    extras: Option<&axilog_core::analysis::replay_extras::ReplayExtras>,
 ) -> ReplayBlock {
     let activity = activity.filter(|a| a.len() == report.players.len());
     // The scalars ride the replay tracks (`#[serde(skip)]` on the legacy
@@ -876,7 +1048,133 @@ pub fn build_replay(
         }
     });
 
-    ReplayBlock { by_entity: intervals, tracks }
+    let (gliding, transformations, captures, decorations) =
+        extras.map_or_else(Default::default, |e| build_replay_extras(e, index));
+
+    ReplayBlock { by_entity: intervals, tracks, gliding, transformations, captures, decorations }
+}
+
+/// Reproject the three eye-candy families onto the wire.
+///
+/// The only real work here is the entity join, which is best-effort by
+/// design (see [`ReplayBlock::gliding`]) -- every row survives whether or not
+/// its agent is a tracked entity.
+fn build_replay_extras(
+    extras: &axilog_core::analysis::replay_extras::ReplayExtras,
+    index: &EntityIndex,
+) -> (Vec<GliderOut>, Vec<TransformationOut>, Vec<CaptureOut>, Vec<DecorationOut>) {
+    use axilog_core::analysis::decorations::{DecorationKind, DecorationShape};
+    use axilog_core::analysis::gadget_capture::CaptureShape;
+
+    let gliding = extras
+        .agent_states
+        .gliding
+        .iter()
+        .map(|g| GliderOut {
+            entity_id: index.by_agent_addr(g.agent_addr),
+            agent_addr: g.agent_addr,
+            start_ms: g.start_ms,
+            end_ms: g.end_ms,
+        })
+        .collect();
+
+    let transformations = extras
+        .agent_states
+        .transformations
+        .iter()
+        .map(|t| TransformationOut {
+            entity_id: index.by_agent_addr(t.agent_addr),
+            agent_addr: t.agent_addr,
+            transformation_id: t.transformation_id,
+            guid: t.guid.clone(),
+            start_ms: t.start_ms,
+            end_ms: t.end_ms,
+        })
+        .collect();
+
+    let captures = extras
+        .captures
+        .iter()
+        .map(|c| CaptureOut {
+            entity_id: index.by_agent_addr(c.agent_addr),
+            agent_addr: c.agent_addr,
+            start_ms: c.start_ms,
+            end_ms: c.end_ms,
+            original_owner: owner_name(c.original_owner),
+            shape: c.shape.as_ref().map(|s| match s {
+                CaptureShape::Circle { radius } => CaptureShapeOut::Circle { radius: *radius },
+                CaptureShape::Polygon { points } => {
+                    CaptureShapeOut::Polygon { points: points.clone() }
+                }
+            }),
+            owner_states: c
+                .owner_states
+                .iter()
+                .map(|s| OwnerStateOut {
+                    time_ms: s.time_ms,
+                    from: owner_name(s.from),
+                    by: owner_name(s.by),
+                })
+                .collect(),
+            progress_states: c
+                .progress_states
+                .iter()
+                .map(|p| ProgressStateOut {
+                    from: owner_name(p.from),
+                    by: owner_name(p.by),
+                    decaying: p.is_decaying(),
+                    progress: p.progress.clone(),
+                })
+                .collect(),
+        })
+        .collect();
+
+    let decorations = extras
+        .decorations
+        .iter()
+        .map(|d| DecorationOut {
+            kind: match d.kind {
+                DecorationKind::CaptureOutline => "capture_outline".to_string(),
+                DecorationKind::CaptureProgress => "capture_progress".to_string(),
+            },
+            start_ms: d.start_ms,
+            end_ms: d.end_ms,
+            anchor: d.anchor,
+            color: d.color.clone(),
+            secondary_color: d.secondary_color.clone(),
+            shape: match &d.shape {
+                DecorationShape::Circle { radius, filled } => {
+                    DecorationShapeOut::Circle { radius: *radius, filled: *filled }
+                }
+                DecorationShape::Polygon { points, filled } => {
+                    DecorationShapeOut::Polygon { points: points.clone(), filled: *filled }
+                }
+                DecorationShape::ProgressBar { width, height, progress } => {
+                    DecorationShapeOut::ProgressBar {
+                        width: *width,
+                        height: *height,
+                        progress: progress.clone(),
+                    }
+                }
+            },
+        })
+        .collect();
+
+    (gliding, transformations, captures, decorations)
+}
+
+/// The wrbg owner as a wire name. `Unknown` keeps its raw index rather than
+/// folding into `white`, so an owner value arcdps adds later is visible in
+/// the output instead of silently reading as unowned.
+fn owner_name(owner: axilog_core::analysis::gadget_capture::Owner) -> String {
+    use axilog_core::analysis::gadget_capture::Owner;
+    match owner {
+        Owner::White => "white".to_string(),
+        Owner::Red => "red".to_string(),
+        Owner::Blue => "blue".to_string(),
+        Owner::Green => "green".to_string(),
+        Owner::Unknown(n) => format!("unknown_{n}"),
+    }
 }
 
 #[cfg(test)]
@@ -902,7 +1200,7 @@ mod tests {
         // The legacy `ReplayTrackOut` carries NO join key at all, so a
         // consumer cannot tell whose track it is reading.
         let (report, index) = fixture_report();
-        let block = build_replay(&report, &index, None);
+        let block = build_replay(&report, &index, None, None);
         // The committed fixture is parsed without `--replay`, so the block
         // is empty -- the assertion that matters is the SHAPE.
         for entity_id in block.tracks.iter().flat_map(|t| t.by_entity.0.keys()) {

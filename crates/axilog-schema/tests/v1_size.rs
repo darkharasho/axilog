@@ -187,6 +187,7 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
     // Task 11: ungated, like every real caller -- `blocks.replay.by_entity`
     // is the always-on half of that block.
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -219,6 +220,7 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
             activity: Some(&activity),
+            replay_extras: Some(&replay_extras),
             boon_states: Some(&boon_states),
             target_conditions: Some(&target_conditions),
         },

@@ -144,6 +144,7 @@ fn build_report_v1_from_bytes(
     // always-on half of that block, so the native document carries
     // down/dead intervals whether or not positions were asked for.
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
     // Task 12: the native path needs these too -- they feed
     // `blocks.boons`/`blocks.conditions`, not just the ei-json adapter.
     let boon_states = want_timeseries
@@ -166,6 +167,7 @@ fn build_report_v1_from_bytes(
             healing_detail: healing_detail.as_ref().filter(|_| want_skill_damage),
             healing_series: healing_detail.as_ref().filter(|_| want_timeseries),
             activity: Some(&activity),
+            replay_extras: Some(&replay_extras),
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
         },
@@ -221,6 +223,7 @@ fn build_report_and_ei_inputs_from_bytes(
     let missiles = want_missiles
         .then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
     // M15 Task 3: `replay=True` now DOES affect the ei-json -- it adds
     // `combatReplayData.{positions, orientations, dc, iconURL}` and the
     // top-level `combatReplayMetaData` (see `axilog_ei::to_ei_json`).
@@ -322,6 +325,7 @@ fn build_report_and_ei_inputs_from_bytes(
             healing_detail: healing_detail.as_ref().filter(|_| want_skill_damage),
             healing_series: healing_detail.as_ref().filter(|_| want_timeseries),
             activity: Some(&activity),
+            replay_extras: Some(&replay_extras),
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
         },

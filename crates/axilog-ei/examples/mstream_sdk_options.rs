@@ -20,6 +20,7 @@ fn main() {
     let enc = axilog_core::model::resolve(&raw);
     let metrics = axilog_core::analysis::analyze(&enc, &raw);
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
     let report = axilog_schema::build_report(
         &enc, &metrics, "0.0.0-bench", None, None, true, true, true, None,
     );
@@ -42,6 +43,7 @@ fn main() {
         &axilog_schema::v1::Passes { boon_states: Some(&boon_states),
             target_conditions: Some(&target_conditions),
             activity: Some(&activity),
+            replay_extras: Some(&replay_extras),
             minions: Some(&minions),
             health_percents: Some(&health_percents),
             enemy_dist: Some(&enemy_dist),

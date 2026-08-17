@@ -262,6 +262,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // hoisted out here and shared by both rather than computed
             // twice.
             let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+            // Same "always-on, no flag" argument as `activity` above: two
+            // filtered scans, and the capture family exits before touching
+            // the event stream on any log predating arcdps build 20260602.
+            let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
             // MEIGAP Task 1b: GW2EI-shape boon stack timelines
             // (`buffUptimes[].states`/`.statesPerSource`) -- gated on
             // `--timeseries`, mirroring GW2EI's own `RawFormatTimelineArrays`
@@ -413,6 +417,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     healing_detail: healing_detail.as_ref().filter(|_| skill_damage),
                     healing_series: healing_detail.as_ref().filter(|_| timeseries),
                     activity: Some(&activity),
+                    replay_extras: Some(&replay_extras),
                     boon_states: boon_states.as_ref(),
                     target_conditions: target_conditions.as_ref(),
                 },

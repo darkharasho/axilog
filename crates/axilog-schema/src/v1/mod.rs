@@ -244,6 +244,14 @@ pub struct Passes<'a> {
     /// comment). `None` here therefore means a caller that has no log to
     /// scan at all, not a gate.
     pub activity: Option<&'a [axilog_core::analysis::replay::ActivityIntervals]>,
+    /// The replay eye-candy families (glider/transformation windows,
+    /// capture-point areas, environment decorations). Like
+    /// [`Self::activity`] above and unlike every other field here, this
+    /// names a pass that is cheap enough to run unconditionally rather than
+    /// an opt-in gate -- see
+    /// [`axilog_core::analysis::replay_extras`]. `None` therefore means a
+    /// caller with no log to scan, not a flag that was off.
+    pub replay_extras: Option<&'a axilog_core::analysis::replay_extras::ReplayExtras>,
     /// MEIGAP Task 1b `--timeseries`: per-(player, boon) stack timelines,
     /// total and split by applier. Lands on `blocks.boons`'
     /// `states`/`per_source` row fields -- enriching the rows the always-on
@@ -371,8 +379,11 @@ pub fn build_report_v1(
     // the block exists when EITHER input does, and `coverage.replay`
     // answers the intervals question -- `Present` on a log parsed with no
     // `--replay` at all, because the down/dead history really is there.
-    let replay = (passes.activity.is_some() || legacy.replay.is_some()).then(|| {
-        let block = activity::build_replay(legacy, &index, passes.activity);
+    let replay = (passes.activity.is_some()
+        || legacy.replay.is_some()
+        || passes.replay_extras.is_some())
+    .then(|| {
+        let block = activity::build_replay(legacy, &index, passes.activity, passes.replay_extras);
         coverage.set(BlockName::Replay, computed(block.is_empty()));
         block
     });

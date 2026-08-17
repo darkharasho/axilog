@@ -93,6 +93,8 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
     // `build(false)` still yields a populated `blocks.replay.by_entity`
     // with no `tracks`.
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
+    // Ungated for the same reason as `activity` -- supplied in BOTH modes.
+    let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
 
     let legacy = axilog_schema::build_report(
         &enc,
@@ -125,6 +127,7 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
             activity: Some(&activity),
+            replay_extras: Some(&replay_extras),
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
         },

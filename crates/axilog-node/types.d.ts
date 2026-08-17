@@ -1767,7 +1767,130 @@ export interface ReplayBlock {
   /** Keyed by entity id. Squad players only. */
   by_entity: ByEntity<ReplayIntervals>
   tracks?: ReplayTracks
+  /**
+   * Glider deploy/stow windows. Omitted (not `[]`) when the log has none.
+   *
+   * A flat list rather than an entity-keyed map: `CBTS_GLIDER` is not
+   * restricted to the squad, so a window can belong to an agent that never
+   * becomes a tracked entity. `agent_addr` is always present, `entity_id`
+   * only when the join resolves.
+   */
+  gliding?: GliderOut[]
+  /** Transformation (mount/tonic/form) windows. Same shape rules as `gliding`. */
+  transformations?: TransformationOut[]
+  /**
+   * Capture-point areas as decoded. Empty on every log written before
+   * arcdps build 20260602, which does not emit the family at all.
+   */
+  captures?: CaptureOut[]
+  /** The renderable projection of `captures`. Neither form reconstructs the other. */
+  decorations?: DecorationOut[]
 }
+
+/**
+ * One glider deployment. A MISSING `end_ms` means the glider was still
+ * deployed at the last event in the log -- not that it closed at log end.
+ */
+export interface GliderOut {
+  entity_id?: number
+  agent_addr: number
+  start_ms: number
+  end_ms?: number
+}
+
+/** One transformation window. */
+export interface TransformationOut {
+  entity_id?: number
+  agent_addr: number
+  /**
+   * The arcdps SESSION-LOCAL id -- meaningless across logs on its own.
+   * `guid` is the portable identity, and is omitted when the log carried no
+   * `CBTS_IDTOGUID` mapping for this id.
+   */
+  transformation_id: number
+  guid?: string
+  start_ms: number
+  end_ms?: number
+}
+
+/**
+ * The arcdps "wrbg" capture owner. `white` is unowned/neutral. An owner
+ * index arcdps adds later serializes as `unknown_<n>` rather than folding
+ * into `white`, which is why this is not a closed union.
+ */
+export type CaptureOwner = 'white' | 'red' | 'blue' | 'green' | string
+
+/** One capture-point area over its lifetime. */
+export interface CaptureOut {
+  /** Almost never resolves -- a capture point is a gadget, not a tracked entity. */
+  entity_id?: number
+  agent_addr: number
+  start_ms: number
+  /**
+   * Omitted when the area never got a hide row and no later show superseded
+   * it. Deliberately NOT defaulted to the gadget's last-aware time here --
+   * that substitution is a rendering decision, made in `DecorationOut`.
+   */
+  end_ms?: number
+  original_owner: CaptureOwner
+  /** Omitted when no geometry row ever arrived. Such an area produces no decoration. */
+  shape?: CaptureShapeOut
+  owner_states: OwnerStateOut[]
+  progress_states: ProgressStateOut[]
+}
+
+/**
+ * The capture area's geometry, in WORLD coordinates. The circle case is the
+ * arcdps single-point overload (radius around the gadget), not a degenerate
+ * polygon.
+ */
+export type CaptureShapeOut =
+  | { kind: 'circle'; radius: number }
+  | { kind: 'polygon'; points: [number, number][] }
+
+/** At `time_ms` the area was held by `from` and being taken by `by`. */
+export interface OwnerStateOut {
+  time_ms: number
+  from: CaptureOwner
+  by: CaptureOwner
+}
+
+/** A run of progress samples sharing one owner pair. */
+export interface ProgressStateOut {
+  from: CaptureOwner
+  by: CaptureOwner
+  /** `by` is nobody, so the bar is falling back toward `from` rather than being captured. */
+  decaying: boolean
+  /** `[time_ms, percent]`, percent in 0..100 at 2 decimal places. */
+  progress: [number, number][]
+}
+
+/** One drawable environment decoration. */
+export interface DecorationOut {
+  kind: 'capture_outline' | 'capture_progress'
+  /**
+   * Log-relative ms, SIGNED. Unlike every other time in this format this can
+   * be negative by exactly one millisecond: the capture-progress splitter
+   * synthesizes a sample at `time - 1`.
+   */
+  start_ms: number
+  end_ms: number
+  /** World-space `[x, y]` the shape is drawn around. */
+  anchor: [number, number]
+  /**
+   * CSS `rgba(...)`. For a progress bar the two colour slots do NOT have
+   * fixed owner roles: capturing puts the capper here, decaying the holder.
+   */
+  color: string
+  secondary_color?: string
+  shape: DecorationShapeOut
+}
+
+/** A decoration's geometry, RELATIVE to `DecorationOut.anchor`. */
+export type DecorationShapeOut =
+  | { kind: 'circle'; radius: number; filled: boolean }
+  | { kind: 'polygon'; points: [number, number][]; filled: boolean }
+  | { kind: 'progress_bar'; width: number; height: number; progress: [number, number][] }
 
 export interface SquadSeries {
   damage: SeriesOut

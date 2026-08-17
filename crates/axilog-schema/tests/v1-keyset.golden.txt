@@ -265,6 +265,11 @@ blocks.replay.by_entity.<id>.down
 blocks.replay.by_entity.<id>.end_ms
 blocks.replay.by_entity.<id>.stack_dist
 blocks.replay.by_entity.<id>.start_ms
+blocks.replay.gliding
+blocks.replay.gliding[].agent_addr
+blocks.replay.gliding[].end_ms
+blocks.replay.gliding[].entity_id
+blocks.replay.gliding[].start_ms
 blocks.replay.tracks
 blocks.replay.tracks.bounds
 blocks.replay.tracks.bounds.max_x
