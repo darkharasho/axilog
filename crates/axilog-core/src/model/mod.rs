@@ -89,8 +89,10 @@ pub struct CommanderTag {
     /// `MarkerAssignment::time_ms`, NOT log-relative: these are raw event
     /// timestamps, so they are not comparable against `duration_ms` and
     /// must not be clipped to `[0, duration_ms]`. Rebase by the log's `t0`
-    /// (see `analysis::distance`) if you want encounter-relative values.
-    /// Merged and sorted across
+    /// -- [`Encounter::log_start_ms`], which is carried alongside these
+    /// values precisely so this is possible from a serialized encounter
+    /// (see `analysis::distance` for the in-process equivalent) -- if you
+    /// want encounter-relative values. Merged and sorted across
     /// every raw addr this player owns (relogs/build-swaps can each carry
     /// their own commander-tag instances -- see
     /// `wvw::markers::MarkerResolution::commander_segments`). Literal
@@ -169,7 +171,25 @@ pub struct Encounter { pub kind: String, pub map: String, pub duration_ms: u64,
     /// `u64` defaulting to 0. Phase B Task 8: replaces axibridge's
     /// `.zevtc`-mtime inference, which is wrong for any copied or restored
     /// file.
-    pub started_at_unix: Option<u64> }
+    pub started_at_unix: Option<u64>,
+    /// The log's `t0`: the arcdps **session time** of the first event, i.e.
+    /// [`crate::evtc::RawLog::log_start_ms`]. Zero for a log with no events.
+    ///
+    /// Every duration and timestamp this crate hands a consumer is
+    /// log-relative EXCEPT two, both of which are raw event times passed
+    /// through deliberately: [`MarkerAssignment::time_ms`] and
+    /// [`CommanderTag::segments`]. Their doc comments say to "rebase by the
+    /// log's `t0`" -- this field is that `t0`, carried so a consumer holding
+    /// only the serialized encounter can actually do it. Without it those
+    /// two fields are uninterpretable outside this process: session time has
+    /// no fixed origin, so the values are not comparable against
+    /// `duration_ms`, against each other across logs, or against anything at
+    /// all.
+    ///
+    /// Not `Option`: unlike [`Self::started_at_unix`] (a wall-clock reading
+    /// that a truncated log may genuinely lack) `t0` is defined for every
+    /// log, and 0 is its honest value for one with no events.
+    pub log_start_ms: u64 }
 
 pub fn agent_kind(a: &RawAgent) -> AgentKind {
     if a.is_elite != 0xffff_ffff { AgentKind::Player }
@@ -316,6 +336,7 @@ pub fn resolve(raw: &RawLog) -> Encounter {
         build: raw.header.build.clone(), revision: raw.header.revision,
         recorded_by: None, teams: Vec::new(), players, enemies,
         markers: Vec::new(), tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
+        log_start_ms: raw.log_start_ms(),
     };
     crate::wvw::apply(&mut enc, raw);
     enc

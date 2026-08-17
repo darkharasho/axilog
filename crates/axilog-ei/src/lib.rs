@@ -2794,7 +2794,7 @@ mod tests {
                 version: String::new(),
                 generated_from: None,
             },
-            encounter: axilog_schema::v1::EncounterOut {
+            encounter: axilog_schema::v1::EncounterOut { log_start_ms: 0,
                 kind: String::new(),
                 map: String::new(),
                 duration_ms: 0,
@@ -2825,7 +2825,7 @@ mod tests {
         use axilog_core::model::{Encounter, Player};
         use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
         use axilog_core::model::Enemy;
-        let enc = Encounter{kind:"wvw".into(),map:"Eternal Battlegrounds".into(),
+        let enc = Encounter{log_start_ms: 0,kind:"wvw".into(),map:"Eternal Battlegrounds".into(),
             duration_ms:1000,build:"".into(),revision:1,recorded_by:Some(":A.1".into()),
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"Daredevil".into(),
@@ -3022,7 +3022,7 @@ mod tests {
         use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
         use axilog_core::analysis::buffs::{self, BoonUptime, GenerationStats};
         use axilog_core::analysis::support::SupportMetrics;
-        let enc = Encounter{kind:"wvw".into(),map:"Eternal Battlegrounds".into(),
+        let enc = Encounter{log_start_ms: 0,kind:"wvw".into(),map:"Eternal Battlegrounds".into(),
             duration_ms:1000,build:"".into(),revision:1,recorded_by:None,
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"Nim Iss".into(),profession:"Thief".into(),elite_spec:"".into(),

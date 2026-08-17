@@ -84,7 +84,8 @@ inside `blocks` is empty or absent.
       ]
     }
   ],
-  "started_at_unix": 1768702180
+  "started_at_unix": 1768702180,
+  "log_start_ms": 33847418
 }
 ```
 
@@ -122,6 +123,19 @@ Omitted (not `0`) when the log carries no such event, so absence stays
 distinguishable from epoch zero. This replaces inferring the start time from
 the `.zevtc` file's mtime, which breaks for any copied or restored file.
 
+`log_start_ms` is the log's **`t0`**: the arcdps *session-time* millisecond
+stamp of the log's first event. Every other time in this document is already
+measured from it — with exactly two exceptions, both raw event times passed
+through deliberately: `markers[].time_ms` and
+`entities[].commander.segments`. Note the example above: the marker's
+`time_ms` of `33847418` is not "9.4 hours into a 49-second fight", it is the
+same instant as `t0`. Session time has no fixed origin, so those two fields
+are uninterpretable on their own; subtract `log_start_ms` from either to get
+an encounter-relative value comparable against `duration_ms`. The result can
+be **negative** — a commander tag held before the log's first event is
+ordinary — which is why the rebase is left to you rather than done here and
+clamped. Always present; `0` for a log with no events.
+
 ## `entities[]` and the `role` field
 
 Real rows from the fixture, trimmed to four representative roles:
@@ -152,7 +166,8 @@ Real rows from the fixture, trimmed to four representative roles:
 `commander.segments` holds every terminated `[tag-on, tag-off)` window this
 player's commander tag was ever assigned, half-open, in the log's own
 millisecond time base (same base as `markers[].time_ms` above — arcdps
-session time, not encounter-relative). These are LITERAL per-instance
+session time, not encounter-relative — subtract `encounter.log_start_ms` to
+rebase). These are LITERAL per-instance
 segments, not a coalesced whole-fight span: entity `7`'s real fixture data
 above shows two, including a zero-width `[33847418, 33847418]` pair from an
 immediate same-timestamp reassignment. There is no minimum-coverage

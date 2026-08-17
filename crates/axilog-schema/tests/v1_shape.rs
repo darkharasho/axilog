@@ -544,3 +544,54 @@ fn the_map_id_and_arena_reach_the_document() {
     }
     assert!(checked > 1000, "expected a real track set, checked {checked}");
 }
+
+/// `encounter.log_start_ms` is the `t0` that makes this document's two
+/// session-time fields interpretable at all.
+///
+/// Before it existed, `markers[].time_ms` and
+/// `entities[].commander.segments` were raw arcdps session times in a
+/// container where everything else was log-relative, and the container
+/// carried no origin to rebase them against -- so a consumer reading only
+/// the JSON could not tell "the tag went up at second 0" from "at second
+/// 33847". This asserts the round trip actually closes on the real
+/// fixture: rebased, both fields land inside the fight.
+#[test]
+fn the_two_session_time_fields_rebase_into_the_fight_by_log_start_ms() {
+    let doc = build();
+    let enc = &doc["encounter"];
+
+    let t0 = enc["log_start_ms"].as_i64().expect("log_start_ms is always present");
+    let duration = enc["duration_ms"].as_i64().expect("duration_ms");
+    // The fixture's own scale: a `t0` of ~9.4 hours of session uptime
+    // against a 49-second fight. Nothing about the numbers themselves
+    // reveals which base they are in, which is the whole problem.
+    assert!(t0 > duration, "expected a session-time t0 far beyond the fight length");
+
+    // Rebased marker times sit inside the fight. Half-open at the top:
+    // the closing event can land on the last millisecond.
+    let markers = enc["markers"].as_array().expect("markers");
+    assert!(!markers.is_empty(), "fixture has marker assignments");
+    for m in markers {
+        let rebased = m["time_ms"].as_i64().expect("time_ms") - t0;
+        assert!(
+            (0..=duration).contains(&rebased),
+            "marker at {rebased}ms is outside [0, {duration}]",
+        );
+    }
+
+    // Same for commander segments. The lower bound is NOT asserted: a tag
+    // held before the log's first event rebases negative, which is
+    // ordinary and is exactly why this field is left for the consumer to
+    // rebase rather than being clamped into `u64` here.
+    let mut segments = 0usize;
+    for e in doc["entities"].as_array().expect("entities") {
+        let Some(commander) = e.get("commander") else { continue };
+        for seg in commander["segments"].as_array().expect("segments") {
+            let (on, off) = (seg[0].as_i64().unwrap() - t0, seg[1].as_i64().unwrap() - t0);
+            assert!(on <= off, "segment [{on}, {off}] runs backwards");
+            assert!(off <= duration, "segment ends at {off}ms, past the fight's {duration}ms");
+            segments += 1;
+        }
+    }
+    assert!(segments > 0, "fixture has a commander with resolved segments");
+}

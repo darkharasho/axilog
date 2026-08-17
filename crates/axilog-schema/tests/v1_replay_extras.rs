@@ -49,7 +49,7 @@ fn player(addr: u64, account: &str) -> Player {
 
 /// A one-player document with the supplied extras attached, serialized.
 fn document(extras: &ReplayExtras) -> serde_json::Value {
-    let enc = Encounter {
+    let enc = Encounter { log_start_ms: 0,
         kind: "wvw".into(),
         map: String::new(),
         duration_ms: 1000,

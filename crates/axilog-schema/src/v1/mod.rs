@@ -63,6 +63,25 @@ pub struct EncounterOut {
     /// this is not a bare `u64` defaulting to 0.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at_unix: Option<u64>,
+    /// The log's `t0` in arcdps **session time** ms -- the origin every
+    /// other time in this document is already measured from.
+    ///
+    /// This document has exactly two fields that are NOT log-relative,
+    /// both raw event times passed through deliberately:
+    /// [`MarkerAssignmentOut::time_ms`] and
+    /// [`super::v1::entities::CommanderOut::segments`]. Both say to rebase
+    /// by the log's `t0`; this is it. It is carried because a consumer
+    /// reading this container as JSON has no other access to it, which made
+    /// those two fields uninterpretable -- session time has no fixed
+    /// origin, so their values could not be compared against `duration_ms`,
+    /// against each other across logs, or against anything else. Subtract
+    /// this to get encounter-relative ms; the result may be negative for a
+    /// tag held before the first event, which is why the rebase is left to
+    /// the consumer rather than done here in `u64`.
+    ///
+    /// Not optional: `t0` is defined for every log (0 for one with no
+    /// events), unlike the wall-clock [`Self::started_at_unix`].
+    pub log_start_ms: u64,
     /// WvW objective ownership timelines (MOBJ). Carried verbatim from the
     /// legacy shape -- unlike `markers` there is no join key to rekey, an
     /// objective belongs to the map rather than to an entity.
@@ -90,6 +109,10 @@ pub struct MarkerAssignmentOut {
     /// not a tracked entity.
     pub agent_addr: u64,
     pub marker: String,
+    /// arcdps **session time** ms, passed through from
+    /// `model::MarkerAssignment::time_ms` with no rebase -- one of this
+    /// document's only two non-log-relative times. Subtract
+    /// [`EncounterOut::log_start_ms`] for an encounter-relative value.
     pub time_ms: u64,
 }
 
@@ -523,6 +546,11 @@ pub fn build_report_v1(
             markers,
             tick_rate: legacy.encounter.tick_rate.clone(),
             started_at_unix: legacy.encounter.started_at_unix,
+            // Sourced from `enc`, not `legacy`: the legacy shape has no
+            // `t0` field and gains none here. It is the format this
+            // container replaces, and its consumers never had the two
+            // absolute-time fields joined to anything.
+            log_start_ms: enc.log_start_ms,
             objectives: legacy.encounter.objectives.clone(),
         },
         entities,
@@ -582,7 +610,7 @@ mod tests {
     /// silently dropped -- see Finding 1 of Task 9's fix round 1.
     #[test]
     fn a_marker_on_an_unrostered_agent_survives_with_no_entity_id() {
-        let enc = Encounter {
+        let enc = Encounter { log_start_ms: 0,
             kind: "wvw".into(),
             map: "".into(),
             duration_ms: 1000,
@@ -651,7 +679,7 @@ mod tests {
     /// never recorded a recorder at all".
     #[test]
     fn an_unresolvable_recorder_drops_recorded_by_but_warns_loudly() {
-        let enc = Encounter {
+        let enc = Encounter { log_start_ms: 0,
             kind: "wvw".into(),
             map: "".into(),
             duration_ms: 1000,
@@ -721,7 +749,7 @@ mod tests {
     /// instead of on a genuine join failure.
     #[test]
     fn no_recorded_by_at_all_produces_no_warning() {
-        let enc = Encounter {
+        let enc = Encounter { log_start_ms: 0,
             kind: "wvw".into(),
             map: "".into(),
             duration_ms: 1000,
