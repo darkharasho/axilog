@@ -147,6 +147,11 @@ release needs both to agree.
    - `crates/axilog-node/npm/*/package.json` (`version`, all 5 platform packages)
    - `crates/axilog-node/package.json`'s `optionalDependencies` pins (all 5, same value)
    - `crates/axilog-py/pyproject.toml` (`[project].version`)
+   - `crates/axilog-node/index.js` — the napi-generated `expected X.Y.Z` binding-version
+     literals, one per platform package. Regenerate with `npm run build` in
+     `crates/axilog-node`, or substitute the literals directly. Missing this does not
+     fail the release itself (`npm-publish` has already run by then) but it DOES fail
+     `lockfile-refresh`, which leaves `main` carrying a stale lockfile.
 2. Verify everything agrees before touching git:
    ```sh
    scripts/check-versions.sh
