@@ -6,10 +6,21 @@ license.workspace = true
 publish = false
 
 [lib]
-# The Python import name must match the `#[pymodule]` function name in
-# src/lib.rs ("axilog"), independent of the crate/package name
-# ("axilog-py") used for `cargo`/crates.io.
-name = "axilog"
+# NOT "axilog", deliberately: axilog-cli's `[[bin]]` is already named
+# `axilog`, and two workspace targets sharing an output name both write
+# `axilog.pdb` into target/<triple>/debug/deps/ on Windows, where the two
+# link.exe invocations race and one dies with `LNK1201: error writing to
+# program database` (rust-lang/cargo#8523). Only debug builds collide --
+# the release profile emits no PDB -- which is why CI's build+test leg
+# (CARGO_PROFILE_DEV_DEBUG=2) failed on windows-msvc while every release
+# workflow leg passed.
+#
+# The Python import name is NOT this: it comes from the `#[pymodule]`
+# function name in src/lib.rs ("axilog"), which is what generates the
+# `PyInit_axilog` symbol CPython looks up, and from `module-name` in
+# pyproject.toml, which is the name maturin gives the packaged extension.
+# Both are still "axilog", so `import axilog` is unaffected.
+name = "axilog_py"
 crate-type = ["cdylib"]
 
 [dependencies]
