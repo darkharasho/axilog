@@ -2,17 +2,38 @@
 
 ## Where things stand
 
-Phase B of the native-format program is **merged**. PR #5 landed on `main` as
-`521abc9` (16 commits, 39 files, +3601/−151). CI was green on all four targets.
-The remote branch is deleted; the local branch `feat/phase-b-native-gaps` and
-its worktree at `../axilog-worktrees/spec2-absorption` still exist and are safe
-to remove whenever.
+**Released as v0.3.4** (`3511039`, tag pushed 2026-08-16). Everything below is
+on `main`. Note that CI on `main` is red between a version bump and the
+`lockfile-refresh` job's follow-up commit — `crates/axilog-node/package-lock.json`
+is deliberately not bumped by hand, and the version guard reports that as a
+mismatch until CI commits it. That is by design; see `RELEASING.md` step 4.
 
-Phase B closed the five gaps native could close that ei-json can't:
-per-target split widened 7 → 23 fields, replay `dc` (despawn) intervals,
-commander-tag segments, engine-side `distToCom`/`stackDist`
-(`crates/axilog-core/src/analysis/distance.rs`, new), and
-`encounter.started_at_unix`.
+Everything axilog owns in the native-format program is **done**. What remains
+is Phase D, the axibridge-side reader rewrite, which is the owner's work and
+not ours to start.
+
+What landed, newest first:
+
+- **MSDELAY** — `instant_cast::SERVER_DELAY` corrected 150 → 10, matching
+  arcdps' own figure. Details under "Facts that cost real time to learn".
+- **MCAST** — `rotation` is now the whole of GW2EI's `InitCastEvents`, the
+  finder catalog runs at 571 of 649, and five `skillMap` proc/instant flags
+  are emitted. Animated casts 1,222/1,222 exact, weapon swaps 134/134 exact,
+  instant casts bounded at 92.9%.
+- **MPROC**, **MOBJ**, and the arcdps **effect decode** across all three
+  event generations.
+- **Phase C** — 4,656-skill and 2,267-buff icon catalogs.
+- **Phase B** — per-target split widened 7 → 23 fields, replay `dc` (despawn)
+  intervals, commander-tag segments, engine-side `distToCom`/`stackDist`
+  (`crates/axilog-core/src/analysis/distance.rs`), `encounter.started_at_unix`,
+  and the log-start anchor centralised across its 16 call sites.
+  (Merged as PR #5, `521abc9`.)
+- **Phase A** — side-channel absorption: ei-json now renders from the native
+  report alone, `EiInputs` is gone, and `--all` exists.
+- **Container 1.0**, plus both SDK stubs re-synced and CI-guarded.
+
+`docs/CHANGELOG.md` has the per-release version of this; `docs/ROADMAP.md` has
+the per-milestone version with measurements.
 
 ## The program this belongs to
 
@@ -25,9 +46,9 @@ Two standing rulings from the owner:
    while the in-tree adapter is 1.0's only reader. Record each in
    `docs/NATIVE-FORMAT.md` §"1.x compatibility rules". Don't stop to ask.
 
-Phases: container DONE → A (side-channel absorption) DONE → **B DONE** →
-**C DONE** (icons; proc flags split out as MPROC) → D (axibridge-side
-reader rewrite — the owner's, not ours).
+Phases: container DONE → A (side-channel absorption) DONE → B DONE →
+C DONE (icons; proc flags split out as MPROC, DONE) → **D — axibridge-side
+reader rewrite, the owner's, not ours. This is where the program now sits.**
 
 ## Facts that cost real time to learn
 
@@ -43,6 +64,17 @@ reader rewrite — the owner's, not ours).
 - Task 7's residuals, for anyone re-measuring: 0.0104 in against GW2EI's own
   exported positions; 1.6944% end-to-end (this project's resampler sits in
   between, which is why the plan's 1e-9 gate was split).
+- GW2EI's `ParserHelper.ServerDelayConstant` is **10**, not 150. 150 is
+  `TimeThresholdConstant`, declared two lines below it in the same block of
+  five `long` constants — an easy misread, and axilog carried it in
+  `instant_cast` alone (`rotation` and `distance` always used 10). At 150 every
+  `epsilon` default in the finder vocabulary ran a 15x-too-wide coincidence
+  window. **Measure this per skill, never on the total**: the total reads
+  backwards, going 340 → 338 squad instant casts while recovery improves,
+  because both casts that vanished were spurious over-fires. Per-skill absolute
+  error went 54 → 52. `scripts/gen_instant_cast_catalog.py` now reads the
+  constant out of `ParserHelper.cs` rather than carrying a literal, so the
+  neighbouring-constant slip cannot recur.
 
 ## Known debt, deliberately parked
 
@@ -52,6 +84,9 @@ reader rewrite — the owner's, not ours).
   BOTH SDK stubs were stale (9 Python types, 8 TypeScript types). Now guarded
   by `crates/axilog-schema/tests/v1_sdk_stubs.rs`, which fails if a field in
   the key-set golden is absent from either stub.
+- Four merged local branches linger (`chore/release-0.3.2`,
+  `feat/side-channel-absorption`, `fix/ci-green`, `fix/enemy-profession`).
+  No worktrees are open. All safe to delete whenever.
 - `dc` is empty on all 42 fixture rows, so that leg of the SDK comparison is
   vacuous; neither SDK asserts `dc`'s presence before comparing, so a rename
   would pass silently.
@@ -72,7 +107,7 @@ reader rewrite — the owner's, not ours).
 - `cargo fmt --all` must NOT be run — this repo is hand-formatted.
 - ei-json goldens must not move.
 - **Never read `fixtures/local/`** — real logs with real account names.
-- Scope tests: `cargo test -p <crate> -q`. Full workspace is 941 tests.
+- Scope tests: `cargo test -p <crate> -q`. Full workspace is 1,073 tests.
 - Python SDK: there is no repo venv. Use
   `VIRTUAL_ENV=/var/tmp/mstephens/axilog-py-venv /var/tmp/mstephens/axilog-py-venv/bin/maturin develop --release`
   from `crates/axilog-py`, then that venv's `python -m unittest discover -s tests`.
@@ -90,7 +125,8 @@ reader rewrite — the owner's, not ours).
 Phase D, a `--compact` CLI flag, format-level size work. (MOBJ and MPROC
 were both on this list; both landed 2026-08-16.)
 
-MPROC's leftovers:
+MPROC's leftovers — all three are now closed, kept here because each records
+why, and two of them are easy to reopen on the strength of a stale comment:
 
 - ~~Effect events are still not decoded~~ — CLOSED 2026-08-16.
   `crates/axilog-core/src/evtc/effect.rs` decodes all three arcdps
@@ -110,7 +146,8 @@ MPROC's leftovers:
   `ServerDelayConstant` replace-the-trailing-swap dedup. The finder pass
   runs once in `analyze` and is shared with `skill_map`. Calibration is
   per family — animated and weapon swaps EXACT, instant casts bounded at
-  93.4% recovered — and the committed ei-json golden was regenerated
+  92.9% recovered (338/364; it read 93.4% before MSDELAY, and the two casts
+  that went away were both spurious) — and the committed ei-json golden was regenerated
   UN-filtered (1,222 → 1,732 entries) to make that possible; see
   `rotation_golden.rs`'s module doc and the golden's own `_note`.
   Fell out of the merge: an ext-healing double-count in `instant_cast`
@@ -132,6 +169,8 @@ MPROC's leftovers:
 
 ---
 
-Assembled 2026-08-16 from memory files and the Phase B session. The SDD ledger
-it partly draws on was deleted at the end of Phase B per the skill;
-`git log b5ba6be..521abc9` is the surviving record if a detail needs checking.
+Assembled 2026-08-16 from memory files and the Phase B session, then brought
+forward through MOBJ, MPROC, MCAST and MSDELAY at the v0.3.4 release. The SDD
+ledger it partly draws on was deleted at the end of Phase B per the skill;
+`git log b5ba6be..521abc9` is the surviving record for Phase B specifically,
+and `git log 521abc9..v0.3.4` for everything after it.
