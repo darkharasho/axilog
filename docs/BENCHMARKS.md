@@ -1310,3 +1310,74 @@ Method: `node -e` over the `--all` document, both forms byte-for-byte the
 same content (`json.dumps(..., separators=(',',':'))` of the pretty form).
 
 Run: `/usr/bin/time -v axilog parse <log> --all --format json -o /dev/null`
+
+## axilog vs Elite Insights — v0.3.2 rerun (2026-08-16, post-MROSTER)
+
+Same methodology as the two EI sections above, and the same two logs:
+EI CLI **v3.27.1.0** + .NET **8.0.25**, driven with axibridge's production
+`settings.conf` verbatim (only `OutLocation` rewritten) via the same
+`dotnet <dll> -c <conf> <log>` argv `eiParser.ts` uses; axilog release build
+at 0.3.2, matched flag set
+(`--format ei-json --replay --skill-damage --timeseries --rotation --modifiers`);
+medians of 3 after an untimed warmup; `/usr/bin/time -f '%M %e'` for wall and
+peak RSS. Both sides re-run in the same session.
+
+The v0.3.0 rerun above is superseded: it was measured the day BEFORE MROSTER,
+so its matched-surface numbers still carried the uncurated 624-agent
+`targets[]`. It remains as the record of where MSTREAM left things.
+
+### Large log (7.6 MB zevtc, 583,194 events, 48 players, 5:48)
+
+| pipeline | wall (median of 3) | peak RSS |
+|---|---|---|
+| Elite Insights CLI | 6.75 s | 860 MiB |
+| axilog, matched ei-json surface | **1.59 s (4.2×)** | **107 MiB (8.0× less)** |
+| axilog, default native JSON | **0.40 s (17×)** | **90 MiB (9.6× less)** |
+| axilog, native `--all` | 1.06 s | 97 MiB |
+
+### Small log (1.5 MB zevtc, 120,435 events, 42 players, 49 s)
+
+| pipeline | wall (median of 3) | peak RSS |
+|---|---|---|
+| Elite Insights CLI | 2.27 s | 374 MiB |
+| axilog, matched ei-json surface | **0.26 s (8.7×)** | **29 MiB (12.7× less)** |
+| axilog, default native JSON | **0.07 s (32×)** | **23 MiB (16× less)** |
+| axilog, native `--all` | 0.16 s | 25 MiB |
+
+### Output size
+
+| document | large log | small log |
+|---|---|---|
+| EI `.json.gz` (raw) | 3,765,534 B (45,926,952) | 1,356,738 B (14,631,743) |
+| axilog `ei-json` matched (gzipped) | 56,898,955 B (2,275,055) | 10,962,209 B (649,192) |
+| axilog native, default | 830,458 B | 461,086 B |
+| axilog native, `--all` | 29,766,788 B | 8,067,599 B |
+
+### Honest notes
+
+- **The large-log ratio moved 2.9× → 4.2× because of MROSTER**, which is
+  already measured in the section above; this rerun is just the first
+  head-to-head taken after it. axilog's matched wall went 2.49 s → 1.59 s
+  while EI stood still.
+- **EI ran 0.5 s faster on the large log and 0.16 s faster on the small one
+  than in the v0.3.0 rerun**, which is why the small-log ratio drifts DOWN
+  (9.7× → 8.7×) despite axilog being unchanged there. Today's EI small-log
+  figure — 2.27 s / 373.5 MiB — reproduces the 2026-08-09 capture's
+  2.27 s / 373 MiB almost exactly, so today's is the better-behaved sample
+  and the v0.3.0 EI row was the slow one. Read the small-log axilog deltas
+  (0.25 → 0.26 s, 24 → 29 MiB) as noise plus surface growth, not regression.
+- **The `--all` row is new** — neither prior EI section had one. It is the
+  fairest "axilog computing everything it knows how to compute" number, and
+  on the large log it still beats EI's matched run 6.4× on wall and 8.9× on
+  memory while emitting a 29.8 MB document.
+- Still not feature-identical: EI computes phases and its full DB-backed
+  surface; axilog computes its documented WvW parity surface. The matched
+  flag set is the closest available comparison and is exactly the shape
+  axibridge runs in production.
+- EI's fixed startup (~2 s of dotnet start + JIT) is paid per spawn, and
+  axibridge spawns the CLI once per uploaded log. axilog's fixed cost is
+  ~0, which is most of the small-log gap.
+
+Harness: `/var/tmp/mstephens/axilog-bench/run-ei-compare.sh <log> <tag>`
+(not committed — it hardcodes local paths). Real-log figures are counts and
+timings only; the log itself stays gitignored.

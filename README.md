@@ -30,13 +30,13 @@ Elite Insights CLI v3.27 on the same machine and logs for scale:
 
 | Log | Events | Players | axilog | Elite Insights |
 | --- | --- | --- | --- | --- |
-| 49 s skirmish | 120,435 | 42 | **60 ms** · 20 MiB | 2.43 s · 373 MiB |
-| Real 5:48 zerg fight | 583,194 | 48 | **360 ms** · 86 MiB | 7.25 s · 857 MiB |
+| 49 s skirmish | 120,435 | 42 | **70 ms** · 23 MiB | 2.27 s · 374 MiB |
+| Real 5:48 zerg fight | 583,194 | 48 | **400 ms** · 90 MiB | 6.75 s · 860 MiB |
 
-Every metric listed above, computed on a whole zerg fight in about a third of a second on one
-thread — **20–40× faster at 10–18× less memory**. Emitting the full Elite Insights-compatible
-document instead, the heaviest thing axilog can produce (replay tracks and all), takes 2.49 s at
-117 MiB — still 2.9× faster at 7.3× less memory than EI's own equivalent configuration.
+Every metric listed above, computed on a whole zerg fight in under half a second on one
+thread — **17–32× faster at 10–16× less memory**. Emitting the full Elite Insights-compatible
+document instead, the heaviest thing axilog can produce (replay tracks and all), takes 1.59 s at
+107 MiB — still 4.2× faster at 8.0× less memory than EI's own equivalent configuration.
 [Full head-to-head and methodology →](#vs-elite-insights)
 
 ## Install
@@ -148,23 +148,26 @@ was *declined*, with reasons, are in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 ### vs Elite Insights
 
 axilog is calibrated against [Elite Insights](https://github.com/baaron4/GW2-Elite-Insights-Parser),
-so a like-for-like timing is worth recording. Measured 2026-08-10 on axilog v0.3.0 against the EI
-CLI v3.27 plus its bundled .NET 8 runtime, same machine, medians of 3 after a warmup. "Matched" is
-a production EI configuration (detailed WvW, damage modifiers, combat replay, raw timeline arrays,
-phases) against axilog's equivalent flag set:
+so a like-for-like timing is worth recording. Measured 2026-08-16 on axilog v0.3.2 against the EI
+CLI v3.27.1.0 plus its bundled .NET 8.0.25 runtime, same machine, medians of 3 after a warmup.
+"Matched" is a production EI configuration (detailed WvW, damage modifiers, combat replay, raw
+timeline arrays, phases) against axilog's equivalent flag set:
 
 | | Real 5:48 zerg (583k events) | 49 s skirmish (120k events) |
 | --- | --- | --- |
-| Elite Insights CLI | 7.25 s · 857 MiB peak | 2.43 s · 373 MiB peak |
-| **axilog, matched surface** | **2.49 s (2.9×) · 117 MiB (7.3× less)** | **0.25 s (9.7×) · 24 MiB (15× less)** |
-| **axilog, default native JSON** | **0.36 s (20×) · 86 MiB (10× less)** | **0.06 s (40×) · 20 MiB (18× less)** |
+| Elite Insights CLI | 6.75 s · 860 MiB peak | 2.27 s · 374 MiB peak |
+| **axilog, matched surface** | **1.59 s (4.2×) · 107 MiB (8.0× less)** | **0.26 s (8.7×) · 29 MiB (12.7× less)** |
+| **axilog, native `--all`** | **1.06 s (6.4×) · 97 MiB (8.9× less)** | **0.16 s (14×) · 25 MiB (15× less)** |
+| **axilog, default native JSON** | **0.40 s (17×) · 90 MiB (9.6× less)** | **0.07 s (32×) · 23 MiB (16× less)** |
 
 Not a feature-identical comparison: EI additionally computes phases and its full skill-DB surface,
 while axilog emits its documented WvW parity surface. Two structural notes — EI pays ~2 s of .NET
 startup and JIT *per spawned parse* (axilog's fixed cost is effectively zero), and memory was once
 EI's one win, until axilog's streaming serializer cut peak RSS 95% (byte-identical across 96
-flag/output combinations). Curating the `ei-json` enemy roster afterwards brought the matched
-surface to **1.70 s · 92 MiB** on the same harness.
+flag/output combinations). The large-log ratio improved 2.9× → 4.2× since v0.3.0 because curating
+the `ei-json` enemy roster cut nine `players × targets`-shaped arrays by 8.8×; the small-log ratio
+drifted 9.7× → 8.7× only because EI itself ran faster this session than in that measurement.
+[Full tables, sizes and honest notes →](docs/BENCHMARKS.md)
 
 ## Accuracy
 
