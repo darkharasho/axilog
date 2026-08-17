@@ -103,14 +103,27 @@ MPROC's leftovers:
   2026-08-16** — see `docs/ROADMAP.md`'s parked section and
   `docs/NATIVE-FORMAT.md`'s 1.x rules. They did not build on the effect
   decoder in the end.
-- **`rotation` is still `AnimatedCastEvent`-only.** The instant casts
-  exist (`analysis::instant_cast::compute`) but are not merged in.
-  Merging them moves cast counts and the ei-json `rotation[]`, so it is a
-  behavioural change, not an additive one.
-- **6 `UsingNoAnimatedCastChecker` finders** are skipped: that checker
-  needs a cast window (start + actual duration), which `analysis::rotation`
-  builds downstream of `instant_cast`. Doing the `rotation` merge above
-  would likely make this reachable too.
+- ~~`rotation` is still `AnimatedCastEvent`-only~~ — CLOSED 2026-08-16.
+  `analysis::rotation::build` now reproduces the whole of GW2EI's
+  `SingleActor.InitCastEvents`: animated casts + `instant_cast`'s
+  synthesized casts + `CBTS_WEAPSWAP` rows, with the
+  `ServerDelayConstant` replace-the-trailing-swap dedup. The finder pass
+  runs once in `analyze` and is shared with `skill_map`. Calibration is
+  per family — animated and weapon swaps EXACT, instant casts bounded at
+  93.1% recovered — and the committed ei-json golden was regenerated
+  UN-filtered (1,222 → 1,732 entries) to make that possible; see
+  `rotation_golden.rs`'s module doc and the golden's own `_note`.
+  Fell out of the merge: an ext-healing double-count in `instant_cast`
+  (the missing `HealingStatsExtensionHandler.SanitizeForSrc` port), and
+  `skill_map::PSEUDO_SKILL_NAMES` so negative pseudo ids get EI's names
+  rather than `"Skill 4294967294"`.
+- **6 `UsingNoAnimatedCastChecker` finders** are still skipped. That
+  checker needs a cast window (start + actual duration), which
+  `analysis::rotation` now builds — so this is newly REACHABLE, and is
+  the obvious next step on the residual 6.9% instant-cast gap. The rest
+  of that gap is GW2EI cast sources outside the finder family entirely
+  (`SpecialCastEventProcess`, `ProfHelper.ComputeEndWithBuffApplyCastEvents`,
+  the Engineer toolbelt helpers).
 
 ---
 

@@ -288,18 +288,30 @@ fn ei_json_per_skill_and_per_second_blocks_match_the_golden() {
 }
 
 /// M14 Task 3: `to_ei_json`'s `rotation[]` mapping, calibrated against the
-/// golden fixture's own `players[].rotation` (itself extracted -- see this
-/// file's module doc's "Task 1 (M14)" entry -- pre-filtered to the same
-/// `AnimatedCastEvent`-pipeline subset `axilog_core::analysis::rotation`
-/// computes). Like `ei_json_per_skill_and_per_second_blocks_match_the_golden`
-/// above, this test's job is narrower than `rotation_golden.rs`'s own
-/// `Metrics`-level calibration: confirm the ei-json ADAPTER LAYER carries
-/// the already-calibrated per-skill cast data through into EI's own flat,
+/// golden fixture's own `players[].rotation` -- since the instant-cast
+/// merge, the source export's VERBATIM `rotation[]`, all three cast
+/// families (see the golden's `_note`, "M14 Task 1 ADDENDUM"). Like
+/// `ei_json_per_skill_and_per_second_blocks_match_the_golden` above, this
+/// test's job is narrower than `rotation_golden.rs`'s own `Metrics`-level
+/// calibration: confirm the ei-json ADAPTER LAYER carries the
+/// already-calibrated per-skill cast data through into EI's own flat,
 /// non-phase-wrapped `rotation[]` shape unchanged, not re-derive the
-/// underlying cast-classification calibration itself. Per-player TOTAL
-/// cast count (summed across every skill id) is asserted EXACT -- the same
-/// "cast COUNT: EXACT" claim `rotation_golden.rs`'s own module doc makes at
-/// the `Metrics` layer.
+/// underlying cast-classification calibration itself.
+///
+/// Counts are asserted per FAMILY, mirroring `rotation_golden.rs`'s own
+/// per-family tolerance table (which is where the reasoning lives): the
+/// animated and weapon-swap counts EXACT, the finder-derived instant count
+/// bounded. Splitting them here is not just borrowed rigour -- the two
+/// exact families are the ones that would catch this layer's real failure
+/// mode, a pseudo id escaping as its unsigned bit pattern, since a weapon
+/// swap emitted as `4294967294` instead of `-2` lands in neither the
+/// golden's swap group nor its animated one.
+///
+/// Two adapter-level claims this test also pins:
+/// - `rotation[].id` is SIGNED: the golden's own swap group is keyed `-2`,
+///   so `ei_skill_id`'s cast is what makes the join land at all.
+/// - `skillMap` gains a `"s-2"` key with EI's own `"Weapon Swap"` name,
+///   from `analysis::skill_map::PSEUDO_SKILL_NAMES`.
 #[test]
 fn ei_json_rotation_cast_counts_match_the_golden() {
     use axilog_core::evtc::anon_account;
@@ -328,6 +340,8 @@ fn ei_json_rotation_cast_counts_match_the_golden() {
 
     let mut joined = 0usize;
     let mut count_mismatches: Vec<String> = Vec::new();
+    let mut instant_ours = 0usize;
+    let mut instant_golden = 0usize;
 
     for (i, agent) in raw.agents.iter().enumerate() {
         if !agent.is_player() {
@@ -347,33 +361,67 @@ fn ei_json_rotation_cast_counts_match_the_golden() {
             "positional join sanity: ei-json players[{player_idx}] must be this same account"
         );
 
-        let golden_count: usize = golden_rotation
-            .iter()
-            .map(|sr| sr["skills"].as_array().map(|s| s.len()).unwrap_or(0))
-            .sum();
         let our_rotation = our_player["rotation"]
             .as_array()
             .unwrap_or_else(|| panic!("account {key}: rotation must be an array"));
-        let our_count: usize = our_rotation
-            .iter()
-            .map(|sr| sr["skills"].as_array().map(|s| s.len()).unwrap_or(0))
-            .sum();
-        if our_count != golden_count {
-            count_mismatches.push(format!("{key}: ours={our_count} golden={golden_count}"));
+
+        // `(animated, weapon swaps, instants)`, split per cast by the same
+        // discriminator `analysis::rotation`'s module doc grounds in GW2EI
+        // source: `duration > 1` is animated, and of the rest the `-2`
+        // pseudo id is a weapon swap.
+        let split = |rotation: &[serde_json::Value]| {
+            let (mut a, mut s, mut i) = (0usize, 0usize, 0usize);
+            for grp in rotation {
+                let id = grp["id"].as_i64().expect("rotation group id");
+                for c in grp["skills"].as_array().expect("skills array") {
+                    match (c["duration"].as_i64().expect("duration"), id) {
+                        (d, _) if d > 1 => a += 1,
+                        (_, -2) => s += 1,
+                        _ => i += 1,
+                    }
+                }
+            }
+            (a, s, i)
+        };
+        let (g_anim, g_swap, g_inst) = split(golden_rotation);
+        let (o_anim, o_swap, o_inst) = split(our_rotation);
+
+        if (o_anim, o_swap) != (g_anim, g_swap) {
+            count_mismatches.push(format!(
+                "{key}: animated ours={o_anim} golden={g_anim}, swaps ours={o_swap} golden={g_swap}"
+            ));
         }
+        instant_ours += o_inst;
+        instant_golden += g_inst;
     }
 
     assert!(joined >= 30, "expected at least 30 accounts to join, got {joined}");
     assert!(
         count_mismatches.is_empty(),
-        "{} account(s) with a rotation cast COUNT mismatch (ei-json adapter layer):\n{}",
+        "{} account(s) with an animated-cast or weapon-swap COUNT mismatch (ei-json adapter \
+         layer -- these two families are held EXACT):\n{}",
         count_mismatches.len(),
         count_mismatches.join("\n")
     );
+    let recovery = instant_ours as f64 / instant_golden.max(1) as f64;
+    assert!(
+        (0.90..=1.02).contains(&recovery),
+        "squad-total instant-cast recovery {recovery:.4} (ours {instant_ours}, golden \
+         {instant_golden}) is outside the bound `rotation_golden.rs` documents"
+    );
+
+    // The pseudo id survives the adapter as EI writes it, key and name both.
+    assert_eq!(
+        ei["skillMap"]["s-2"]["name"], "Weapon Swap",
+        "skillMap must key the weapon-swap pseudo id as `s-2` (signed), naming it as EI does"
+    );
+    assert_eq!(ei["skillMap"]["s-2"]["isSwap"], true);
 
     println!(
-        "ei_json_rotation_cast_counts_match_the_golden: {joined} accounts joined, \
-         0 rotation cast-count mismatches"
+        "ei_json_rotation_cast_counts_match_the_golden: {joined} accounts joined, animated + \
+         weapon-swap counts EXACT for all of them, instant casts {instant_ours}/{instant_golden} \
+         ({:.1}% recovered)",
+        recovery * 100.0
     );
 }
 

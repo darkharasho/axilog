@@ -4,27 +4,42 @@
 //! Same real-account join method as `skill_damage_golden.rs`/
 //! `hit_stats_golden.rs`: raw agent-table index -> `anon_account(i)` ->
 //! golden `account`. `fixtures/wvw-small.ei.json`'s per-player `rotation`
-//! array (see that fixture's `_note`, M14 Task 1 addendum) holds EI's real
-//! `rotation[]` entries extracted from `axibridge/test-fixtures/boon/
-//! 20260117-181030.json`, FILTERED to the `AnimatedCastEvent`-pipeline
-//! subset this module actually computes -- a PER-CAST discriminator,
-//! `id >= 0 && duration > 1` (verified against `CombatEventFactory.
-//! CreateCastEvents`'s own `ActualDuration <= 1` drop plus
-//! `InstantCastEvent`'s ctor, which always hardcodes `ActualDuration = 0`:
-//! any surviving `duration > 1` entry MUST be a real `AnimatedCastEvent`;
-//! any `duration <= 1` entry MUST be an `InstantCastEvent`/`WeaponSwapEvent`
-//! -- NOT the coarser per-skill-id `skillMap[id].isInstantCast` flag, which
-//! a real post-rework capture proved can be `true` for a skill (e.g. a
-//! signet) that ALSO has genuine animated casts under the same id -- see
-//! the golden fixture's own `_note` for the full empirical writeup) -- see
-//! `analysis::rotation`'s module doc for the "why filtered, not the full EI
-//! rotation[]" writeup. 37 of 41 fixture players have at least one animated
-//! cast.
+//! array (see that fixture's `_note`, M14 Task 1 and its ADDENDUM) holds
+//! EI's real `rotation[]` entries from `axibridge/test-fixtures/boon/
+//! 20260117-181030.json` VERBATIM -- all 1,732 of them, no longer filtered
+//! to the animated subset, since `analysis::rotation` now reproduces
+//! GW2EI's whole `InitCastEvents` merge. 37 of 41 fixture players have at
+//! least one animated cast.
 //!
-//! ## Tolerance
+//! ## Tolerance, per cast FAMILY
+//!
+//! The merged list holds three families, told apart per cast by
+//! `duration > 1` (animated) and then by the `-2` pseudo id (weapon swap)
+//! -- the discriminator `analysis::rotation`'s module doc grounds in
+//! `CombatEventFactory.CreateCastEvents`'s `ActualDuration <= 1` drop plus
+//! `InstantCastEvent`/`WeaponSwapEvent`'s ctors. They are held to
+//! different standards, because this project reproduces them to different
+//! depths:
+//!
+//! - **Animated** -- the start/end pairing state machine, fully ported.
+//!   EXACT, as it has been since M14: per-player count, per-skill-id set,
+//!   and every per-cast field within the tolerances below.
+//! - **Weapon swaps** -- a `CBTS_WEAPSWAP` row IS the event, with no
+//!   heuristics in between, so the only thing on trial is the merge and
+//!   its `ServerDelayConstant` dedup. Per-player count **EXACT** (134 for
+//!   134 on the committed fixture).
+//! - **Instant casts** -- `analysis::instant_cast`'s finder catalog, which
+//!   documents its own coverage gaps (effect-keyed finders, the
+//!   `UsingNoAnimatedCastChecker` family, and GW2EI's non-finder cast
+//!   sources: `SpecialCastEventProcess`, `ProfHelper.
+//!   ComputeEndWithBuffApplyCastEvents`, the Engineer toolbelt helpers).
+//!   BOUNDED, not exact: [`INSTANT_PER_PLAYER_ABS_TOLERANCE`] per player
+//!   and [`INSTANT_TOTAL_RECOVERY_FLOOR`]..[`INSTANT_TOTAL_RECOVERY_CEILING`]
+//!   on the squad total. Asserting exactness here would mean asserting
+//!   that catalog is complete, which it is not and does not claim to be.
 //!
 //! - Per-player animated cast COUNT (`total_casts`): **EXACT**.
-//! - Per-skill-id cast SET (which skill ids appear at all): **EXACT**.
+//! - Per-skill-id cast SET (which animated skill ids appear at all): **EXACT**.
 //! - Per-cast `castTime`/`duration`/`timeGained` (all integer ms fields):
 //!   within `TIME_FIELD_ABS_TOLERANCE_MS` -- documented headroom for
 //!   GW2EI's own cast-boundary/rounding quirks (`SetAcceleration`'s
@@ -66,6 +81,22 @@ const TIME_FIELD_ABS_TOLERANCE_MS: i64 = 1;
 /// Same rounding-mode headroom, at `quickness`'s 3-decimal scale.
 const QUICKNESS_ABS_TOLERANCE: f64 = 0.001;
 
+/// Largest per-player instant-cast count difference tolerated. Measured
+/// worst case on the committed fixture is 5 (in both directions); this is
+/// headroom, and its job is to catch a REGIME change -- a finder family
+/// silently going dark, or one over-firing on every event -- not to
+/// certify the count. See this file's module doc for why this family is
+/// bounded rather than exact.
+const INSTANT_PER_PLAYER_ABS_TOLERANCE: usize = 8;
+/// Squad-total instant casts recovered, as a fraction of the golden's.
+/// Measured 339/364 = 0.931 on the committed fixture.
+const INSTANT_TOTAL_RECOVERY_FLOOR: f64 = 0.90;
+/// The same ratio's upper bound -- an over-firing finder is as much a
+/// regression as a missing one, and the ext-healing double-count this
+/// bound was written after (`instant_cast`'s `SanitizeForSrc` port) would
+/// have shown up here as ~1.04.
+const INSTANT_TOTAL_RECOVERY_CEILING: f64 = 1.02;
+
 fn read_anon_fixture() -> Vec<u8> {
     std::fs::read(ANON_FIXTURE_PATH).unwrap_or_else(|e| panic!("read committed fixture {ANON_FIXTURE_PATH}: {e}"))
 }
@@ -86,43 +117,75 @@ fn read_golden_json() -> serde_json::Value {
     serde_json::from_str(&s).expect("parse golden EI JSON")
 }
 
-/// `golden["rotation"]` (already animated-only filtered, see module doc) ->
-/// skill id -> ordered `(castTime, duration, timeGained, quickness)` list.
-fn golden_rotation_map(golden_p: &serde_json::Value) -> HashMap<i64, Vec<(i64, i64, i64, f64)>> {
-    let mut map = HashMap::new();
+/// GW2EI's pseudo skill id for a weapon swap (`SkillIDs.WeaponSwap`), in
+/// the SIGNED space an EI export writes it in.
+const WEAPON_SWAP_ID: i64 = -2;
+
+/// The three cast families `InitCastEvents` merges, told apart by the
+/// per-cast discriminator `analysis::rotation`'s module doc grounds in
+/// GW2EI source: `duration > 1` can only be an `AnimatedCastEvent`,
+/// `duration <= 1` can only be an `InstantCastEvent`/`WeaponSwapEvent`,
+/// and the two of THOSE are told apart by the pseudo id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Family {
+    Animated,
+    Swap,
+    Instant,
+}
+
+fn family(skill_id: i64, duration_ms: i64) -> Family {
+    if duration_ms > 1 {
+        Family::Animated
+    } else if skill_id == WEAPON_SWAP_ID {
+        Family::Swap
+    } else {
+        Family::Instant
+    }
+}
+
+/// One side's rotation, split by [`Family`]: family -> skill id -> ordered
+/// `(castTime, duration, timeGained, quickness)` list.
+type RotationByFamily = HashMap<Family, HashMap<i64, Vec<(i64, i64, i64, f64)>>>;
+
+fn insert_cast(map: &mut RotationByFamily, id: i64, cast: (i64, i64, i64, f64)) {
+    map.entry(family(id, cast.1)).or_default().entry(id).or_default().push(cast);
+}
+
+/// `golden["rotation"]`, verbatim from the source EI export (NOT filtered
+/// any more -- see this file's module doc and the golden's own `_note`).
+fn golden_rotation_map(golden_p: &serde_json::Value) -> RotationByFamily {
+    let mut map = RotationByFamily::new();
     let Some(rotation) = golden_p.get("rotation").and_then(|v| v.as_array()) else { return map };
     for grp in rotation {
         let id = grp["id"].as_i64().expect("id");
-        let skills: Vec<(i64, i64, i64, f64)> = grp["skills"]
-            .as_array()
-            .expect("skills array")
-            .iter()
-            .map(|s| {
-                (
-                    s["castTime"].as_i64().expect("castTime"),
-                    s["duration"].as_i64().expect("duration"),
-                    s["timeGained"].as_i64().expect("timeGained"),
-                    s["quickness"].as_f64().expect("quickness"),
-                )
-            })
-            .collect();
-        map.insert(id, skills);
+        for s in grp["skills"].as_array().expect("skills array") {
+            insert_cast(&mut map, id, (
+                s["castTime"].as_i64().expect("castTime"),
+                s["duration"].as_i64().expect("duration"),
+                s["timeGained"].as_i64().expect("timeGained"),
+                s["quickness"].as_f64().expect("quickness"),
+            ));
+        }
     }
     map
 }
 
-fn our_rotation_map(rotation: &axilog_core::analysis::rotation::RotationMetrics) -> HashMap<i64, Vec<(i64, i64, i64, f64)>> {
-    rotation
-        .iter()
-        .map(|s| {
-            let casts = s
-                .casts
-                .iter()
-                .map(|c| (c.cast_time_ms, c.duration_ms, c.time_gained_ms, c.quickness))
-                .collect();
-            (s.skill_id as i64, casts)
-        })
-        .collect()
+fn our_rotation_map(rotation: &axilog_core::analysis::rotation::RotationMetrics) -> RotationByFamily {
+    let mut map = RotationByFamily::new();
+    for s in rotation {
+        // `as i32`: this project carries EI's negative pseudo ids as their
+        // `u32` bit pattern -- same cast the ei-json adapter's
+        // `ei_skill_id` makes on the way out.
+        let id = i64::from(s.skill_id as i32);
+        for c in &s.casts {
+            insert_cast(&mut map, id, (c.cast_time_ms, c.duration_ms, c.time_gained_ms, c.quickness));
+        }
+    }
+    map
+}
+
+fn family_total(map: &RotationByFamily, f: Family) -> usize {
+    map.get(&f).map_or(0, |m| m.values().map(Vec::len).sum())
 }
 
 struct FieldMismatch {
@@ -151,6 +214,10 @@ fn check_rotation_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
     let mut joined = 0usize;
     let mut players_with_casts = 0usize;
     let mut count_mismatches: Vec<(String, usize, usize)> = Vec::new();
+    let mut swap_mismatches: Vec<(String, usize, usize)> = Vec::new();
+    let mut instant_over_budget: Vec<(String, usize, usize)> = Vec::new();
+    let mut instant_ours = 0usize;
+    let mut instant_golden = 0usize;
     let mut skill_set_mismatches: Vec<(String, Vec<i64>, Vec<i64>)> = Vec::new();
     let mut field_mismatches: Vec<FieldMismatch> = Vec::new();
     let mut max_time_delta: i64 = 0;
@@ -174,8 +241,11 @@ fn check_rotation_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
         let Some(pm) = metrics.players.iter().find(|m| m.agent_addr == p.agent_addr) else { continue };
         joined += 1;
 
-        let golden_map = golden_rotation_map(golden_p);
-        let our_map = our_rotation_map(&pm.rotation);
+        let golden_by_family = golden_rotation_map(golden_p);
+        let our_by_family = our_rotation_map(&pm.rotation);
+        let empty = HashMap::new();
+        let golden_map = golden_by_family.get(&Family::Animated).unwrap_or(&empty);
+        let our_map = our_by_family.get(&Family::Animated).unwrap_or(&empty);
 
         let golden_total: usize = golden_map.values().map(|v| v.len()).sum();
         let our_total: usize = our_map.values().map(|v| v.len()).sum();
@@ -184,6 +254,26 @@ fn check_rotation_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
         }
         if golden_total > 0 {
             players_with_casts += 1;
+        }
+
+        // -- weapon swaps: EXACT, same as the animated family. This one is
+        // fully ours to get right -- a `CBTS_WEAPSWAP` row IS the event,
+        // with no finder heuristics in between -- so the only thing being
+        // calibrated is the `InitCastEvents` merge and its
+        // `ServerDelayConstant` dedup.
+        let g_swaps = family_total(&golden_by_family, Family::Swap);
+        let o_swaps = family_total(&our_by_family, Family::Swap);
+        if g_swaps != o_swaps {
+            swap_mismatches.push((key.clone(), o_swaps, g_swaps));
+        }
+
+        // -- instant casts: BOUNDED, not exact. See this file's module doc.
+        let g_inst = family_total(&golden_by_family, Family::Instant);
+        let o_inst = family_total(&our_by_family, Family::Instant);
+        instant_ours += o_inst;
+        instant_golden += g_inst;
+        if o_inst.abs_diff(g_inst) > INSTANT_PER_PLAYER_ABS_TOLERANCE {
+            instant_over_budget.push((key.clone(), o_inst, g_inst));
         }
 
         let mut golden_ids: Vec<i64> = golden_map.keys().copied().collect();
@@ -196,7 +286,7 @@ fn check_rotation_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
             // partial mismatch doesn't hide field-level info.
         }
 
-        for (id, gcasts) in &golden_map {
+        for (id, gcasts) in golden_map {
             let Some(ocasts) = our_map.get(id) else { continue };
             if ocasts.len() != gcasts.len() {
                 continue; // already captured by skill_set/count mismatches above
@@ -250,6 +340,36 @@ fn check_rotation_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
             report.join("\n")
         );
     }
+    if !swap_mismatches.is_empty() {
+        let report: Vec<String> = swap_mismatches
+            .iter()
+            .map(|(a, o, g)| format!("{a}: ours={o} golden={g}"))
+            .collect();
+        panic!(
+            "{} account(s) with a weapon-swap COUNT mismatch (checked {joined} accounts):\n{}",
+            swap_mismatches.len(),
+            report.join("\n")
+        );
+    }
+    if !instant_over_budget.is_empty() {
+        let report: Vec<String> = instant_over_budget
+            .iter()
+            .map(|(a, o, g)| format!("{a}: ours={o} golden={g}"))
+            .collect();
+        panic!(
+            "{} account(s) whose instant-cast count is more than \
+             {INSTANT_PER_PLAYER_ABS_TOLERANCE} off the golden (checked {joined} accounts):\n{}",
+            instant_over_budget.len(),
+            report.join("\n")
+        );
+    }
+    let instant_recovery = instant_ours as f64 / instant_golden.max(1) as f64;
+    assert!(
+        (INSTANT_TOTAL_RECOVERY_FLOOR..=INSTANT_TOTAL_RECOVERY_CEILING).contains(&instant_recovery),
+        "squad-total instant-cast recovery {instant_recovery:.4} (ours {instant_ours}, golden \
+         {instant_golden}) is outside [{INSTANT_TOTAL_RECOVERY_FLOOR}, \
+         {INSTANT_TOTAL_RECOVERY_CEILING}] -- see this file's module doc"
+    );
     if !skill_set_mismatches.is_empty() {
         let report: Vec<String> = skill_set_mismatches
             .iter()
@@ -277,7 +397,10 @@ fn check_rotation_matches_ei_golden(bytes: &[u8], golden: &serde_json::Value) {
         "rotation_matches_ei_golden: {joined} accounts joined ({players_with_casts} with >=1 animated \
          cast), 0 count mismatches, 0 skill-id-set mismatches, {total_casts_checked} casts field-checked, \
          max time-field delta {max_time_delta}ms (tolerance {TIME_FIELD_ABS_TOLERANCE_MS}ms), max \
-         quickness delta {max_quickness_delta:.6} (tolerance {QUICKNESS_ABS_TOLERANCE})"
+         quickness delta {max_quickness_delta:.6} (tolerance {QUICKNESS_ABS_TOLERANCE}); \
+         weapon swaps EXACT for all {joined}; instant casts {instant_ours}/{instant_golden} \
+         ({:.1}% recovered)",
+        instant_recovery * 100.0
     );
 }
 
@@ -352,10 +475,10 @@ fn rotation_calibrated_against_local_postrework_ei_json_when_available() {
     let metrics = analyze(&enc, &raw);
 
     let golden_players = golden["players"].as_array().expect("players array");
-    // Per-CAST discriminator (not the coarser per-skill-id `skillMap[id].
-    // isInstantCast` flag -- see this file's module doc for the empirical
-    // writeup on why that flag is unreliable): `id >= 0 && duration > 1`.
-    let is_animated_cast = |id: i64, duration: i64| id >= 0 && duration > 1;
+    // This local check stays scoped to the ANIMATED family alone (the one
+    // held exact -- see this file's module doc's per-family tolerance
+    // table), on both sides. The instant/swap families are calibrated
+    // against the committed golden above rather than duplicated here.
 
     let mut golden_by_account: HashMap<String, &serde_json::Value> = HashMap::new();
     for p in golden_players {
@@ -388,7 +511,7 @@ fn rotation_calibrated_against_local_postrework_ei_json_when_available() {
                 .iter()
                 .filter_map(|s| {
                     let duration = s["duration"].as_i64().expect("duration");
-                    if !is_animated_cast(id, duration) {
+                    if family(id, duration) != Family::Animated {
                         return None;
                     }
                     Some((
@@ -403,7 +526,9 @@ fn rotation_calibrated_against_local_postrework_ei_json_when_available() {
                 golden_map.insert(id, skills);
             }
         }
-        let our_map = our_rotation_map(&pm.rotation);
+        let our_by_family = our_rotation_map(&pm.rotation);
+        let empty = HashMap::new();
+        let our_map = our_by_family.get(&Family::Animated).unwrap_or(&empty);
 
         let golden_total: usize = golden_map.values().map(|v| v.len()).sum();
         let our_total: usize = our_map.values().map(|v| v.len()).sum();

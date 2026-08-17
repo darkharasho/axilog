@@ -98,7 +98,9 @@ pub mod defenses;
 /// pairing state machine -- no pet-credit fold, casts belong to the caster
 /// only). See `rotation`'s module doc for the full GW2EI
 /// `CombatEventFactory.CreateCastEvents`/`AnimatedCastEvent` citation trail
-/// and the documented `InstantCastEvent`-machinery scope gap.
+/// and for the `InitCastEvents` merge that folds `instant_cast`'s
+/// synthesized casts and the log's `CBTS_WEAPSWAP` rows into the same
+/// per-player list.
 pub mod rotation;
 /// Generated reference tables, not analysis passes: skill art from the GW2
 /// API and buff art from GW2EI's own buff list. They are grouped here, ahead
@@ -685,10 +687,19 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             players[i].per_target.insert(dst, stats);
         }
     }
+    // The ONE instant-cast finder pass for this whole analysis. Two
+    // consumers need it and it is not cheap (an effect-keyed finder forces
+    // the effect decode, thousands of rows on a WvW log), so it runs here
+    // and both take a slice: `rotation::build` for the instant half of
+    // GW2EI's `InitCastEvents` merge, `skill_map::build` for the
+    // `is_instant_cast` flag.
+    let instant_finders: Vec<instant_cast::FinderDef> =
+        instant_cast::catalog::all().into_iter().copied().collect();
+    let instants = instant_cast::compute(raw, enc, &instant_finders);
     // M14 Task 1: per-player rotation (cast tracking) -- see `rotation`'s
     // module doc. No `squad`/`enemies` filter needed beyond `addr_to_rep`
     // itself (only registered for squad player addrs).
-    let rotation_by_rep = rotation::build(raw, &addr_to_rep);
+    let rotation_by_rep = rotation::build(raw, &addr_to_rep, &instants);
     for p in &mut players {
         if let Some(r) = rotation_by_rep.get(&p.agent_addr) {
             p.rotation = r.clone();
@@ -781,7 +792,7 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // `rotation` (both already populated on `players` above) actually
     // referenced, plus the always-tracked boon ids -- see `skill_map`'s
     // module doc.
-    let skill_map = skill_map::build(raw, enc, &players);
+    let skill_map = skill_map::build(raw, &players, &instants);
     // MEIGAP2 row 3: `instanceID`, read off the registry built at the top
     // of this function -- no extra scan (see `Metrics::instance_ids`).
     let instance_ids: BTreeMap<u64, u16> = enc

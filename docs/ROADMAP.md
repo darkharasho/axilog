@@ -235,6 +235,43 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   follow-up.
 
 ## Queued (the only open feature work)
+- ~~MCAST: merge instant casts + weapon swaps into `rotation`~~ — **DONE 2026-08-16**.
+  `analysis::rotation::build` now transcribes GW2EI's `SingleActor.InitCastEvents`
+  (`SingleActor.cs:599-619`) whole: `animated ++ instant`, then the weapon-swap loop with
+  its `ServerDelayConstant` replace-the-trailing-swap dedup. `AnimationStatus` gained the
+  `Instant` variant (neutral to `aftercast_stats`, matching `GameplayStatistics`). The one
+  expensive finder pass now runs once in `analyze` and is shared with `skill_map::build`,
+  which takes the events rather than recomputing them.
+
+  Three things this forced, each worth knowing:
+  - **The committed ei-json golden had to move**, the one deliberate exception to "goldens
+    don't move". `fixtures/wvw-small.ei.json`'s `rotation` was extracted PRE-FILTERED to the
+    animated subset (1,222 entries, zero with `duration <= 1`) while the real export it came
+    from has 1,732. It was regenerated VERBATIM from that export. The join was re-derived
+    independently of the account mapping — match each old golden player against the source
+    player whose `id >= 0 && duration > 1` subset reproduces it exactly (37 of 41 unique,
+    all identity; the other 4 are the zero-cast `Non Squad Player N` rows). Details in the
+    golden's own `_note`.
+  - **Calibration is per cast FAMILY**, not one total. Animated: EXACT (unchanged, 1,222 for
+    1,222, every field 0 residual). Weapon swaps: EXACT (134 for 134). Instant casts:
+    BOUNDED — 339/364, **93.1% recovered**, because that family is only as complete as the
+    finder catalog. Asserting exactness there would be asserting the catalog is complete.
+  - **Negative pseudo ids now reach the surface.** They ride as `-2i32 as u32` natively and
+    the ei-json adapter casts back (`ei_skill_id`), so `rotation[].id` is `-2` and `skillMap`
+    keys `"s-2"`, as EI writes them. `skill_map::PSEUDO_SKILL_NAMES` ports the NEGATIVE-id
+    subset of GW2EI's `SkillItemOverrides` so they name themselves ("Weapon Swap") instead
+    of falling back to `"Skill 4294967294"`. The 12 Weaver dual-attunement ids still fall
+    back — EI names those from its Buff table, a different subsystem.
+
+  Found while calibrating: a real bug in `instant_cast`, not in the merge. The ext-healing
+  finders never ported `HealingStatsExtensionHandler.SanitizeForSrc`, so every heal counted
+  twice (healer's client + recipient's). One `src_is_peer` predicate at stream collection;
+  three finders went from +35 over to exact.
+
+  Behavioural consequences, both intended: `--view rotation` cast counts and APM now cover
+  all actions, not just animations (the fixture's sample row went 55 → 63 casts, 67.0 → 76.7
+  APM, and 63 is exactly what EI reports), and ei-json `rotation[]` gained the ~29% of
+  entries it was missing.
 - ~~MPROC skill proc/instant-cast flags~~ — **DONE 2026-08-16** (`c6dc134`, `324a1e5`,
   `a620c3c`). All five flags are computed and emitted in both formats. The scoping below
   held up in full: it is a subsystem port, not a catalog generator, and `isInstantCast`
@@ -282,13 +319,11 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
 
   New deliberate gap, much smaller: **6 `UsingNoAnimatedCastChecker` finders** are skipped.
   That checker needs a cast WINDOW (start plus actual duration), which `analysis::rotation`
-  builds downstream of `instant_cast`.
+  builds downstream of `instant_cast` — and as of the MCAST merge below it now DOES build
+  one, so these 6 are newly reachable.
 
-  Also still open: the **`rotation` fill** the entry below calls out as adjacent value.
-  Instant casts are computed but are NOT merged into `PlayerMetrics::rotation`, which
-  remains `AnimatedCastEvent`-only. That is a behavioural change to an existing block
-  (cast counts move, ei-json `rotation[]` moves), so it was kept separate from the flag
-  work rather than bundled into it.
+  The **`rotation` fill** this entry used to leave open is **DONE 2026-08-16** — see MCAST
+  below.
 
   Original scoping, retained because it is what made the work tractable:
 - MPROC skill proc/instant-cast flags (`skillMap[].isTraitProc`/`isGearProc`/

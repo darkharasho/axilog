@@ -1,6 +1,6 @@
 //! Per-player rotation (cast tracking) -- M14, Task 1.
 //!
-//! Reproduces the ANIMATED-CAST subset of GW2EI's `rotation[]` (the
+//! Reproduces GW2EI's `rotation[]` (the
 //! `JsonRotation`/`JsonRotation.JsonSkill` shape:
 //! `{ id, skills: [{ castTime, duration, timeGained, quickness }] }`),
 //! grouped by skill id, one entry per squad player (account-folded via
@@ -165,48 +165,92 @@
 //!     10,878 casts, so no midpoint is reached there and changing it would
 //!     be an unmeasured edit to an already-exact surface.
 //!
-//! # Deliberately OUT OF SCOPE: GW2EI's `InstantCastEvent` machinery
+//! # The instant-cast and weapon-swap merge
 //!
 //! GW2EI's real `rotation[]` is NOT limited to the `AnimatedCastEvent`
-//! pipeline above -- `SingleActor.InitCastEvents` (`GW2EIEvtcParser/
-//! EIData/Actors/SingleActor.cs:599-619`) additionally merges in
-//! `_instantCastData` (a large, per-skill-id-registered family of
-//! "InstantCastFinder"s -- `GW2EIEvtcParser/EIData/InstantCastFinders/*`,
-//! one per instant-cast mechanic: weapon swaps, procs, extension-sourced
-//! instant heals/barriers, marker/effect/buff/damage-triggered instants,
-//! minion-spawn casts, etc, each keyed to specific skill ids across every
-//! profession) plus a SEPARATE `WeaponSwapEvent` merge keyed off the
-//! dedicated `CBTS_WEAPSWAP`(11) statechange (pseudo skill id `-2`,
-//! `SkillIDs.WeaponSwap`) -- NEITHER of which derives from
-//! `is_activation`/`ANIMATION_START`/`ANIMATION_STOP` at all, and neither
-//! of which this module implements. Verified directly against this
-//! project's own source EI JSON (`axibridge/test-fixtures/boon/
-//! 20260117-181030.json`, the real dps.report export this project's
-//! committed `fixtures/wvw-small.ei.json` fixture is itself extracted
-//! from): of 1,732 total rotation-group cast entries across all 41
-//! players, 510 (~29%) are NOT part of the `AnimatedCastEvent` pipeline
-//! this module reproduces -- identified PER CAST (not per skill id) as
-//! `id >= 0 && duration > 1`, grounded directly in
-//! `CombatEventFactory.CreateCastEvents`'s own `RemoveAll(x => x.Caster.
-//! IsPlayer && x.ActualDuration <= 1)` filter plus `InstantCastEvent`'s
-//! ctor (`ActualDuration` always hardcoded to `0`): a surviving
-//! `duration > 1` entry can only be a real `AnimatedCastEvent`; a
-//! `duration <= 1` entry can only be an `InstantCastEvent`/
-//! `WeaponSwapEvent`. This is a PER-CAST signal, not a per-skill-id one --
-//! confirmed on a real post-rework capture (`fixtures/local/
+//! pipeline above. `SingleActor.InitCastEvents` (`GW2EIEvtcParser/EIData/
+//! Actors/SingleActor.cs:599-619`) builds a player's cast list from THREE
+//! sources, and [`build`] reproduces all three:
+//!
+//! ```text
+//! CastEvents.AddRange(animationCastData);
+//! CastEvents.AddRange(instantCastData);
+//! foreach (WeaponSwapEvent wepSwap in log.CombatData.GetWeaponSwapData(AgentItem))
+//! {
+//!     if (CastEvents.Count > 0 && (wepSwap.Time - CastEvents.Last().Time) < ServerDelayConstant
+//!         && CastEvents.Last().SkillID == WeaponSwap)
+//!     {
+//!         CastEvents[^1] = wepSwap;
+//!     }
+//!     else { CastEvents.Add(wepSwap); }
+//! }
+//! CastEvents.SortByTimeThenNegatedSwap();
+//! ```
+//!
+//! 1. **Animated casts** -- the start/end pairing state machine above.
+//! 2. **Instant casts** -- `analysis::instant_cast`'s port of the
+//!    `InstantCastFinder` family (`GW2EIEvtcParser/EIData/
+//!    InstantCastFinders/*`), passed in already computed so the one
+//!    expensive finder pass is shared with `analysis::skill_map` rather
+//!    than run twice.
+//! 3. **Weapon swaps** -- the dedicated `CBTS_WEAPSWAP`(11) statechange,
+//!    under GW2EI's pseudo skill id `-2` (`SkillIDs.WeaponSwap`, carried
+//!    here as [`crate::analysis::skill_map::WEAPON_SWAP_SKILL_ID`], the
+//!    same `-2i32 as u32` bit-cast every negative pseudo id in this
+//!    codebase uses). Neither this nor (2) derives from
+//!    `is_activation`/`ANIMATION_START`/`ANIMATION_STOP` at all.
+//!
+//! ## The swap dedup is transcribed literally, order and all
+//!
+//! The `CastEvents.Last()` the swap loop tests is the last element of the
+//! still-UNSORTED `animated ++ instant` concatenation -- so on the first
+//! iteration it is the latest instant cast (or the latest animated cast
+//! when a player has no instants), and on every later iteration it is the
+//! swap the previous iteration just appended. That second case is the one
+//! that actually fires in practice: it collapses two `CBTS_WEAPSWAP` rows
+//! landing within [`SERVER_DELAY_MS`] of each other down to the later one.
+//! [`build`] therefore keeps the same three-part list identity rather than
+//! pre-sorting, because a pre-sorted list would compare against a
+//! different neighbour and drop a different swap.
+//!
+//! `SortByTimeThenNegatedSwap` (`CastEvent.cs:67`) is NOT reproduced: it
+//! orders the flat list, and this module's output is grouped by skill id
+//! with each group in time order (see [`RotationMetrics`]), a shape that
+//! order cannot affect.
+//!
+//! Instant casts and swaps are merged AFTER the cross-skill `CutAt`
+//! sanitize pass below, matching GW2EI, where that trim runs inside
+//! `CombatEventFactory.CreateCastEvents` on animated data alone -- an
+//! instant cast must not shorten a real animation it happens to fall
+//! inside.
+//!
+//! ## Telling the two families apart in an EI export
+//!
+//! A cast's family is recoverable PER CAST (not per skill id) from
+//! `duration` alone: `CombatEventFactory.CreateCastEvents` drops
+//! `RemoveAll(x => x.Caster.IsPlayer && x.ActualDuration <= 1)`, while
+//! `InstantCastEvent`'s and `WeaponSwapEvent`'s ctors both hardcode
+//! `ActualDuration = 0`. So a surviving `duration > 1` entry can only be a
+//! real `AnimatedCastEvent`, and a `duration <= 1` entry can only be an
+//! instant or a swap. This is what the committed golden's own regeneration
+//! join was re-verified against (`fixtures/wvw-small.ei.json`'s `_note`,
+//! "M14 Task 1 ADDENDUM"), and it is a PER-CAST signal, not a per-skill-id
+//! one -- confirmed on a real post-rework capture (`fixtures/local/
 //! wvw-postrework.{zevtc,ei.json}`, gitignored): `Signet of Fury` (id
 //! 14410) has two real, ~500ms-duration animated casts AND two duration-0
 //! instant-proc entries on the SAME player, even though that capture's own
 //! `skillMap["s14410"].isInstantCast` is `true` -- a coarser per-skill flag
-//! that would wrongly exclude the two genuinely-animated entries too (an
-//! earlier version of this module's calibration used that flag directly;
-//! it happened to agree with the per-cast signal on the smaller committed
-//! fixture -- 0 disagreements across 1,732 entries -- but diverges on this
-//! richer real capture, which is why the per-cast discriminator is the one
-//! actually used). This is a documented, honest scope limit (mirrors M14's
-//! own skillMap-name-gap precedent for Task 2): `rotation_golden.rs`
-//! calibrates ONLY the remaining ~71% "animated" subset, not the full EI
-//! `rotation[]`.
+//! that would wrongly exclude the two genuinely-animated entries too.
+//!
+//! ## Residual gap
+//!
+//! `WeaponSwapEvent.IgnoreOnRotationRender()` is `IsSpecialBundleSwap`,
+//! set only by `LuminaryHelper.FlagLuminaryRadiantForgeWeaponSwapEvents`
+//! for the Luminary elite spec. It does NOT drop the entry -- EI still
+//! emits it and merely tags the JSON row `ignoreOnRotationRender: true`
+//! (`JsonRotationBuilder.cs:22-25`) -- so no cast is missed by not
+//! porting it; only that presentational flag is absent, and this project
+//! does not model Luminary at all.
 //!
 //! # Account folding
 //!
@@ -279,11 +323,9 @@ pub struct Cast {
 
 /// GW2EI's `CastEvent.AnimationStatus`
 /// (`GW2EIEvtcParser/ParsedData/CombatEvents/CastEvents/CastEvent.cs:8`),
-/// restricted to the four values [`set_acceleration`] can produce.
-///
-/// GW2EI's fifth value, `Instant`, is only ever set on `InstantCastEvent`
-/// (a synthesized, zero-duration cast this project does not model), so it
-/// is deliberately absent rather than dead.
+/// complete: the four values [`set_acceleration`] can produce, plus
+/// [`AnimationStatus::Instant`] for the two synthesized zero-duration
+/// families [`build`] merges in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AnimationStatus {
     /// `SetAcceleration` never ran, or ran but matched no `case` -- a
@@ -299,6 +341,13 @@ pub enum AnimationStatus {
     Interrupted,
     /// End `is_activation` was `Reset(5)`: the animation ran to completion.
     Full,
+    /// Not an animation at all: a synthesized `InstantCastEvent` or a
+    /// `WeaponSwapEvent`, both of whose ctors set `Status = Instant` and
+    /// hardcode `ActualDuration = ExpectedDuration = 0`. Neutral to
+    /// [`aftercast_stats`], which counts only `Reduced`/`Interrupted` --
+    /// matching `GameplayStatistics`'s own switch, whose `Instant` casts
+    /// fall through both cases with `SavedDuration == 0` regardless.
+    Instant,
 }
 
 /// GW2EI's `GameplayStatistics` aftercast counters, for one player's whole
@@ -394,7 +443,7 @@ pub fn aftercast_stats(rotation: &RotationMetrics) -> AftercastStats {
                     // already-negated value.
                     out.wasted_ms -= c.time_gained_ms;
                 }
-                AnimationStatus::Unknown | AnimationStatus::Full => {}
+                AnimationStatus::Unknown | AnimationStatus::Full | AnimationStatus::Instant => {}
             }
         }
     }
@@ -431,6 +480,16 @@ struct Item {
     value: i64,
     buff_dmg: i64,
     activation: u8,
+}
+
+/// One entry of the instant-cast / weapon-swap half of `InitCastEvents`'s
+/// merge (see the module doc). Both families are `ActualDuration = 0` by
+/// construction, so a skill id and a time are the whole event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MergedCast {
+    skill_id: u32,
+    /// Project-relative (`t0`-based) ms, same clock as [`Cast::cast_time_ms`].
+    time: i64,
 }
 
 /// Working accumulator for one (possibly still start-only/"unknown") cast,
@@ -673,7 +732,18 @@ fn process_skill(skill_id: u32, items: &[Item], log_end_rel: i64) -> Vec<CastAcc
 /// Computes [`RotationMetrics`] for every squad player addr present in
 /// `addr_to_rep` (i.e. every squad player, account-folded onto its
 /// representative addr -- see the module doc's "Account folding" section).
-pub fn build(raw: &RawLog, addr_to_rep: &BTreeMap<u64, u64>) -> BTreeMap<u64, RotationMetrics> {
+///
+/// `instants` is `analysis::instant_cast::compute`'s already-computed
+/// output for this same log, merged in per the module doc's "instant-cast
+/// and weapon-swap merge" section. It is a parameter rather than an
+/// internal call so the one finder pass is shared with
+/// `analysis::skill_map`, which needs the same events for its
+/// `is_instant_cast` flag. Pass `&[]` to get the animated pipeline alone.
+pub fn build(
+    raw: &RawLog,
+    addr_to_rep: &BTreeMap<u64, u64>,
+    instants: &[crate::analysis::instant_cast::InstantCastEvent],
+) -> BTreeMap<u64, RotationMetrics> {
     let t0 = raw.log_start_ms() as i64;
     let log_end_rel = raw.events.last().map(|e| e.time as i64 - t0).unwrap_or(0);
     let post_era = raw.header.is_post_buff_rework();
@@ -709,8 +779,43 @@ pub fn build(raw: &RawLog, addr_to_rep: &BTreeMap<u64, u64>) -> BTreeMap<u64, Ro
         });
     }
 
+    // The other two cast families, bucketed per representative addr and
+    // kept in the chronological order GW2EI's own `GetInstantCastData` /
+    // `GetWeaponSwapData` hand back (see the module doc). `compute` returns
+    // its events sorted by `(time, skill, caster)` and `raw.events` is
+    // chronological, so both fall out already ordered.
+    let mut instants_by_rep: BTreeMap<u64, Vec<MergedCast>> = BTreeMap::new();
+    for ic in instants {
+        let Some(&rep) = addr_to_rep.get(&ic.caster) else { continue };
+        instants_by_rep
+            .entry(rep)
+            .or_default()
+            .push(MergedCast { skill_id: ic.skill_id, time: ic.time as i64 - t0 });
+    }
+    let mut swaps_by_rep: BTreeMap<u64, Vec<MergedCast>> = BTreeMap::new();
+    for e in &raw.events {
+        if e.is_statechange != sc::WEAPON_SWAP {
+            continue;
+        }
+        let Some(&rep) = addr_to_rep.get(&e.src_agent) else { continue };
+        swaps_by_rep.entry(rep).or_default().push(MergedCast {
+            skill_id: crate::analysis::skill_map::WEAPON_SWAP_SKILL_ID,
+            time: e.time as i64 - t0,
+        });
+    }
+
+    // Every rep that produced ANY of the three families -- a player who only
+    // ever swapped weapons still gets a rotation.
+    let reps: std::collections::BTreeSet<u64> = per_rep
+        .keys()
+        .chain(instants_by_rep.keys())
+        .chain(swaps_by_rep.keys())
+        .copied()
+        .collect();
+
     let mut result: BTreeMap<u64, RotationMetrics> = BTreeMap::new();
-    for (rep, by_skill) in per_rep {
+    for rep in reps {
+        let by_skill = per_rep.remove(&rep).unwrap_or_default();
         let mut flat: Vec<CastAcc> = Vec::new();
         for (skill_id, items) in &by_skill {
             flat.extend(process_skill(*skill_id, items, log_end_rel));
@@ -738,6 +843,43 @@ pub fn build(raw: &RawLog, addr_to_rep: &BTreeMap<u64, u64>) -> BTreeMap<u64, Ro
                 quickness: c.quickness,
                 status: c.status,
             });
+        }
+        // -- `InitCastEvents`, transcribed: `animated ++ instant`, then the
+        // swap loop's replace-or-append against that list's LAST element.
+        // Only `(skill_id, time)` matters, since both merged families are
+        // zero-duration by construction.
+        //
+        // The animated half of that concatenation never needs materializing
+        // here: the replace arm additionally requires
+        // `CastEvents.Last().SkillID == WeaponSwap`, and the animated
+        // pipeline keys casts off `RawEvent::skillid`, which cannot carry
+        // the `-2i32 as u32` sentinel. So whenever the trailing element is
+        // an animated cast the arm is unreachable and GW2EI appends --
+        // exactly what an empty `merged` does below.
+        let mut merged: Vec<MergedCast> = instants_by_rep.remove(&rep).unwrap_or_default();
+        for sw in swaps_by_rep.remove(&rep).unwrap_or_default() {
+            match merged.last() {
+                Some(l)
+                    if sw.time - l.time < SERVER_DELAY_MS
+                        && l.skill_id == crate::analysis::skill_map::WEAPON_SWAP_SKILL_ID =>
+                {
+                    // `CastEvents[^1] = wepSwap`.
+                    *merged.last_mut().expect("matched on `Some`") = sw;
+                }
+                _ => merged.push(sw),
+            }
+        }
+        for m in merged {
+            by_id.entry(m.skill_id).or_default().push(Cast {
+                cast_time_ms: m.time,
+                duration_ms: 0,
+                time_gained_ms: 0,
+                quickness: 0.0,
+                status: AnimationStatus::Instant,
+            });
+        }
+        for casts in by_id.values_mut() {
+            casts.sort_by_key(|c| c.cast_time_ms);
         }
         let rotation: RotationMetrics = by_id
             .into_iter()
@@ -790,7 +932,7 @@ mod tests {
             RawEvent { time: 1100, src_agent: 1, skillid: 500, is_activation: 5, value: 1000, buff_dmg: 1000, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let rot = &out[&1];
         assert_eq!(rot.len(), 1);
         assert_eq!(rot[0].skill_id, 500);
@@ -812,7 +954,7 @@ mod tests {
             RawEvent { time: 400, src_agent: 1, skillid: 500, is_activation: 4, value: 400, buff_dmg: 400, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let c = out[&1][0].casts[0];
         assert_eq!(c.duration_ms, 400);
         assert_eq!(c.time_gained_ms, -400);
@@ -827,7 +969,7 @@ mod tests {
             RawEvent { time: 700, src_agent: 1, skillid: 500, is_activation: 3, value: 700, buff_dmg: 700, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let c = out[&1][0].casts[0];
         assert_eq!(c.duration_ms, 700);
         assert_eq!(c.time_gained_ms, 300);
@@ -840,7 +982,7 @@ mod tests {
             RawEvent { time: 1000, src_agent: 1, skillid: 500, is_activation: 5, value: 1000, buff_dmg: 1000, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let c = out[&1][0].casts[0];
         assert_eq!(c.time_gained_ms, 0);
     }
@@ -853,7 +995,7 @@ mod tests {
             RawEvent { time: 500, src_agent: 1, skillid: 500, is_activation: 5, value: 500, buff_dmg: 1000, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let c = out[&1][0].casts[0];
         assert_eq!(c.quickness, 1.0);
     }
@@ -866,7 +1008,7 @@ mod tests {
             RawEvent { time: 1000, src_agent: 1, skillid: 500, is_activation: 5, value: 1000, buff_dmg: 500, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let c = out[&1][0].casts[0];
         assert_eq!(c.quickness, -0.833);
     }
@@ -883,7 +1025,7 @@ mod tests {
             RawEvent { time: 3100, src_agent: 1, skillid: 999, is_activation: 5, value: 100, buff_dmg: 100, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let rot = &out[&1];
         let skill500 = rot.iter().find(|s| s.skill_id == 500).unwrap();
         assert_eq!(skill500.casts.len(), 1);
@@ -910,7 +1052,7 @@ mod tests {
             RawEvent { time: 200, src_agent: 1, skillid: 500, is_activation: 5, value: 50, buff_dmg: 50, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let rot = &out[&1];
         assert!(rot.iter().all(|s| s.skill_id != 500));
     }
@@ -923,7 +1065,7 @@ mod tests {
             RawEvent { time: 320, src_agent: 1, skillid: 999, is_activation: 5, value: 20, buff_dmg: 20, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let rot = &out[&1];
         let skill500 = rot.iter().find(|s| s.skill_id == 500).unwrap();
         assert_eq!(skill500.casts.len(), 1);
@@ -941,7 +1083,7 @@ mod tests {
             RawEvent { time: 1, src_agent: 1, skillid: 500, is_activation: 5, value: 1, buff_dmg: 1, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         assert!(out.get(&1).map(|r| r.is_empty()).unwrap_or(true));
     }
 
@@ -952,7 +1094,7 @@ mod tests {
             RawEvent { time: 1000, src_agent: 42, skillid: 500, is_activation: 5, value: 1000, buff_dmg: 1000, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1])); // 42 not in squad
+        let out = build(&raw, &addr_map(&[1]), &[]); // 42 not in squad
         assert!(out.get(&1).map(|r| r.is_empty()).unwrap_or(true));
         assert!(!out.contains_key(&42));
     }
@@ -964,7 +1106,7 @@ mod tests {
             RawEvent { time: 300, src_agent: 1, skillid: RESURRECT_SKILL_ID, is_activation: 4, value: 300, buff_dmg: 300, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let c = out[&1][0].casts[0];
         assert_eq!(c.time_gained_ms, 0); // would be -300 for any other skill id
     }
@@ -978,7 +1120,7 @@ mod tests {
             RawEvent { time: 700, src_agent: 1, skillid: 500, is_statechange: sc::ANIMATION_STOP, is_activation: 3, value: 700, buff_dmg: 700, ..base_event() },
         ];
         let raw = raw_from("20260501", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let c = out[&1][0].casts[0];
         assert_eq!(c.cast_time_ms, 0);
         assert_eq!(c.duration_ms, 700);
@@ -995,7 +1137,7 @@ mod tests {
             RawEvent { time: 1000, src_agent: 1, skillid: 500, is_activation: 5, value: 1000, buff_dmg: 1000, ..base_event() },
         ];
         let raw = raw_from("20260501", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         assert!(out.get(&1).map(|r| r.is_empty()).unwrap_or(true));
     }
 
@@ -1008,7 +1150,7 @@ mod tests {
             RawEvent { time: 500, src_agent: 1, skillid: DODGE_SKILL_ID, is_activation: 5, value: 500, buff_dmg: 750, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let c = out[&1][0].casts[0];
         assert_eq!(c.quickness, 0.0);
         assert_eq!(c.duration_ms, 500);
@@ -1023,7 +1165,7 @@ mod tests {
             RawEvent { time: 300, src_agent: 1, skillid: 500, is_activation: 5, value: 100, buff_dmg: 100, ..base_event() },
         ];
         let raw = raw_from("20260114", events);
-        let out = build(&raw, &addr_map(&[1]));
+        let out = build(&raw, &addr_map(&[1]), &[]);
         let rot = &out[&1];
         assert_eq!(rot.len(), 1);
         assert_eq!(rot[0].casts.len(), 2);

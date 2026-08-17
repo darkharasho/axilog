@@ -100,7 +100,14 @@ fn skill_map_scoped_to_referenced_ids_on_committed_fixture() {
         let raw_name = skill_names.get(&id).map(|s| s.trim()).unwrap_or("");
         let numeric_or_empty = raw_name.is_empty() || raw_name.chars().all(|c| c.is_ascii_digit());
         if numeric_or_empty {
-            assert_eq!(entry.name, format!("Skill {id}"), "skill {id}: expected fallback name for empty/numeric/absent log-table row (raw: {raw_name:?})");
+            // A NEGATIVE pseudo id (`-2` weapon swap, and the instant-cast
+            // catalog's own set) is never in the log's skill table -- no
+            // such game skill exists -- so it lands here, but resolves to
+            // EI's own name via `skill_map::PSEUDO_SKILL_NAMES` rather than
+            // to the `"Skill <id>"` fallback.
+            let expected = axilog_core::analysis::skill_map::pseudo_name(id)
+                .map_or_else(|| format!("Skill {id}"), str::to_string);
+            assert_eq!(entry.name, expected, "skill {id}: expected fallback/pseudo name for empty/numeric/absent log-table row (raw: {raw_name:?})");
             fallback_count += 1;
         } else {
             assert_eq!(entry.name, raw_name, "skill {id}: expected the log table's own trimmed name verbatim");

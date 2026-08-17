@@ -570,14 +570,39 @@ fn collect_streams(
         }
 
         // --- healing extension ---------------------------------------------
+        // `src_is_peer` is `HealingStatsExtensionHandler.SanitizeForSrc`
+        // (`HealingStatsExtensionHandler.cs:175-183`), which EVERY
+        // ext-healing finder runs on its per-source group before looking at
+        // a single event (`EXTHealingCastFinder.cs:25`,
+        // `EXTBarrierCastFinder.cs:25`):
+        //
+        // ```text
+        // if (events.Any(x => x.SrcIsPeer)) { events.RemoveAll(x => !x.SrcIsPeer); return true; }
+        // return false;   // caller: `continue` -- the whole group is skipped
+        // ```
+        //
+        // Both arms collapse to the same per-EVENT predicate: a non-peer
+        // event is dropped when its source has a peer event (arm 1) and
+        // also when it does not (arm 2, the whole group goes), so no
+        // grouping pass is needed here. The rule is per (skill, source) and
+        // identical for every finder reading this stream, which is why it
+        // belongs at collection rather than in `emit_for_finder`.
+        //
+        // Without it the ext-healing finders roughly DOUBLE-count: the
+        // same heal is reported once by the healer's own arcdps and once by
+        // the recipient's, and `RawExtHealEvent::src_is_peer` (which
+        // defaults to `true` when neither peer bit is set -- see its own
+        // doc comment) is the flag that picks one.
         if let Some(h) = crate::evtc::ext_healing::decode_data_event(
             e,
             crate::evtc::ext_healing::HEALING_SIGNATURE,
         ) {
-            push(
-                StreamKey::ExtHealing(h.skill_id),
-                TriggerHit { time: e.time, key: e.src_agent, other: e.dst_agent, ..TriggerHit::NONE },
-            );
+            if h.src_is_peer {
+                push(
+                    StreamKey::ExtHealing(h.skill_id),
+                    TriggerHit { time: e.time, key: e.src_agent, other: e.dst_agent, ..TriggerHit::NONE },
+                );
+            }
         }
     }
 

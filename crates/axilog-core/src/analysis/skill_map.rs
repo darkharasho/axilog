@@ -110,22 +110,19 @@
 //! swap as just another cast entry: `SkillIDs.WeaponSwap = -2` (verified
 //! against `baaron4/GW2-Elite-Insights-Parser`, `master`,
 //! `GW2EIEvtcParser/ParserHelpers/IDs/SkillIDs.cs`, 2026-08-09 -- the same
-//! constant this project's own `analysis::rotation` module doc already
-//! cites for its own, separate, documented `WeaponSwapEvent` scope gap).
+//! constant this project's own `analysis::rotation` uses for the
+//! `WeaponSwapEvent` half of its `InitCastEvents` merge).
 //! [`WEAPON_SWAP_SKILL_ID`] reproduces that same sentinel (`-2i32 as u32`,
 //! since this project's skill ids are unsigned throughout).
 //!
-//! On this module's OWN referenced scope, the literal `-2` sentinel can
-//! never actually fire: `-2` is not a real game skill id (never appears in
-//! `RawLog::skills`, never appears in `skill_damage` since it's not a
-//! damage event), and `analysis::rotation` deliberately does NOT decode
-//! `CBTS_WEAPSWAP`/`WeaponSwapEvent` casts at all (see that module's own
-//! "Deliberately OUT OF SCOPE" doc section) -- so it never contributes a
-//! rotation-group skill id either. `is_swap` is still implemented (and
-//! unit-tested against the sentinel directly) because it's a cheap,
-//! objectively-correct-by-construction check, and matches EI's own
-//! `isSwap` field shape for any FUTURE caller that widens the referenced
-//! scope (e.g. if a later milestone decodes `WeaponSwapEvent` casts too).
+//! The sentinel now really does reach this module's referenced scope:
+//! `analysis::rotation` merges `CBTS_WEAPSWAP` rows into each player's
+//! rotation as GW2EI's `InitCastEvents` does, so `-2i32 as u32` arrives
+//! here as a rotation-group skill id like any other. It still never
+//! appears in `RawLog::skills` (it is not a real game skill) or in
+//! `skill_damage` (it deals none), which is what [`PSEUDO_SKILL_NAMES`]
+//! below exists to cover -- without it the entry's name would resolve to
+//! the fallback `"Skill 4294967294"` rather than EI's `"Weapon Swap"`.
 //!
 //! ## Extended non-sentinel `is_swap` ids (M14, Task 3, Ruling B)
 //!
@@ -419,11 +416,75 @@ pub type SkillMap = BTreeMap<u32, SkillMapEntry>;
 fn resolve_name(id: u32, raw_name: Option<&str>) -> String {
     let trimmed = raw_name.map(str::trim).unwrap_or("");
     let numeric_or_empty = trimmed.is_empty() || trimmed.chars().all(|c| c.is_ascii_digit());
-    if numeric_or_empty {
-        format!("Skill {id}")
-    } else {
-        trimmed.to_string()
+    if !numeric_or_empty {
+        return trimmed.to_string();
     }
+    match pseudo_name(id) {
+        Some(n) => n.to_string(),
+        None => format!("Skill {id}"),
+    }
+}
+
+/// GW2EI's `SkillItemOverrides.OverridenSkillNames` (`GW2EIEvtcParser/
+/// ParsedData/Skills/SkillItemOverrides.cs`), restricted to the NEGATIVE
+/// pseudo skill ids -- the synthetic ids that have no `RawLog::skills` row
+/// to name them because no such game skill exists.
+///
+/// # Why only the negative subset
+///
+/// The full override table is 577 entries wide and mostly re-names ids the
+/// log's own skill table already names perfectly well (EI prefers its
+/// API-backed disambiguations, e.g. `"Flame Blast (Superior Sigil of
+/// Fire)"`); adopting all of it is the same database-backed naming gap this
+/// module's doc comment already declares out of scope. The negative ids are
+/// different in kind: for those the log table is not merely less specific,
+/// it is EMPTY, so the alternative is not a worse name but `"Skill
+/// 4294967294"`.
+///
+/// Every one of these is reachable: the entries are `SkillIDs.WeaponSwap`
+/// (merged into every player's rotation by `analysis::rotation`) plus the
+/// negative ids `analysis::instant_cast`'s generated catalog can emit.
+///
+/// # The one gap
+///
+/// GW2EI's twelve Weaver dual-attunement pseudo ids (`-5`..`-16`, e.g.
+/// `FireWaterAttunement`) are NOT in `OverridenSkillNames` at all -- EI
+/// names those from its BUFF table instead (`WeaverHelper.cs:308`,
+/// `new Buff("Fire Water Attunement", FireWaterAttunement, ...)`), a
+/// different subsystem this module does not read. They keep the `"Skill
+/// <id>"` fallback, and [`is_swap`] still classifies them correctly.
+const PSEUDO_SKILL_NAMES: &[(u32, &str)] = &[
+    ((-2i32) as u32, "Weapon Swap"), // SkillIDs.WeaponSwap
+    ((-17i32) as u32, "Mirage Cloak"), // SkillIDs.MirageCloakDodge
+    ((-20i32) as u32, "Restoring Reprieve or Rejunevating Respite"), // SkillIDs.RestoringReprieveOrRejunevatingRespite
+    ((-21i32) as u32, "Opening Passage or Clarified Conclusion"), // SkillIDs.OpeningPassageOrClarifiedConclusion
+    ((-22i32) as u32, "Potent Haste or Overwhelming Celerity"), // SkillIDs.PotentHasteOrOverwhelmingCelerity
+    ((-23i32) as u32, "Portent of Freedom or Unhindered Delivery"), // SkillIDs.PortentOfFreedomOrUnhinderedDelivery
+    ((-26i32) as u32, "Rune of the Nightmare"), // SkillIDs.RuneOfNightmare
+    ((-28i32) as u32, "Ranger Pet Spawned"), // SkillIDs.RangerPetSpawned
+    ((-29i32) as u32, "Healing Mist or Soothing Detonation"), // SkillIDs.HealingMistOrSoothingDetonation
+    ((-31i32) as u32, "Blade Burst or Particle Accelerator"), // SkillIDs.BladeBurstOrParticleAccelerator
+    ((-32i32) as u32, "Relic of Fireworks (Buff Loss)"), // SkillIDs.RelicOfFireworksBuffLoss
+    ((-38i32) as u32, "Superior Sigil of Leeching"), // SkillIDs.SuperiorSigilOfLeeching
+    ((-39i32) as u32, "Blitz Mines (Drop)"), // SkillIDs.BlitzMinesDrop
+    ((-40i32) as u32, "Relic of the Claw (Buff Loss)"), // SkillIDs.RelicOfTheClawBuffLoss
+    ((-41i32) as u32, "Berserk (End)"), // SkillIDs.BerserkEndSkill
+    ((-42i32) as u32, "Superior Rune of the Lich (Spawn Minion)"), // SkillIDs.RuneLichSpawn
+    ((-43i32) as u32, "Superior Rune of the Ogre (Spawn Minion)"), // SkillIDs.RuneOgreSpawn
+    ((-44i32) as u32, "Superior Rune of the Golemancer (Spawn Minion)"), // SkillIDs.RuneGolemancerSpawn
+    ((-45i32) as u32, "Superior Rune of the Privateer (Spawn Minion)"), // SkillIDs.RunePrivateerSpawn
+    ((-46i32) as u32, "Relic of the Lich (Spawn Minion)"), // SkillIDs.RelicLichSpawn
+    ((-47i32) as u32, "Relic of the Ogre (Spawn Minion)"), // SkillIDs.RelicOgreSpawn
+    ((-48i32) as u32, "Relic of the Golemancer (Spawn Minion)"), // SkillIDs.RelicGolemancerSpawn
+    ((-49i32) as u32, "Relic of the Privateer (Spawn Minion)"), // SkillIDs.RelicPrivateerSpawn
+    ((-50i32) as u32, "Relic of the Steamshrieker"), // SkillIDs.RelicOfTheSteamshrieker
+    ((-59i32) as u32, "Relic of the Cruel Overseer"), // SkillIDs.RelicOfTheCruelOverseer
+];
+
+/// EI's own display name for a negative pseudo skill id, if it has one --
+/// see [`PSEUDO_SKILL_NAMES`].
+pub fn pseudo_name(id: u32) -> Option<&'static str> {
+    PSEUDO_SKILL_NAMES.iter().find(|&&(k, _)| k == id).map(|&(_, n)| n)
 }
 
 /// The referenced-id scope: every skill id any squad player's already-
@@ -463,8 +524,8 @@ fn referenced_skill_ids(players: &[PlayerMetrics]) -> BTreeSet<u32> {
 /// per-player data" placement in `analyze()`.
 pub fn build(
     raw: &RawLog,
-    enc: &crate::model::Encounter,
     players: &[PlayerMetrics],
+    instants: &[super::instant_cast::InstantCastEvent],
 ) -> SkillMap {
     let ids = referenced_skill_ids(players);
     // Last-wins on a duplicate id (never observed in practice -- arcdps
@@ -473,17 +534,16 @@ pub fn build(
     let names: BTreeMap<u32, &str> = raw.skills.iter().map(|s| (s.id, s.name.as_str())).collect();
 
     // MPROC. The four proc/accuracy flags come from finder AVAILABILITY
-    // and cost only a build/capability probe; `is_instant_cast` needs the
-    // finders to have actually fired, so it pays for a real pass. Both
-    // are computed once for the whole map rather than per id.
+    // and cost only a build/capability probe, so they stay here.
+    // `is_instant_cast` needs the finders to have actually FIRED, which is
+    // a real pass over the log -- `analysis::rotation` needs the same
+    // events to build its half of GW2EI's `InitCastEvents` merge, so
+    // `analyze` runs that pass once and hands the result to both.
     let finders: Vec<super::instant_cast::FinderDef> =
         super::instant_cast::catalog::all().into_iter().copied().collect();
     let (trait_procs, gear_procs, uncond_procs, not_accurate) =
         super::instant_cast::available_flags(raw, &finders);
-    let fired: BTreeSet<u32> = super::instant_cast::compute(raw, enc, &finders)
-        .into_iter()
-        .map(|e| e.skill_id)
-        .collect();
+    let fired: BTreeSet<u32> = instants.iter().map(|e| e.skill_id).collect();
 
     ids.into_iter()
         .map(|id| {
@@ -523,16 +583,6 @@ mod tests {
     /// (`Check::Spec`). These fixtures carry no players and no finder
     /// -triggering events, so an empty one is exact rather than a stub:
     /// with no spec to read, every spec-checked finder correctly fails.
-    fn empty_enc() -> crate::model::Encounter {
-        crate::model::Encounter {
-            kind: "wvw".into(), map: String::new(), duration_ms: 0,
-            build: String::new(), revision: 1, recorded_by: None,
-            teams: Vec::new(), players: Vec::new(), enemies: Vec::new(),
-            markers: Vec::new(), tick_rate: None, objectives: Vec::new(),
-            started_at_unix: None,
-        }
-    }
-
     fn raw_with_skills(skills: Vec<RawSkill>) -> RawLog {
         use crate::evtc::{RawHeader, RawLog};
         RawLog { header: RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 },
@@ -559,7 +609,7 @@ mod tests {
     fn named_skill_resolves_from_log_table() {
         let raw = raw_with_skills(vec![RawSkill { id: 5000, name: "Fireball".into() }]);
         let players = vec![player_referencing(&[5000], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert_eq!(map[&5000].name, "Fireball");
     }
 
@@ -567,7 +617,7 @@ mod tests {
     fn empty_name_falls_back_to_skill_id() {
         let raw = raw_with_skills(vec![RawSkill { id: 5001, name: "".into() }]);
         let players = vec![player_referencing(&[5001], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert_eq!(map[&5001].name, "Skill 5001");
     }
 
@@ -575,7 +625,7 @@ mod tests {
     fn whitespace_only_name_falls_back_to_skill_id() {
         let raw = raw_with_skills(vec![RawSkill { id: 5002, name: "   ".into() }]);
         let players = vec![player_referencing(&[5002], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert_eq!(map[&5002].name, "Skill 5002");
     }
 
@@ -584,7 +634,7 @@ mod tests {
         // arcdps sometimes writes a bare numeric placeholder string.
         let raw = raw_with_skills(vec![RawSkill { id: 5003, name: "27725".into() }]);
         let players = vec![player_referencing(&[5003], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert_eq!(map[&5003].name, "Skill 5003");
     }
 
@@ -593,7 +643,7 @@ mod tests {
         // Referenced (via rotation) but absent from `raw.skills` entirely.
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[], &[], &[], &[6000])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert_eq!(map[&6000].name, "Skill 6000");
     }
 
@@ -601,7 +651,7 @@ mod tests {
     fn name_is_trimmed() {
         let raw = raw_with_skills(vec![RawSkill { id: 5004, name: "  Meteor Shower  ".into() }]);
         let players = vec![player_referencing(&[5004], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert_eq!(map[&5004].name, "Meteor Shower");
     }
 
@@ -609,7 +659,7 @@ mod tests {
     fn weapon_swap_sentinel_is_flagged_is_swap() {
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[WEAPON_SWAP_SKILL_ID], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert!(map[&WEAPON_SWAP_SKILL_ID].is_swap);
     }
 
@@ -617,7 +667,7 @@ mod tests {
     fn ordinary_skill_is_not_flagged_is_swap() {
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[5005], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert!(!map[&5005].is_swap);
     }
 
@@ -631,7 +681,7 @@ mod tests {
         // both land correctly, independently of each other.
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[5492], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert!(map[&5492].is_swap, "5492 (FireAttunementSkill) must be flagged is_swap");
         assert!(!map[&5492].can_crit, "5492 (FireAttunementSkill) must remain non-critable");
     }
@@ -644,7 +694,7 @@ mod tests {
         // Revenant/Necromancer entries.
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[28085, 62567], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert!(map[&28085].is_swap, "28085 (Herald's LegendaryDragonStanceSkill) must be flagged is_swap");
         assert!(map[&62567].is_swap, "62567 (EnterHarbingerShroud) must be flagged is_swap");
     }
@@ -659,7 +709,7 @@ mod tests {
         let raw = raw_with_skills(vec![]);
         let ids: Vec<u32> = vec![43470, 44857, (-5i32) as u32, (-16i32) as u32];
         let players = vec![player_referencing(&ids, &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert!(map[&43470].is_swap, "43470 (DualFireAttunement) must be flagged is_swap");
         assert!(map[&44857].is_swap, "44857 (DualEarthAttunement) must be flagged is_swap");
         assert!(map[&((-5i32) as u32)].is_swap, "-5 (FireWaterAttunement pseudo id) must be flagged is_swap");
@@ -684,7 +734,7 @@ mod tests {
         // NON_CRITABLE_SKILLS`'s 20 entries.
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[9292], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert!(!map[&9292].can_crit);
     }
 
@@ -692,7 +742,7 @@ mod tests {
     fn ordinary_skill_can_crit() {
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[5006], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert!(map[&5006].can_crit);
     }
 
@@ -700,7 +750,7 @@ mod tests {
     fn auto_attack_is_always_omitted() {
         let raw = raw_with_skills(vec![RawSkill { id: 5007, name: "Slash".into() }]);
         let players = vec![player_referencing(&[5007], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert_eq!(map[&5007].auto_attack, None);
     }
 
@@ -708,7 +758,7 @@ mod tests {
     fn scoping_covers_outgoing_taken_per_target_rotation_and_boons() {
         let raw = raw_with_skills(vec![]);
         let players = vec![player_referencing(&[1], &[2], &[(9, &[3])], &[4])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert!(map.contains_key(&1), "outgoing skill id missing");
         assert!(map.contains_key(&2), "taken skill id missing");
         assert!(map.contains_key(&3), "per_target skill id missing");
@@ -728,7 +778,7 @@ mod tests {
             RawSkill { id: 999_999, name: "NeverTouched".into() },
         ]);
         let players = vec![player_referencing(&[1], &[], &[], &[])];
-        let map = build(&raw, &empty_enc(), &players);
+        let map = build(&raw, &players, &[]);
         assert!(map.contains_key(&1));
         assert!(!map.contains_key(&999_999));
     }
@@ -736,7 +786,7 @@ mod tests {
     #[test]
     fn empty_players_still_includes_the_12_boon_ids_only() {
         let raw = raw_with_skills(vec![]);
-        let map = build(&raw, &empty_enc(), &[]);
+        let map = build(&raw, &[], &[]);
         assert_eq!(map.len(), super::super::buffs::BOON_IDS.len());
     }
 }

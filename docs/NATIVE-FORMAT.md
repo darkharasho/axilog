@@ -435,6 +435,23 @@ seconds). Note the name collision GW2EI bequeathed: `aftercast.wasted_count`
 is a *cast-interrupt* count, an unrelated quantity to the boon-generation
 `*_wasted` fields under `boons`.
 
+**`skill_id` can be a pseudo id.** The cast list holds all three families
+Elite Insights merges — real animated casts, synthesized instant casts, and
+weapon swaps — and EI numbers its synthetic skills NEGATIVELY (`-2` is a
+weapon swap; the instant-cast catalog uses roughly three dozen more). Skill
+ids are `u32` everywhere in this format, so those arrive as their two's
+complement bit pattern: **`4294967294` is `-2`**, and in general
+`id_signed = id as i32`. The ei-json adapter casts back, so an `ei-json`
+export writes `-2` and keys `skillMap` as `"s-2"`, exactly as EI does.
+`catalogs.skills` names them (`"Weapon Swap"`), so a consumer that resolves
+ids through the catalog needs no special handling; one that formats the
+number itself should apply the cast.
+
+An instant cast or weapon swap always has `duration_ms == 0`,
+`time_gained_ms == 0` and `quickness == 0.0` — which is also how to tell the
+families apart after the fact: any cast with `duration_ms > 1` is a real
+animated cast, and any other is not.
+
 ### `coverage` — what a block's status means, and what to do about it
 
 Real example (default flags — no `--replay`/`--rotation`/`--modifiers`):

@@ -171,10 +171,18 @@ fn table_view_defense_has_header_and_known_row() {
 }
 
 /// M14, Task 3: `--view rotation` — header token plus a known row value from
-/// the committed anon fixture (`:Anon129.5773`, Mesmer, the fixture's top
-/// cast count: 55 animated casts, ~67.0 APM -- see
-/// `axilog-core/tests/rotation_golden.rs` for the calibration this cast
-/// count traces back to). Deliberately does NOT pass `--rotation` -- this
+/// the committed anon fixture (`:Anon129.5773`, Mesmer: 63 casts, ~76.7
+/// APM -- see `axilog-core/tests/rotation_golden.rs` for the calibration
+/// this cast count traces back to).
+///
+/// 63, not the 55 this test asserted before the instant-cast merge: the
+/// count is now `total_casts` over the whole merged list (animated +
+/// instant + weapon swaps, per `analysis::rotation`'s `InitCastEvents`
+/// section), which is both what EI's own `rotation[]` holds -- the golden
+/// has exactly 63 entries for this player -- and what makes APM mean
+/// actions per minute rather than animations per minute.
+///
+/// Deliberately does NOT pass `--rotation` -- this
 /// view reads `PlayerMetrics::rotation` directly (always computed by
 /// `analyze()`), not the opt-in `Report::players[].rotation` JSON block, so
 /// it must produce this same row with or without that flag.
@@ -190,8 +198,8 @@ fn table_view_rotation_has_header_and_known_row() {
     assert!(s.contains("APM"), "rotation view header missing 'APM'");
     let row = s.lines().find(|l| l.contains(":Anon129.5773")).expect("known player row present");
     assert!(row.contains("Mesmer"), "known row missing profession: {row}");
-    assert!(row.contains("55"), "known row missing cast count 55: {row}");
-    assert!(row.contains("67.0"), "known row missing APM 67.0: {row}");
+    assert!(row.contains("63"), "known row missing cast count 63: {row}");
+    assert!(row.contains("76.7"), "known row missing APM 76.7: {row}");
 }
 
 /// Task 5 (M2): the `anonymize` subcommand itself, exercised against the

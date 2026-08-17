@@ -392,6 +392,7 @@ catalogs.skills.<id>.is_instant_cast
 catalogs.skills.<id>.is_not_accurate
 catalogs.skills.<id>.is_swap
 catalogs.skills.<id>.is_trait_proc
+catalogs.skills.<id>.is_unconditional_proc
 catalogs.skills.<id>.name
 coverage
 coverage.boons

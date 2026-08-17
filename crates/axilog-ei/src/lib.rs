@@ -706,6 +706,20 @@ fn ei_catalog_key(prefix: char, id: i64) -> String {
     format!("{prefix}{id}")
 }
 
+/// One skill id, back in the SIGNED space real EI writes it in.
+///
+/// GW2EI's synthetic skills live at negative ids (`SkillIDs.WeaponSwap =
+/// -2`, plus the ~36 negative ids `analysis::instant_cast`'s finder
+/// catalog can emit), and a real export writes them that way: `"s-2"` in
+/// `skillMap`, `"id": -2` in `rotation[]`. This project carries skill ids
+/// as `u32` throughout, storing those as the `-2i32 as u32` bit pattern
+/// (`analysis::skill_map::WEAPON_SWAP_SKILL_ID`), so the adapter has to
+/// cast back on the way out. Identity for every real game skill id --
+/// those are far below `i32::MAX`.
+fn ei_skill_id(id: u32) -> i64 {
+    i64::from(id as i32)
+}
+
 struct EiDoc<'a> {
     fight_name: String,
     duration_ms: u64,
@@ -2012,7 +2026,12 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
             }
             let rotation_json: Vec<Value> = by_skill
                 .into_iter()
-                .map(|(skill_id, skills)| json!({ "id": skill_id, "skills": skills }))
+                // `as i32`: GW2EI's pseudo skill ids are NEGATIVE (`-2`
+                // weapon swap, and the instant-cast catalog's own set),
+                // carried through this project's unsigned `skill_id` as
+                // the same bit pattern. Identity for every real id, which
+                // is well under `i32::MAX`. See `ei_skill_id`.
+                .map(|(skill_id, skills)| json!({ "id": ei_skill_id(skill_id), "skills": skills }))
                 .collect();
             let obj = v.as_object_mut().expect("player value is always a JSON object");
             obj.insert("rotation".to_string(), json!(rotation_json));
@@ -2529,7 +2548,7 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
     // `axilog_schema::v1::catalogs::CatalogBuilder`'s doc comment for why
     // that invariant was relaxed for skills specifically.
     let skill_map: BTreeMap<String, Value> = report.catalogs.skills.iter().map(|(&id, e)| {
-        (ei_catalog_key('s', i64::from(id)), json!({
+        (ei_catalog_key('s', ei_skill_id(id)), json!({
             "name": e.name,
             "isSwap": e.is_swap,
             "canCrit": e.can_crit,
