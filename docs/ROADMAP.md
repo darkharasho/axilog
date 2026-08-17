@@ -254,7 +254,7 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
     golden's own `_note`.
   - **Calibration is per cast FAMILY**, not one total. Animated: EXACT (unchanged, 1,222 for
     1,222, every field 0 residual). Weapon swaps: EXACT (134 for 134). Instant casts:
-    BOUNDED — 339/364, **93.1% recovered**, because that family is only as complete as the
+    BOUNDED — 340/364, **93.4% recovered**, because that family is only as complete as the
     finder catalog. Asserting exactness there would be asserting the catalog is complete.
   - **Negative pseudo ids now reach the surface.** They ride as `-2i32 as u32` natively and
     the ei-json adapter casts back (`ei_skill_id`), so `rotation[].id` is `-2` and `skillMap`
@@ -277,8 +277,8 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   held up in full: it is a subsystem port, not a catalog generator, and `isInstantCast`
   genuinely required running the finders. Shipped as
   `analysis::instant_cast` (model + one engine, mirroring `damage_mods`) plus
-  `scripts/gen_instant_cast_catalog.py`, which extracts **565 of GW2EI's 649** finder
-  constructions with a named reason for each of the 84 skips. (It was 429/220 as first
+  `scripts/gen_instant_cast_catalog.py`, which extracts **571 of GW2EI's 649** finder
+  constructions with a named reason for each of the 78 skips. (It was 429/220 as first
   shipped; the effect decode below closed the largest skip bucket.)
 
   Four corrections to the scoping below, all found by machine accounting rather than by
@@ -317,10 +317,14 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
     epsilon band (`|applied - d| < eps`); on an effect finder it is exact equality, or an
     inclusive `[min, max]` range. They are separate `Check` variants for that reason.
 
-  New deliberate gap, much smaller: **6 `UsingNoAnimatedCastChecker` finders** are skipped.
-  That checker needs a cast WINDOW (start plus actual duration), which `analysis::rotation`
-  builds downstream of `instant_cast` — and as of the MCAST merge below it now DOES build
-  one, so these 6 are newly reachable.
+  That gap's companion — **6 `UsingNoAnimatedCastChecker` finders** — is **CLOSED
+  2026-08-16**. `Check::NoAnimatedCast` transcribes `CombatData.IsCasting` against the
+  windows `rotation::animated` builds, so the catalog is now **571 of 649** (was 565).
+  The apparent cycle (`instant_cast` needs cast windows, `rotation` needs instant casts)
+  is broken by splitting `rotation::build` in two around the finder pass; `analyze` runs
+  animated → finders → merge and builds the animated half exactly once. The checker is
+  load-bearing, not decorative: on the committed fixture those six finders emit 6 squad
+  casts of Lesser Symbol of Resolution without it and **1** with it, and EI reports 1.
 
   The **`rotation` fill** this entry used to leave open is **DONE 2026-08-16** — see MCAST
   below.

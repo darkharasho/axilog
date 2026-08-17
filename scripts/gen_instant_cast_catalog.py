@@ -609,13 +609,13 @@ def analyse(ctor, argstr, chain, named):
                 eps = resolve_int(parts[1]) if len(parts) > 1 else 150
                 checks.append(f"Check::Duration {{ duration: {dur}, epsilon: {eps} }}")
         elif name == "UsingNoAnimatedCastChecker":
-            # `CombatData.IsCasting` asks whether the caster's animated
-            # cast WINDOW (start plus actual duration) contains a time.
-            # This project pairs cast starts with stops in
-            # `analysis::rotation`, downstream of here, so the window is
-            # not available -- and dropping the checker would widen the
-            # finder onto casts EI excludes.
-            raise Skip("animated-cast window intersection is not available here")
+            skill = rs_id(resolve_id(parts[0]))
+            off = resolve_int(parts[1]) if len(parts) > 1 else 0
+            eps = resolve_int(parts[2]) if len(parts) > 2 else 150
+            checks.append(
+                f"Check::NoAnimatedCast {{ skill_id: {skill}, "
+                f"time_offset: {off}, epsilon: {eps} }}"
+            )
         elif name == "UsingChecker":
             # An arbitrary closure over the parsed log. Dropping it would
             # WIDEN the finder; see this script's docstring.

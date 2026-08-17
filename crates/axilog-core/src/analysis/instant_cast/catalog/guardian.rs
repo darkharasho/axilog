@@ -34,6 +34,18 @@ const G_GUARDIAN_SAVE_YOURSELVES: [u8; 16] = [0x68, 0xF2, 0xC3, 0x78, 0xE6, 0xC8
 const G_GUARDIAN_SHOUT: [u8; 16] = [0x12, 0x2B, 0xA5, 0x5C, 0xCD, 0xF2, 0xB6, 0x43, 0x92, 0x9F, 0x6C, 0x4A, 0x97, 0x22, 0x6D, 0xC9];
 /// `EffectGUIDs.GuardianSignetOfJudgement2`.
 const G_GUARDIAN_SIGNET_OF_JUDGEMENT_2: [u8; 16] = [0x5E, 0xAC, 0x13, 0xDB, 0x09, 0x53, 0xEF, 0x4C, 0x9C, 0x5B, 0xCC, 0x10, 0xDB, 0x13, 0xC9, 0xC8];
+/// `EffectGUIDs.GuardianSymbolOfBlades`.
+const G_GUARDIAN_SYMBOL_OF_BLADES: [u8; 16] = [0xFA, 0x37, 0xE0, 0xB7, 0x72, 0x72, 0x31, 0x4A, 0xA1, 0xAD, 0xCF, 0xF8, 0x24, 0xF2, 0x4C, 0x27];
+/// `EffectGUIDs.GuardianSymbolOfBladesLarge`.
+const G_GUARDIAN_SYMBOL_OF_BLADES_LARGE: [u8; 16] = [0x8B, 0x05, 0x12, 0x28, 0x82, 0xE5, 0x32, 0x42, 0xA4, 0xD4, 0x72, 0x5F, 0x0A, 0x15, 0x37, 0xA4];
+/// `EffectGUIDs.GuardianSymbolOfProtection`.
+const G_GUARDIAN_SYMBOL_OF_PROTECTION: [u8; 16] = [0x83, 0x21, 0x37, 0x3F, 0xA1, 0x4B, 0x2B, 0x4B, 0x87, 0x61, 0xCD, 0xC6, 0xEE, 0xAD, 0xB1, 0x61];
+/// `EffectGUIDs.GuardianSymbolOfProtectionLarge`.
+const G_GUARDIAN_SYMBOL_OF_PROTECTION_LARGE: [u8; 16] = [0xE1, 0x0D, 0x2D, 0x0D, 0xF7, 0x80, 0x31, 0x46, 0xA6, 0x9B, 0xBB, 0x5B, 0xD4, 0x79, 0x44, 0xFC];
+/// `EffectGUIDs.GuardianSymbolOfResolutionLarge`.
+const G_GUARDIAN_SYMBOL_OF_RESOLUTION_LARGE: [u8; 16] = [0x13, 0xD0, 0xB6, 0x5D, 0x73, 0xB5, 0x33, 0x4D, 0x80, 0x82, 0x4E, 0xE1, 0x7B, 0x5C, 0x25, 0x7E];
+/// `EffectGUIDs.GuardianSymbolOfResolution_LuminaryLuminousStaffSymbol`.
+const G_GUARDIAN_SYMBOL_OF_RESOLUTION_LUMINARY_LUMINOUS_STAFF_SYMBOL: [u8; 16] = [0x98, 0xC9, 0x83, 0x4C, 0x63, 0x81, 0x20, 0x4A, 0x85, 0xDC, 0x67, 0xC3, 0x75, 0xD1, 0x35, 0xE4];
 /// `EffectGUIDs.LuminaryRadiantCourage1`.
 const G_LUMINARY_RADIANT_COURAGE_1: [u8; 16] = [0x03, 0x85, 0x07, 0x57, 0xF1, 0x4F, 0xD4, 0x4A, 0x99, 0x98, 0xD4, 0xCA, 0xD7, 0x1C, 0xC5, 0x89];
 /// `EffectGUIDs.LuminaryRadiantCourage2`.
@@ -378,6 +390,73 @@ pub const FINDERS: &[FinderDef] = &[
         source: "GuardianHelper",
         trigger: Trigger::Damage { skill_id: 30255 },
         origin: CastOrigin::Trait,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 79336,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_SYMBOL_OF_BLADES, by_dst: false },
+        origin: CastOrigin::Trait,
+        not_accurate: true,
+        checks: &[
+            Check::NoAnimatedCast { skill_id: 9097, time_offset: 0, epsilon: 150 },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 79336,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_SYMBOL_OF_BLADES_LARGE, by_dst: false },
+        origin: CastOrigin::Trait,
+        not_accurate: true,
+        checks: &[
+            Check::NoAnimatedCast { skill_id: 9097, time_offset: 0, epsilon: 150 },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 13677,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_SYMBOL_OF_RESOLUTION_LUMINARY_LUMINOUS_STAFF_SYMBOL, by_dst: false },
+        origin: CastOrigin::Trait,
+        not_accurate: true,
+        checks: &[
+            Check::NoAnimatedCast { skill_id: 9146, time_offset: 0, epsilon: 150 },
+            Check::NoAnimatedCast { skill_id: 76708, time_offset: 0, epsilon: 150 },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 13677,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_SYMBOL_OF_RESOLUTION_LARGE, by_dst: false },
+        origin: CastOrigin::Trait,
+        not_accurate: true,
+        checks: &[
+            Check::NoAnimatedCast { skill_id: 9146, time_offset: 0, epsilon: 150 },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 13684,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_SYMBOL_OF_PROTECTION, by_dst: false },
+        origin: CastOrigin::Trait,
+        not_accurate: true,
+        checks: &[
+            Check::NoAnimatedCast { skill_id: 9161, time_offset: 0, epsilon: 150 },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 13684,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_SYMBOL_OF_PROTECTION_LARGE, by_dst: false },
+        origin: CastOrigin::Trait,
+        not_accurate: true,
+        checks: &[
+            Check::NoAnimatedCast { skill_id: 9161, time_offset: 0, epsilon: 150 },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {

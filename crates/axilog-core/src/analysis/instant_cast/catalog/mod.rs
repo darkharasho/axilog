@@ -2,8 +2,8 @@
 //! The transcribed `InstantCastFinder` catalog.
 //!
 //! Extracted from 70 GW2EI source files: **649** finder
-//! constructions considered, **565** transcribed,
-//! **84** skipped. Every skip carries a named reason (below);
+//! constructions considered, **571** transcribed,
+//! **78** skipped. Every skip carries a named reason (below);
 //! nothing is approximated, because a finder that loses an
 //! unrepresentable checker would fire on events Elite Insights never
 //! counts -- worse than a missing finder, not better.
@@ -11,7 +11,6 @@
 //! Skips by reason:
 //!
 //! - 70 x arbitrary `.UsingChecker(lambda)` predicate
-//! - 6 x animated-cast window intersection is not available here
 //! - 4 x the barrier extension is not decoded by this project
 //! - 4 x bespoke subclass with log-specific state
 //!

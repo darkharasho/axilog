@@ -110,20 +110,25 @@ MPROC's leftovers:
   `ServerDelayConstant` replace-the-trailing-swap dedup. The finder pass
   runs once in `analyze` and is shared with `skill_map`. Calibration is
   per family — animated and weapon swaps EXACT, instant casts bounded at
-  93.1% recovered — and the committed ei-json golden was regenerated
+  93.4% recovered — and the committed ei-json golden was regenerated
   UN-filtered (1,222 → 1,732 entries) to make that possible; see
   `rotation_golden.rs`'s module doc and the golden's own `_note`.
   Fell out of the merge: an ext-healing double-count in `instant_cast`
   (the missing `HealingStatsExtensionHandler.SanitizeForSrc` port), and
   `skill_map::PSEUDO_SKILL_NAMES` so negative pseudo ids get EI's names
   rather than `"Skill 4294967294"`.
-- **6 `UsingNoAnimatedCastChecker` finders** are still skipped. That
-  checker needs a cast window (start + actual duration), which
-  `analysis::rotation` now builds — so this is newly REACHABLE, and is
-  the obvious next step on the residual 6.9% instant-cast gap. The rest
-  of that gap is GW2EI cast sources outside the finder family entirely
-  (`SpecialCastEventProcess`, `ProfHelper.ComputeEndWithBuffApplyCastEvents`,
-  the Engineer toolbelt helpers).
+- ~~**6 `UsingNoAnimatedCastChecker` finders** are still skipped~~ —
+  CLOSED 2026-08-16. `Check::NoAnimatedCast` ports
+  `CombatData.IsCasting` against `rotation::animated`'s windows, and the
+  catalog is regenerated at 571 of 649 finders (was 565). The pipeline in
+  `analyze` now runs animated → finders → merge, which is what breaks the
+  apparent cycle between the two modules. On the committed fixture the
+  checker is doing real work: those six finders emit 6 squad casts
+  without it and **1** with it, and EI's golden reports exactly 1.
+  The residual instant-cast gap is now GW2EI cast sources outside the
+  finder family entirely (`SpecialCastEventProcess`,
+  `ProfHelper.ComputeEndWithBuffApplyCastEvents`, the Engineer toolbelt
+  helpers) plus the 70 arbitrary-lambda finders.
 
 ---
 

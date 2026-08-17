@@ -687,19 +687,24 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             players[i].per_target.insert(dst, stats);
         }
     }
-    // The ONE instant-cast finder pass for this whole analysis. Two
-    // consumers need it and it is not cheap (an effect-keyed finder forces
-    // the effect decode, thousands of rows on a WvW log), so it runs here
-    // and both take a slice: `rotation::build` for the instant half of
-    // GW2EI's `InitCastEvents` merge, `skill_map::build` for the
-    // `is_instant_cast` flag.
-    let instant_finders: Vec<instant_cast::FinderDef> =
-        instant_cast::catalog::all().into_iter().copied().collect();
-    let instants = instant_cast::compute(raw, enc, &instant_finders);
     // M14 Task 1: per-player rotation (cast tracking) -- see `rotation`'s
     // module doc. No `squad`/`enemies` filter needed beyond `addr_to_rep`
     // itself (only registered for squad player addrs).
-    let rotation_by_rep = rotation::build(raw, &addr_to_rep, &instants);
+    //
+    // The three cast families interleave, so this runs in GW2EI's order
+    // rather than as one call: the ANIMATED pass first, because
+    // `Check::NoAnimatedCast` reads its windows; then the ONE instant-cast
+    // finder pass for this whole analysis; then the merge that consumes
+    // both. The finder pass is shared rather than repeated -- it is not
+    // cheap (an effect-keyed finder forces the effect decode, thousands of
+    // rows on a WvW log) and two consumers need it: `rotation::build` for
+    // the instant half of `InitCastEvents`, `skill_map::build` for the
+    // `is_instant_cast` flag.
+    let animated_casts = rotation::animated(raw, &addr_to_rep);
+    let instant_finders: Vec<instant_cast::FinderDef> =
+        instant_cast::catalog::all().into_iter().copied().collect();
+    let instants = instant_cast::compute(raw, enc, &instant_finders, &animated_casts);
+    let rotation_by_rep = rotation::build(raw, animated_casts, &instants);
     for p in &mut players {
         if let Some(r) = rotation_by_rep.get(&p.agent_addr) {
             p.rotation = r.clone();

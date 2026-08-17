@@ -39,14 +39,27 @@
 //! the same reason: it is what lets the catalog be machine-extracted from
 //! the C# source with an accounting of everything it could not express.
 //!
+//! # The animated-cast dependency
+//!
+//! [`Check::NoAnimatedCast`] asks whether the caster's animated cast
+//! WINDOW -- start plus ACTUAL duration -- contains a time
+//! (`CombatData.IsCasting`). This project pairs cast starts with stops in
+//! `analysis::rotation`, which also CONSUMES this module's output for its
+//! `InitCastEvents` merge, so the two look circular. They are not: the
+//! animated pass is independent of the finders, and `rotation` exposes it
+//! separately as [`rotation::animated`]. `analysis` runs
+//! animated -> finders -> merge, building the animated half exactly once.
+//!
+//! A caller with no animated casts to give (every unit test that is not
+//! about this checker) passes `&AnimatedCasts::default()`, which makes
+//! `is_casting` false and so every `NoAnimatedCast` check PASS. That is
+//! deliberately the permissive direction, matching a real log in which the
+//! caster genuinely never cast the skill.
+//!
+//! [`rotation::animated`]: crate::analysis::rotation::animated
+//!
 //! # Deliberate gaps
 //!
-//! * **Six `UsingNoAnimatedCastChecker` finders are skipped.** That
-//!   checker asks whether the caster's animated cast WINDOW -- start plus
-//!   actual duration -- contains a time (`CombatData.IsCasting`). This
-//!   project pairs cast starts with stops in `analysis::rotation`, which
-//!   is downstream of here, so the window is not available. Dropping the
-//!   checker instead would widen those six onto casts EI excludes.
 //! * **Spec checkers read a static spec per agent**, not GW2EI's
 //!   `GetSpecAtTime`. An agent's spec cannot change within one agent addr
 //!   (a build swap or relog produces a NEW addr, which this project
@@ -252,6 +265,13 @@ struct Ctx<'a> {
     /// both the stream collection and [`Check::SecondaryEffect`] can go
     /// from a GUID to its events in two lookups.
     effects_by_id: BTreeMap<u32, Vec<usize>>,
+    /// GW2EI's `CombatData.GetAnimatedCastData`, for
+    /// [`Check::NoAnimatedCast`]. Built by `analysis::rotation` and passed
+    /// in, because this project's cast-window pairing lives there; a
+    /// default-empty one makes every such check pass, which is the right
+    /// answer for a log with no animated casts and the documented
+    /// behaviour for a caller that has none to give.
+    casts: &'a crate::analysis::rotation::AnimatedCasts,
 }
 
 impl Ctx<'_> {
@@ -315,7 +335,12 @@ fn effect_agents(ctx: &Ctx<'_>, f: &FinderDef, ev: &crate::evtc::EffectEvent) ->
 /// (`CombatData.cs:214-244`) minus the parts that only exist to build its
 /// four id sets -- those are derived from finder availability alone, so
 /// [`available_flags`] computes them without running anything.
-pub fn compute(raw: &RawLog, enc: &Encounter, finders: &[FinderDef]) -> Vec<InstantCastEvent> {
+pub fn compute(
+    raw: &RawLog,
+    enc: &Encounter,
+    finders: &[FinderDef],
+    casts: &crate::analysis::rotation::AnimatedCasts,
+) -> Vec<InstantCastEvent> {
     let caps = capabilities(raw);
     let active: Vec<&FinderDef> = finders.iter().filter(|f| f.available(&caps)).collect();
     if active.is_empty() {
@@ -323,7 +348,7 @@ pub fn compute(raw: &RawLog, enc: &Encounter, finders: &[FinderDef]) -> Vec<Inst
     }
 
     let need_effects = active.iter().any(|f| matches!(f.trigger, Trigger::Effect { .. }));
-    let ctx = build_ctx(raw, enc, need_effects);
+    let ctx = build_ctx(raw, enc, need_effects, casts);
     let wanted: BTreeSet<StreamKey> = active.iter().map(|f| f.trigger.stream_key()).collect();
     let streams = collect_streams(&ctx, &wanted);
 
@@ -373,7 +398,12 @@ pub fn available_flags(
     (trait_p, gear_p, uncond_p, not_acc)
 }
 
-fn build_ctx<'a>(raw: &'a RawLog, enc: &Encounter, need_effects: bool) -> Ctx<'a> {
+fn build_ctx<'a>(
+    raw: &'a RawLog,
+    enc: &Encounter,
+    need_effects: bool,
+    casts: &'a crate::analysis::rotation::AnimatedCasts,
+) -> Ctx<'a> {
     let registry = InstidRegistry::build(raw);
 
     let effects = if need_effects {
@@ -427,6 +457,7 @@ fn build_ctx<'a>(raw: &'a RawLog, enc: &Encounter, need_effects: bool) -> Ctx<'a
         post_era: raw.header.is_post_buff_rework(),
         effects,
         effects_by_id,
+        casts,
     }
 }
 
@@ -709,6 +740,12 @@ fn passes(ctx: &Ctx<'_>, f: &FinderDef, hit: &TriggerHit) -> bool {
         Check::SecondaryEffect { guid, inverted_src, type_rel, time_offset, epsilon, negated } => {
             secondary_effect(ctx, f, hit, guid, inverted_src, type_rel, time_offset, epsilon)
                 != negated
+        }
+        // `hit.key` is the un-folded key party, i.e. `effect.Src` for the
+        // plain `EffectCastFinder` every construction of this checker uses
+        // -- see `Check::NoAnimatedCast`. The leading `!` is the C#'s own.
+        Check::NoAnimatedCast { skill_id, time_offset, epsilon } => {
+            !ctx.casts.is_casting(skill_id, hit.key, hit.time as i64 + time_offset, epsilon)
         }
     })
 }

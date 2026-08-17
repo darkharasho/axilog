@@ -29,10 +29,10 @@
 //!   its `ServerDelayConstant` dedup. Per-player count **EXACT** (134 for
 //!   134 on the committed fixture).
 //! - **Instant casts** -- `analysis::instant_cast`'s finder catalog, which
-//!   documents its own coverage gaps (effect-keyed finders, the
-//!   `UsingNoAnimatedCastChecker` family, and GW2EI's non-finder cast
-//!   sources: `SpecialCastEventProcess`, `ProfHelper.
-//!   ComputeEndWithBuffApplyCastEvents`, the Engineer toolbelt helpers).
+//!   documents its own coverage gaps (the 70 arbitrary-lambda finders, and
+//!   GW2EI's non-finder cast sources: `SpecialCastEventProcess`,
+//!   `ProfHelper.ComputeEndWithBuffApplyCastEvents`, the Engineer toolbelt
+//!   helpers).
 //!   BOUNDED, not exact: [`INSTANT_PER_PLAYER_ABS_TOLERANCE`] per player
 //!   and [`INSTANT_TOTAL_RECOVERY_FLOOR`]..[`INSTANT_TOTAL_RECOVERY_CEILING`]
 //!   on the squad total. Asserting exactness here would mean asserting
@@ -89,7 +89,7 @@ const QUICKNESS_ABS_TOLERANCE: f64 = 0.001;
 /// bounded rather than exact.
 const INSTANT_PER_PLAYER_ABS_TOLERANCE: usize = 8;
 /// Squad-total instant casts recovered, as a fraction of the golden's.
-/// Measured 339/364 = 0.931 on the committed fixture.
+/// Measured 340/364 = 0.934 on the committed fixture.
 const INSTANT_TOTAL_RECOVERY_FLOOR: f64 = 0.90;
 /// The same ratio's upper bound -- an over-firing finder is as much a
 /// regression as a missing one, and the ext-healing double-count this

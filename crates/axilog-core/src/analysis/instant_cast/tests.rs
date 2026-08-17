@@ -1,6 +1,6 @@
 //! Engine tests for the instant-cast finder port.
 //!
-//! These pin the SEMANTICS the 565-row catalog is evaluated under --
+//! These pin the SEMANTICS the 571-row catalog is evaluated under --
 //! caster selection, ICD grouping, availability gating and the two
 //! deliberate asymmetries (`Initial` applies, ICD-before-checks). The
 //! catalog's own faithfulness is a separate question, answered by the
@@ -8,6 +8,14 @@
 
 use super::*;
 use crate::evtc::{buff_remove, RawAgent, RawEvent, RawHeader};
+
+/// [`super::compute`] with no animated casts to check against, which is
+/// every test here except the `Check::NoAnimatedCast` ones (which call the
+/// real one with a populated index). An empty index makes `is_casting`
+/// false, so a `NoAnimatedCast` check passes -- see the module doc.
+fn compute(raw: &RawLog, enc: &Encounter, finders: &[FinderDef]) -> Vec<InstantCastEvent> {
+    super::compute(raw, enc, finders, &crate::analysis::rotation::AnimatedCasts::default())
+}
 use crate::model::{Player, Team};
 
 fn base() -> RawEvent {
@@ -849,6 +857,119 @@ fn with_minions_credits_the_owner_of_an_effect_spawned_by_a_pet() {
     assert_eq!(compute(&log, &enc(vec![]), &[effect_finder(false)])[0].caster, 5);
 }
 
+/// One animation boundary row for agent 1. [`raw_fx`]'s build is PRE the
+/// `ANIMATION_START`/`STOP` era, so these are the older overloaded combat
+/// rows -- `is_activation` 1 to start, 3 (reset) to end.
+fn anim(time: u64, activation: u8, skill: u32, dur: i32) -> RawEvent {
+    let mut e = base();
+    e.time = time;
+    e.src_agent = 1;
+    e.skillid = skill;
+    e.is_activation = activation;
+    e.value = dur;
+    e.buff_dmg = dur;
+    e
+}
+
+/// A log in which agent 1 animates `CAST_SKILL` over `[0, 1000]` and an
+/// effect fires at `effect_time`.
+fn casting_log(effect_time: u64) -> RawLog {
+    raw_fx(
+        vec![player_agent(1)],
+        vec![
+            id_to_guid(EFFECT_ID, EGUID),
+            anim(0, 1, CAST_SKILL, 1000),
+            anim(1000, 3, CAST_SKILL, 1000),
+            effect(effect_time, EFFECT_ID, 1, None),
+        ],
+    )
+}
+
+/// The animated skill the `NoAnimatedCast` tests below watch -- GW2EI's
+/// `SymbolOfWrath_SymbolOfResolution`, one of the three real ones.
+const CAST_SKILL: u32 = 9146;
+
+/// `EffectCastFinder(..).UsingNoAnimatedCastChecker(SymbolOfWrath_SymbolOfResolution)`,
+/// at the C#'s default `epsilon = ServerDelayConstant`.
+fn no_animated_cast_finder() -> FinderDef {
+    FinderDef {
+        checks: &[Check::NoAnimatedCast {
+            skill_id: CAST_SKILL,
+            time_offset: 0,
+            epsilon: NAC_EPSILON,
+        }],
+        ..effect_finder(false)
+    }
+}
+
+const NAC_EPSILON: i64 = 10;
+
+/// `analysis::rotation::animated` over `casting_log`, with agent 1 folded
+/// onto itself -- what `analyze` hands `compute`.
+fn windows(log: &RawLog) -> crate::analysis::rotation::AnimatedCasts {
+    crate::analysis::rotation::animated(log, &[(1u64, 1u64)].into_iter().collect())
+}
+
+/// The point of the checker: the same effect GUID is spawned both by the
+/// real skill and by the trait that copies it, so "was the caster
+/// mid-animation on the real one?" is the only thing separating them.
+#[test]
+fn a_no_animated_cast_check_suppresses_an_effect_inside_the_cast_window() {
+    let log = casting_log(500);
+    assert!(
+        super::compute(&log, &enc(vec![]), &[no_animated_cast_finder()], &windows(&log)).is_empty()
+    );
+    // Without the check the same effect is a cast -- i.e. the check is
+    // what is doing the work here, not some other gate.
+    assert_eq!(compute(&log, &enc(vec![]), &[effect_finder(false)]).len(), 1);
+}
+
+#[test]
+fn a_no_animated_cast_check_passes_when_the_caster_was_not_casting() {
+    let log = casting_log(5000);
+    assert_eq!(
+        super::compute(&log, &enc(vec![]), &[no_animated_cast_finder()], &windows(&log)).len(),
+        1
+    );
+}
+
+/// `IntersectsActualCastWindow` is `time >= Time - threshold && EndTime +
+/// threshold >= time` -- INCLUSIVE at both epsilon-widened ends.
+#[test]
+fn the_cast_window_is_inclusive_at_both_epsilon_widened_ends() {
+    let w = windows(&casting_log(0));
+    for (time, want) in [
+        (-NAC_EPSILON - 1, false),
+        (-NAC_EPSILON, true),
+        (0, true),
+        (1000, true),
+        (1000 + NAC_EPSILON, true),
+        (1000 + NAC_EPSILON + 1, false),
+    ] {
+        assert_eq!(
+            w.is_casting(CAST_SKILL, 1, time, NAC_EPSILON),
+            want,
+            "at {time}ms"
+        );
+    }
+    // A different skill id, and a different agent, are both misses.
+    assert!(!w.is_casting(CAST_SKILL + 1, 1, 500, NAC_EPSILON));
+    assert!(!w.is_casting(CAST_SKILL, 2, 500, NAC_EPSILON));
+}
+
+#[test]
+fn an_empty_cast_index_makes_every_no_animated_cast_check_pass() {
+    // The documented default for a caller with no animated casts to give.
+    let log = casting_log(500);
+    let out = super::compute(
+        &log,
+        &enc(vec![]),
+        &[no_animated_cast_finder()],
+        &crate::analysis::rotation::AnimatedCasts::default(),
+    );
+    assert_eq!(out.len(), 1);
+}
+
 #[test]
 fn every_effect_finder_is_not_accurate() {
     // Forced by the ctor (`EffectCastFinder.cs:40`): the visual appears
@@ -864,14 +985,13 @@ fn every_effect_finder_is_not_accurate() {
 /// The extraction accounting, pinned in code so a regenerate that changes
 /// coverage has to change this number deliberately.
 ///
-/// 565 of GW2EI's 649 finder constructions. The 84 skips are all
+/// 571 of GW2EI's 649 finder constructions. The 78 skips are all
 /// categorical and all named in `catalog/mod.rs`: 70 arbitrary
-/// `.UsingChecker(lambda)` predicates, 6 `UsingNoAnimatedCastChecker`
-/// (needs a cast window this module sits upstream of), 4
-/// barrier-extension finders and 4 `BandTogetherCastFinder`s.
+/// `.UsingChecker(lambda)` predicates, 4 barrier-extension finders and 4
+/// `BandTogetherCastFinder`s.
 #[test]
 fn the_catalog_carries_every_finder_the_generator_could_transcribe() {
-    assert_eq!(catalog::all().len(), 565);
+    assert_eq!(catalog::all().len(), 571);
 }
 
 /// The effect finders are the largest single bucket, and they are the
@@ -883,7 +1003,7 @@ fn the_catalog_carries_the_effect_finders() {
         .iter()
         .filter(|f| matches!(f.trigger, Trigger::Effect { .. }))
         .count();
-    assert_eq!(effect, 136);
+    assert_eq!(effect, 142);
     // Both subclasses, not just the common one.
     assert!(catalog::all()
         .iter()

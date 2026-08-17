@@ -331,6 +331,26 @@ pub enum Check {
         /// form's empty-set `false` mirrors.
         negated: bool,
     },
+    /// `.UsingNoAnimatedCastChecker(skillID, timeOffset, epsilon)`
+    /// (`EffectCastFinder.cs:293-297`), whose whole body is
+    ///
+    /// ```text
+    /// !combatData.IsCasting(skillID, effect.Src, effect.Time + timeOffset, epsilon)
+    /// ```
+    ///
+    /// "was this caster mid-animation on `skill_id` at the time the effect
+    /// fired?" -- the test that separates a TRAIT-procced copy of a skill
+    /// from the visual of the player casting the real one, which spawn the
+    /// same effect.
+    ///
+    /// Note the checker names `effect.Src` directly rather than the
+    /// finder's `GetAgent(evt)`. Every construction of it is a plain
+    /// `EffectCastFinder` with no `WithMinions()`, for which the two are
+    /// the same agent, so the engine reads the un-folded key party.
+    ///
+    /// The negation is baked in (the C# has no positive form), so this
+    /// check passes when NO animated cast overlaps.
+    NoAnimatedCast { skill_id: u32, time_offset: i64, epsilon: i64 },
 }
 
 /// How a [`Check::SecondaryEffect`]'s other effect must be anchored
