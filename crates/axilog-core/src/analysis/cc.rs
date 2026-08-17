@@ -344,7 +344,7 @@ mod tests {
             players: vec![],
             enemies: vec![],
             markers: vec![],
-            tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
+            tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         };
         let raw = RawLog {
             header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
@@ -534,7 +534,7 @@ mod tests {
         let enc = Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![], enemies: vec![],
-            markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
+            markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         };
         let mut e = cc_ev(100, 1, 9, 5000); // would look like 5000 damage if not excluded
         e.buff = 1;

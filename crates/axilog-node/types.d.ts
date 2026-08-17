@@ -857,6 +857,20 @@ export interface EncounterOutV1 {
   recorded_by?: number
   teams: TeamOut[]
   markers: MarkerAssignmentOutV1[]
+  /**
+   * The log's `t0` in arcdps **session-time** milliseconds -- the origin
+   * every other time in this document is already measured from.
+   *
+   * Exactly two fields here are NOT log-relative: `markers[].time_ms` and
+   * `entities[].commander.segments`. Both are raw event times, so without
+   * this value they cannot be compared against `duration_ms` or against
+   * anything else. Subtract this from either for an encounter-relative
+   * value -- the result may be negative (a tag held before the first
+   * event), which is why the rebase is left to you.
+   *
+   * Always present; `0` for a log with no events.
+   */
+  log_start_ms: number
   /** Carried verbatim from the legacy shape -- an objective belongs to the map, not to an entity, so unlike `markers` there is no join key to rekey. */
   objectives: ObjectiveOut[]
   tick_rate?: TickRateOut

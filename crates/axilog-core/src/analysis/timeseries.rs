@@ -648,7 +648,7 @@ mod tests {
         Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms, build: "".into(), revision: 1,
             recorded_by: None, teams: vec![], players: vec![], enemies: vec![],
-            markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
+            markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         }
     }
 
@@ -858,7 +858,7 @@ mod tests {
         let enc = Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
-            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
+            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         };
         let addr_to_rep: BTreeMap<u64, u64> = enc.players.iter()
             .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))

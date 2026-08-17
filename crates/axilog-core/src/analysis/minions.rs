@@ -332,7 +332,7 @@ mod tests {
             kind: "wvw".into(), map: String::new(), duration_ms: 1000,
             build: String::new(), revision: 1, recorded_by: None,
             teams: vec![Team { color: "red".into(), team_id: 1, guid: None, shard_id: None }],
-            players, enemies: Vec::new(), markers: Vec::new(), tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
+            players, enemies: Vec::new(), markers: Vec::new(), tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         }
     }
 

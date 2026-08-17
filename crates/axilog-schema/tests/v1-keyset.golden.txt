@@ -422,6 +422,7 @@ encounter
 encounter.build
 encounter.duration_ms
 encounter.kind
+encounter.log_start_ms
 encounter.map
 encounter.map_id
 encounter.markers

@@ -134,7 +134,7 @@ pub(crate) mod tests_support {
             }
         }
 
-        let enc = Encounter {
+        let enc = Encounter { log_start_ms: 0,
             kind: "wvw".into(),
             map: "".into(),
             duration_ms: 1000,

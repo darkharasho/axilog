@@ -116,8 +116,10 @@ pub struct CommanderOut {
     /// session time** -- the same base as `markers[].time_ms`, NOT
     /// log-relative and NOT clipped to `[0, duration_ms]`. Passed through
     /// from `model::CommanderTag::segments` with no rebase; a consumer that
-    /// wants encounter-relative values must subtract the log's `t0` itself
-    /// (as `analysis::distance` does). Literal per-instance commander-tag
+    /// wants encounter-relative values must subtract the log's `t0` itself,
+    /// which this document carries as
+    /// [`crate::v1::EncounterOut::log_start_ms`] (as `analysis::distance`
+    /// does internally). Literal per-instance commander-tag
     /// holds, not a coalesced whole-fight span (see
     /// `model::CommanderTag::segments` for the full GW2EI-sourced
     /// rationale: no coverage threshold, no log-end fallback beyond a
@@ -347,7 +349,7 @@ mod tests {
     }
 
     fn encounter(players: Vec<Player>, enemies: Vec<Enemy>) -> Encounter {
-        Encounter {
+        Encounter { log_start_ms: 0,
             kind: "wvw".into(),
             map: "Green Alpine Borderlands".into(),
             duration_ms: 1000,

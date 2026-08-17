@@ -863,6 +863,13 @@ class _EncounterOutV1Required(TypedDict):
     revision: int
     teams: List[TeamOut]
     markers: List[MarkerAssignmentOutV1]
+    #: The log's `t0` in arcdps SESSION-time milliseconds -- the origin
+    #: every other time in this document is already measured from. Exactly
+    #: two fields are not log-relative: `markers[].time_ms` and
+    #: `entities[].commander.segments`. Subtract this from either for an
+    #: encounter-relative value (it may go negative, e.g. a tag held before
+    #: the first event). Always present; `0` for a log with no events.
+    log_start_ms: int
     #: WvW objective ownership timelines -- carried verbatim from the
     #: legacy shape; an objective belongs to the map, not to an entity, so
     #: unlike `markers` there is no join key to rekey.

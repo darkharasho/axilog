@@ -10,6 +10,26 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v0.3.6 — 2026-08-17
+
+**The native container now carries the log's `t0` as `encounter.log_start_ms`.** Two fields in
+the 1.0 document are deliberately NOT log-relative — `markers[].time_ms` and
+`entities[].commander.segments` — because both are raw arcdps event times and clipping them into
+the fight window would destroy real information. Their doc comments told a consumer to "rebase by
+the log's `t0`", but nothing in the container was that `t0`, so from JSON alone the rebase was
+impossible: arcdps session time has no fixed origin, which left both fields incomparable against
+`duration_ms`, against each other across logs, and against anything else. On the committed fixture
+the commander's segments read `[[33847418, 33847418], [33847418, 33896600]]` against a
+`duration_ms` of `49285` — nothing in those numbers says which base they are in.
+
+`encounter.log_start_ms` is that origin, sourced from `RawLog::log_start_ms` via a new
+`Encounter::log_start_ms`. Purely additive, so 1.0 stays frozen and no existing field changes
+meaning. The rebase is still left to the consumer rather than done at the serialization boundary,
+because a commander tag held before the log's first event rebases negative and `u64` cannot carry
+that — clamping here would silently lose data the consumer can represent correctly.
+`v1_shape::the_two_session_time_fields_rebase_into_the_fight_by_log_start_ms` asserts the round
+trip closes on the real fixture rather than arguing it in prose.
+
 ## v0.3.5 — 2026-08-17
 
 **Native map geometry — `encounter.map_id` and `blocks.replay.tracks.arena`.** The native

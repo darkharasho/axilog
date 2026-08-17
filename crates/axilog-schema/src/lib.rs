@@ -1683,7 +1683,7 @@ mod tests {
     #[test]
     fn enemies_keeps_fighting_npcs_while_ei_targets_keeps_only_enemy_players() {
         use axilog_core::model::Enemy;
-        let enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:1000,
+        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(), duration_ms:1000,
             build:"".into(), revision:1, recorded_by:None, teams:vec![], players:vec![],
             enemies: vec![
                 Enemy { id: 9, instid: 0, name: "Participant".into(), team: "blue".into(),
@@ -1801,7 +1801,7 @@ mod tests {
         use axilog_core::model::Team;
         use axilog_core::wvw::objectives::{ObjectiveStatus, ObjectiveType};
 
-        let enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:1000,
+        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(), duration_ms:1000,
             build:"".into(), revision:1, recorded_by:None,
             teams: vec![
                 Team { color: "blue".into(), team_id: 433, guid: None, shard_id: Some(1009) },
@@ -1852,7 +1852,7 @@ mod tests {
     #[test]
     fn ei_targets_curation_is_gated_on_the_wvw_encounter_kind() {
         use axilog_core::model::Enemy;
-        let enc = Encounter { kind:"raid".into(), map:"".into(), duration_ms:1000,
+        let enc = Encounter { log_start_ms: 0, kind:"raid".into(), map:"".into(), duration_ms:1000,
             build:"".into(), revision:1, recorded_by:None, teams:vec![], players:vec![],
             enemies: vec![
                 Enemy { id: 9, instid: 0, name: "Boss".into(), team: "red".into(),
@@ -1872,7 +1872,7 @@ mod tests {
 
     #[test]
     fn serializes_report_with_versions() {
-        let enc = Encounter { kind:"wvw".into(), map:"Eternal Battlegrounds".into(),
+        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"Eternal Battlegrounds".into(),
             duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"".into(),
@@ -1907,7 +1907,7 @@ mod tests {
     #[test]
     fn healing_block_present_when_extension_detected() {
         use axilog_core::analysis::healing::HealingMetrics;
-        let enc = Encounter { kind:"wvw".into(), map:"".into(),
+        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(),
             duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
@@ -1951,7 +1951,7 @@ mod tests {
     #[test]
     fn skill_damage_is_opt_in_like_replay_and_missiles() {
         use axilog_core::analysis::skill_damage::{PerTargetSkills, SkillDamageMetrics, SkillEntry};
-        let enc = Encounter { kind:"wvw".into(), map:"".into(),
+        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(),
             duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
@@ -2000,7 +2000,7 @@ mod tests {
     #[test]
     fn per_second_and_dps_targets_are_both_gated_by_include_timeseries() {
         use axilog_core::analysis::timeseries::{DpsTargetEntry, TargetSeries, TimeseriesMetrics};
-        let enc = Encounter { kind:"wvw".into(), map:"".into(),
+        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(),
             duration_ms:2000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
@@ -2060,7 +2060,7 @@ mod tests {
     #[test]
     fn rotation_is_opt_in_like_skill_damage_and_timeseries() {
         use axilog_core::analysis::rotation::{Cast, SkillRotation};
-        let enc = Encounter { kind:"wvw".into(), map:"".into(),
+        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(),
             duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
@@ -2153,7 +2153,7 @@ mod tests {
             subgroup: 1, in_squad: true, commander: true, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1],
         };
-        let enc = Encounter {
+        let enc = Encounter { log_start_ms: 0,
             kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
             enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
@@ -2202,7 +2202,7 @@ mod tests {
             subgroup: 1, in_squad: true, commander: false, marker: None, commander_tag: None, guild_id: None,
             agent_addrs: vec![1],
         };
-        let enc = Encounter {
+        let enc = Encounter { log_start_ms: 0,
             kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
             enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
