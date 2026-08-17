@@ -12,7 +12,7 @@ hand-written:
 
 ```sh
 cargo run --release -p axilog-cli -- parse fixtures/wvw-small.anon.zevtc \
-  --format json --output /tmp/v1.json
+  --format json --output v1.json
 ```
 
 ## The six top-level keys
@@ -201,11 +201,11 @@ document, since that predicate is not otherwise exposed per-entity outside
 
 ## `catalogs` — names appear exactly once
 
-Real excerpt. `buffs` is from the default `/tmp/v1.json` run — `catalogs.skills`
+Real excerpt. `buffs` is from the default `v1.json` run — `catalogs.skills`
 is `{}` there, because nothing referenced a skill id without `--skill-damage`
 or `--rotation`; the `skills` entry below is from the `--skill-damage` run
-(`/tmp/v1-full.json`) instead, and `damage_mods` is from a `--modifiers` run
-(`/tmp/v1-modifiers.json`), so this is a composite of three real documents,
+(`v1-full.json`) instead, and `damage_mods` is from a `--modifiers` run
+(`v1-modifiers.json`), so this is a composite of three real documents,
 not one single one:
 
 ```json
@@ -540,7 +540,7 @@ without `--timeseries`), raw-encoded (no long runs to exploit):
 ### Decoder — JavaScript
 
 Five lines, and it is exactly what was run against real output to produce
-the numbers above (`node decode.js /tmp/v1.json`, using
+the numbers above (`node decode.js v1.json`, using
 `doc.blocks.series.squad.damage` and an RLE row from
 `doc.blocks.series.by_entity`):
 
@@ -559,7 +559,7 @@ Verified: `decodeSeries(doc.blocks.series.squad.damage).length === 50`
 ### Decoder — Python
 
 Same algorithm, run against the same real document
-(`python3 decode.py /tmp/v1.json`):
+(`python3 decode.py v1.json`):
 
 ```python
 def decode_series(s):
@@ -574,8 +574,8 @@ def decode_series(s):
 Verified: `len(decode_series(doc["blocks"]["series"]["squad"]["damage"])) == 50`,
 and the same RLE row decodes to `[0] * 51`.
 
-Both decoders were executed against `/tmp/v1.json` (default flags) and
-`/tmp/v1-full.json` (`--timeseries --skill-damage --rotation --modifiers
+Both decoders were executed against `v1.json` (default flags) and
+`v1-full.json` (`--timeseries --skill-damage --rotation --modifiers
 --missiles --replay`, which populates `series.by_entity` and exercises a
 real RLE row) as part of writing this document; both round-tripped `len`
 correctly and matched the raw/RLE encoding the binary actually chose.
