@@ -137,7 +137,7 @@ fn enc(players: Vec<Player>) -> Encounter {
         markers: Vec::new(),
         tick_rate: None,
         objectives: Vec::new(),
-        started_at_unix: None,
+        started_at_unix: None, map_id: None,
     }
 }
 

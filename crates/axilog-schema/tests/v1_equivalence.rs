@@ -891,7 +891,7 @@ fn a_log_without_the_healing_extension_reports_unsupported_not_empty() {
         }],
         enemies: vec![],
         markers: vec![],
-        tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+        tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
     };
     let metrics = Metrics {
         players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],
@@ -959,7 +959,7 @@ fn a_computed_block_with_no_rows_still_reports_empty() {
         players: vec![],
         enemies: vec![],
         markers: vec![],
-        tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+        tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
     };
     let metrics = Metrics {
         // The extension IS present -- so `healing` is answerable here, and

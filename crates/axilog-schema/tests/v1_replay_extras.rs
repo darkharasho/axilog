@@ -62,7 +62,7 @@ fn document(extras: &ReplayExtras) -> serde_json::Value {
         markers: vec![],
         tick_rate: None,
         objectives: Vec::new(),
-        started_at_unix: None,
+        started_at_unix: None, map_id: None,
     };
     let metrics = Metrics {
         players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],

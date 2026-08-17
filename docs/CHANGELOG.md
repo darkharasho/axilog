@@ -10,6 +10,35 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v0.3.5 — 2026-08-17
+
+**Native map geometry — `encounter.map_id` and `blocks.replay.tracks.arena`.** The native
+format carried replay positions as raw world (game-inch) coordinates and nothing to plot them
+with: no map id, no projection. The only place the per-map world rect existed on the way out was
+`analysis::ei_replay::MapTransform`, i.e. inside the EI compatibility adapter — so a consumer
+reading native could not draw a map without also parsing ei-json, or without re-transcribing
+`wvw::maps::WVW_MAPS` into its own codebase and owning the drift.
+
+Both are now emitted natively. `encounter.map_id` is the raw `CBTS_MAPID` value the `map`
+display name is derived from, present with or without `--replay`, for consumers joining against
+their own map assets. `blocks.replay.tracks.arena` carries the arena image's native size and URL
+plus the world rect it covers, so world → pixel is a four-line formula the consumer can apply at
+any canvas size. Nothing is pre-rounded or pre-rescaled: GW2EI's `combatReplayMetaData` squeezes
+`sizes` to a 750px maximum dimension and rounds `inchToPixel` to three decimals, both artifacts of
+its renderer, and both derivable from `arena` rather than the reverse. Scaling `arena` to EI's own
+canvas reproduces EI's pixel on all five mapped ids, asserted against `MapTransform` itself
+(`arena_tests::projection_reproduces_gw2eis_transform_on_every_map`) rather than argued in prose.
+
+`arena` is omitted for a map id with no hand-authored arena image; the consumer then has only
+`bounds`, which is the union of the observed positions rather than a fixed frame and is therefore
+not comparable across logs.
+
+**1.0 is frozen.** `docs/NATIVE-FORMAT.md`'s compatibility rules were explicitly suspended while
+the format had no external consumer, with the suspension written to end "the moment one does". It
+has: axibridge reads the native document in production as of its unit-2 cutover. Renames,
+removals, retypes and meaning changes now require a major bump, gated by the key-set golden. This
+release's additions are additive — nine new keys, none removed.
+
 ## v0.3.4 — 2026-08-16
 
 **MSDELAY — the instant-cast server delay constant.** `SERVER_DELAY` was 150 ms; arcdps' own

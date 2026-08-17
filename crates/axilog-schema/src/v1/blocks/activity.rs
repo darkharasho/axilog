@@ -502,9 +502,97 @@ pub struct ReplayTracks {
     pub poll_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<ReplayBounds>,
+    /// The static geometry that turns the world coordinates in
+    /// [`ReplayTrack::samples`] into a picture. Rides `tracks` for the same
+    /// reason `poll_ms` and `bounds` do: it describes the samples and is
+    /// meaningless without them.
+    ///
+    /// `None` when the log's map id has no known arena (see [`ArenaOut`]);
+    /// consumers then have only `bounds`, which is the union of the observed
+    /// positions rather than a fixed frame, and is therefore NOT comparable
+    /// between two logs on the same map.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arena: Option<ArenaOut>,
     /// Keyed by entity id. The legacy `ReplayTrackOut` carried no join key
     /// at all, so a consumer could not tell whose track it was reading.
     pub by_entity: ByEntity<ReplayTrack>,
+}
+
+/// The fixed world rectangle a WvW map's arena image covers, and the image
+/// itself: everything a consumer needs to project [`ReplayTrack::samples`]
+/// onto a map without knowing anything about GW2 map geometry.
+///
+/// # Why this is emitted rather than left to the consumer
+///
+/// Positions in this format are raw world (game-inch) coordinates, which is
+/// the honest thing to carry -- they are what arcdps records and they are
+/// projection-independent. But they are unplottable on their own: turning
+/// them into map pixels needs the per-map world rect, which is static GW2
+/// data axilog already holds in [`axilog_core::wvw::maps::WVW_MAPS`]. Making
+/// each consumer re-transcribe that table would recreate exactly the
+/// drift that module's doc comment exists to prevent, one repository
+/// further out. So the rect travels with the samples.
+///
+/// # Projection
+///
+/// World y grows northward, image y grows downward, so the y axis flips:
+///
+/// ```text
+/// px = (x - world_min_x) / (world_max_x - world_min_x) * image_width
+/// py = (1 - (y - world_min_y) / (world_max_y - world_min_y)) * image_height
+/// ```
+///
+/// Scale both by `canvas / image_*` to render at any size. Nothing here is
+/// pre-rounded or pre-rescaled: GW2EI's exported `combatReplayMetaData`
+/// carries the image size already squeezed to a 750px maximum dimension and
+/// an `inchToPixel` rounded to three decimals, both of which are artifacts
+/// of its own renderer. A consumer that wants those numbers can derive
+/// them; a consumer that wants full precision cannot recover it from them.
+#[derive(Serialize, Debug, Clone, Copy, PartialEq)]
+pub struct ArenaOut {
+    /// The arena image's native width in pixels (GW2EI's `_pixelSize.width`).
+    pub image_width: u32,
+    /// The arena image's native height in pixels.
+    pub image_height: u32,
+    /// The arena image URL.
+    pub image_url: &'static str,
+    /// World (game-inch) x of the image's LEFT edge.
+    pub world_min_x: f64,
+    /// World y of the image's BOTTOM edge -- the larger `py`, because of the
+    /// flip documented above.
+    pub world_min_y: f64,
+    /// World x of the image's RIGHT edge.
+    pub world_max_x: f64,
+    /// World y of the image's TOP edge.
+    pub world_max_y: f64,
+}
+
+impl ArenaOut {
+    /// Look up the arena for a map id. `None` for every id without a
+    /// hand-authored arena image -- see
+    /// [`axilog_core::wvw::maps::map_def`], which is the single table this
+    /// reads.
+    pub fn for_map_id(map_id: u32) -> Option<Self> {
+        let def = axilog_core::wvw::maps::map_def(map_id)?;
+        let (min_x, min_y, max_x, max_y) = def.rect;
+        Some(Self {
+            image_width: def.pixel_size.0,
+            image_height: def.pixel_size.1,
+            image_url: def.image_url,
+            world_min_x: min_x,
+            world_min_y: min_y,
+            world_max_x: max_x,
+            world_max_y: max_y,
+        })
+    }
+
+    /// Project one world position to a pixel in this arena's native image
+    /// space, per the formula in the type's doc comment.
+    pub fn to_image_pixel(&self, x: f64, y: f64) -> (f64, f64) {
+        let fx = (x - self.world_min_x) / (self.world_max_x - self.world_min_x);
+        let fy = (y - self.world_min_y) / (self.world_max_y - self.world_min_y);
+        (fx * f64::from(self.image_width), (1.0 - fy) * f64::from(self.image_height))
+    }
 }
 
 /// Mirrors the real `ReplayBoundsOut`, which is `f64`, not the brief's
@@ -1044,6 +1132,7 @@ pub fn build_replay(
                 max_x: r.bounds.max_x,
                 max_y: r.bounds.max_y,
             }),
+            arena: report.encounter.map_id.and_then(ArenaOut::for_map_id),
             by_entity,
         }
     });
@@ -1279,5 +1368,96 @@ mod tests {
         let (report, index) = fixture_report();
         let block = build_missiles(&report, &index);
         let _ = serde_json::to_value(&block).expect("an empty block still serializes");
+    }
+}
+
+/// [`ArenaOut`] is the native format's answer to "where does this position
+/// go on a map", and the only existing, log-verified answer to that question
+/// in this repository is `ei_replay::MapTransform`, which is a transcription
+/// of GW2EI's own renderer. These tests pin the new type to that one.
+#[cfg(test)]
+mod arena_tests {
+    use super::ArenaOut;
+    use axilog_core::analysis::ei_replay::MapTransform;
+    use axilog_core::wvw::maps::WVW_MAPS;
+
+    #[test]
+    fn every_table_map_has_an_arena_and_nothing_else_does() {
+        for def in WVW_MAPS {
+            let arena = ArenaOut::for_map_id(def.map_id).expect("table entry");
+            assert_eq!((arena.image_width, arena.image_height), def.pixel_size);
+            assert_eq!(arena.image_url, def.image_url);
+            assert_eq!(
+                (arena.world_min_x, arena.world_min_y, arena.world_max_x, arena.world_max_y),
+                def.rect,
+            );
+        }
+        // GW2EI names these but has no arena image for them; they fall
+        // through to a computed bounding box, which is not a fixed frame and
+        // must not be presented as one.
+        assert!(ArenaOut::for_map_id(899).is_none(), "Obsidian Sanctum");
+        assert!(ArenaOut::for_map_id(1315).is_none(), "Armistice Bastion");
+        assert!(ArenaOut::for_map_id(0).is_none());
+    }
+
+    /// The equality oracle. A consumer that scales this arena's native image
+    /// pixels to GW2EI's own canvas must land on GW2EI's own pixel, to the
+    /// rounding EI applies at the end -- otherwise the documented projection
+    /// is not the projection this data was produced under, and every replay
+    /// drawn from it would be subtly displaced.
+    #[test]
+    fn projection_reproduces_gw2eis_transform_on_every_map() {
+        for def in WVW_MAPS {
+            let arena = ArenaOut::for_map_id(def.map_id).unwrap();
+            let ei = MapTransform::for_map_id(def.map_id).unwrap();
+            let sx = ei.out_w / ei.img_w;
+            let sy = ei.out_h / ei.img_h;
+            // Sample the rect's interior on a coarse grid, plus its corners.
+            for i in 0..=8 {
+                for j in 0..=8 {
+                    let x = (def.rect.0 + (def.rect.2 - def.rect.0) * f64::from(i) / 8.0) as f32;
+                    let y = (def.rect.1 + (def.rect.3 - def.rect.1) * f64::from(j) / 8.0) as f32;
+                    let (mine_x, mine_y) = arena.to_image_pixel(f64::from(x), f64::from(y));
+                    let theirs = ei.to_map_pixel(x, y);
+                    // EI rounds to 3 decimals at the very end (`round_ei`);
+                    // compare inside that tolerance rather than re-deriving
+                    // its rounding, so this test fails on a real projection
+                    // error and not on a last-digit tie.
+                    assert!(
+                        (mine_x * sx - theirs[0]).abs() < 1e-3,
+                        "map {} x at ({x}, {y}): {} vs EI {}",
+                        def.map_id,
+                        mine_x * sx,
+                        theirs[0],
+                    );
+                    assert!(
+                        (mine_y * sy - theirs[1]).abs() < 1e-3,
+                        "map {} y at ({x}, {y}): {} vs EI {}",
+                        def.map_id,
+                        mine_y * sy,
+                        theirs[1],
+                    );
+                }
+            }
+        }
+    }
+
+    /// The y flip is the one thing a consumer is most likely to get backwards,
+    /// so it gets an assertion that reads like the claim: the world's NORTH
+    /// edge is the image's TOP row.
+    #[test]
+    fn world_north_is_image_top() {
+        let arena = ArenaOut::for_map_id(95).unwrap();
+        let (_, top) = arena.to_image_pixel(0.0, arena.world_max_y);
+        let (_, bottom) = arena.to_image_pixel(0.0, arena.world_min_y);
+        assert!(top.abs() < 1e-9, "north edge maps to py 0, got {top}");
+        assert!(
+            (bottom - f64::from(arena.image_height)).abs() < 1e-9,
+            "south edge maps to py = image height, got {bottom}",
+        );
+        let (left, _) = arena.to_image_pixel(arena.world_min_x, 0.0);
+        let (right, _) = arena.to_image_pixel(arena.world_max_x, 0.0);
+        assert!(left.abs() < 1e-9, "west edge maps to px 0, got {left}");
+        assert!((right - f64::from(arena.image_width)).abs() < 1e-9);
     }
 }

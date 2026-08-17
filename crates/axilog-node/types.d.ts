@@ -632,6 +632,20 @@ export interface TimelineOut {
 export interface EncounterOut {
   kind: string
   map: string
+  /**
+   * The raw `CBTS_MAPID` value that `map` is the display name for. Carried
+   * alongside the name, not instead of it: the name is for people, the id is
+   * the join key into your own map assets (tile sets, objective catalogs,
+   * landmark tables). Matching on the display string would break the moment
+   * a name is reworded.
+   *
+   * You do NOT need this to project replay positions -- the geometry for
+   * that travels with the positions as `ReplayTracks.arena`.
+   *
+   * Omitted (not `null`) when the log carries no MAP_ID event, which stays
+   * distinguishable from map id 0.
+   */
+  map_id?: number
   duration_ms: number
   build: string
   revision: number
@@ -822,6 +836,20 @@ export interface MarkerAssignmentOutV1 {
 export interface EncounterOutV1 {
   kind: string
   map: string
+  /**
+   * The raw `CBTS_MAPID` value that `map` is the display name for. Carried
+   * alongside the name, not instead of it: the name is for people, the id is
+   * the join key into your own map assets (tile sets, objective catalogs,
+   * landmark tables). Matching on the display string would break the moment
+   * a name is reworded.
+   *
+   * You do NOT need this to project replay positions -- the geometry for
+   * that travels with the positions as `ReplayTracks.arena`.
+   *
+   * Omitted (not `null`) when the log carries no MAP_ID event, which stays
+   * distinguishable from map id 0.
+   */
+  map_id?: number
   duration_ms: number
   build: string
   revision: number
@@ -1747,11 +1775,59 @@ export interface ReplayIntervals {
   stack_dist?: number
 }
 
+/**
+ * The fixed world rectangle a WvW map's arena image covers, and the image
+ * itself: everything needed to project `ReplayTrack.samples` onto a map
+ * without knowing anything about GW2 map geometry.
+ *
+ * Positions in this format are raw world (game-inch) coordinates -- what
+ * arcdps records, and projection-independent. Plotting them needs the
+ * per-map world rect, which is static GW2 data axilog already holds, so the
+ * rect travels with the samples rather than being re-transcribed by every
+ * consumer.
+ *
+ * World y grows northward, image y grows downward, so the y axis flips:
+ *
+ * ```js
+ * const px = (x - a.world_min_x) / (a.world_max_x - a.world_min_x) * a.image_width
+ * const py = (1 - (y - a.world_min_y) / (a.world_max_y - a.world_min_y)) * a.image_height
+ * ```
+ *
+ * Scale both by `canvas / image_*` to render at any size. Nothing here is
+ * pre-rounded or pre-rescaled -- GW2EI's `combatReplayMetaData` carries the
+ * image size squeezed to a 750px maximum dimension and an `inchToPixel`
+ * rounded to three decimals, both artifacts of its renderer. You can derive
+ * those from these numbers; you cannot recover these from those.
+ */
+export interface Arena {
+  /** The arena image's native width in pixels. */
+  image_width: number
+  /** The arena image's native height in pixels. */
+  image_height: number
+  image_url: string
+  /** World (game-inch) x of the image's LEFT edge. */
+  world_min_x: number
+  /** World y of the image's BOTTOM edge -- the LARGER `py`, because of the flip. */
+  world_min_y: number
+  /** World x of the image's RIGHT edge. */
+  world_max_x: number
+  /** World y of the image's TOP edge. */
+  world_max_y: number
+}
+
 /** The gated half of `ReplayBlock` -- present only under `{ replay: true }`. */
 export interface ReplayTracks {
   /** Shared polling interval for every track. */
   poll_ms: number
   bounds?: ReplayBounds
+  /**
+   * The static geometry that turns `ReplayTrack.samples` into a picture.
+   *
+   * Omitted when the log's map id has no known arena. You then have only
+   * `bounds`, which is the union of the OBSERVED positions rather than a
+   * fixed frame -- so it is not comparable between two logs on the same map.
+   */
+  arena?: Arena
   /** Keyed by entity id. Wider than `ReplayBlock.by_entity`: enemy players appear here too. */
   by_entity: ByEntity<ReplayTrack>
 }

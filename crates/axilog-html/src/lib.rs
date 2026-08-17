@@ -77,7 +77,7 @@ mod tests {
                 ],
                 markers: vec![],
                 tick_rate: None,
-                objectives: Vec::new(), started_at_unix: None,
+                objectives: Vec::new(), started_at_unix: None, map_id: None,
             },
             players: vec![PlayerOut {
                 account: ":Player.1234".into(),

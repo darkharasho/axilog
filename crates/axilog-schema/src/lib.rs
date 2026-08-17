@@ -398,6 +398,11 @@ pub fn build_replay_out(replay: &Replay) -> ReplayOut {
 }
 #[derive(Serialize, Clone)]
 pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u64,
+    /// The raw `CBTS_MAPID` value `map` is the display name for. See
+    /// [`axilog_core::model::Encounter::map_id`]. Omitted (not `null`) when
+    /// the log carries no MAP_ID event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub map_id: Option<u32>,
     pub build: String, pub revision: u8, pub recorded_by: Option<String>,
     pub teams: Vec<TeamOut>,
     /// Every `CBTS_MARKER` assignment observed in the log (Task 7, M2),
@@ -1579,6 +1584,7 @@ pub fn build_report(
         // doc / the M11 plan's "grep-audit for the old field name" gate).
         schema_version: "0.2", axilog_version: axilog_version.to_string(),
         encounter: EncounterOut { kind: enc.kind.clone(), map: enc.map.clone(),
+            map_id: enc.map_id,
             duration_ms: enc.duration_ms, build: enc.build.clone(), revision: enc.revision,
             recorded_by: enc.recorded_by.clone(),
             teams: enc.teams.iter().map(|t| TeamOut{color:t.color.clone(),team_id:t.team_id,guid:t.guid.clone(),shard_id:t.shard_id}).collect(),
@@ -1691,7 +1697,7 @@ mod tests {
                     profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
                     agent_addrs: vec![11] },
             ],
-            markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
+            markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None, map_id: None };
         let m = Metrics { players: vec![],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![]},
             boons: Default::default(), boon_uptime: Default::default(),
@@ -1810,7 +1816,7 @@ mod tests {
                 auto_upgrade_progress: 42,
                 owners: vec![(433, 0), (2767, 44684)],
             }],
-            started_at_unix: None };
+            started_at_unix: None, map_id: None };
         let m = Metrics::default();
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&report).unwrap();
@@ -1853,7 +1859,7 @@ mod tests {
                     is_player: false, marker: None, profession: None, elite_spec: None,
                     agent_addrs: vec![9] },
             ],
-            markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
+            markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None, map_id: None };
         let m = Metrics { players: vec![],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![]},
             boons: Default::default(), boon_uptime: Default::default(),
@@ -1871,7 +1877,7 @@ mod tests {
             teams:vec![], players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"".into(),
             team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]}],
-            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
+            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None, map_id: None };
         let m = Metrics { players: vec![PlayerMetrics{agent_addr:1,damage_total:500,
             dps:500.0,..Default::default()}],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![500],
@@ -1911,7 +1917,7 @@ mod tests {
                     profession:"Guardian".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![2]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
+            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None, map_id: None };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 healing: HealingMetrics { healing_out_total: 500, healing_out_allies: 300,
@@ -1952,7 +1958,7 @@ mod tests {
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
+            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None, map_id: None };
         let entry = SkillEntry { skill_id: 100, total: 50, hits: 1, min: 50, max: 50, crit_hits: 0, flank_hits: 0 };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
@@ -2001,7 +2007,7 @@ mod tests {
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
+            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None, map_id: None };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 timeseries: TimeseriesMetrics {
@@ -2061,7 +2067,7 @@ mod tests {
                     profession:"Thief".into(),elite_spec:"".into(),team:"red".into(),
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
-            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None };
+            enemies:vec![], markers:vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None, map_id: None };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 rotation: vec![SkillRotation { skill_id: 500, casts: vec![
@@ -2150,7 +2156,7 @@ mod tests {
         let enc = Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
-            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
         };
         let mut dst = [0u8; 8];
         dst[0..4].copy_from_slice(&123.456f32.to_le_bytes());
@@ -2199,7 +2205,7 @@ mod tests {
         let enc = Encounter {
             kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
-            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
         };
         fn missile_ev(time: u64, statechange: u8, src: u64, dst: u64, is_flanking: u8, pad: u32) -> RawEvent {
             RawEvent {

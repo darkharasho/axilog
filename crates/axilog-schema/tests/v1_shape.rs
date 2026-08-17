@@ -506,3 +506,41 @@ fn no_block_key_is_a_character_name() {
     walk(&v["blocks"], &names, "blocks", &mut hits);
     assert!(hits.is_empty(), "character name(s) used as block keys: {hits:?}");
 }
+
+/// `encounter.map_id` and `blocks.replay.tracks.arena` are what let a
+/// consumer put this log on a map without EI-shaped input. On the committed
+/// fixture -- Green Alpine Borderlands, id 95 -- both must be there and must
+/// carry the table's own values.
+#[test]
+fn the_map_id_and_arena_reach_the_document() {
+    let doc = build();
+    assert_eq!(doc["encounter"]["map"], "Green Alpine Borderlands");
+    assert_eq!(doc["encounter"]["map_id"], 95);
+
+    let arena = &doc["blocks"]["replay"]["tracks"]["arena"];
+    assert_eq!(arena["image_width"], 697);
+    assert_eq!(arena["image_height"], 1000);
+    assert_eq!(arena["image_url"], "https://i.imgur.com/nVu2ivF.png");
+    assert_eq!(arena["world_min_x"], -30720.0);
+    assert_eq!(arena["world_min_y"], -43008.0);
+    assert_eq!(arena["world_max_x"], 30720.0);
+    assert_eq!(arena["world_max_y"], 43008.0);
+
+    // The arena is a FIXED frame -- unlike `bounds`, which is the union of
+    // the observed positions. Every sample must fall inside it, or the frame
+    // is the wrong one for this map and every replay drawn from it would be
+    // clipped.
+    let tracks = doc["blocks"]["replay"]["tracks"]["by_entity"]
+        .as_object()
+        .expect("tracks under --replay");
+    let mut checked = 0usize;
+    for track in tracks.values() {
+        for s in track["samples"].as_array().expect("samples") {
+            let (x, y) = (s[1].as_f64().unwrap(), s[2].as_f64().unwrap());
+            assert!((-30720.0..=30720.0).contains(&x), "x {x} outside the arena");
+            assert!((-43008.0..=43008.0).contains(&y), "y {y} outside the arena");
+            checked += 1;
+        }
+    }
+    assert!(checked > 1000, "expected a real track set, checked {checked}");
+}
