@@ -42,7 +42,7 @@ pub const FINDERS: &[FinderDef] = &[
         icd: 10,
         checks: &[
             Check::AroundDst { negated: false },
-            Check::SecondaryEffect { guid: &G_CONDUIT_FORM_OF_THE_DERVISH_SCYTHE, inverted_src: false, type_rel: TypeRel::Inverted, time_offset: 0, epsilon: 150, negated: true },
+            Check::SecondaryEffect { guid: &G_CONDUIT_FORM_OF_THE_DERVISH_SCYTHE, inverted_src: false, type_rel: TypeRel::Inverted, time_offset: 0, epsilon: 10, negated: true },
         ],
         ..FinderDef::DEFAULT
     },
@@ -260,7 +260,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "RevenantHelper",
         trigger: Trigger::Effect { guid: &G_REVENANT_SPEAR_BLITZ_MINES_DETONATION_1, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_REVENANT_SPEAR_BLITZ_MINES_DETONATION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_REVENANT_SPEAR_BLITZ_MINES_DETONATION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
             Check::Spec { party: Party::Key, specs: &["Revenant"], base: true, negated: false },
         ],
         ..FinderDef::DEFAULT

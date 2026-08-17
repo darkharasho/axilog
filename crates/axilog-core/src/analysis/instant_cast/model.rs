@@ -33,8 +33,19 @@ pub enum CastOrigin {
 /// GW2EI `InstantCastFinder.DefaultICD` (`InstantCastFinder.cs:26`).
 pub const DEFAULT_ICD: i64 = 50;
 
-/// GW2EI `ParserHelper.ServerDelayConstant`.
-pub const SERVER_DELAY: i64 = 150;
+/// GW2EI `ParserHelper.ServerDelayConstant` (`ParserHelper.cs:30`), the
+/// coincidence window every `epsilon` default in the `InstantCastFinder`
+/// builder vocabulary is measured in, and -- halved -- the width of
+/// `Ctx::snap`'s weapon-swap search.
+///
+/// Was 150 here until it was checked against source. `ParserHelper.cs`
+/// declares five similar `long` constants in one block and the neighbour
+/// two lines down is `TimeThresholdConstant = 150`, which is what got
+/// transcribed. The generator now READS this value out of `ParserHelper.cs`
+/// rather than carrying a literal, so the same slip cannot recur; keep this
+/// declaration in sync with `scripts/gen_instant_cast_catalog.py`'s
+/// `SERVER_DELAY_MS`.
+pub const SERVER_DELAY: i64 = 10;
 
 /// GW2EI `GW2Builds.StartOfLife` / `EndOfLife` stand-ins, and the same for
 /// `ArcDPSBuilds`. Deliberately identical to the constants

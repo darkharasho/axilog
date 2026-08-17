@@ -371,7 +371,7 @@ pub const FINDERS: &[FinderDef] = &[
         checks: &[
             Check::AroundDst { negated: false },
             Check::Spec { party: Party::Other, specs: &["Guardian"], base: true, negated: false },
-            Check::SecondaryEffect { guid: &G_GUARDIAN_SHOUT, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_GUARDIAN_SHOUT, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -399,7 +399,7 @@ pub const FINDERS: &[FinderDef] = &[
         origin: CastOrigin::Trait,
         not_accurate: true,
         checks: &[
-            Check::NoAnimatedCast { skill_id: 9097, time_offset: 0, epsilon: 150 },
+            Check::NoAnimatedCast { skill_id: 9097, time_offset: 0, epsilon: 10 },
         ],
         ..FinderDef::DEFAULT
     },
@@ -410,7 +410,7 @@ pub const FINDERS: &[FinderDef] = &[
         origin: CastOrigin::Trait,
         not_accurate: true,
         checks: &[
-            Check::NoAnimatedCast { skill_id: 9097, time_offset: 0, epsilon: 150 },
+            Check::NoAnimatedCast { skill_id: 9097, time_offset: 0, epsilon: 10 },
         ],
         ..FinderDef::DEFAULT
     },
@@ -421,8 +421,8 @@ pub const FINDERS: &[FinderDef] = &[
         origin: CastOrigin::Trait,
         not_accurate: true,
         checks: &[
-            Check::NoAnimatedCast { skill_id: 9146, time_offset: 0, epsilon: 150 },
-            Check::NoAnimatedCast { skill_id: 76708, time_offset: 0, epsilon: 150 },
+            Check::NoAnimatedCast { skill_id: 9146, time_offset: 0, epsilon: 10 },
+            Check::NoAnimatedCast { skill_id: 76708, time_offset: 0, epsilon: 10 },
         ],
         ..FinderDef::DEFAULT
     },
@@ -433,7 +433,7 @@ pub const FINDERS: &[FinderDef] = &[
         origin: CastOrigin::Trait,
         not_accurate: true,
         checks: &[
-            Check::NoAnimatedCast { skill_id: 9146, time_offset: 0, epsilon: 150 },
+            Check::NoAnimatedCast { skill_id: 9146, time_offset: 0, epsilon: 10 },
         ],
         ..FinderDef::DEFAULT
     },
@@ -444,7 +444,7 @@ pub const FINDERS: &[FinderDef] = &[
         origin: CastOrigin::Trait,
         not_accurate: true,
         checks: &[
-            Check::NoAnimatedCast { skill_id: 9161, time_offset: 0, epsilon: 150 },
+            Check::NoAnimatedCast { skill_id: 9161, time_offset: 0, epsilon: 10 },
         ],
         ..FinderDef::DEFAULT
     },
@@ -455,7 +455,7 @@ pub const FINDERS: &[FinderDef] = &[
         origin: CastOrigin::Trait,
         not_accurate: true,
         checks: &[
-            Check::NoAnimatedCast { skill_id: 9161, time_offset: 0, epsilon: 150 },
+            Check::NoAnimatedCast { skill_id: 9161, time_offset: 0, epsilon: 10 },
         ],
         ..FinderDef::DEFAULT
     },
@@ -524,7 +524,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "LuminaryHelper",
         trigger: Trigger::Effect { guid: &G_LUMINARY_RADIANT_JUSTICE_1, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_LUMINARY_RADIANT_JUSTICE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_LUMINARY_RADIANT_JUSTICE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -533,7 +533,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "LuminaryHelper",
         trigger: Trigger::Effect { guid: &G_LUMINARY_RADIANT_RESOLVE_1, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_LUMINARY_RADIANT_RESOLVE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_LUMINARY_RADIANT_RESOLVE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -542,7 +542,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "LuminaryHelper",
         trigger: Trigger::Effect { guid: &G_LUMINARY_RADIANT_COURAGE_1, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_LUMINARY_RADIANT_COURAGE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_LUMINARY_RADIANT_COURAGE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -552,7 +552,7 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::Effect { guid: &G_LUMINARY_SOVEREIGN_OF_LIGHT_MODEL, by_dst: false },
         origin: CastOrigin::Trait,
         checks: &[
-            Check::SecondaryEffect { guid: &G_LUMINARY_SOVEREIGN_OF_LIGHT_AUDIO, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_LUMINARY_SOVEREIGN_OF_LIGHT_AUDIO, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
             Check::Spec { party: Party::Key, specs: &["Luminary"], base: false, negated: false },
         ],
         ..FinderDef::DEFAULT

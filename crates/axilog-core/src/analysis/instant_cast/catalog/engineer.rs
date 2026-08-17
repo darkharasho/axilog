@@ -198,7 +198,7 @@ pub const FINDERS: &[FinderDef] = &[
         checks: &[
             Check::AroundDst { negated: false },
             Check::Spec { party: Party::Other, specs: &["Holosmith"], base: false, negated: false },
-            Check::SecondaryEffect { guid: &G_HOLOSMIT_BLADE_BURST_PARTICLE_ACCELERATOR_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_HOLOSMIT_BLADE_BURST_PARTICLE_ACCELERATOR_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },

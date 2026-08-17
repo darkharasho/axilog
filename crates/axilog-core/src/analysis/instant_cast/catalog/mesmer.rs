@@ -73,7 +73,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "ChronomancerHelper",
         trigger: Trigger::Effect { guid: &G_CHRONOMANCER_SPLIT_SECOND, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_CHRONOMANCER_SEIZE_THE_MOMENT_SHATTER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_CHRONOMANCER_SEIZE_THE_MOMENT_SHATTER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
             Check::Spec { party: Party::Key, specs: &["Chronomancer"], base: false, negated: false },
         ],
         ..FinderDef::DEFAULT
@@ -83,7 +83,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "ChronomancerHelper",
         trigger: Trigger::Effect { guid: &G_CHRONOMANCER_REWINDER, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_CHRONOMANCER_SEIZE_THE_MOMENT_SHATTER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_CHRONOMANCER_SEIZE_THE_MOMENT_SHATTER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
             Check::Spec { party: Party::Key, specs: &["Chronomancer"], base: false, negated: false },
         ],
         ..FinderDef::DEFAULT
@@ -93,7 +93,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "ChronomancerHelper",
         trigger: Trigger::Effect { guid: &G_CHRONOMANCER_TIME_SINK, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_CHRONOMANCER_SEIZE_THE_MOMENT_SHATTER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_CHRONOMANCER_SEIZE_THE_MOMENT_SHATTER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
             Check::Spec { party: Party::Key, specs: &["Chronomancer"], base: false, negated: false },
         ],
         ..FinderDef::DEFAULT
@@ -148,7 +148,7 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::Effect { guid: &G_MESMER_CRY_OF_FRUSTRATION, by_dst: false },
         checks: &[
             Check::Spec { party: Party::Key, specs: &["Mirage", "Mesmer"], base: false, negated: false },
-            Check::SecondaryEffect { guid: &G_MESMER_THE_PRESTIGE_DISAPPEAR_2_AND_NON_CHRONO_SHATTER_AROUND_CLONES, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: true },
+            Check::SecondaryEffect { guid: &G_MESMER_THE_PRESTIGE_DISAPPEAR_2_AND_NON_CHRONO_SHATTER_AROUND_CLONES, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: true },
         ],
         ..FinderDef::DEFAULT
     },
@@ -158,7 +158,7 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::Effect { guid: &G_MESMER_DIVERSION, by_dst: false },
         checks: &[
             Check::Spec { party: Party::Key, specs: &["Mirage", "Mesmer"], base: false, negated: false },
-            Check::SecondaryEffect { guid: &G_MESMER_THE_PRESTIGE_DISAPPEAR_2_AND_NON_CHRONO_SHATTER_AROUND_CLONES, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: true },
+            Check::SecondaryEffect { guid: &G_MESMER_THE_PRESTIGE_DISAPPEAR_2_AND_NON_CHRONO_SHATTER_AROUND_CLONES, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: true },
         ],
         ..FinderDef::DEFAULT
     },
@@ -235,7 +235,7 @@ pub const FINDERS: &[FinderDef] = &[
             Check::Spec { party: Party::Key, specs: &["Mesmer"], base: true, negated: true },
             Check::AroundDst { negated: false },
             Check::Spec { party: Party::Other, specs: &["Mesmer"], base: true, negated: false },
-            Check::SecondaryEffect { guid: &G_MESMER_MANTRA_OF_RESOLVE_AND_POWER_CLEANSE, inverted_src: true, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_MESMER_MANTRA_OF_RESOLVE_AND_POWER_CLEANSE, inverted_src: true, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         min_gw2_build: 158837,
         ..FinderDef::DEFAULT
@@ -274,7 +274,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "MesmerHelper",
         trigger: Trigger::Effect { guid: &G_MESMER_RIFLE_ABSTRACTION, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_MESMER_RIFLE_ABSTRACTION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_MESMER_RIFLE_ABSTRACTION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
             Check::Spec { party: Party::Key, specs: &["Mesmer"], base: true, negated: false },
         ],
         ..FinderDef::DEFAULT
@@ -291,8 +291,8 @@ pub const FINDERS: &[FinderDef] = &[
         source: "MirageHelper",
         trigger: Trigger::Effect { guid: &G_MIRAGE_JAUNT, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_MIRAGE_JAUNT_CONFLICT_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
-            Check::SecondaryEffect { guid: &G_MIRAGE_JAUNT_CONFLICT_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_MIRAGE_JAUNT_CONFLICT_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
+            Check::SecondaryEffect { guid: &G_MIRAGE_JAUNT_CONFLICT_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
             Check::Spec { party: Party::Key, specs: &["Mirage"], base: false, negated: false },
         ],
         ..FinderDef::DEFAULT
@@ -327,7 +327,7 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::Effect { guid: &G_TROUBADOUR_SYNCOPATE_DELAYED_WAVE_1, by_dst: false },
         origin: CastOrigin::Unconditional,
         checks: &[
-            Check::SecondaryEffect { guid: &G_TROUBADOUR_SYNCOPATE_DELAYED_WAVE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_TROUBADOUR_SYNCOPATE_DELAYED_WAVE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },

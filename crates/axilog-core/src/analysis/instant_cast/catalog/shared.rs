@@ -472,7 +472,7 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::Effect { guid: &G_RELIC_WHITE_CIRCLE, by_dst: false },
         origin: CastOrigin::Gear,
         checks: &[
-            Check::SecondaryEffect { guid: &G_RELIC_OF_THE_WIZARDS_TOWER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_RELIC_OF_THE_WIZARDS_TOWER, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -496,7 +496,7 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::Effect { guid: &G_RELIC_WHITE_CIRCLE, by_dst: false },
         origin: CastOrigin::Gear,
         checks: &[
-            Check::SecondaryEffect { guid: &G_RELIC_OF_THE_BEEHIVE_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 1000, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_RELIC_OF_THE_BEEHIVE_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 1000, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -506,7 +506,7 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::Effect { guid: &G_RELIC_OF_MOUNT_BALRIOR_1, by_dst: false },
         origin: CastOrigin::Gear,
         checks: &[
-            Check::SecondaryEffect { guid: &G_RELIC_OF_MOUNT_BALRIOR_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_RELIC_OF_MOUNT_BALRIOR_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -538,7 +538,7 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::Effect { guid: &G_RELIC_OF_THE_NAUTICAL_BEAST_GROUND_2, by_dst: false },
         origin: CastOrigin::Gear,
         checks: &[
-            Check::SecondaryEffect { guid: &G_RELIC_OF_THE_NAUTICAL_BEAST_GROUND_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_RELIC_OF_THE_NAUTICAL_BEAST_GROUND_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -693,7 +693,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "ProfHelper",
         trigger: Trigger::Effect { guid: &G_SKYSCALE_BLAST_1, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_SKYSCALE_BLAST_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_SKYSCALE_BLAST_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },

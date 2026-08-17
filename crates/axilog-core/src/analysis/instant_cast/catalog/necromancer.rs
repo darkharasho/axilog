@@ -241,8 +241,8 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::Effect { guid: &G_REAPER_YOU_ARE_ALL_WEAKLINGS_1, by_dst: false },
         checks: &[
             Check::Spec { party: Party::Key, specs: &["Reaper"], base: false, negated: false },
-            Check::SecondaryEffect { guid: &G_REAPER_YOU_ARE_ALL_WEAKLINGS_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
-            Check::SecondaryEffect { guid: &G_REAPER_YOU_ARE_ALL_WEAKLINGS_3, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_REAPER_YOU_ARE_ALL_WEAKLINGS_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
+            Check::SecondaryEffect { guid: &G_REAPER_YOU_ARE_ALL_WEAKLINGS_3, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -365,7 +365,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "RitualistHelper",
         trigger: Trigger::Effect { guid: &G_RITUALIST_INNERVATE_ANGUISH_1, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_RITUALIST_INNERVATE_ANGUISH_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_RITUALIST_INNERVATE_ANGUISH_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -374,7 +374,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "RitualistHelper",
         trigger: Trigger::Effect { guid: &G_RITUALIST_INNERVATE_WANDERLUST_1, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_RITUALIST_INNERVATE_WANDERLUST_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_RITUALIST_INNERVATE_WANDERLUST_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -383,7 +383,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "RitualistHelper",
         trigger: Trigger::Effect { guid: &G_RITUALIST_INNERVATE_PRESERVATION_1, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_RITUALIST_INNERVATE_PRESERVATION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_RITUALIST_INNERVATE_PRESERVATION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -416,7 +416,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "ScourgeHelper",
         trigger: Trigger::BuffGain { buff_id: 40052 },
         checks: &[
-            Check::Duration { duration: 6000, epsilon: 150 },
+            Check::Duration { duration: 6000, epsilon: 10 },
         ],
         ..FinderDef::DEFAULT
     },
@@ -425,7 +425,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "ScourgeHelper",
         trigger: Trigger::BuffGain { buff_id: 40052 },
         checks: &[
-            Check::Duration { duration: 3500, epsilon: 150 },
+            Check::Duration { duration: 3500, epsilon: 10 },
         ],
         ..FinderDef::DEFAULT
     },

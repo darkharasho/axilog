@@ -75,6 +75,15 @@ def _lines(path):
 # `GW2Builds` mixes plain integers with `ulong.MinValue`/`MaxValue`
 # aliases for StartOfLife/EndOfLife.
 BUILDS = {}
+def _const_long(name):
+    """One `const long <name> = <int>;` from `ParserHelper.cs`."""
+    for line in _lines("GW2EIEvtcParser/ParserHelpers/ParserHelper.cs"):
+        m = re.search(rf"\bconst\s+long\s+{name}\s*=\s*(-?\d+)\s*;", line)
+        if m:
+            return int(m.group(1))
+    sys.exit(f"ParserHelper.cs declares no `const long {name}`")
+
+
 for line in _lines("GW2EIEvtcParser/ParserHelpers/GW2Builds.cs"):
     m = re.match(r"\s*public const (?:ulong|long) (\w+)\s*=\s*(\w+)(?:\.(\w+))?;", line)
     if m:
@@ -339,12 +348,26 @@ def resolve_species_list(expr, named):
     return [resolve_species(e)]
 
 
+#: `ParserHelper.ServerDelayConstant` -- every `epsilon` default in the
+#: `InstantCastFinder` builder vocabulary is this value, and it is inlined
+#: into the generated catalog rather than emitted as a named Rust const,
+#: because the catalog is pure data.
+#:
+#: READ FROM SOURCE, not transcribed: `ParserHelper.cs` declares it in a
+#: block of five similar `long` constants and the neighbour two lines down
+#: is `TimeThresholdConstant = 150`. This catalog previously carried 150 for
+#: exactly that reason, which widened every secondary-effect coincidence
+#: window 15x. Keep `analysis::instant_cast::model::SERVER_DELAY` in sync
+#: with whatever this reads.
+SERVER_DELAY_MS = _const_long("ServerDelayConstant")
+
+
 def resolve_int(expr):
     e = expr.strip().rstrip("L")
     if re.fullmatch(r"-?\d+", e):
         return int(e)
     if e.split(".")[-1] == "ServerDelayConstant":
-        return 150
+        return SERVER_DELAY_MS
     if e.split(".")[-1] == "DefaultICD":
         return 50
     raise Skip(f"non-literal integer `{expr.strip()}`")
@@ -585,7 +608,7 @@ def analyse(ctor, argstr, chain, named):
             inv, rel, neg = SECONDARY_CHECKERS[name]
             guid = resolve_guid(parts[0])
             off = resolve_int(parts[1]) if len(parts) > 1 else 0
-            eps = resolve_int(parts[2]) if len(parts) > 2 else 150
+            eps = resolve_int(parts[2]) if len(parts) > 2 else SERVER_DELAY_MS
             checks.append(
                 f"Check::SecondaryEffect {{ guid: &{guid_const(guid)}, "
                 f"inverted_src: {str(inv).lower()}, type_rel: TypeRel::{rel}, "
@@ -606,12 +629,12 @@ def analyse(ctor, argstr, chain, named):
                 checks.append(f"Check::EffectDuration {{ min: {lo}, max: {hi} }}")
             else:
                 dur = resolve_int(parts[0])
-                eps = resolve_int(parts[1]) if len(parts) > 1 else 150
+                eps = resolve_int(parts[1]) if len(parts) > 1 else SERVER_DELAY_MS
                 checks.append(f"Check::Duration {{ duration: {dur}, epsilon: {eps} }}")
         elif name == "UsingNoAnimatedCastChecker":
             skill = rs_id(resolve_id(parts[0]))
             off = resolve_int(parts[1]) if len(parts) > 1 else 0
-            eps = resolve_int(parts[2]) if len(parts) > 2 else 150
+            eps = resolve_int(parts[2]) if len(parts) > 2 else SERVER_DELAY_MS
             checks.append(
                 f"Check::NoAnimatedCast {{ skill_id: {skill}, "
                 f"time_offset: {off}, epsilon: {eps} }}"

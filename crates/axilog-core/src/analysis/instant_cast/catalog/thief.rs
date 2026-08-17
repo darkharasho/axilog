@@ -45,8 +45,8 @@ pub const FINDERS: &[FinderDef] = &[
         source: "AntiquaryHelper",
         trigger: Trigger::Effect { guid: &G_ANTIQUARY_CHAK_SHIELD_1, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_ANTIQUARY_CHAK_SHIELD_3, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
-            Check::SecondaryEffect { guid: &G_ANTIQUARY_CHAK_SHIELD_4, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_ANTIQUARY_CHAK_SHIELD_3, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
+            Check::SecondaryEffect { guid: &G_ANTIQUARY_CHAK_SHIELD_4, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -199,8 +199,8 @@ pub const FINDERS: &[FinderDef] = &[
         source: "ThiefHelper",
         trigger: Trigger::Effect { guid: &G_ENEMY_AO_E_2_4_0, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_THIEF_THOUSAND_NEEDLES_AO_E_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 280, epsilon: 150, negated: false },
-            Check::SecondaryEffect { guid: &G_THIEF_THOUSAND_NEEDLES_AO_E_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 280, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_THIEF_THOUSAND_NEEDLES_AO_E_1, inverted_src: false, type_rel: TypeRel::Any, time_offset: 280, epsilon: 10, negated: false },
+            Check::SecondaryEffect { guid: &G_THIEF_THOUSAND_NEEDLES_AO_E_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 280, epsilon: 10, negated: false },
             Check::Spec { party: Party::Key, specs: &["Thief"], base: true, negated: false },
         ],
         ..FinderDef::DEFAULT
@@ -227,7 +227,7 @@ pub const FINDERS: &[FinderDef] = &[
         checks: &[
             Check::AroundDst { negated: false },
             Check::Spec { party: Party::Other, specs: &["Thief"], base: true, negated: false },
-            Check::SecondaryEffect { guid: &G_THIEF_INFILTRATORS_SIGNET_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_THIEF_INFILTRATORS_SIGNET_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },

@@ -439,7 +439,7 @@ fn a_duration_check_is_a_band_not_an_equality() {
         checks: &[Check::Duration { duration: 5000, epsilon: SERVER_DELAY }],
         ..gain_finder()
     };
-    for (applied, want) in [(5000, 1), (5100, 1), (5200, 0), (3000, 0)] {
+    for (applied, want) in [(5000, 1), (5008, 1), (5020, 0), (3000, 0)] {
         let log = raw(vec![player_agent(1)], vec![apply(100, BUFF, 1, 2, applied)]);
         assert_eq!(compute(&log, &enc(vec![]), &[f]).len(), want, "applied {applied}");
     }
@@ -512,20 +512,22 @@ fn a_before_swap_snap_clamps_a_late_cast_and_leaves_an_early_one() {
     };
 
     // The loss landed AFTER the swap: clamped back to just before it.
-    let late = raw(vec![player_agent(1)], vec![swap(990, 1), remove_all(1000, BUFF, 1)]);
-    assert_eq!(compute(&late, &enc(vec![]), &[f])[0].time, 989);
+    // 4ms apart -- the window is `ServerDelayConstant / 2` = 5ms, so these
+    // offsets are deliberately tight.
+    let late = raw(vec![player_agent(1)], vec![swap(996, 1), remove_all(1000, BUFF, 1)]);
+    assert_eq!(compute(&late, &enc(vec![]), &[f])[0].time, 995);
 
     // The loss already precedes the swap: left alone. `min` is the whole
-    // reason -- a symmetric "snap to the swap" would move this to 1019.
-    let early = raw(vec![player_agent(1)], vec![remove_all(1000, BUFF, 1), swap(1020, 1)]);
+    // reason -- a symmetric "snap to the swap" would move this to 1005.
+    let early = raw(vec![player_agent(1)], vec![remove_all(1000, BUFF, 1), swap(1004, 1)]);
     assert_eq!(compute(&early, &enc(vec![]), &[f])[0].time, 1000);
 
-    // A swap 200ms earlier is outside the +-75ms window.
+    // A swap 200ms earlier is far outside the +-5ms window.
     let far = raw(vec![player_agent(1)], vec![swap(800, 1), remove_all(1000, BUFF, 1)]);
     assert_eq!(compute(&far, &enc(vec![]), &[f])[0].time, 1000);
 
     // A swap by a DIFFERENT agent must not move this player's cast.
-    let other = raw(vec![player_agent(1)], vec![swap(990, 2), remove_all(1000, BUFF, 1)]);
+    let other = raw(vec![player_agent(1)], vec![swap(996, 2), remove_all(1000, BUFF, 1)]);
     assert_eq!(compute(&other, &enc(vec![]), &[f])[0].time, 1000);
 
     // Without the flag the swap is ignored entirely.
@@ -715,13 +717,13 @@ fn a_secondary_effect_check_requires_a_companion_effect_from_the_same_caster() {
     // Companion present, same caster, inside the window.
     let mut evs = base_events.clone();
     evs.push(effect(100, EFFECT_ID, 1, Some(2)));
-    evs.push(effect(120, EFFECT_ID2, 1, Some(2)));
+    evs.push(effect(105, EFFECT_ID2, 1, Some(2)));
     assert_eq!(compute(&raw_fx(vec![], evs), &enc(vec![]), &[f]).len(), 1);
 
     // Companion belongs to a DIFFERENT caster.
     let mut evs = base_events.clone();
     evs.push(effect(100, EFFECT_ID, 1, Some(2)));
-    evs.push(effect(120, EFFECT_ID2, 9, Some(2)));
+    evs.push(effect(105, EFFECT_ID2, 9, Some(2)));
     assert!(compute(&raw_fx(vec![], evs), &enc(vec![]), &[f]).is_empty());
 
     // Companion too far away in time.
@@ -756,7 +758,7 @@ fn a_negated_secondary_effect_check_passes_when_the_companion_is_absent() {
             id_to_guid(EFFECT_ID, EGUID),
             id_to_guid(EFFECT_ID2, EGUID2),
             effect(100, EFFECT_ID, 1, Some(2)),
-            effect(120, EFFECT_ID2, 1, Some(2)),
+            effect(105, EFFECT_ID2, 1, Some(2)),
         ],
     );
     assert!(compute(&accompanied, &enc(vec![]), &[f]).is_empty());
@@ -770,7 +772,7 @@ fn secondary_effect_type_rel_compares_how_the_two_are_anchored() {
             id_to_guid(EFFECT_ID2, EGUID2),
             // The triggering effect is always agent-anchored.
             effect(100, EFFECT_ID, 1, Some(2)),
-            effect(120, EFFECT_ID2, 1, companion_anchored.then_some(2)),
+            effect(105, EFFECT_ID2, 1, companion_anchored.then_some(2)),
         ]
     };
     // `FinderDef::checks` is `&'static`, so the three variants have to be

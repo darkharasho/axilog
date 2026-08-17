@@ -89,7 +89,14 @@ const QUICKNESS_ABS_TOLERANCE: f64 = 0.001;
 /// bounded rather than exact.
 const INSTANT_PER_PLAYER_ABS_TOLERANCE: usize = 8;
 /// Squad-total instant casts recovered, as a fraction of the golden's.
-/// Measured 340/364 = 0.934 on the committed fixture.
+/// Measured 338/364 = 0.929 on the committed fixture.
+///
+/// It was 340/364 while `instant_cast::model::SERVER_DELAY` carried 150
+/// instead of GW2EI's 10. The two casts that went away were both SPURIOUS
+/// -- a 15x-too-wide secondary-effect window pairing unrelated effects for
+/// skills 56873 and 78358 -- and both of those skills went from +1 over the
+/// golden to EXACT. A lower ratio here is not automatically worse: this is
+/// a signed total over a per-skill error that runs in both directions.
 const INSTANT_TOTAL_RECOVERY_FLOOR: f64 = 0.90;
 /// The same ratio's upper bound -- an over-firing finder is as much a
 /// regression as a missing one, and the ext-healing double-count this

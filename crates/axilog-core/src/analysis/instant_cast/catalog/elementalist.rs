@@ -166,8 +166,8 @@ pub const FINDERS: &[FinderDef] = &[
         source: "ElementalistHelper",
         trigger: Trigger::Effect { guid: &G_ELEMENTALIST_CLEANSING_FIRE_1, by_dst: true },
         checks: &[
-            Check::SecondaryEffect { guid: &G_ELEMENTALIST_CLEANSING_FIRE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
-            Check::SecondaryEffect { guid: &G_ELEMENTALIST_CLEANSING_FIRE_3, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_ELEMENTALIST_CLEANSING_FIRE_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
+            Check::SecondaryEffect { guid: &G_ELEMENTALIST_CLEANSING_FIRE_3, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
             Check::AroundDst { negated: false },
             Check::Spec { party: Party::Other, specs: &["Elementalist"], base: true, negated: false },
         ],
@@ -336,7 +336,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "EvokerHelper",
         trigger: Trigger::Effect { guid: &G_EVOKER_OTTERS_COMPASSION_1, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_EVOKER_OTTERS_COMPASSION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_EVOKER_OTTERS_COMPASSION_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         ..FinderDef::DEFAULT
     },
@@ -345,7 +345,7 @@ pub const FINDERS: &[FinderDef] = &[
         source: "EvokerHelper",
         trigger: Trigger::Effect { guid: &G_EVOKER_HARES_AGILITY_1, by_dst: false },
         checks: &[
-            Check::SecondaryEffect { guid: &G_EVOKER_HARES_AGILITY_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 150, negated: false },
+            Check::SecondaryEffect { guid: &G_EVOKER_HARES_AGILITY_2, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
         ],
         min_gw2_build: 190000,
         ..FinderDef::DEFAULT

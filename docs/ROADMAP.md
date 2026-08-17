@@ -214,6 +214,30 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   rows 792/958 exact, ids 38/69, all denominator residuals 0.0. 36 local calibration tests now
   run from any worktree via AXILOG_LOCAL_FIXTURES.
 
+- MSDELAY `instant_cast::SERVER_DELAY` corrected 150 → 10 (DONE 2026-08-16). GW2EI's
+  `ParserHelper.ServerDelayConstant` is **10**; 150 is `TimeThresholdConstant`, declared two
+  lines below it in the same block of five `long` constants. axilog was already using 10 in
+  `analysis::rotation` and `analysis::distance`, so only `instant_cast` carried the slip —
+  which meant every `epsilon` default in the finder vocabulary (46 catalog sites: 44
+  `SecondaryEffect`, plus `Duration`/`NoAnimatedCast`) ran a 15x-too-wide coincidence window,
+  and `Ctx::snap`'s weapon-swap search ran ±75ms instead of ±5ms.
+
+  Measured per SKILL, not just on the total, because the total alone reads backwards:
+  squad instant casts go 340 → 338 while the recovery is IMPROVING. The whole difference is
+  skills 56873 (Chronomancer Time Sink) and 78358 (Luminary Radiant Courage), both
+  `SecondaryEffect` finders, both +1 over the golden at 150 and EXACT at 10 — the wide window
+  was pairing each trigger with an unrelated companion effect. Per-skill absolute error
+  54 → 52 (over-fires 15 → 13; the 39 missing stay missing, they are catalog coverage, not
+  this constant). The snap window is inert on the committed fixture: 13 snap-using finders
+  fire and every recovered cast TIME is byte-identical at ±75ms and ±5ms, so that half is
+  corrected on source authority rather than on measurement.
+
+  `scripts/gen_instant_cast_catalog.py` now READS the constant out of `ParserHelper.cs`
+  instead of carrying a literal, so the neighbouring-constant slip cannot recur. Five
+  `instant_cast` unit tests had in/out samples sized to the 150ms window (e.g. a duration
+  band probed at 5100/5200) and were re-tuned to the real one; they were fixtures scaled to
+  the bug, not independent evidence for it.
+
 ## Done (axibridge gap closure)
 - MEIGAP + MEIGAP2 COMPLETE (shipped v0.3.0): the axibridge cutover audit
   (axibridge:docs/axilog-cutover-report.md) found 30 of 118 read fields blank under axilog's
@@ -254,8 +278,10 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
     golden's own `_note`.
   - **Calibration is per cast FAMILY**, not one total. Animated: EXACT (unchanged, 1,222 for
     1,222, every field 0 residual). Weapon swaps: EXACT (134 for 134). Instant casts:
-    BOUNDED — 340/364, **93.4% recovered**, because that family is only as complete as the
+    BOUNDED — 338/364, **92.9% recovered**, because that family is only as complete as the
     finder catalog. Asserting exactness there would be asserting the catalog is complete.
+    (Was 340/364 until `SERVER_DELAY` was corrected 150 → 10; see MSDELAY below. Both casts
+    that went away were spurious, so the per-skill absolute error went 54 → 52.)
   - **Negative pseudo ids now reach the surface.** They ride as `-2i32 as u32` natively and
     the ei-json adapter casts back (`ei_skill_id`), so `rotation[].id` is `-2` and `skillMap`
     keys `"s-2"`, as EI writes them. `skill_map::PSEUDO_SKILL_NAMES` ports the NEGATIVE-id
