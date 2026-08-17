@@ -152,6 +152,7 @@ __all__ = [
     "ReplayTrack",
     "ReplayBlock",
     "ReplayIntervals",
+    "Arena",
     "ReplayTracks",
     "GliderOut",
     "TransformationOut",
@@ -244,6 +245,11 @@ class EncounterOut(_EncounterOutRequired, total=False):
 
     tick_rate: TickRateOut
     started_at_unix: int
+    #: The raw `CBTS_MAPID` value `map` is the display name for. Omitted
+    #: (not `None`) when the log carries no MAP_ID event, which stays
+    #: distinguishable from map id 0. Match on this, not on `map`, when
+    #: joining against your own per-map assets.
+    map_id: int
 
 # --- damage / cc --------------------------------------------------------
 
@@ -875,6 +881,11 @@ class EncounterOutV1(_EncounterOutV1Required, total=False):
     #: event -- absence stays distinguishable from epoch zero, so do not
     #: default it to `0`.
     started_at_unix: int
+    #: The raw `CBTS_MAPID` value `map` is the display name for. Omitted
+    #: (not `None`) when the log carries no MAP_ID event, which stays
+    #: distinguishable from map id 0. Match on this, not on `map`, when
+    #: joining against your own per-map assets.
+    map_id: int
 
 #: What an entity IS -- squad member, non-squad friendly, enemy player, or
 #: NPC/gadget. Declaration order is `entities[]`'s sort order.
@@ -1666,12 +1677,46 @@ class _ReplayTracksRequired(TypedDict):
     #: appear here too.
     by_entity: Dict[str, ReplayTrack]
 
+class Arena(TypedDict):
+    """The fixed world rectangle a WvW map's arena image covers, plus the
+    image itself: everything needed to project `ReplayTrack["samples"]`
+    onto a map without knowing any GW2 map geometry.
+
+    Samples are raw world (game-inch) coordinates -- what arcdps records,
+    and independent of anybody's canvas. World y grows northward and image
+    y grows downward, so the y axis flips::
+
+        px = (x - a["world_min_x"]) / (a["world_max_x"] - a["world_min_x"]) * a["image_width"]
+        py = (1 - (y - a["world_min_y"]) / (a["world_max_y"] - a["world_min_y"])) * a["image_height"]
+
+    Scale both by ``canvas / image_*`` to render at any size. Nothing here
+    is pre-rounded or pre-rescaled.
+    """
+
+    #: The arena image's native width in pixels.
+    image_width: int
+    #: The arena image's native height in pixels.
+    image_height: int
+    image_url: str
+    #: World (game-inch) x of the image's LEFT edge.
+    world_min_x: float
+    #: World y of the image's BOTTOM edge -- the LARGER `py`, per the flip.
+    world_min_y: float
+    #: World x of the image's RIGHT edge.
+    world_max_x: float
+    #: World y of the image's TOP edge.
+    world_max_y: float
+
 class ReplayTracks(_ReplayTracksRequired, total=False):
     """The gated half of `ReplayBlock` -- present only under
     `replay=True`. `bounds` is omitted (not `None`) when there is nothing
-    to bound."""
+    to bound. `arena` is omitted for a map id with no hand-authored arena
+    image; you then have only `bounds`, which is the union of the OBSERVED
+    positions rather than a fixed frame, and so is not comparable between
+    two logs on the same map."""
 
     bounds: ReplayBounds
+    arena: Arena
 
 class _ReplayBlockRequired(TypedDict):
     #: Keyed by entity id. Squad players only.

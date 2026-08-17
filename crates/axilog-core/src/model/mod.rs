@@ -136,6 +136,15 @@ pub struct Team {
 }
 #[derive(Debug, Clone)]
 pub struct Encounter { pub kind: String, pub map: String, pub duration_ms: u64,
+    /// The raw `CBTS_MAPID` (`sc::MAP_ID`) `src_agent` value that `map` is
+    /// the display name for. Carried alongside the name rather than instead
+    /// of it because the two answer different questions: the name is for
+    /// people, the id is the join key into per-map geometry
+    /// ([`crate::wvw::maps::map_def`]) and into any consumer's own map
+    /// tables. `None` when the log has no MAP_ID event -- which must stay
+    /// distinguishable from map id 0, the same argument
+    /// [`Self::started_at_unix`] makes for epoch zero.
+    pub map_id: Option<u32>,
     pub build: String, pub revision: u8, pub recorded_by: Option<String>,
     pub teams: Vec<Team>, pub players: Vec<Player>, pub enemies: Vec<Enemy>,
     /// Every `CBTS_MARKER` assignment observed in the log, in stream order
@@ -306,7 +315,7 @@ pub fn resolve(raw: &RawLog) -> Encounter {
         kind: "wvw".into(), map: "World vs World".into(), duration_ms,
         build: raw.header.build.clone(), revision: raw.header.revision,
         recorded_by: None, teams: Vec::new(), players, enemies,
-        markers: Vec::new(), tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+        markers: Vec::new(), tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
     };
     crate::wvw::apply(&mut enc, raw);
     enc

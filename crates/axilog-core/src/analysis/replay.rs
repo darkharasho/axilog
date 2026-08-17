@@ -639,7 +639,7 @@ mod tests {
             players: vec![],
             enemies: vec![],
             markers: vec![],
-            tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+            tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
         }
     }
 

@@ -271,6 +271,14 @@ blocks.replay.gliding[].end_ms
 blocks.replay.gliding[].entity_id
 blocks.replay.gliding[].start_ms
 blocks.replay.tracks
+blocks.replay.tracks.arena
+blocks.replay.tracks.arena.image_height
+blocks.replay.tracks.arena.image_url
+blocks.replay.tracks.arena.image_width
+blocks.replay.tracks.arena.world_max_x
+blocks.replay.tracks.arena.world_max_y
+blocks.replay.tracks.arena.world_min_x
+blocks.replay.tracks.arena.world_min_y
 blocks.replay.tracks.bounds
 blocks.replay.tracks.bounds.max_x
 blocks.replay.tracks.bounds.max_y
@@ -415,6 +423,7 @@ encounter.build
 encounter.duration_ms
 encounter.kind
 encounter.map
+encounter.map_id
 encounter.markers
 encounter.markers[].agent_addr
 encounter.markers[].entity_id

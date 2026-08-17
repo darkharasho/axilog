@@ -79,7 +79,7 @@ fn encounter(players: Vec<Player>, enemies: Vec<Enemy>) -> Encounter {
         players,
         enemies,
         markers: Vec::new(),
-        tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+        tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
     }
 }
 

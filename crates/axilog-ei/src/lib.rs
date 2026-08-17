@@ -2804,7 +2804,7 @@ mod tests {
                 teams: vec![],
                 markers: vec![],
                 tick_rate: None,
-                objectives: Vec::new(), started_at_unix: None,
+                objectives: Vec::new(), started_at_unix: None, map_id: None,
             },
             entities: vec![],
             source_order: axilog_schema::v1::SourceOrder::default(),
@@ -2848,7 +2848,7 @@ mod tests {
             Enemy{id:10,instid:10,name:"Gadget".into(),team:"blue".into(),
             is_player:false,marker:None,profession:None,elite_spec:None,
             agent_addrs:vec![10]}],
-            markers:vec![],tick_rate:None,objectives: Vec::new(), started_at_unix:None};
+            markers:vec![],tick_rate:None,objectives: Vec::new(), started_at_unix:None, map_id:None};
         use axilog_core::analysis::contribution::ContributionMetrics;
         let m = Metrics{players:vec![
             PlayerMetrics{agent_addr:1,damage_total:500,dps:500.0,per_enemy:vec![(9,500)],
@@ -3027,7 +3027,7 @@ mod tests {
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"Nim Iss".into(),profession:"Thief".into(),elite_spec:"".into(),
             team:"red".into(),subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]}],
-            enemies:vec![],markers:vec![],tick_rate:None,objectives: Vec::new(), started_at_unix:None};
+            enemies:vec![],markers:vec![],tick_rate:None,objectives: Vec::new(), started_at_unix:None, map_id:None};
         let mut boon_uptime = std::collections::BTreeMap::new();
         // Might (intensity): avg_stacks=3.5, presence_pct=100.0.
         boon_uptime.insert((1u64, buffs::MIGHT), BoonUptime { presence_pct: 100.0, avg_stacks: 3.5 });
@@ -3138,7 +3138,7 @@ mod tests {
         let report = Report {
             schema_version: "0.2", axilog_version: "0.1.0".to_string(),
             encounter: EncounterOut { kind: "wvw".into(), map: "".into(), duration_ms: 10_000,
-                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None },
+                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None },
             players: vec![
                 base_player(":A.1", Some(HealingOut {
                     healing_out_total: 5000, healing_out_allies: 3000, healing_out_self: 2000,
@@ -3282,7 +3282,7 @@ mod tests {
         Report {
             schema_version: "0.2", axilog_version: "0.1.0".to_string(),
             encounter: EncounterOut { kind: "wvw".into(), map: "".into(), duration_ms: 2_000,
-                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None },
+                build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None },
             players,
             enemies: vec![],
             ei_targets,

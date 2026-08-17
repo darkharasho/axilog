@@ -28,6 +28,22 @@ use serde::Serialize;
 pub struct EncounterOut {
     pub kind: String,
     pub map: String,
+    /// The raw `CBTS_MAPID` (`sc::MAP_ID`) value that `map` is the display
+    /// name for. Carried alongside the name, not instead of it: the name is
+    /// for people, the id is the join key. A consumer that wants to place
+    /// this encounter on its own map assets -- tile sets, objective
+    /// catalogs, landmark tables -- needs a stable id, and matching on the
+    /// display string would break the moment a name is reworded.
+    ///
+    /// The geometry needed to project `blocks.replay` positions onto those
+    /// assets does NOT have to be looked up from this id: it travels with
+    /// the positions as [`super::blocks::activity::ArenaOut`]. This field is
+    /// for the consumer's own tables.
+    ///
+    /// Omitted (not `null`) when the log carries no MAP_ID event, which must
+    /// stay distinguishable from map id 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub map_id: Option<u32>,
     pub duration_ms: u64,
     pub build: String,
     pub revision: u8,
@@ -498,6 +514,7 @@ pub fn build_report_v1(
         encounter: EncounterOut {
             kind: legacy.encounter.kind.clone(),
             map: legacy.encounter.map.clone(),
+            map_id: legacy.encounter.map_id,
             duration_ms: legacy.encounter.duration_ms,
             build: legacy.encounter.build.clone(),
             revision: legacy.encounter.revision,
@@ -582,7 +599,7 @@ mod tests {
                 // resolves to an entity id.
                 MarkerAssignment { agent_addr: 99, marker: "star".into(), time_ms: 20 },
             ],
-            tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+            tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
         };
         let metrics = Metrics {
             players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],
@@ -648,7 +665,7 @@ mod tests {
             players: vec![player(1, ":Squaddie.1")],
             enemies: vec![],
             markers: vec![],
-            tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+            tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
         };
         let metrics = Metrics {
             players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],
@@ -715,7 +732,7 @@ mod tests {
             players: vec![player(1, ":Squaddie.1")],
             enemies: vec![],
             markers: vec![],
-            tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+            tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
         };
         let metrics = Metrics {
             players: vec![PlayerMetrics { agent_addr: 1, ..Default::default() }],

@@ -688,3 +688,89 @@ test('parseFile: { everything: true } computes every gate -- nothing left not_co
   const bareOff = Object.values(bare.coverage).filter((s) => s === 'not_computed').length
   assert.ok(bareOff >= 3, `expected the default parse to leave gates off, got ${bareOff}`)
 })
+
+test('map geometry: encounter.map_id is ungated, tracks.arena projects onto GW2EI’s own pixel', () => {
+  // `map_id` answers "which map is this" and must not need the replay gate:
+  // a consumer joining against its own tile set / landmark table has no
+  // reason to pay for position decoding.
+  const bare = sdk.parseFile(FIXTURE)
+  assert.equal(bare.encounter.map, 'Green Alpine Borderlands')
+  assert.equal(bare.encounter.map_id, 95, 'map_id must be present with no opts')
+
+  // The arena rides the positions it describes.
+  assert.equal(bare.blocks.replay.tracks, undefined)
+
+  const full = sdk.parseFile(FIXTURE, { everything: true })
+  const arena = full.blocks.replay.tracks.arena
+  assert.ok(arena, 'arena must be present alongside tracks')
+  assert.equal(arena.image_width, 697)
+  assert.equal(arena.image_height, 1000)
+  assert.equal(arena.image_url, 'https://i.imgur.com/nVu2ivF.png')
+  assert.deepEqual(
+    [arena.world_min_x, arena.world_min_y, arena.world_max_x, arena.world_max_y],
+    [-30720, -43008, 30720, 43008],
+  )
+
+  // Every sample must fall inside the frame. The arena is a FIXED rect, not
+  // a bounding box of what was observed -- if a sample escapes it, the frame
+  // is the wrong one and every replay drawn from it would be clipped.
+  let samples = 0
+  for (const track of Object.values(full.blocks.replay.tracks.by_entity)) {
+    for (const [, x, y] of track.samples) {
+      assert.ok(x >= arena.world_min_x && x <= arena.world_max_x, `x ${x} outside the arena`)
+      assert.ok(y >= arena.world_min_y && y <= arena.world_max_y, `y ${y} outside the arena`)
+      samples++
+    }
+  }
+  assert.ok(samples > 5000, `expected a real sample set, got ${samples}`)
+
+  // The claim the arena exists to support: applying the documented formula
+  // and scaling to GW2EI's canvas lands on GW2EI's own pixel. Checked
+  // against the ei-json path's real output for the same log.
+  //
+  // MEDIAN, not max, and that is not a weakened assertion -- it is the only
+  // honest one at this level. The two paths sample differently: GW2EI
+  // freezes an actor across a >600ms gap whose last velocity reads ~zero
+  // (`ei_replay::handle_position`'s hold branch) and then snaps to the next
+  // real point, while the native downsampler interpolates straight through.
+  // So a minority of instants legitimately hold different POSITIONS, which
+  // says nothing about the PROJECTION. A wrong scale, offset or axis flip
+  // would move every sample at once and blow the median instantly; the
+  // exactness of the transform itself is pinned against `MapTransform`
+  // directly in `arena_tests::projection_reproduces_gw2eis_transform_on_every_map`.
+  const ei = sdk.parseFileEi(FIXTURE, { everything: true })
+  const meta = ei.combatReplayMetaData
+  const project = (x, y) => [
+    ((x - arena.world_min_x) / (arena.world_max_x - arena.world_min_x)) * meta.sizes[0],
+    (1 - (y - arena.world_min_y) / (arena.world_max_y - arena.world_min_y)) * meta.sizes[1],
+  ]
+
+  const errors = []
+  for (const p of ei.players) {
+    const entity = full.entities.find((e) => e.account === p.account)
+    const crd = p.combatReplayData
+    if (!entity || !crd?.positions?.length) continue
+    const track = full.blocks.replay.tracks.by_entity[entity.id]
+    if (!track) continue
+    // Pair by TIME, not by array index. EI's positions array starts at the
+    // agent's own first-aware poll, so index i means a different instant for
+    // each player -- exactly the offset arithmetic native's explicit
+    // timestamps exist to remove.
+    // CEIL: a track's first polled instant is its first-aware time rounded
+    // UP onto the polling grid, so an agent first seen at t=1ms starts at
+    // t=300, not t=0. Flooring here silently shifts that agent's whole track
+    // one poll and makes a correct projection look broken.
+    const first = Math.ceil(crd.start / meta.pollingRate) * meta.pollingRate
+    for (const [t, x, y] of track.samples) {
+      const i = Math.round((t - first) / meta.pollingRate)
+      if (i < 0 || i >= crd.positions.length) continue
+      const [px, py] = project(x, y)
+      errors.push(Math.max(Math.abs(px - crd.positions[i][0]), Math.abs(py - crd.positions[i][1])))
+    }
+  }
+  assert.ok(errors.length > 5000, `expected a real comparison set, got ${errors.length}`)
+  errors.sort((a, b) => a - b)
+  const median = errors[Math.floor(errors.length / 2)]
+  // EI rounds its output to 3 decimals; the median must sit inside that.
+  assert.ok(median < 0.01, `median projection error ${median}px -- the transform is wrong`)
+})
