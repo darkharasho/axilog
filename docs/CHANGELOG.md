@@ -10,6 +10,52 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v0.3.4 — 2026-08-16
+
+**MSDELAY — the instant-cast server delay constant.** `SERVER_DELAY` was 150 ms; arcdps' own
+figure is 10 ms. The two casts the wider window had been inventing were both spurious, so the
+per-skill absolute error against the rotation golden went 54 → 52 and skills 56873 and 78358 went
+from one cast over the golden to exact. Instant-cast coverage reads 338/364 rather than 340/364
+for the same reason: fewer casts, none of them real losses.
+
+Also in this release: the Windows `LNK1201` link failure (the CLI binary and the Python cdylib were
+both named `axilog`, so their PDBs collided), and the 0.3.3 lockfile refresh.
+
+## v0.3.3 — 2026-08-16
+
+The native output format program, end to end. **Container 1.0** — six top-level keys, an
+`entities[]` roster with roles and deterministic ids, referenced-ids-only `catalogs`, gated
+`blocks`, honest `coverage` states and a raw/RLE series envelope — emitted from `--format json` and
+both SDKs, with the legacy report proven to reproject losslessly out of it. **Phase A** absorbed the
+EI side channel into those blocks (`dist_outcomes`, `healing_detail`, `boon_states`,
+`target_conditions`, enemy per-skill damage and outgoing series, minions, health percents), which
+let `ei-json` be rendered from the native report alone and `EiInputs` be deleted; `--all` and the
+consumer-parse-cost benchmark landed with it. **Phase B** closed the gaps only native can close: the
+23-field per-target split (hit quality, missed/evaded/blocked/invulned, applied CC), `distToCom` and
+`stackDist` computed engine-side, commander-tag segments, `dc` despawn intervals, and the log-start
+anchor centralised across its 16 call sites. **Phase C** shipped two generated icon catalogs —
+4,656 skills from the GW2 API (plus `autoAttack` from `slot == "Weapon_1"`) and 2,267 buffs from
+GW2EI's own table.
+
+**MOBJ — WvW objective ownership.** Objective ownership timelines and shard ids parsed off the
+encounter and emitted in both formats.
+
+**MPROC / MCAST — instant casts.** GW2EI's `InstantCastFinder` machinery ported, a
+565-of-649 catalog machine-extracted from the C# sources, the five `skillMap` proc/instant flags
+emitted, arcdps effect events decoded across all three generations to feed the effect-keyed
+finders, and instant casts merged with weapon swaps into the rotation per `InitCastEvents`.
+Calibration: animated casts exact (1,222/1,222), weapon swaps exact (134/134), instant casts
+bounded at 92.9%.
+
+**Replay extras.** Glider, transformation and gadget capture. Both SDK type stubs were re-synced
+with the 1.0 container and are now guarded in CI against the key-set golden. 1,069 tests.
+
+## v0.3.2 — 2026-08-10
+
+Enemy `profession`/`elite_spec` carried through to the enemy roster and declared in the Node types;
+three CI failures fixed; the README rewritten from 778 lines to 232, with the deep reference moved
+into `docs/`.
+
 ## v0.3.1 — 2026-08-10
 
 **MSMALL — the deferred accuracy tail.** `HealingLogic` for Regeneration (GW2EI's only
