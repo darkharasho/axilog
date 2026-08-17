@@ -334,10 +334,21 @@ jobs:
           node -e "
             const sdk = require('@axiapps/axilog');
             const report = sdk.parseFile('$FIXTURE');
-            if (report.players.length !== 42) {
-              throw new Error('expected 42 players, got ' + report.players.length);
+            // Native 1.0 container shape (see the commit that moved
+            // parseFile off the legacy Report): the flat \`players\` array is
+            // now the role-tagged \`entities\` roster, and the squad damage
+            // total is a block field rather than a sum the caller does. Both
+            // numbers below are the SAME values this check asserted against
+            // the legacy shape -- the four friendly_player entities deal 0
+            // damage, so the old sum-over-42 and \`damage.squad.total\` agree
+            // exactly.
+            const players = report.entities.filter(
+              (e) => e.role === 'squad' || e.role === 'friendly_player'
+            );
+            if (players.length !== 42) {
+              throw new Error('expected 42 players, got ' + players.length);
             }
-            const total = report.players.reduce((acc, p) => acc + p.damage.total, 0);
+            const total = report.blocks.damage.squad.total;
             if (total !== 2138414) {
               throw new Error('expected squad damage total 2138414, got ' + total);
             }
@@ -503,10 +514,16 @@ jobs:
           /tmp/wheel-smoke/bin/python - <<'PYEOF'
           import axilog
           report = axilog.parse_file("fixtures/wvw-small.anon.zevtc")
-          assert report["schema_version"], "missing schema_version"
-          assert report["players"], "no players parsed from fixture"
-          assert report["skill_map"], "missing skill_map"
-          print(f"smoke OK: {len(report['players'])} players, schema {report['schema_version']}")
+          # Native 1.0 container shape (ReportV1): the schema version moved
+          # under `axilog`, the flat `players` list became the role-tagged
+          # `entities` roster, and `skill_map` became `catalogs.skills`.
+          assert report["axilog"]["schema"] == "1.0", report["axilog"]
+          assert report["entities"], "no entities parsed from fixture"
+          assert report["catalogs"]["skills"], "missing skill catalog"
+          print(
+              f"smoke OK: {len(report['entities'])} entities, "
+              f"schema {report['axilog']['schema']}"
+          )
           PYEOF
 
   # Gated npm publish (M8 Task 2). Never runs on a workflow_dispatch dry run
