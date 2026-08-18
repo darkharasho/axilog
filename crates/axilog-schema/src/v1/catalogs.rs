@@ -94,6 +94,17 @@ pub struct SkillEntry {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct BuffEntry {
     pub name: String,
+    /// The buff's art, resolved the same way `SkillEntry::icon` is: the GW2
+    /// API catalog first, then GW2EI's buff table.
+    ///
+    /// Boons and conditions reach a log through its skill table, so a buff id
+    /// often has a `SkillEntry` too — but only when some event referenced it
+    /// as a skill. A buff the log only ever reported as an application (a
+    /// boon nobody's damage came from) has no skill row at all, so a consumer
+    /// rendering a boon or condition had nowhere to read art from and had to
+    /// carry its own hardcoded table. Hence this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// `"condition"` (any of the 14 tracked conditions, damaging or not --
     /// e.g. Chilled/Taunt are conditions with no damage component),
     /// `"boon"` (any of the 12 tracked boons), or `"effect"` (everything
@@ -263,6 +274,11 @@ impl CatalogBuilder {
                     id,
                     BuffEntry {
                         name: buffs::name(id).unwrap_or_default().to_string(),
+                        // Same precedence as `SkillEntry::icon`: where both
+                        // tables have an entry the API is the better source.
+                        icon: axilog_core::analysis::skill_icons::icon(id).or_else(|| {
+                            axilog_core::analysis::buff_icons::icon(id).map(str::to_owned)
+                        }),
                         kind,
                         stacking: if is_intensity { "intensity" } else { "duration" },
                         max_stacks,
@@ -431,6 +447,35 @@ mod tests {
         // A buff has no weapon slot, so the auto-attack question still does
         // not apply -- the buff catalog carries art and nothing else.
         assert!(c.skills[&717].auto_attack.is_none());
+    }
+
+    /// Every boon and condition carries art.
+    ///
+    /// `BuffEntry` had no `icon` field at all until this test's fix, so a
+    /// consumer rendering a boon or condition had nowhere to read one from.
+    /// The skill catalog was not a substitute: a buff only gets a `SkillEntry`
+    /// when some event referenced its id AS a skill, which a boon nobody's
+    /// damage came from never does.
+    #[test]
+    fn every_boon_and_condition_in_the_catalog_carries_an_icon() {
+        let mut b = CatalogBuilder::default();
+        for id in [740u32, 717, 1187, 736, 737, 722, 727, 27705] {
+            b.reference_buff(id);
+        }
+        let c = b.finish(&metrics_with_skills(), None);
+        assert_eq!(c.buffs.len(), 8, "guard against the loop silently building nothing");
+        for (id, entry) in &c.buffs {
+            assert!(
+                matches!(entry.kind, "boon" | "condition"),
+                "buff {id} ({}) should be a boon or condition here, got {}",
+                entry.name,
+                entry.kind
+            );
+            let icon = entry.icon.as_deref().unwrap_or_else(|| {
+                panic!("buff {id} ({}) has no icon", entry.name)
+            });
+            assert!(icon.starts_with("https://render.guildwars2.com/"), "buff {id}: {icon}");
+        }
     }
 
     #[test]

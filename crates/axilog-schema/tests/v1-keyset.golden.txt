@@ -373,6 +373,7 @@ blocks.support.by_entity.<id>.strips_duration_ms
 catalogs
 catalogs.buffs
 catalogs.buffs.<id>
+catalogs.buffs.<id>.icon
 catalogs.buffs.<id>.kind
 catalogs.buffs.<id>.max_stacks
 catalogs.buffs.<id>.name
