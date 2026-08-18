@@ -32,6 +32,13 @@ use std::collections::BTreeMap;
 /// GUID (`3cd1c64a5000774488009d4d69455c5c`) is NOT in either table below
 /// -- real, not just synthetic, coverage of the "unknown GUID -> hex
 /// fallback" path.
+// NOTE: these two tables and `analysis::marker_icons::MARKERS` are extracted
+// from the SAME GW2EI source and must not drift apart. They are kept separate
+// on purpose -- these carry the legacy schema's lowercase-kebab names
+// (`"arrow"`, `"purple-commander"`), which are part of `PlayerOut.marker`'s
+// published output, while `marker_icons` carries display labels and art for
+// the 1.0 document. `marker_tables_agree_with_the_icon_catalog` below pins the
+// GUID SETS together so a regenerated icon catalog cannot silently diverge.
 const SQUAD_MARKER_NAMES: &[(&str, &str)] = &[
     ("c3a56f1e045e3848b07cbac5bbdd2c32", "arrow"),
     ("73c880ae431c9f4d8a5972acf7066f4e", "circle"),
@@ -1023,5 +1030,38 @@ mod tests {
         // Only the two forward 25-tick/1000ms intervals contribute.
         assert!((tr.avg - 25.0).abs() < 1e-9, "avg={}", tr.avg);
         assert!((tr.min - 25.0).abs() < 1e-9, "min={}", tr.min);
+    }
+}
+
+#[cfg(test)]
+mod marker_table_drift_tests {
+    use super::{COMMANDER_TAG_VARIANTS, SQUAD_MARKER_NAMES};
+    use crate::analysis::marker_icons::MARKERS;
+
+    /// The GUID sets here and in `analysis::marker_icons` come from one
+    /// upstream file but are transcribed by two different mechanisms -- these
+    /// tables by hand from a fetched copy, the icon catalog by
+    /// `scripts/gen_marker_catalog.py`. Regenerating one and not the other
+    /// would leave a marker named but art-less, or drawn but unnamed, with
+    /// nothing failing. Pin the sets against each other.
+    #[test]
+    fn marker_tables_agree_with_the_icon_catalog() {
+        for (guid, name) in SQUAD_MARKER_NAMES {
+            let m = MARKERS.iter().find(|m| m.guid == *guid)
+                .unwrap_or_else(|| panic!("squad marker {name} ({guid}) missing from marker_icons"));
+            assert_eq!(m.kind, "squad_marker", "{name} ({guid}) has the wrong kind");
+        }
+        for (guid, name) in COMMANDER_TAG_VARIANTS {
+            let m = MARKERS.iter().find(|m| m.guid == *guid)
+                .unwrap_or_else(|| panic!("tag {name} ({guid}) missing from marker_icons"));
+            assert!(
+                m.kind == "commander_tag" || m.kind == "catmander_tag",
+                "{name} ({guid}) has the wrong kind: {}", m.kind,
+            );
+        }
+        // And the reverse, so a GUID added to the icon catalog cannot go
+        // unnamed in the legacy tables.
+        let named = SQUAD_MARKER_NAMES.len() + COMMANDER_TAG_VARIANTS.len();
+        assert_eq!(named, MARKERS.len(), "one table gained a GUID the other did not");
     }
 }

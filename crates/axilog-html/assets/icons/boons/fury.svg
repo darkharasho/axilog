@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" role="img" aria-label="fury">
+  <defs>
+    <linearGradient id="b" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E9C68F"/>
+      <stop offset=".55" stop-color="#D89440"/>
+      <stop offset="1" stop-color="#BF700A"/>
+    </linearGradient>
+  </defs>
+  <path fill="#A74806" d="M20 0L37.5 10V40H2.5V10Z"/>
+  <path fill="url(#b)" d="M20 2.07L35.7 11.04V38.2H4.3V11.04Z"/>
+  <path fill="#fff" fill-opacity=".13" d="M20 2.07L35.7 11.04L4.3 38.2V11.04Z"/>
+  <path fill="#FEFBEF" fill-rule="evenodd" d="M19 9L20 9L20 14L21 14L21 19L22 19L22 18L23 18L23 17L25 17L25 16L26 16L26 15L27 15L27 17L26 17L26 19L25 19L25 22L31 22L31 23L29 23L29 24L27 24L27 25L26 25L26 26L27 26L27 27L28 27L28 28L30 28L30 29L25 29L25 31L26 31L26 32L25 32L25 31L23 31L23 30L21 30L21 29L20 29L20 31L19 31L19 32L18 32L18 34L17 34L17 35L16 35L16 33L15 33L15 30L14 30L14 29L11 29L11 27L12 27L12 26L13 26L13 24L12 24L12 23L11 23L11 22L10 22L10 20L9 20L9 19L12 19L12 20L15 20L15 21L16 21L16 18L17 18L17 15L18 15L18 12L19 12L19 9Z"/>
+</svg>
