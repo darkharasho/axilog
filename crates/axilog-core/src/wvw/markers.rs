@@ -630,6 +630,154 @@ mod tests {
         marker_ev(time, src, local_id, buff)
     }
 
+
+    /// `CBTS_SQUADMARKER` row: position packed as GW2EI reads it back --
+    /// x,y as two f32 in `src_agent`, z in the low half of `dst_agent`.
+    fn ground_ev(time: u64, index: u32, x: f32, y: f32, z: f32) -> RawEvent {
+        let mut src = [0u8; 8];
+        src[0..4].copy_from_slice(&x.to_le_bytes());
+        src[4..8].copy_from_slice(&y.to_le_bytes());
+        let mut dst = [0u8; 8];
+        dst[0..4].copy_from_slice(&z.to_le_bytes());
+        RawEvent {
+            time,
+            src_agent: u64::from_le_bytes(src),
+            dst_agent: u64::from_le_bytes(dst),
+            skillid: index,
+            is_statechange: sc::SQUADMARKER_GROUND,
+            ..marker_ev(time, 0, 0, 0)
+        }
+    }
+
+    #[test]
+    fn a_ground_marker_placed_and_removed_is_one_closed_window() {
+        let raw = raw_from(
+            vec![
+                ground_ev(1000, 4, 10.0, 20.0, 30.0),
+                ground_ev(5000, 4, f32::INFINITY, f32::INFINITY, f32::INFINITY),
+            ],
+            vec![],
+        );
+        let out = resolve_ground_markers(&raw);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "star");
+        assert_eq!(out[0].index, 4);
+        assert_eq!((out[0].x, out[0].y, out[0].z), (10.0, 20.0, 30.0));
+        assert_eq!((out[0].start_ms, out[0].end_ms), (1000, Some(5000)));
+    }
+
+    /// The log ending is not a removal. Manufacturing an `end_ms` here would
+    /// claim the commander cleared a marker they never cleared.
+    #[test]
+    fn a_marker_still_placed_at_log_end_has_no_end() {
+        let raw = raw_from(vec![ground_ev(1000, 0, 1.0, 2.0, 3.0)], vec![]);
+        let out = resolve_ground_markers(&raw);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "arrow");
+        assert_eq!(out[0].end_ms, None);
+    }
+
+    /// Moving a marker is ONE marker with two positions, so the first window
+    /// closes where the second opens.
+    #[test]
+    fn moving_a_marker_closes_the_previous_window() {
+        let raw = raw_from(
+            vec![
+                ground_ev(1000, 1, 10.0, 10.0, 0.0),
+                ground_ev(4000, 1, 90.0, 90.0, 0.0),
+            ],
+            vec![],
+        );
+        let out = resolve_ground_markers(&raw);
+        assert_eq!(out.len(), 2);
+        assert_eq!((out[0].start_ms, out[0].end_ms), (1000, Some(4000)));
+        assert_eq!((out[1].start_ms, out[1].end_ms), (4000, None));
+        assert_eq!(out[1].x, 90.0);
+    }
+
+    /// The game re-sends a stationary marker. Without the same-position rule
+    /// one marker becomes hundreds of zero-length windows.
+    #[test]
+    fn a_repeat_at_the_same_position_is_not_a_second_marker() {
+        let raw = raw_from(
+            vec![
+                ground_ev(1000, 2, 5.0, 5.0, 5.0),
+                ground_ev(2000, 2, 5.0, 5.0, 5.0),
+                ground_ev(3000, 2, 5.0, 5.0, 5.0),
+            ],
+            vec![],
+        );
+        let out = resolve_ground_markers(&raw);
+        assert_eq!(out.len(), 1, "a stationary marker is one marker");
+        assert_eq!(out[0].start_ms, 1000);
+        assert_eq!(out[0].end_ms, None);
+    }
+
+    /// Indexes are independent: removing the star must not close the arrow.
+    #[test]
+    fn marker_indexes_are_tracked_independently() {
+        let raw = raw_from(
+            vec![
+                ground_ev(1000, 0, 1.0, 1.0, 0.0),
+                ground_ev(1100, 4, 2.0, 2.0, 0.0),
+                ground_ev(2000, 4, f32::INFINITY, f32::INFINITY, f32::INFINITY),
+            ],
+            vec![],
+        );
+        let out = resolve_ground_markers(&raw);
+        assert_eq!(out.len(), 2);
+        let arrow = out.iter().find(|m| m.name == "arrow").unwrap();
+        let star = out.iter().find(|m| m.name == "star").unwrap();
+        assert_eq!(arrow.end_ms, None, "removing the star must not close the arrow");
+        assert_eq!(star.end_ms, Some(2000));
+    }
+
+    /// A removal with nothing open is a no-op, not a marker at infinity.
+    #[test]
+    fn a_removal_with_nothing_open_places_nothing() {
+        let raw = raw_from(
+            vec![ground_ev(1000, 3, f32::INFINITY, f32::INFINITY, f32::INFINITY)],
+            vec![],
+        );
+        assert!(resolve_ground_markers(&raw).is_empty());
+    }
+
+    /// NaN is rejected the same way infinity is. GW2EI tests only for
+    /// infinity via `Length()`, but a NaN coordinate would sail through that
+    /// check and land a marker nowhere.
+    #[test]
+    fn a_nan_position_is_treated_as_a_removal_not_a_placement() {
+        let raw = raw_from(
+            vec![
+                ground_ev(1000, 5, 1.0, 1.0, 0.0),
+                ground_ev(2000, 5, f32::NAN, 1.0, 0.0),
+            ],
+            vec![],
+        );
+        let out = resolve_ground_markers(&raw);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].end_ms, Some(2000));
+    }
+
+    /// A shape index this build of the game has and we do not is dropped
+    /// rather than named by guess.
+    #[test]
+    fn an_unknown_marker_index_is_dropped() {
+        let raw = raw_from(vec![ground_ev(1000, 99, 1.0, 1.0, 0.0)], vec![]);
+        assert!(resolve_ground_markers(&raw).is_empty());
+    }
+
+    /// All eight shapes name correctly, in GW2EI's `SquadMarkerIndex` order.
+    #[test]
+    fn every_ground_marker_index_names_a_shape() {
+        let raw = raw_from(
+            (0..8).map(|i| ground_ev(1000 + i as u64, i, i as f32, 0.0, 0.0)).collect(),
+            vec![],
+        );
+        let names: Vec<_> = resolve_ground_markers(&raw).iter().map(|m| m.name.clone()).collect();
+        assert_eq!(names, ["arrow", "circle", "heart", "square", "star", "swirl", "triangle", "x"]);
+    }
+
     /// A commander tag opened and later closed by a removal produces one
     /// closed segment. Marker resolution discards closed instances today
     /// ("nothing downstream needs point-in-time history"), which is exactly
@@ -1064,4 +1212,91 @@ mod marker_table_drift_tests {
         let named = SQUAD_MARKER_NAMES.len() + COMMANDER_TAG_VARIANTS.len();
         assert_eq!(named, MARKERS.len(), "one table gained a GUID the other did not");
     }
+}
+
+/// Ground squad marker shape names, indexed by `skillid`.
+///
+/// The order is GW2EI's `SquadMarkerIndex` enum, whose own source marks it
+/// "To be verified" -- so this is transcribed as-is rather than corrected,
+/// and the names match `SQUAD_MARKER_NAMES` above so one icon lookup serves
+/// both the ground and overhead variants of a shape.
+const GROUND_MARKER_NAMES: [&str; 8] =
+    ["arrow", "circle", "heart", "square", "star", "swirl", "triangle", "x"];
+
+/// Decode `CBTS_SQUADMARKER` (statechange 53) into placed ground markers.
+///
+/// The event stream is a sequence of placements and removals per marker
+/// index, not a list of markers, so the windows have to be reconstructed.
+/// The rules are GW2EI's (`CombatEventFactory`'s `StateChange.SquadMarker`
+/// arm), and each exists for a reason worth keeping:
+///
+/// - A non-finite position is a REMOVAL. arcdps signals "marker cleared" by
+///   sending infinity rather than a separate event type, so reading it as a
+///   coordinate would place a marker at infinity and never close the real
+///   one. GW2EI tests `Position.Length() == PositiveInfinity`; this checks
+///   every component for finiteness, which also rejects NaN.
+/// - A placement at a DIFFERENT position closes the open window first: the
+///   commander moved the marker, which is one marker with two positions,
+///   not two markers.
+/// - A placement at the SAME position while a window is open is a repeat and
+///   is dropped. The game re-sends these, and without this rule a stationary
+///   marker becomes hundreds of zero-length windows.
+///
+/// `end_ms` stays `None` for a marker still placed when the log ends -- the
+/// log boundary is not a removal, and manufacturing one would claim the
+/// commander cleared it.
+pub fn resolve_ground_markers(raw: &RawLog) -> Vec<crate::model::GroundMarker> {
+    use crate::model::GroundMarker;
+
+    // Open window per marker index, as an index into `out`.
+    let mut open: BTreeMap<u8, usize> = BTreeMap::new();
+    let mut out: Vec<GroundMarker> = Vec::new();
+
+    for e in raw.events.iter().filter(|e| e.is_statechange == sc::SQUADMARKER_GROUND) {
+        // `src_agent` packs x and y as two f32s, `dst_agent` carries z in its
+        // low half -- the same reinterpretation GW2EI's `ReadPosition` does,
+        // written with `to_le_bytes` rather than a pointer cast.
+        let src = e.src_agent.to_le_bytes();
+        let dst = e.dst_agent.to_le_bytes();
+        let x = f32::from_le_bytes([src[0], src[1], src[2], src[3]]);
+        let y = f32::from_le_bytes([src[4], src[5], src[6], src[7]]);
+        let z = f32::from_le_bytes([dst[0], dst[1], dst[2], dst[3]]);
+
+        let index = (e.skillid & 0xff) as u8;
+        let Some(name) = GROUND_MARKER_NAMES.get(index as usize) else {
+            // An index outside 0..=7 is a shape this build of the game has
+            // and we do not. Dropping it beats inventing a name.
+            continue;
+        };
+
+        if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+            if let Some(i) = open.remove(&index) {
+                out[i].end_ms = Some(e.time);
+            }
+            continue;
+        }
+
+        if let Some(&i) = open.get(&index) {
+            let same_spot = (out[i].x - x).abs() < 1e-6
+                && (out[i].y - y).abs() < 1e-6
+                && (out[i].z - z).abs() < 1e-6;
+            if same_spot {
+                continue;
+            }
+            out[i].end_ms = Some(e.time);
+            open.remove(&index);
+        }
+
+        open.insert(index, out.len());
+        out.push(GroundMarker {
+            index,
+            name: (*name).to_string(),
+            x,
+            y,
+            z,
+            start_ms: e.time,
+            end_ms: None,
+        });
+    }
+    out
 }

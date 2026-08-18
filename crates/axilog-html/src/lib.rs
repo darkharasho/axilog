@@ -75,7 +75,7 @@ mod tests {
                     TeamOut { color: "red".into(), team_id: 1, guid: None, shard_id: None },
                     TeamOut { color: "blue".into(), team_id: 2, guid: None, shard_id: None },
                 ],
-                markers: vec![],
+                markers: vec![], ground_markers: vec![],
                 tick_rate: None,
                 objectives: Vec::new(), started_at_unix: None, map_id: None,
             },

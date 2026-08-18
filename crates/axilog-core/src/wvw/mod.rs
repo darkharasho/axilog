@@ -510,6 +510,7 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         en.marker = markers::final_marker(&marker_res.open, &en.agent_addrs);
     }
     enc.markers = marker_res.assignments;
+    enc.ground_markers = markers::resolve_ground_markers(raw);
     enc.tick_rate = markers::resolve_tick_rate(raw, enc.duration_ms);
 }
 
@@ -599,7 +600,7 @@ mod tests {
         let mut enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:0,
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1"), player(3, ":B.2")],
-            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None };
+            enemies: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None };
         dedupe_players(&mut enc.players);
         assert_eq!(enc.players.len(), 2);
     }
@@ -611,7 +612,7 @@ mod tests {
         let mut enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:0,
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1")],
-            enemies: vec![], markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None };
+            enemies: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None };
         dedupe_players(&mut enc.players);
         assert_eq!(enc.players.len(), 1);
         assert_eq!(enc.players[0].agent_addr, 1);

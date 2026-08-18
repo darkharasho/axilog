@@ -113,6 +113,28 @@ pub struct CommanderTag {
 /// doesn't restrict `CBTS_MARKER` to squad members).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MarkerAssignment { pub agent_addr: u64, pub marker: String, pub time_ms: u64 }
+/// One ground-placed squad marker, from `CBTS_SQUADMARKER` (statechange 53).
+///
+/// Unlike [`MarkerAssignment`] this is attached to a POSITION, not an agent:
+/// it is the commander dropping a shape on the terrain. Windows are
+/// half-open `[start_ms, end_ms)` in **arcdps session time**, the same base
+/// as [`CommanderTag::segments`]; `end_ms` is `None` for a marker still
+/// placed when the log ends.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroundMarker {
+    /// 0..=7, GW2EI's `SquadMarkerIndex` order.
+    pub index: u8,
+    /// `"arrow"`, `"circle"`, ... -- the same lowercase names
+    /// `crate::wvw::markers::SQUAD_MARKER_NAMES` uses for the overhead
+    /// variants, so a consumer can share one icon lookup.
+    pub name: String,
+    /// World inches, the same space replay positions use.
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub start_ms: u64,
+    pub end_ms: Option<u64>,
+}
 /// Server tick-rate telemetry derived from `CBTS_TICK` (Task 7, M2,
 /// arcdps-dev guidance item 7). See
 /// `crate::wvw::markers::resolve_tick_rate` for the derivation and its
@@ -152,6 +174,9 @@ pub struct Encounter { pub kind: String, pub map: String, pub duration_ms: u64,
     /// Every `CBTS_MARKER` assignment observed in the log, in stream order
     /// (Task 7, M2). Empty when the log has no marker events.
     pub markers: Vec<MarkerAssignment>,
+    /// Ground-placed squad markers, from `CBTS_SQUADMARKER`. Distinct from
+    /// `markers` above, which is agent-attached.
+    pub ground_markers: Vec<GroundMarker>,
     /// Tick-rate telemetry from `CBTS_TICK` (Task 7, M2), `None` when the
     /// log has fewer than two such events.
     pub tick_rate: Option<TickRate>,
@@ -361,7 +386,8 @@ pub fn resolve(raw: &RawLog) -> Encounter {
         kind: "wvw".into(), map: "World vs World".into(), duration_ms,
         build: raw.header.build.clone(), revision: raw.header.revision,
         recorded_by: None, teams: Vec::new(), players, enemies,
-        markers: Vec::new(), tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
+        markers: Vec::new(), ground_markers: Vec::new(),
+        tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
         log_start_ms: raw.log_start_ms(),
     };
     crate::wvw::apply(&mut enc, raw);

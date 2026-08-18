@@ -55,6 +55,12 @@ pub struct EncounterOut {
     pub recorded_by: Option<u32>,
     pub teams: Vec<crate::TeamOut>,
     pub markers: Vec<MarkerAssignmentOut>,
+    /// Ground-placed squad markers, from `CBTS_SQUADMARKER`.
+    ///
+    /// A different system from `markers` above, not a variant of it: these
+    /// are attached to a world POSITION rather than an agent, and identified
+    /// by a fixed index rather than a content GUID.
+    pub ground_markers: Vec<GroundMarkerOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tick_rate: Option<crate::TickRateOut>,
     /// Wall-clock log start, seconds since the epoch, from arcdps's
@@ -127,6 +133,32 @@ pub struct MarkerAssignmentOut {
     /// document's only two non-log-relative times. Subtract
     /// [`EncounterOut::log_start_ms`] for an encounter-relative value.
     pub time_ms: u64,
+}
+
+/// One ground-placed squad marker.
+///
+/// Positions are WORLD INCHES, the same space `blocks.replay` tracks use, so
+/// a consumer can project them with the same arena transform and needs no
+/// separate calibration.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct GroundMarkerOut {
+    /// 0..=7, GW2EI's `SquadMarkerIndex` order.
+    pub index: u8,
+    /// `"arrow"`, `"circle"`, ... -- the same names the overhead variants
+    /// use, so one icon lookup serves both.
+    pub name: String,
+    /// Wiki art for the shape, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<&'static str>,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    /// arcdps **session time** ms, like [`MarkerAssignmentOut::time_ms`].
+    pub start_ms: u64,
+    /// Absent for a marker still placed when the log ends -- the log
+    /// boundary is not a removal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u64>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -505,6 +537,28 @@ pub fn build_report_v1(
         })
         .collect();
 
+    // Ground markers reuse the overhead shapes' art: the eight symbols are
+    // the same, so `marker_icons` is looked up by LABEL rather than by GUID
+    // (a ground marker carries no GUID at all).
+    let ground_markers = legacy
+        .encounter
+        .ground_markers
+        .iter()
+        .map(|m| GroundMarkerOut {
+            index: m.index,
+            name: m.name.clone(),
+            icon: axilog_core::analysis::marker_icons::MARKERS
+                .iter()
+                .find(|k| k.kind == "squad_marker" && k.label.eq_ignore_ascii_case(&m.name))
+                .and_then(|k| k.icon),
+            x: m.x,
+            y: m.y,
+            z: m.z,
+            start_ms: m.start_ms,
+            end_ms: m.end_ms,
+        })
+        .collect();
+
     // The legacy `Encounter::recorded_by` carries the recorder's raw
     // account string (see `wvw::apply` in axilog-core), not an agent addr,
     // so it can't be joined through `index.by_agent_addr` directly. Resolve
@@ -568,6 +622,7 @@ pub fn build_report_v1(
             recorded_by,
             teams: legacy.encounter.teams.clone(),
             markers,
+            ground_markers,
             tick_rate: legacy.encounter.tick_rate.clone(),
             started_at_unix: legacy.encounter.started_at_unix,
             // Sourced from `enc`, not `legacy`: the legacy shape has no
@@ -634,7 +689,7 @@ mod tests {
     /// silently dropped -- see Finding 1 of Task 9's fix round 1.
     #[test]
     fn a_marker_on_an_unrostered_agent_survives_with_no_entity_id() {
-        let enc = Encounter { log_start_ms: 0,
+        let enc = Encounter { log_start_ms: 0, ground_markers: vec![],
             kind: "wvw".into(),
             map: "".into(),
             duration_ms: 1000,
@@ -716,7 +771,7 @@ mod tests {
             teams: vec![],
             players: vec![player(1, ":Squaddie.1")],
             enemies: vec![],
-            markers: vec![],
+            markers: vec![], ground_markers: vec![],
             tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
         };
         let metrics = Metrics {
@@ -783,7 +838,7 @@ mod tests {
             teams: vec![],
             players: vec![player(1, ":Squaddie.1")],
             enemies: vec![],
-            markers: vec![],
+            markers: vec![], ground_markers: vec![],
             tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
         };
         let metrics = Metrics {

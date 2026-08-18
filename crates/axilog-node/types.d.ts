@@ -841,6 +841,29 @@ export interface MarkerAssignmentOutV1 {
 }
 
 /**
+ * One ground-placed squad marker, from `CBTS_SQUADMARKER`. A different system
+ * from `MarkerAssignmentOutV1`, not a variant of it: attached to a world
+ * POSITION rather than an agent, and identified by a fixed index rather than
+ * a content GUID.
+ */
+export interface GroundMarkerOutV1 {
+  /** 0..=7, GW2EI's `SquadMarkerIndex` order. */
+  index: number
+  /** `arrow`, `circle`, ... — the same names the overhead variants use. */
+  name: string
+  /** Wiki art for the shape, when known. */
+  icon?: string
+  /** World inches, the same space `blocks.replay` tracks use. */
+  x: number
+  y: number
+  z: number
+  /** arcdps session time ms, like `MarkerAssignmentOutV1.time_ms`. */
+  start_ms: number
+  /** Absent for a marker still placed when the log ends. */
+  end_ms?: number
+}
+
+/**
  * The 1.0 encounter envelope -- a reprojection of the legacy `EncounterOut`
  * with `markers[]` rekeyed from `agent_addr` to `entity_id`.
  */
@@ -868,6 +891,7 @@ export interface EncounterOutV1 {
   recorded_by?: number
   teams: TeamOut[]
   markers: MarkerAssignmentOutV1[]
+  ground_markers: GroundMarkerOutV1[]
   /**
    * The log's `t0` in arcdps **session-time** milliseconds -- the origin
    * every other time in this document is already measured from.

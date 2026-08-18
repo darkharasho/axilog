@@ -463,6 +463,25 @@ pub mod sc {
     /// for this task, which covers only above-target/agent markers per the
     /// arcdps-dev guidance.
     pub const MARKER: u8 = 37;
+    /// Ground-placed squad markers -- the eight shapes a commander drops on
+    /// the terrain, as opposed to [`MARKER`]'s above-agent variants.
+    ///
+    /// A different system entirely, which is why it needs its own constant
+    /// rather than a flag on `MARKER`: the marker is identified by a fixed
+    /// `skillid` INDEX (0..=7, GW2EI's `SquadMarkerIndex`) rather than a
+    /// content GUID, and it carries a world position instead of an agent.
+    ///
+    /// Payload, per the arcdps EVTC reference and GW2EI's
+    /// `SquadMarkerEvent`, which decodes it identically:
+    /// ```text
+    /// CBTS_SQUADMARKER,
+    /// // src_agent: (float)x, (float)y   -- two f32 packed into the u64
+    /// // dst_agent: (float)z             -- one f32 in the low half
+    /// // skillid:   marker index, 0..=7
+    /// ```
+    /// A position of infinity is a REMOVAL, not a placement at infinity --
+    /// see `crate::wvw::markers::resolve_ground_markers`.
+    pub const SQUADMARKER_GROUND: u8 = 53;
     /// Server tick-rate telemetry (Task 7, M2 -- arcdps-dev guidance item
     /// 7). Verified against the arcdps EVTC reference by hand-counting
     /// `enum cbtstatechange` from `CBTS_COMBAT = 0`: `CBTS_TICK` is index

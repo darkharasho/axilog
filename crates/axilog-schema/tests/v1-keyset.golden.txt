@@ -422,6 +422,15 @@ coverage.support
 encounter
 encounter.build
 encounter.duration_ms
+encounter.ground_markers
+encounter.ground_markers[].end_ms
+encounter.ground_markers[].icon
+encounter.ground_markers[].index
+encounter.ground_markers[].name
+encounter.ground_markers[].start_ms
+encounter.ground_markers[].x
+encounter.ground_markers[].y
+encounter.ground_markers[].z
 encounter.kind
 encounter.log_start_ms
 encounter.map

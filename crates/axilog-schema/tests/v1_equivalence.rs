@@ -890,7 +890,7 @@ fn a_log_without_the_healing_extension_reports_unsupported_not_empty() {
             agent_addrs: vec![1],
         }],
         enemies: vec![],
-        markers: vec![],
+        markers: vec![], ground_markers: vec![],
         tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
     };
     let metrics = Metrics {
@@ -958,7 +958,7 @@ fn a_computed_block_with_no_rows_still_reports_empty() {
         teams: vec![],
         players: vec![],
         enemies: vec![],
-        markers: vec![],
+        markers: vec![], ground_markers: vec![],
         tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
     };
     let metrics = Metrics {

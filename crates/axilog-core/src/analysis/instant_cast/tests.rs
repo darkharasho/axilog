@@ -134,7 +134,7 @@ fn enc(players: Vec<Player>) -> Encounter {
         teams: vec![Team { color: "red".into(), team_id: 1, guid: None, shard_id: None }],
         players,
         enemies: Vec::new(),
-        markers: Vec::new(),
+        markers: Vec::new(), ground_markers: Vec::new(),
         tick_rate: None,
         objectives: Vec::new(),
         started_at_unix: None, log_start_ms: 0, map_id: None,

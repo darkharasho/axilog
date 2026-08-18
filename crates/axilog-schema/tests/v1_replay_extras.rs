@@ -59,7 +59,7 @@ fn document(extras: &ReplayExtras) -> serde_json::Value {
         teams: vec![],
         players: vec![player(1, ":Squaddie.1")],
         enemies: vec![],
-        markers: vec![],
+        markers: vec![], ground_markers: vec![],
         tick_rate: None,
         objectives: Vec::new(),
         started_at_unix: None, map_id: None,

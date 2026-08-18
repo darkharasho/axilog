@@ -849,7 +849,7 @@ mod tests {
             players: vec![player],
             enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None,
                 profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()), agent_addrs: vec![9] }],
-            markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
+            markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         };
         let raw = raw_from(vec![
             strike(1, 9, 100), // pre-relog damage from addr 1
@@ -877,7 +877,7 @@ mod tests {
             players: vec![player],
             enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None,
                 profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()), agent_addrs: vec![9] }],
-            markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
+            markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         };
         let raw = raw_from(vec![
             strike(9, 1, 80),  // enemy hits pre-relog addr
@@ -910,7 +910,7 @@ mod tests {
                 is_player: true, marker: None,
                 profession: Some("Necromancer".into()), elite_spec: Some("Reaper".into()),
                 agent_addrs: vec![9, 10] }],
-            markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
+            markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         };
         let raw = raw_from(vec![
             strike(1, 9, 100),  // damage to the enemy's pre-relog addr
@@ -965,7 +965,7 @@ mod tests {
                     profession: Some("Guardian".into()), elite_spec: Some("Firebrand".into()),
                     agent_addrs: vec![13] },
             ],
-            markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
+            markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         };
         fn cc_strike(src: u64, dst: u64, duration_ms: i32) -> RawEvent {
             let mut e = strike(src, dst, duration_ms);
@@ -990,7 +990,7 @@ mod tests {
     fn empty_enc() -> Encounter {
         Encounter { kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![], enemies: vec![],
-            markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None }
+            markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None }
     }
 
     /// Final-review fix wave (downgraded M4 Task 3): a log whose arcdps

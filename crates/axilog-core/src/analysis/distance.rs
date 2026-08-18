@@ -609,7 +609,7 @@ mod tests {
             teams: vec![],
             players,
             enemies: vec![],
-            markers: vec![],
+            markers: vec![], ground_markers: vec![],
             tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         }
     }

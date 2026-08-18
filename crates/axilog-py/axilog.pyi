@@ -93,6 +93,7 @@ __all__ = [
     # native format 1.0 (Task 12)
     "ReportV1",
     "AxilogMeta",
+    "GroundMarkerOutV1",
     "MarkerAssignmentOutV1",
     "EncounterOutV1",
     "Role",
@@ -846,6 +847,22 @@ class _MarkerAssignmentOutV1Required(TypedDict):
     marker: str
     time_ms: int
 
+class _GroundMarkerOutV1Required(TypedDict):
+    index: int
+    name: str
+    x: float
+    y: float
+    z: float
+    start_ms: int
+
+class GroundMarkerOutV1(_GroundMarkerOutV1Required, total=False):
+    """One ground-placed squad marker, from `CBTS_SQUADMARKER`. Attached to
+    a world POSITION rather than an agent, and identified by a fixed index
+    rather than a content GUID. Positions are world inches."""
+
+    icon: str
+    end_ms: int
+
 class MarkerAssignmentOutV1(_MarkerAssignmentOutV1Required, total=False):
     """One `CBTS_MARKER` assignment, native 1.0 shape. `agent_addr` is
     always present (arcdps does not restrict `CBTS_MARKER` to squad
@@ -866,6 +883,7 @@ class _EncounterOutV1Required(TypedDict):
     revision: int
     teams: List[TeamOut]
     markers: List[MarkerAssignmentOutV1]
+    ground_markers: List[GroundMarkerOutV1]
     #: The log's `t0` in arcdps SESSION-time milliseconds -- the origin
     #: every other time in this document is already measured from. Exactly
     #: two fields are not log-relative: `markers[].time_ms` and
