@@ -49,6 +49,16 @@ jobs:
       - name: Check tag == [workspace.package].version
         if: startsWith(github.ref, 'refs/tags/')
         run: scripts/check-tag-version.sh "${{ github.ref_name }}"
+      # Fail-fast on every OTHER hand-maintained version site, before any
+      # build minutes are spent. Unconditional: it needs no tag, so a
+      # workflow_dispatch dry run gets the same guard. The lockfile is
+      # excluded -- it cannot name platform packages that are not published
+      # yet -- and is checked post-publish by lockfile-refresh instead.
+      # Until v0.3.12 this ran ONLY post-publish, so a stale index.js
+      # literal shipped to npm and was reported when it was too late to fix.
+      - name: Check every other version site is in sync
+        run: scripts/check-versions.sh --pre-publish
+
       - name: Skip tag/version check (workflow_dispatch dry run, no tag ref)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: echo "Not running on a 'refs/tags/*' ref (this is a workflow_dispatch dry run) -- skipping the tag==Cargo-version guard. Release creation and npm publish are separately gated off later in this workflow."
@@ -736,6 +746,12 @@ jobs:
       # this job).
       - name: Check tag == [workspace.package].version
         run: scripts/check-tag-version.sh "${{ github.ref_name }}"
+      # Every hand-maintained version site except the lockfile, which cannot
+      # name unpublished platform packages and so is checked post-publish.
+      # This ran only post-publish until v0.3.12, where a stale index.js
+      # literal shipped to npm and was reported after it was unfixable.
+      - name: Check every other version site is in sync
+        run: scripts/check-versions.sh --pre-publish
 
       - uses: actions/download-artifact@v4
         with:

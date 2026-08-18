@@ -34,6 +34,20 @@ CARGO_VERSION="$("$REPO_ROOT/scripts/workspace-version.sh")" || exit 1
 
 FAIL=0
 
+# --pre-publish: skip the package-lock check only. The lock is the one
+# version site that CANNOT be correct before a release -- it has to name
+# @axiapps platform packages that do not exist on the registry yet -- so
+# it is checked after npm-publish, by release.yml's lockfile-refresh job.
+# Every other site can and must be correct before a single build minute is
+# spent, which is what this flag lets the pre-build version-guard assert.
+SKIP_LOCKFILE=0
+for arg in "$@"; do
+  case "$arg" in
+    --pre-publish) SKIP_LOCKFILE=1 ;;
+    *) echo "usage: check-versions.sh [--pre-publish]" >&2; exit 2 ;;
+  esac
+done
+
 json_version() {
   # $1: path to a package.json-shaped file. Prints its top-level "version".
   node -e '
@@ -131,7 +145,9 @@ fi
 # Assert the root versions, and that every optionalDependencies pin has a
 # real lock entry carrying a matching version and a resolved URL.
 NODE_LOCK="$REPO_ROOT/crates/axilog-node/package-lock.json"
-if [ -f "$NODE_LOCK" ]; then
+if [ "$SKIP_LOCKFILE" -eq 1 ]; then
+  echo "SKIP: crates/axilog-node/package-lock.json (--pre-publish; checked after npm-publish)"
+elif [ -f "$NODE_LOCK" ]; then
   LOCK_PROBLEMS="$(node -e '
     const fs = require("fs");
     const [lockPath, want] = process.argv.slice(1);
