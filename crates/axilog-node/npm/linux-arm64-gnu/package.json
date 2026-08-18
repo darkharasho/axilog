@@ -1,6 +1,6 @@
 {
   "name": "@axiapps/axilog-linux-arm64-gnu",
-  "version": "0.3.12",
+  "version": "1.0.0",
   "cpu": [
     "arm64"
   ],
