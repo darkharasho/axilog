@@ -1,4 +1,4 @@
-# axilog
+# <img width="36" height="36" alt="axilog logo" src="assets/axilog-glyph.png" /> axilog
 
 A fast, cross-platform combat-log parser for Guild Wars 2 arcdps logs. Part of the axi suite.
 
