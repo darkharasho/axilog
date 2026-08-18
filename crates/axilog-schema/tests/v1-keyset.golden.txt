@@ -430,6 +430,9 @@ encounter.markers
 encounter.markers[].agent_addr
 encounter.markers[].entity_id
 encounter.markers[].marker
+encounter.markers[].marker_icon
+encounter.markers[].marker_kind
+encounter.markers[].marker_label
 encounter.markers[].time_ms
 encounter.objectives
 encounter.recorded_by

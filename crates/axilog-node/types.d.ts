@@ -825,7 +825,18 @@ export interface MarkerAssignmentOutV1 {
   /** The entity this marker is on. Absent for agents that carry markers but are not tracked entities. */
   entity_id?: number
   agent_addr: number
+  /** The raw 32-hex content GUID, exactly as arcdps reported it. */
   marker: string
+  /**
+   * Resolved from GW2EI's marker tables. All three are absent together when
+   * GW2EI does not know the GUID -- real logs do carry such ids, so handle
+   * the absence rather than assuming coverage.
+   */
+  marker_kind?: 'squad_marker' | 'commander_tag' | 'catmander_tag'
+  /** `Arrow`, `Purple`, `X` -- the marker's name. */
+  marker_label?: string
+  /** Wiki art for the marker. */
+  marker_icon?: string
   time_ms: number
 }
 

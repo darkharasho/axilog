@@ -854,6 +854,9 @@ class MarkerAssignmentOutV1(_MarkerAssignmentOutV1Required, total=False):
     entity."""
 
     entity_id: int
+    marker_kind: str
+    marker_label: str
+    marker_icon: str
 
 class _EncounterOutV1Required(TypedDict):
     kind: str

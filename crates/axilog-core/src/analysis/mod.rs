@@ -107,6 +107,7 @@ pub mod rotation;
 /// of `skill_map`, because nothing in the pipeline computes them -- they are
 /// the two lookups that answer what a log cannot say about an id.
 pub mod buff_icons;
+pub mod marker_icons;
 pub mod skill_icon_overrides;
 pub mod skill_icons;
 /// Best-effort `skillMap` built from the log's own skill table (M14, Task 2)

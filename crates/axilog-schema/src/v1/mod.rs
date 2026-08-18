@@ -108,7 +108,20 @@ pub struct MarkerAssignmentOut {
     /// Always present, so a marker is never lost just because its agent is
     /// not a tracked entity.
     pub agent_addr: u64,
+    /// The raw 32-hex content GUID, exactly as arcdps reported it.
     pub marker: String,
+    /// `"squad_marker"`, `"commander_tag"` or `"catmander_tag"`, resolved
+    /// from [`axilog_core::analysis::marker_icons`]. Absent when GW2EI does
+    /// not know this GUID -- real logs do carry such ids, so a consumer must
+    /// handle the absence rather than assume coverage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marker_kind: Option<&'static str>,
+    /// `"Arrow"`, `"Purple"`, `"X"`. Absent on the same terms as `marker_kind`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marker_label: Option<&'static str>,
+    /// Wiki art for the marker. Absent on the same terms as `marker_kind`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marker_icon: Option<&'static str>,
     /// arcdps **session time** ms, passed through from
     /// `model::MarkerAssignment::time_ms` with no rebase -- one of this
     /// document's only two non-log-relative times. Subtract
@@ -473,11 +486,22 @@ pub fn build_report_v1(
         .encounter
         .markers
         .iter()
-        .map(|m| MarkerAssignmentOut {
-            entity_id: index.by_agent_addr(m.agent_addr),
-            agent_addr: m.agent_addr,
-            marker: m.marker.clone(),
-            time_ms: m.time_ms,
+        .map(|m| {
+            // arcdps reports only the GUID. Lowercased before lookup because
+            // GW2EI writes these uppercase in C# while the raw log spells
+            // them lowercase -- a case mismatch would miss silently.
+            let known = axilog_core::analysis::marker_icons::lookup(
+                &m.marker.to_ascii_lowercase(),
+            );
+            MarkerAssignmentOut {
+                entity_id: index.by_agent_addr(m.agent_addr),
+                agent_addr: m.agent_addr,
+                marker: m.marker.clone(),
+                marker_kind: known.map(|k| k.kind),
+                marker_label: known.map(|k| k.label),
+                marker_icon: known.and_then(|k| k.icon),
+                time_ms: m.time_ms,
+            }
         })
         .collect();
 
