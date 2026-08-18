@@ -10,6 +10,38 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.0.0 — 2026-08-18
+
+**1.0 is a promise, not a feature.** Nothing in this release changes an output — the native
+format has been `"1.0"` since v0.3.3 and every metric is still asserted against a real reference
+export in CI. What changes is what the version number commits to. From here:
+
+- **Native format 1.0 is frozen.** Fields are added, never removed or re-meaninged, inside the
+  `1.0` schema string. The one breaking change of the 0.3 line — `down_contribution` splitting
+  into `downs_contribution`/`downed_by` — is the last of its kind before a 2.0.
+- **The Node and Python surfaces are stable.** `@axiapps/axilog` and `axilog` on PyPI ship the
+  same core as the CLI, as native extension modules rather than subprocess wrappers, and their
+  exported names are covered by semver from this tag on.
+- **The CLI's flags and formats are stable.** `axilog parse --help` stays the measured reference
+  for what each flag computes and costs.
+
+This entry also covers v0.3.7 through v0.3.12, which shipped without their own changelog sections:
+
+- **Icons for every buff, condition, skill and marker.** `catalogs.buffs` entries carry icons
+  (v0.3.7), GW2EI's skill-icon override catalog is applied (v0.3.9), boon and condition icons are
+  traced from the GW2 wiki art rather than hotlinked (v0.3.11), and every icon the format emits is
+  mirrored onto a domain we control (v0.3.12) — so a consumer rendering an axilog report is not
+  one upstream deletion away from a page of broken images.
+- **Squad markers and commander tags decode.** Marker and commander-tag GUIDs resolve to names
+  (v0.3.10), and ground-placed squad markers come through with their positions (v0.3.11), which
+  is what lets a consumer draw them on a replay map at all.
+- **Account names lost a leading colon.** arcdps prefixes account names with `:`; axilog now
+  strips it, so `":Player.1234"` no longer has to be cleaned up by every consumer independently
+  (v0.3.7).
+- **The release pipeline checks every version site before publishing, not after.** A stale
+  `index.js` literal shipped to npm in v0.3.12 and was reported after it was unfixable; the
+  pre-publish gate exists so that specific failure cannot recur.
+
 ## v0.3.6 — 2026-08-17
 
 **The native container now carries the log's `t0` as `encounter.log_start_ms`.** Two fields in

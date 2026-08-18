@@ -768,13 +768,56 @@ jobs:
           echo "Release contents:"
           ls -la
 
+      # Notes come from the tag's docs/CHANGELOG.md section plus a generated
+      # install/verify footer. The script exits non-zero when that section is
+      # missing, so this step fails the release rather than publishing the raw
+      # commit list `--generate-notes` used to emit.
+      - name: Build release notes
+        run: scripts/release-notes.sh "${{ github.ref_name }}" > release-notes.md
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" release/* \
             --title "${{ github.ref_name }}" \
-            --generate-notes
+            --notes-file release-notes.md
+
+      # Same webhook AxiBridge posts to, held as a repo variable rather than a
+      # secret so an unset value skips the step instead of posting to nowhere.
+      - name: Post to Discord
+        if: ${{ vars.DISCORD_WEBHOOK_URL != '' }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ vars.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          export RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+          NOTES="$(scripts/release-notes.sh --no-footer "$TAG")"
+          export NOTES
+
+          payload=$(python3 -c "
+          import json, os
+
+          tag = os.environ['TAG']
+          notes = os.environ.get('NOTES', '').strip()
+
+          if len(notes) > 3800:
+              notes = notes[:3800] + '\n\n*... see full notes on GitHub*'
+
+          embed = {
+              'title': f'axilog {tag}',
+              'url': os.environ['RELEASE_URL'],
+              'description': notes or 'A new version of axilog is available!',
+              'color': 0xE8B53D,
+              'thumbnail': {'url': 'https://raw.githubusercontent.com/darkharasho/axilog/main/assets/icon.png'},
+              'footer': {'text': 'axilog Release'},
+          }
+
+          print(json.dumps({'embeds': [embed]}))
+          ")
+
+          curl -sf -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK_URL"
 
       # Explicitly dispatch the PyPI trusted-publishing workflow. The
       # `release: published` trigger in pypi-publish.yml does NOT fire for
