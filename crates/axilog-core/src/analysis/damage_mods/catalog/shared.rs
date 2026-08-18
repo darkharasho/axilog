@@ -12,7 +12,7 @@ use super::super::model::*;
 pub static D422_0: DamageModifierDef = DamageModifierDef {
     id: 422,
     name: "Might 25",
-    icon: "https://i.imgur.com/aXVbVl6.png",
+    icon: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-aXVbVl6.png",
     description: "With 25 stacks of Might",
     source: ModSource::Common,
     spec_specific_shared: false,
@@ -39,7 +39,7 @@ pub static D422_0: DamageModifierDef = DamageModifierDef {
 pub static D423_0: DamageModifierDef = DamageModifierDef {
     id: 423,
     name: "Might >= 20",
-    icon: "https://i.imgur.com/HbDL75f.png",
+    icon: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-HbDL75f.png",
     description: "With at least 20 stacks of Might",
     source: ModSource::Common,
     spec_specific_shared: false,
@@ -66,7 +66,7 @@ pub static D423_0: DamageModifierDef = DamageModifierDef {
 pub static D424_0: DamageModifierDef = DamageModifierDef {
     id: 424,
     name: "Might <= 15",
-    icon: "https://i.imgur.com/IimHVxe.png",
+    icon: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-IimHVxe.png",
     description: "With less than 15 stacks of Might",
     source: ModSource::Common,
     spec_specific_shared: false,
@@ -147,7 +147,7 @@ pub static D56_0: DamageModifierDef = DamageModifierDef {
 pub static D428_0: DamageModifierDef = DamageModifierDef {
     id: 428,
     name: "Stability >= 10",
-    icon: "https://i.imgur.com/nAaynHA.png",
+    icon: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-nAaynHA.png",
     description: "With at least 10 stacks of Stability",
     source: ModSource::Common,
     spec_specific_shared: false,
@@ -174,7 +174,7 @@ pub static D428_0: DamageModifierDef = DamageModifierDef {
 pub static D427_0: DamageModifierDef = DamageModifierDef {
     id: 427,
     name: "Stability >= 5",
-    icon: "https://i.imgur.com/Z4YUAvW.png",
+    icon: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-Z4YUAvW.png",
     description: "With at least 5 stacks of Stability",
     source: ModSource::Common,
     spec_specific_shared: false,
@@ -201,7 +201,7 @@ pub static D427_0: DamageModifierDef = DamageModifierDef {
 pub static D426_0: DamageModifierDef = DamageModifierDef {
     id: 426,
     name: "Stability >= 3",
-    icon: "https://i.imgur.com/byOtZxM.png",
+    icon: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-byOtZxM.png",
     description: "With at least 3 stacks of Stability",
     source: ModSource::Common,
     spec_specific_shared: false,
@@ -228,7 +228,7 @@ pub static D426_0: DamageModifierDef = DamageModifierDef {
 pub static D425_0: DamageModifierDef = DamageModifierDef {
     id: 425,
     name: "Stability >= 1",
-    icon: "https://i.imgur.com/ArLGcWu.png",
+    icon: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-ArLGcWu.png",
     description: "With at least 1 stack of Stability",
     source: ModSource::Common,
     spec_specific_shared: false,

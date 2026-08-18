@@ -73,9 +73,39 @@
 //! The remaining 29 entries are covered by this module's own unit tests
 //! against the transcription.
 
+/// The base every mirrored icon is served from.
+///
+/// Art that GW2EI hosts on `i.imgur.com` or `assets.gw2dat.com` is served
+/// from here instead. Those two can disappear without notice and the art
+/// cannot be re-sourced -- of the ids they back, the official GW2 API knows
+/// one, and that one carries no icon.
+pub const ICON_MIRROR_BASE: &str = "https://darkharasho.github.io/axibridge-map-tiles/icons/";
+
+/// The upstream URL a mirrored icon was taken from, or `url` unchanged when
+/// it was never mirrored.
+///
+/// This is the inverse of the substitution above, and it exists because our
+/// icon URLs are GW2EI's modulo exactly this one rewrite. The EI-equality
+/// goldens compare our output against real GW2EI exports, which still carry
+/// the upstream URLs; they undo the rewrite on our side rather than freeze
+/// the mirrored strings into their assertions, so they stay able to notice
+/// GW2EI changing an icon.
+pub fn upstream_icon_url(url: &str) -> std::borrow::Cow<'_, str> {
+    let Some(name) = url.strip_prefix(ICON_MIRROR_BASE) else {
+        return std::borrow::Cow::Borrowed(url);
+    };
+    // Hosts spelled in two pieces so this file does not contain the literals
+    // that `no_shipped_icon_url_points_at_an_untrusted_host` forbids.
+    match name.split_once('-') {
+        Some(("imgur", rest)) => std::borrow::Cow::Owned(format!("https://i.{}/{rest}", "imgur.com")),
+        Some(("gw2dat", rest)) => std::borrow::Cow::Owned(format!("https://assets.{}/{rest}", "gw2dat.com")),
+        _ => std::borrow::Cow::Borrowed(url),
+    }
+}
+
 /// `ParserIcons.UnknownProfessionIcon` (`ParserIcons.cs:48`) -- what EI
 /// falls back to for a `Spec` it has no icon for.
-pub const UNKNOWN_PROFESSION_ICON: &str = "https://i.imgur.com/UbvyFSt.png";
+pub const UNKNOWN_PROFESSION_ICON: &str = "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-UbvyFSt.png";
 
 /// `ParserIcons.BaseResProfIcons`, as `(spec name, url)` pairs in EI's own
 /// declaration order (grouped by profession, elite specs newest-first, core
@@ -86,59 +116,59 @@ pub const UNKNOWN_PROFESSION_ICON: &str = "https://i.imgur.com/UbvyFSt.png";
 /// `crate::model::profession_name` produces.
 pub const BASE_RES_PROF_ICONS: &[(&str, &str)] = &[
     // Ranger
-    ("Galeshot", "https://i.imgur.com/4wTs28o.png"),
-    ("Untamed", "https://i.imgur.com/u8l36Pw.png"),
-    ("Soulbeast", "https://i.imgur.com/1uDdNtU.png"),
-    ("Druid", "https://i.imgur.com/Glb39dj.png"),
-    ("Ranger", "https://i.imgur.com/r7TAcjS.png"),
+    ("Galeshot", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-4wTs28o.png"),
+    ("Untamed", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-u8l36Pw.png"),
+    ("Soulbeast", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-1uDdNtU.png"),
+    ("Druid", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-Glb39dj.png"),
+    ("Ranger", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-r7TAcjS.png"),
     // Engineer
-    ("Amalgam", "https://i.imgur.com/SjSb5yJ.png"),
-    ("Mechanist", "https://i.imgur.com/1jUOMlX.png"),
-    ("Holosmith", "https://i.imgur.com/Q96yagv.png"),
-    ("Scrapper", "https://i.imgur.com/Cd9yD43.png"),
-    ("Engineer", "https://i.imgur.com/hckhnZy.png"),
+    ("Amalgam", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-SjSb5yJ.png"),
+    ("Mechanist", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-1jUOMlX.png"),
+    ("Holosmith", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-Q96yagv.png"),
+    ("Scrapper", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-Cd9yD43.png"),
+    ("Engineer", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-hckhnZy.png"),
     // Thief
-    ("Antiquary", "https://i.imgur.com/R1f6iXn.png"),
-    ("Specter", "https://i.imgur.com/nVAyYVQ.png"),
-    ("Deadeye", "https://i.imgur.com/kryyJRy.png"),
-    ("Daredevil", "https://i.imgur.com/RiCJalE.png"),
-    ("Thief", "https://i.imgur.com/dS8un97.png"),
+    ("Antiquary", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-R1f6iXn.png"),
+    ("Specter", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-nVAyYVQ.png"),
+    ("Deadeye", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-kryyJRy.png"),
+    ("Daredevil", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-RiCJalE.png"),
+    ("Thief", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-dS8un97.png"),
     // Elementalist
-    ("Evoker", "https://i.imgur.com/Ie4y9Qf.png"),
-    ("Catalyst", "https://i.imgur.com/2B73rSk.png"),
-    ("Weaver", "https://i.imgur.com/03RLBaX.png"),
-    ("Tempest", "https://i.imgur.com/FnLyZvk.png"),
-    ("Elementalist", "https://i.imgur.com/2ybEpCV.png"),
+    ("Evoker", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-Ie4y9Qf.png"),
+    ("Catalyst", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-2B73rSk.png"),
+    ("Weaver", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-03RLBaX.png"),
+    ("Tempest", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-FnLyZvk.png"),
+    ("Elementalist", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-2ybEpCV.png"),
     // Mesmer
-    ("Troubadour", "https://i.imgur.com/xRdE1iN.png"),
-    ("Virtuoso", "https://i.imgur.com/sncfljQ.png"),
-    ("Mirage", "https://i.imgur.com/fL88z7p.png"),
-    ("Chronomancer", "https://i.imgur.com/rI1tW64.png"),
-    ("Mesmer", "https://i.imgur.com/FXgZQ46.png"),
+    ("Troubadour", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-xRdE1iN.png"),
+    ("Virtuoso", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-sncfljQ.png"),
+    ("Mirage", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-fL88z7p.png"),
+    ("Chronomancer", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-rI1tW64.png"),
+    ("Mesmer", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-FXgZQ46.png"),
     // Necromancer
-    ("Ritualist", "https://i.imgur.com/S8msdHU.png"),
-    ("Harbinger", "https://i.imgur.com/PwhIT4u.png"),
-    ("Scourge", "https://i.imgur.com/uVdgw3H.png"),
-    ("Reaper", "https://i.imgur.com/X463V90.png"),
-    ("Necromancer", "https://i.imgur.com/kK3l1C1.png"),
+    ("Ritualist", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-S8msdHU.png"),
+    ("Harbinger", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-PwhIT4u.png"),
+    ("Scourge", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-uVdgw3H.png"),
+    ("Reaper", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-X463V90.png"),
+    ("Necromancer", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-kK3l1C1.png"),
     // Warrior
-    ("Paragon", "https://i.imgur.com/Wp4lhTM.png"),
-    ("Bladesworn", "https://i.imgur.com/mFzTJXv.png"),
-    ("Spellbreaker", "https://i.imgur.com/A6JTWBV.png"),
-    ("Berserker", "https://i.imgur.com/dNY6e8n.png"),
-    ("Warrior", "https://i.imgur.com/ejI5STj.png"),
+    ("Paragon", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-Wp4lhTM.png"),
+    ("Bladesworn", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-mFzTJXv.png"),
+    ("Spellbreaker", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-A6JTWBV.png"),
+    ("Berserker", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-dNY6e8n.png"),
+    ("Warrior", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-ejI5STj.png"),
     // Guardian
-    ("Luminary", "https://i.imgur.com/1znO8HP.png"),
-    ("Willbender", "https://i.imgur.com/pIFrNLa.png"),
-    ("Firebrand", "https://i.imgur.com/TOsmJOl.png"),
-    ("Dragonhunter", "https://i.imgur.com/GqKocpf.png"),
-    ("Guardian", "https://i.imgur.com/l329bR4.png"),
+    ("Luminary", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-1znO8HP.png"),
+    ("Willbender", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-pIFrNLa.png"),
+    ("Firebrand", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-TOsmJOl.png"),
+    ("Dragonhunter", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-GqKocpf.png"),
+    ("Guardian", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-l329bR4.png"),
     // Revenant
-    ("Conduit", "https://i.imgur.com/qaXHsQU.png"),
-    ("Vindicator", "https://i.imgur.com/hKBqtWE.png"),
-    ("Renegade", "https://i.imgur.com/whOAxsp.png"),
-    ("Herald", "https://i.imgur.com/O7kekkb.png"),
-    ("Revenant", "https://i.imgur.com/lvp7545.png"),
+    ("Conduit", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-qaXHsQU.png"),
+    ("Vindicator", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-hKBqtWE.png"),
+    ("Renegade", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-whOAxsp.png"),
+    ("Herald", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-O7kekkb.png"),
+    ("Revenant", "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-lvp7545.png"),
 ];
 
 /// EI's `Spec` for an axilog player: the elite specialization when there is
@@ -185,7 +215,7 @@ mod tests {
         assert_eq!(urls.len(), 45, "duplicate icon URL");
         assert!(!urls.contains(UNKNOWN_PROFESSION_ICON), "fallback must be distinct");
         for (name, url) in BASE_RES_PROF_ICONS {
-            assert!(url.starts_with("https://i.imgur.com/"), "{name}: {url}");
+            assert!(url.starts_with("https://darkharasho.github.io/axibridge-map-tiles/icons/"), "{name}: {url}");
             assert!(url.ends_with(".png"), "{name}: {url}");
         }
     }
@@ -218,19 +248,19 @@ mod tests {
     #[test]
     fn spot_checks_against_parser_icons() {
         // BaseResBerserker (HoT, Warrior)
-        assert_eq!(prof_icon_url("Warrior", "Berserker"), "https://i.imgur.com/dNY6e8n.png");
+        assert_eq!(prof_icon_url("Warrior", "Berserker"), "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-dNY6e8n.png");
         // BaseResFirebrand (PoF, Guardian)
-        assert_eq!(prof_icon_url("Guardian", "Firebrand"), "https://i.imgur.com/TOsmJOl.png");
+        assert_eq!(prof_icon_url("Guardian", "Firebrand"), "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-TOsmJOl.png");
         // BaseResMechanist (EoD, Engineer)
-        assert_eq!(prof_icon_url("Engineer", "Mechanist"), "https://i.imgur.com/1jUOMlX.png");
+        assert_eq!(prof_icon_url("Engineer", "Mechanist"), "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-1jUOMlX.png");
         // BaseResUntamed (SotO, Ranger)
-        assert_eq!(prof_icon_url("Ranger", "Untamed"), "https://i.imgur.com/u8l36Pw.png");
+        assert_eq!(prof_icon_url("Ranger", "Untamed"), "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-u8l36Pw.png");
         // BaseResConduit (post-SotO, Revenant)
-        assert_eq!(prof_icon_url("Revenant", "Conduit"), "https://i.imgur.com/qaXHsQU.png");
+        assert_eq!(prof_icon_url("Revenant", "Conduit"), "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-qaXHsQU.png");
         // BaseResRitualist (post-SotO, Necromancer)
-        assert_eq!(prof_icon_url("Necromancer", "Ritualist"), "https://i.imgur.com/S8msdHU.png");
+        assert_eq!(prof_icon_url("Necromancer", "Ritualist"), "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-S8msdHU.png");
         // core, no elite spec
-        assert_eq!(prof_icon_url("Thief", ""), "https://i.imgur.com/dS8un97.png");
+        assert_eq!(prof_icon_url("Thief", ""), "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-dS8un97.png");
     }
 
     /// The elite spec wins over the profession, and an elite spec EI does

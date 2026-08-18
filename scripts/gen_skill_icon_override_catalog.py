@@ -58,6 +58,8 @@ import os
 import re
 import sys
 
+from icon_mirror import mirror
+
 ROOT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/gw2ei"
 PARSER = os.path.join(ROOT, "GW2EIEvtcParser")
 TABLE = os.path.join(PARSER, "ParsedData/Skills/SkillItemOverrides.cs")
@@ -278,7 +280,7 @@ def main():
             # coin flip.
             skipped["id declared with more than one icon"] += declarations[skill_id]
             continue
-        rows.append((skill_id, next(iter(urls))))
+        rows.append((skill_id, mirror(next(iter(urls)))))
         repeats += declarations[skill_id] - 1
 
     total_skipped = sum(skipped.values())

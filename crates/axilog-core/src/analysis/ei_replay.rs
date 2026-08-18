@@ -1631,7 +1631,7 @@ mod tests {
         assert_eq!(
             meta.maps,
             vec![CombatReplayMapImage {
-                url: "https://i.imgur.com/nVu2ivF.png",
+                url: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-nVu2ivF.png",
                 interval: [0, 348362],
                 position: [0.0, 0.0],
             }]

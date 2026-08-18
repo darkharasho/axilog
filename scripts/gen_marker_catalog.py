@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Regenerate `analysis::marker_icons` from the GW2EI C# sources.
 
+This rewrites the target file WHOLE. Anything hand-added to it -- a
+`mod tests`, a helper -- is deleted on the next run, silently and with
+a green suite. That happened once, costing five tests; they now live in
+`crates/axilog-core/tests/marker_icons_catalog.rs`, where regeneration
+cannot reach them. Put new tests there, not here.
+
 arcdps reports a squad marker or commander tag as a raw 32-hex-character
 content GUID -- `1993FADB6FB70E4383A223A54D311F7D` -- and nothing else. The
 log does not say it is purple, does not say it is a tag rather than an
@@ -49,6 +55,8 @@ import collections
 import os
 import re
 import sys
+
+from icon_mirror import mirror
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/gw2ei"
 PARSER = os.path.join(ROOT, "GW2EIEvtcParser")
@@ -140,7 +148,7 @@ def load_icon_map(name, icon_consts):
     out = {}
     for guid_sym, icon_sym in re.findall(r"\{\s*MarkerGUIDs\.(\w+)\s*,\s*(\w+)\s*\}", body):
         if icon_sym in icon_consts:
-            out[guid_sym] = icon_consts[icon_sym]
+            out[guid_sym] = mirror(icon_consts[icon_sym])
     return out
 
 

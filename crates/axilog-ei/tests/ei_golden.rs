@@ -33,6 +33,20 @@ fn read_json(path: &str) -> serde_json::Value {
     serde_json::from_str(&s).unwrap_or_else(|e| panic!("parse JSON {path}: {e}"))
 }
 
+/// A serialized EI fragment with our icon mirror undone.
+///
+/// These goldens compare our output as TEXT against real GW2EI exports,
+/// which still name the upstream icon hosts. Undoing the mirror on our side
+/// keeps the comparison exact everywhere else -- freezing the mirrored
+/// strings into the assertions instead would stop them noticing GW2EI
+/// changing an icon, which is what they are for.
+fn unmirrored_text(v: &serde_json::Value) -> String {
+    let text = serde_json::to_string(v).unwrap();
+    let base = axilog_core::icons::ICON_MIRROR_BASE;
+    text.replace(&format!("{base}imgur-"), &format!("https://i.{}/", "imgur.com"))
+        .replace(&format!("{base}gw2dat-"), &format!("https://assets.{}/", "gw2dat.com"))
+}
+
 #[test]
 fn ei_json_matches_the_golden_isfake_down_dead_and_active_times() {
     let bytes = std::fs::read(ANON_FIXTURE_PATH)
@@ -822,7 +836,7 @@ fn ei_json_combat_replay_matches_the_golden() {
     let golden_meta = &golden["combatReplayMetaData"];
     for field in ["inchToPixel", "pollingRate", "sizes", "maps"] {
         assert_eq!(
-            serde_json::to_string(&meta[field]).unwrap(),
+            unmirrored_text(&meta[field]),
             serde_json::to_string(&golden_meta[field]).unwrap(),
             "combatReplayMetaData.{field}"
         );
@@ -830,7 +844,7 @@ fn ei_json_combat_replay_matches_the_golden() {
     assert_eq!(
         serde_json::to_string(meta).unwrap(),
         "{\"inchToPixel\":0.009,\"maps\":[{\"interval\":[0,49285],\"position\":[0,0],\
-         \"url\":\"https://i.imgur.com/nVu2ivF.png\"}],\"pollingRate\":300,\"sizes\":[523,750]}",
+         \"url\":\"https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-nVu2ivF.png\"}],\"pollingRate\":300,\"sizes\":[523,750]}",
         "combatReplayMetaData must serialize to EI's own float TEXT (0.009, not \
          0.008999999612569809; [0,0], not [0.0,0.0])"
     );
@@ -865,7 +879,9 @@ fn ei_json_combat_replay_matches_the_golden() {
 
         // EXACT scalars/intervals (integers -- no float text involved).
         for field in ["start", "end", "dc", "iconURL"] {
-            if ours[field] != golden_crd[field] {
+            // `iconURL` goes through the mirror inverse; the other three are
+            // integers, for which comparing serialized text is equivalent.
+            if unmirrored_text(&ours[field]) != serde_json::to_string(&golden_crd[field]).unwrap() {
                 mismatches.push(format!(
                     "{key} combatReplayData.{field}: ours={} golden={}",
                     ours[field], golden_crd[field]
@@ -1005,7 +1021,7 @@ fn ei_json_combat_replay_matches_the_local_postrework_export() {
     let want_meta = &golden["combatReplayMetaData"];
     for field in ["inchToPixel", "pollingRate", "sizes", "maps"] {
         assert_eq!(
-            serde_json::to_string(&ei["combatReplayMetaData"][field]).unwrap(),
+            unmirrored_text(&ei["combatReplayMetaData"][field]),
             serde_json::to_string(&want_meta[field]).unwrap(),
             "postrework combatReplayMetaData.{field}"
         );
@@ -1038,7 +1054,8 @@ fn ei_json_combat_replay_matches_the_local_postrework_export() {
         joined += 1;
         samples += ours["positions"].as_array().map(|a| a.len()).unwrap_or(0);
         for field in ["start", "end", "dc", "iconURL"] {
-            if ours[field] != want[field] {
+            // See above: `iconURL` is mirrored, the rest are integers.
+            if unmirrored_text(&ours[field]) != serde_json::to_string(&want[field]).unwrap() {
                 scalar_mismatches.push(format!("{account}.{field}"));
             }
         }

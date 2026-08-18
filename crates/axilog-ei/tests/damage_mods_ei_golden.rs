@@ -191,7 +191,20 @@ fn ei_json_damage_modifiers_match_the_reference_export_text_when_available() {
             continue;
         }
         for f in &expected_fields {
-            if o[*f] != g[*f] {
+            // `icon` is compared after undoing our mirror: the reference is
+            // GW2EI's own export, so it still names the upstream host. Every
+            // other field must match byte for byte.
+            let differs = if *f == "icon" {
+                match (o[*f].as_str(), g[*f].as_str()) {
+                    (Some(mine), Some(theirs)) => {
+                        axilog_core::icons::upstream_icon_url(mine) != theirs
+                    }
+                    _ => o[*f] != g[*f],
+                }
+            } else {
+                o[*f] != g[*f]
+            };
+            if differs {
                 map_failures.push(format!("{k}.{f}: emitted {} != reference {}", o[*f], g[*f]));
             }
         }

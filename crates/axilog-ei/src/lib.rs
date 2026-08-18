@@ -3916,7 +3916,7 @@ mod tests {
             json!([[i64::MIN, 0], [600, i64::MAX]]),
             "GW2EI's long.MinValue/MaxValue sentinels survive as exact i64s"
         );
-        assert_eq!(crd["iconURL"], "https://i.imgur.com/RiCJalE.png", "Daredevil");
+        assert_eq!(crd["iconURL"], "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-RiCJalE.png", "Daredevil");
         // MENEMYPROF: the enemy PLAYER target now resolves its OWN spec icon
         // (this fixture's enemy is a Reaper), where before it always got
         // `UNKNOWN_PROFESSION_ICON` because `model::Enemy` carried no

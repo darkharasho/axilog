@@ -1073,4 +1073,82 @@ mod tests {
         assert_eq!(metrics.warnings[0].code, "healing_extension_absent");
         assert_eq!(metrics.warnings[0].message, "healing extension not present in this log");
     }
+
+    /// No shipped icon URL may point at a host we do not control.
+    ///
+    /// `render.guildwars2.com` is ArenaNet's own and `wiki.guildwars2.com`
+    /// is long-lived and heavily mirrored, so both are safe to hot-link.
+    /// `i.imgur.com` and `assets.gw2dat.com` are not: the imgur art is
+    /// anonymous uploads that may vanish without notice, and it cannot be
+    /// re-sourced (of the ids it backs, the official API knows one, and
+    /// that one carries no icon). Both are mirrored into the
+    /// `axibridge-map-tiles` Pages repo; `scripts/icon_mirror.py` rewrites
+    /// them for the generated catalogs, and the hand-written tables below
+    /// were rewritten in place.
+    ///
+    /// This scans SOURCE, not the catalog tables, and that is the whole
+    /// point. An earlier version of this test walked `BUFF_ICONS` and
+    /// `SKILL_ICON_OVERRIDES` only -- and missed `icons.rs`, the
+    /// profession/elite-spec table, which is hand-written rather than
+    /// generated and held 46 un-mirrored URLs. Parsing one real log still
+    /// emitted 82 imgur links with that test green. Scanning source catches
+    /// any table, generated or not, including ones not yet written.
+    ///
+    /// One exemption: doc comments, which quote GW2EI's own C# verbatim --
+    /// rewriting those would misrepresent what upstream actually says.
+    /// There is no file-level exemption. An earlier draft exempted
+    /// `ei_replay.rs` on the belief that its URL came from a parsed GW2EI
+    /// fixture; it does not -- `combat_replay_meta` builds it from
+    /// `WVW_MAPS`, so the exemption would have masked a stale golden.
+    #[test]
+    fn no_shipped_icon_url_points_at_an_untrusted_host() {
+        // Assembled from parts: this scan reads every `.rs` file under
+        // `crates/`, including this one, so spelling the forbidden
+        // literals here would make the test fail on itself.
+        let untrusted = [
+            format!("https://i.{}", "imgur.com/"),
+            format!("https://assets.{}", "gw2dat.com/"),
+        ];
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent().expect("crates/").parent().expect("repo root").to_path_buf();
+
+        let mut stack = vec![root.join("crates")];
+        let mut offenders: Vec<String> = Vec::new();
+        let mut files_scanned = 0usize;
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable crates/ tree") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|n| n == "target") { continue; }
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") { continue; }
+                files_scanned += 1;
+                let text = std::fs::read_to_string(&path).expect("readable .rs");
+                for (i, line) in text.lines().enumerate() {
+                    let trimmed = line.trim_start();
+                    if trimmed.starts_with("//!") || trimmed.starts_with("///") { continue; }
+                    if let Some(host) = untrusted.iter().find(|h| line.contains(h.as_str())) {
+                        offenders.push(format!(
+                            "{}:{} -> {host}",
+                            path.strip_prefix(&root).unwrap_or(&path).display(),
+                            i + 1
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "un-mirrored icon URLs ({}):\n  {}",
+            offenders.len(),
+            offenders.join("\n  ")
+        );
+        // Non-vacuity: a bad root or a broken walk would otherwise pass by
+        // scanning nothing at all.
+        assert!(files_scanned > 100, "expected to scan the crate tree, scanned {files_scanned} files");
+    }
 }

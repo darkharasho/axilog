@@ -564,7 +564,7 @@ fn the_map_id_and_arena_reach_the_document() {
     let arena = &doc["blocks"]["replay"]["tracks"]["arena"];
     assert_eq!(arena["image_width"], 697);
     assert_eq!(arena["image_height"], 1000);
-    assert_eq!(arena["image_url"], "https://i.imgur.com/nVu2ivF.png");
+    assert_eq!(arena["image_url"], "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-nVu2ivF.png");
     assert_eq!(arena["world_min_x"], -30720.0);
     assert_eq!(arena["world_min_y"], -43008.0);
     assert_eq!(arena["world_max_x"], 30720.0);

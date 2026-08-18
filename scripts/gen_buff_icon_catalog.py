@@ -36,10 +36,13 @@ Three details the naive scan gets wrong, each handled below:
     `SkillImages.cs` -- a C# alias this script does not try to model.
     Instead an unresolved `Class.Const` falls back to the bare `Const`
     across every image class, and is accepted only when it is unambiguous.
-  * Icons span four hosts (`render.guildwars2.com`, `wiki.guildwars2.com`,
-    `i.imgur.com`, `assets.gw2dat.com`), so unlike the skill catalog there
-    is no shared prefix worth factoring out. URLs are stored whole, which
-    is also why lookups return `&'static str` and never allocate.
+  * Icons span several hosts, so unlike the skill catalog there is no
+    shared prefix worth factoring out. URLs are stored whole, which is
+    also why lookups return `&'static str` and never allocate. Two of
+    those hosts -- `i.imgur.com` and `assets.gw2dat.com` -- are not ones
+    we control, so `icon_mirror.mirror` rewrites them to our own mirror
+    on the way out; see that module for why, and for why an unrecognised
+    URL on either host is a hard error rather than a pass-through.
 
 Usage:
 
@@ -54,6 +57,8 @@ import glob
 import os
 import re
 import sys
+
+from icon_mirror import mirror
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/gw2ei"
 PARSER = os.path.join(ROOT, "GW2EIEvtcParser")
@@ -329,7 +334,7 @@ def main():
         else:
             icon = next(iter(urls))
             repeats += declarations[buff_id] - 1
-        rows.append((buff_id, icon))
+        rows.append((buff_id, mirror(icon)))
 
     total_skipped = sum(skipped.values())
     with open(OUT, "w") as f:

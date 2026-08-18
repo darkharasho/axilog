@@ -147,35 +147,35 @@ pub const WVW_MAPS: &[WvwMapDef] = &[
         // GW2EI writes these as `-36864 + 950` etc.; kept as the evaluated
         // constants so the table stays a table.
         rect: (-35914.0, -34614.0, 37814.0, 39114.0),
-        image_url: "https://i.imgur.com/t0khtQd.png",
+        image_url: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-t0khtQd.png",
     },
     WvwMapDef {
         map_id: 95,
         name: "Green Alpine Borderlands",
         pixel_size: (697, 1000),
         rect: (-30720.0, -43008.0, 30720.0, 43008.0),
-        image_url: "https://i.imgur.com/nVu2ivF.png",
+        image_url: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-nVu2ivF.png",
     },
     WvwMapDef {
         map_id: 96,
         name: "Blue Alpine Borderlands",
         pixel_size: (697, 1000),
         rect: (-30720.0, -43008.0, 30720.0, 43008.0),
-        image_url: "https://i.imgur.com/nVu2ivF.png",
+        image_url: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-nVu2ivF.png",
     },
     WvwMapDef {
         map_id: 968,
         name: "Edge of the Mists",
         pixel_size: (3556, 3646),
         rect: (-36864.0, -36864.0, 36864.0, 36864.0),
-        image_url: "https://i.imgur.com/iEpKYL0.jpg",
+        image_url: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-iEpKYL0.jpg",
     },
     WvwMapDef {
         map_id: 1099,
         name: "Red Desert Borderlands",
         pixel_size: (1000, 1000),
         rect: (-36864.0, -36864.0, 36864.0, 36864.0),
-        image_url: "https://i.imgur.com/R5p9fqw.png",
+        image_url: "https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-R5p9fqw.png",
     },
 ];
 
@@ -235,7 +235,7 @@ mod tests {
     fn every_entry_has_a_nonempty_image_url() {
         for m in WVW_MAPS {
             assert!(
-                m.image_url.starts_with("https://i.imgur.com/"),
+                m.image_url.starts_with("https://darkharasho.github.io/axibridge-map-tiles/icons/"),
                 "{}: {}",
                 m.map_id,
                 m.image_url

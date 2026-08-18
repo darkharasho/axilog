@@ -348,7 +348,7 @@ fn combat_replay_meta_matches_the_local_reference_exactly() {
     let want_maps = want["maps"].as_array().expect("maps array");
     assert_eq!(got.maps.len(), want_maps.len(), "WvW exports exactly one arena image");
     for (mine, theirs) in got.maps.iter().zip(want_maps) {
-        assert_eq!(mine.url, theirs["url"].as_str().unwrap());
+        assert_eq!(axilog_core::icons::upstream_icon_url(mine.url), theirs["url"].as_str().unwrap());
         assert_eq!(
             mine.interval,
             [theirs["interval"][0].as_i64().unwrap(), theirs["interval"][1].as_i64().unwrap()]
@@ -376,7 +376,7 @@ fn icon_urls_match_the_local_reference_exactly() {
         let Some(want) = p["combatReplayData"]["iconURL"].as_str() else {
             continue;
         };
-        assert_eq!(spec_icon_url(spec), want, "iconURL mismatch for spec {spec}");
+        assert_eq!(axilog_core::icons::upstream_icon_url(spec_icon_url(spec)), want, "iconURL mismatch for spec {spec}");
         assert_ne!(
             spec_icon_url(spec),
             axilog_core::icons::UNKNOWN_PROFESSION_ICON,
