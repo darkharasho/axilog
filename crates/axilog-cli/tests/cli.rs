@@ -78,7 +78,7 @@ fn table_and_csv_have_headers_local_raw_when_present() {
 }
 
 /// M3, Task 5: `--view support` — header token plus a known row value from
-/// the committed anon fixture (`:Anon133.5921`, Elementalist, 93
+/// the committed anon fixture (`Anon133.5921`, Elementalist, 93
 /// cleanses — the top cleanser in the fixture).
 #[test]
 fn table_view_support_has_header_and_known_row() {
@@ -93,13 +93,13 @@ fn table_view_support_has_header_and_known_row() {
     assert!(s.contains("resurrects"), "support view header missing 'resurrects'");
     assert!(s.contains("stunbreaks"), "support view header missing 'stunbreaks'");
     assert!(
-        s.contains(":Anon133.5921") && s.contains("Elementalist") && s.contains("93"),
-        "support view missing known row (:Anon133.5921, Elementalist, 93 cleanses):\n{s}"
+        s.contains("Anon133.5921") && s.contains("Elementalist") && s.contains("93"),
+        "support view missing known row (Anon133.5921, Elementalist, 93 cleanses):\n{s}"
     );
 }
 
 /// M3, Task 5: `--view boons` — header token plus a known row value from
-/// the committed anon fixture (`:Anon163.7031`, Mesmer, ~37.4% Alacrity
+/// the committed anon fixture (`Anon163.7031`, Mesmer, ~37.4% Alacrity
 /// presence — the only player with any Alacrity uptime in this fixture).
 #[test]
 fn table_view_boons_has_header_and_known_row() {
@@ -114,13 +114,13 @@ fn table_view_boons_has_header_and_known_row() {
     assert!(s.contains("Alac%"), "boons view header missing 'Alac%'");
     assert!(s.contains("Stab%"), "boons view header missing 'Stab%'");
     assert!(s.contains("Prot%"), "boons view header missing 'Prot%'");
-    let row = s.lines().find(|l| l.contains(":Anon163.7031")).expect("known player row present");
+    let row = s.lines().find(|l| l.contains("Anon163.7031")).expect("known player row present");
     assert!(row.contains("Mesmer"), "known row missing profession: {row}");
     assert!(row.contains("37.4"), "known row missing Alacrity presence 37.4%: {row}");
 }
 
 /// M10, Task 1: `--view healing` — header token plus a known row value from
-/// the committed anon fixture (`:Anon125.5625`, Ranger, the fixture's top
+/// the committed anon fixture (`Anon125.5625`, Ranger, the fixture's top
 /// healer at 208414 total healing out / 42827 downed healing -- see
 /// `axilog-core/tests/healing_golden.rs` for the calibration this number
 /// traces back to).
@@ -136,14 +136,14 @@ fn table_view_healing_has_header_and_known_row() {
     assert!(s.contains("allies"), "healing view header missing 'allies'");
     assert!(s.contains("barrier"), "healing view header missing 'barrier'");
     assert!(s.contains("downed"), "healing view header missing 'downed'");
-    let row = s.lines().find(|l| l.contains(":Anon125.5625")).expect("known player row present");
+    let row = s.lines().find(|l| l.contains("Anon125.5625")).expect("known player row present");
     assert!(row.contains("Ranger"), "known row missing profession: {row}");
     assert!(row.contains("208414"), "known row missing healing out total 208414: {row}");
     assert!(row.contains("42827"), "known row missing downed healing 42827: {row}");
 }
 
 /// M13, Task 3: `--view defense` — header token plus a known row value from
-/// the committed anon fixture (`:Anon119.5403`, Guardian, the fixture's top
+/// the committed anon fixture (`Anon119.5403`, Guardian, the fixture's top
 /// damage-taker: 24 blocks, 2 evades, 4 dodges, 81974 total damage taken
 /// [79652 strike / 1652 condi], 0 downs -- see
 /// `axilog-core/tests/defenses_golden.rs` for the calibration these numbers
@@ -163,7 +163,7 @@ fn table_view_defense_has_header_and_known_row() {
     assert!(s.contains("strike"), "defense view header missing 'strike'");
     assert!(s.contains("condi"), "defense view header missing 'condi'");
     assert!(s.contains("downs"), "defense view header missing 'downs'");
-    let row = s.lines().find(|l| l.contains(":Anon119.5403")).expect("known player row present");
+    let row = s.lines().find(|l| l.contains("Anon119.5403")).expect("known player row present");
     assert!(row.contains("Guardian"), "known row missing profession: {row}");
     assert!(row.contains("81974"), "known row missing damage taken 81974: {row}");
     assert!(row.contains("79652"), "known row missing strike damage 79652: {row}");
@@ -171,7 +171,7 @@ fn table_view_defense_has_header_and_known_row() {
 }
 
 /// M14, Task 3: `--view rotation` — header token plus a known row value from
-/// the committed anon fixture (`:Anon129.5773`, Mesmer: 63 casts, ~76.7
+/// the committed anon fixture (`Anon129.5773`, Mesmer: 63 casts, ~76.7
 /// APM -- see `axilog-core/tests/rotation_golden.rs` for the calibration
 /// this cast count traces back to).
 ///
@@ -196,7 +196,7 @@ fn table_view_rotation_has_header_and_known_row() {
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("casts"), "rotation view header missing 'casts'");
     assert!(s.contains("APM"), "rotation view header missing 'APM'");
-    let row = s.lines().find(|l| l.contains(":Anon129.5773")).expect("known player row present");
+    let row = s.lines().find(|l| l.contains("Anon129.5773")).expect("known player row present");
     assert!(row.contains("Mesmer"), "known row missing profession: {row}");
     assert!(row.contains("63"), "known row missing cast count 63: {row}");
     assert!(row.contains("76.7"), "known row missing APM 76.7: {row}");
@@ -258,4 +258,33 @@ fn anonymize_subcommand_roundtrips_metrics() {
         v["axilog"]["generated_from"] = serde_json::Value::Null;
     }
     assert_eq!(v_before, v_after, "anonymize subcommand must not change any metric-bearing field");
+}
+
+/// arcdps writes every account in the agent name buffer as `:Name.1234`. That
+/// colon is a wire-format artifact — Elite Insights strips it, and shipping it
+/// through rendered account names as `:Name.1234` everywhere downstream
+/// (confirmed on a Windows install of a consumer).
+///
+/// The per-view row assertions above use bare `Anon<N>.<N>` needles, which
+/// `contains` would still find inside a `:Anon<N>.<N>` row — so they cannot
+/// catch a regression on their own. This one can: it asserts the colon spelling
+/// appears nowhere in the rendered table.
+#[test]
+fn table_view_accounts_have_no_arcdps_colon() {
+    for view in ["default", "support", "boons", "healing", "defense", "rotation"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_axilog"))
+            .args(["parse", ANON_FIXTURE_PATH, "--format", "table", "--view", view])
+            .output()
+            .expect("run axilog");
+        assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+        let s = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            s.contains("Anon"),
+            "{view} view rendered no accounts at all, so the colon check is vacuous:\n{s}"
+        );
+        assert!(
+            !s.contains(":Anon"),
+            "{view} view is rendering accounts with the raw arcdps colon:\n{s}"
+        );
+    }
 }

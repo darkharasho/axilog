@@ -263,14 +263,14 @@ fn the_full_key_set_matches_the_committed_golden() {
     );
 }
 
-/// After scrubbing/anonymization, no *account-shaped* string (`:Name.NNNN`)
-/// appears ANYWHERE in the serialized 1.0 document except as an `:Anon`
+/// After scrubbing/anonymization, no *account-shaped* string (`Name.NNNN`)
+/// appears ANYWHERE in the serialized 1.0 document except as an `Anon`
 /// placeholder.
 ///
 /// This is deliberately narrower than "no identity leaks": the scanner
 /// below only recognizes the account shape, so it cannot see a leaked
-/// CHARACTER name (anonymized characters are plain `Anon<N>`, with no colon
-/// and no numeric suffix, and real character/NPC names have no reliable
+/// CHARACTER name (anonymized characters are plain `Anon<N>`, with no
+/// numeric suffix, and real character/NPC names have no reliable
 /// shape at all -- exactly the kind of thing a `_note` field could carry
 /// invisibly). For that, see
 /// `no_name_from_the_encounter_appears_outside_entities` below, which
@@ -278,14 +278,15 @@ fn the_full_key_set_matches_the_committed_golden() {
 /// exactly, against the ground-truth name set, rather than by shape
 /// guessing. This test still earns its keep alongside that one: it also
 /// catches a name that is PRESENT but WRONG (e.g. a real account slipped in
-/// where an `:Anon` placeholder should be), which the entities-exclusion
+/// where an `Anon` placeholder should be), which the entities-exclusion
 /// test would not flag since the wrong account would still be inside
 /// `entities[]`.
 ///
 /// The committed fixture (`fixtures/wvw-small.anon.zevtc`) is already
-/// anonymized: every account is of the form `:Anon<N>.<4 digits>`. So the
+/// anonymized: every account is of the form `Anon<N>.<4 digits>` once
+/// `model::normalize_account` has stripped the raw arcdps colon. So the
 /// assertion is that every account-shaped string appearing anywhere in the
-/// serialized document starts with `:Anon` -- anything else is an
+/// serialized document starts with `Anon` -- anything else is an
 /// unscrubbed identity that leaked through some field other than
 /// `entities[]`.
 #[test]
@@ -297,14 +298,14 @@ fn no_unscrubbed_identity_survives_in_the_v1_document() {
     eprintln!("account-shaped strings found: {}", account_like.len());
     for a in &account_like {
         assert!(
-            a.starts_with(":Anon"),
+            a.starts_with("Anon"),
             "unscrubbed account-shaped string {a:?} in the v1 document"
         );
     }
 
     // A scanner that finds nothing still "passes" the loop above -- guard
     // against a scanner that isn't actually scanning. The fixture has 42
-    // players (each contributing at least one `:AnonN.NNNN` account
+    // players (each contributing at least one `AnonN.NNNN` account
     // reference), so a healthy scan should find dozens of hits, not a
     // handful. 40 is a floor comfortably below the 43 the scan currently
     // finds, leaving room for minor future fixture/shape changes without
@@ -325,43 +326,86 @@ fn no_unscrubbed_identity_survives_in_the_v1_document() {
 /// one.
 #[test]
 fn the_account_scanner_detects_a_known_bad_account() {
-    let text = r#"{"_note":":RealName.1234","other":1}"#;
+    let text = r#"{"_note":"RealName.1234","other":1}"#;
     let matches = regex_lite_account_matches(text);
     assert!(
-        matches.iter().any(|m| m == ":RealName.1234"),
+        matches.iter().any(|m| m == "RealName.1234"),
         "scanner failed to find a planted unscrubbed account in {matches:?}"
     );
 
-    // Sanity check the negative case too: a clean `:Anon` account should
+    // The colon spelling must still be found. `normalize_account` strips it
+    // from `Player.account`, but a leak that arrives some other way could
+    // carry it, and a scanner that only sees the post-strip spelling would
+    // wave that one through.
+    let colon = r#"{"_note":":RealName.1234"}"#;
+    assert_eq!(
+        regex_lite_account_matches(colon),
+        vec!["RealName.1234".to_string()],
+        "scanner must still catch a raw arcdps-spelled account"
+    );
+
+    // Sanity check the negative case too: a clean `Anon` account should
     // also be found (it's account-shaped), just not flagged as a leak by
     // the caller.
-    let clean = r#"{"account":":Anon12.3456"}"#;
+    let clean = r#"{"account":"Anon12.3456"}"#;
     let clean_matches = regex_lite_account_matches(clean);
-    assert_eq!(clean_matches, vec![":Anon12.3456".to_string()]);
+    assert_eq!(clean_matches, vec!["Anon12.3456".to_string()]);
+
+    // JSON numbers are not accounts. A float and a semver-ish version both
+    // have a dot, and the version even has a digit run after it -- neither
+    // may enter the scan, or the caller's `starts_with("Anon")` assertion
+    // would fail on a perfectly clean document.
+    let numeric = r#"{"dps":12.3456,"version":"0.3.6","ratio":1.23456}"#;
+    assert_eq!(
+        regex_lite_account_matches(numeric),
+        Vec::<String>::new(),
+        "scanner must not mistake JSON numbers for accounts"
+    );
 }
 
-/// Minimal account-shape scanner: `:Name.1234`. Avoids adding a `regex`
+/// Minimal account-shape scanner: `Name.1234`. Avoids adding a `regex`
 /// dependency to the test suite for one pattern.
+///
+/// This used to anchor on the leading `:` arcdps writes into the agent name
+/// buffer. `model::normalize_account` now strips that colon, so anchoring on
+/// it found ZERO accounts -- and the scan went silently blind rather than
+/// failing, which is precisely what the caller's non-vacuity floor exists to
+/// catch. It caught it.
+///
+/// The shape is therefore anchored on the `.` + exactly-four-digits suffix
+/// instead, walking backwards over the name. Two guards keep JSON numbers out:
+/// the suffix must not be followed by another digit or a dot (so `1.23456` and
+/// a version like `0.3.6` are rejected), and the name part must contain at
+/// least one ASCII letter (so a bare float like `12.3456` is rejected while
+/// every real GW2 account, which always has letters, is kept).
 fn regex_lite_account_matches(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
     for (i, b) in bytes.iter().enumerate() {
-        if *b != b':' {
+        if *b != b'.' {
             continue;
         }
-        let rest = &text[i..];
-        let end = rest
-            .char_indices()
-            .position(|(_, c)| c == '"' || c == ',')
-            .unwrap_or(rest.len());
-        let candidate = &rest[..end];
-        let dot = candidate.rfind('.');
-        if let Some(d) = dot {
-            let digits = &candidate[d + 1..];
-            if digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()) {
-                out.push(candidate.to_string());
-            }
+        let Some(digits) = bytes.get(i + 1..i + 5) else {
+            continue;
+        };
+        if !digits.iter().all(u8::is_ascii_digit) {
+            continue;
         }
+        if bytes
+            .get(i + 5)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'.')
+        {
+            continue;
+        }
+        let mut start = i;
+        while start > 0 && bytes[start - 1].is_ascii_alphanumeric() {
+            start -= 1;
+        }
+        let name = &text[start..i];
+        if !name.bytes().any(|c| c.is_ascii_alphabetic()) {
+            continue;
+        }
+        out.push(text[start..i + 5].to_string());
     }
     out
 }
@@ -376,7 +420,7 @@ fn regex_lite_account_matches(text: &str) -> Vec<String> {
 /// the model (`Player::account`, `Player::character`, enemy-PLAYER
 /// `Enemy::name`), so it also catches a leaked CHARACTER name, which the
 /// account-shape scanner cannot see at all (anonymized characters are plain
-/// `Anon<N>`, with no colon and no digit suffix, and real character names
+/// `Anon<N>`, with no digit suffix, and real character names
 /// have no reliable shape to scan for).
 #[test]
 fn no_name_from_the_encounter_appears_outside_entities() {

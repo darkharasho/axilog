@@ -288,13 +288,39 @@ pub fn profession_name(prof: u32, is_elite: u32) -> (String, String) {
     (base, spec)
 }
 
+/// Strips the leading `:` arcdps writes in front of every account name.
+///
+/// The agent name buffer is `character \0 account \0 subgroup \0`, and the
+/// account field arrives from the game as `:Name.1234`. That colon is a
+/// wire-format artifact, not part of the account: Elite Insights strips it,
+/// every GW2 API and every player-facing surface spells the account without
+/// it, and shipping it through made account names render as `:Name.1234` in
+/// downstream consumers.
+///
+/// This is the ONE place a `Player.account` is built from raw bytes, so it is
+/// the one place the strip belongs. `RawAgent::name_parts` deliberately stays
+/// verbatim — it reports what the file says, and `anonymize` rewrites that
+/// same buffer and must keep the colon it found there.
+///
+/// The prefix is constant across every account, so removing it cannot merge
+/// two distinct accounts and leaves every account-keyed fold intact. An
+/// account that is *only* a colon is left alone rather than emptied, because
+/// an empty account means "anonymized enemy" to `wvw::dedupe_players`.
+fn normalize_account(raw: &str) -> String {
+    match raw.strip_prefix(':') {
+        Some(rest) if !rest.is_empty() => rest.to_string(),
+        _ => raw.to_string(),
+    }
+}
+
 pub fn resolve(raw: &RawLog) -> Encounter {
     let mut players = Vec::new();
     let mut enemies = Vec::new();
     for a in &raw.agents {
         match agent_kind(a) {
             AgentKind::Player => {
-                let (character, account, sub) = a.name_parts();
+                let (character, raw_account, sub) = a.name_parts();
+                let account = normalize_account(&raw_account);
                 let (profession, elite_spec) = profession_name(a.prof, a.is_elite);
                 players.push(Player {
                     agent_addr: a.addr, account, character, profession, elite_spec,
@@ -345,7 +371,7 @@ pub fn resolve(raw: &RawLog) -> Encounter {
 #[cfg(test)]
 mod tests {
     use crate::evtc::{RawLog, RawHeader, RawAgent, RawEvent, sc};
-    use super::resolve;
+    use super::{normalize_account, resolve};
     fn agent(addr: u64, is_elite: u32, name: &[u8]) -> RawAgent {
         RawAgent { addr, prof: 5, is_elite,
             toughness:0, concentration:0, healing:0, hitbox_width:0,
@@ -386,6 +412,24 @@ mod tests {
         assert_eq!((base.as_str(), spec.as_str()), ("Revenant", "Herald"));
     }
 
+    /// arcdps prefixes every account in the agent name buffer with `:`.
+    /// Shipping that through made accounts render as `:Name.1234` downstream
+    /// (confirmed on a Windows install), and every golden test that joins our
+    /// output to a real Elite Insights export had to `trim_start_matches(':')`
+    /// to make the join land.
+    #[test]
+    fn normalize_account_strips_the_arcdps_colon() {
+        assert_eq!(normalize_account(":Alice.1234"), "Alice.1234");
+        // Idempotent: an already-clean account is untouched, so re-normalizing
+        // a value that came from somewhere else cannot eat a real character.
+        assert_eq!(normalize_account("Alice.1234"), "Alice.1234");
+        // An anonymized enemy has no account at all, and `wvw::dedupe_players`
+        // reads emptiness as exactly that -- so neither "" nor a degenerate
+        // lone colon may be turned into the other.
+        assert_eq!(normalize_account(""), "");
+        assert_eq!(normalize_account(":"), ":");
+    }
+
     #[test]
     fn splits_players_from_npcs() {
         // The friend/foe partition (Task 16A) needs WvW team ids and a
@@ -410,7 +454,10 @@ mod tests {
         };
         let enc = resolve(&raw);
         assert_eq!(enc.players.len(), 1);
-        assert_eq!(enc.players[0].account, ":Alice.1234");
+        // The raw name buffer says `:Alice.1234`; `normalize_account` strips
+        // the arcdps colon so `Player.account` reads the way Elite Insights,
+        // the GW2 API and every player-facing surface spell it.
+        assert_eq!(enc.players[0].account, "Alice.1234");
         assert_eq!(enc.players[0].subgroup, 5);
         assert_eq!(enc.enemies.len(), 1);
         assert_eq!(enc.enemies[0].id, 2);
