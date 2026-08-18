@@ -179,6 +179,28 @@ pub struct CatalogBuilder {
     minions: std::collections::HashMap<(u32, String), u32>,
 }
 
+/// One id, three catalogs, one answer.
+///
+/// GW2EI's overrides come FIRST -- the order GW2EI itself uses in
+/// `SkillItem.cs`, which consults `OverridenSkillIcons` before falling back
+/// to `ApiSkill.Icon`. An entry there is a deliberate correction, so
+/// deferring to the API would reinstate exactly the value GW2EI overrode.
+/// It is also the only source for ids `/v2/skills` does not list at all --
+/// sigil procs, pet skills, combo finishers, phantasms. On the committed
+/// fixture the API leaves 84 of 508 skill ids art-less and the override
+/// table covers 73 of them, while the two overlap on only 29 ids and differ
+/// on 19, so putting overrides first is a small, deliberate change.
+///
+/// `buff_icons` is last because it is the narrowest: boons and conditions,
+/// which neither other table carries.
+fn resolve_icon(id: u32) -> Option<String> {
+    if let Some(url) = axilog_core::analysis::skill_icon_overrides::icon(id) {
+        return Some(url.to_owned());
+    }
+    axilog_core::analysis::skill_icons::icon(id)
+        .or_else(|| axilog_core::analysis::buff_icons::icon(id).map(str::to_owned))
+}
+
 impl CatalogBuilder {
     pub fn reference_skill(&mut self, id: u32) {
         self.skills.insert(id);
@@ -221,9 +243,7 @@ impl CatalogBuilder {
                         name: entry
                             .map(|e| e.name.clone())
                             .unwrap_or_else(|| format!("Skill {id}")),
-                        icon: axilog_core::analysis::skill_icons::icon(id).or_else(|| {
-                            axilog_core::analysis::buff_icons::icon(id).map(str::to_owned)
-                        }),
+                        icon: resolve_icon(id),
                         is_swap: entry.map(|e| e.is_swap).unwrap_or(false),
                         can_crit: entry.map(|e| e.can_crit).unwrap_or(true),
                         // The log never carries this; the generated GW2 API
@@ -274,11 +294,7 @@ impl CatalogBuilder {
                     id,
                     BuffEntry {
                         name: buffs::name(id).unwrap_or_default().to_string(),
-                        // Same precedence as `SkillEntry::icon`: where both
-                        // tables have an entry the API is the better source.
-                        icon: axilog_core::analysis::skill_icons::icon(id).or_else(|| {
-                            axilog_core::analysis::buff_icons::icon(id).map(str::to_owned)
-                        }),
+                        icon: resolve_icon(id),
                         kind,
                         stacking: if is_intensity { "intensity" } else { "duration" },
                         max_stacks,
@@ -476,6 +492,46 @@ mod tests {
             });
             assert!(icon.starts_with("https://render.guildwars2.com/"), "buff {id}: {icon}");
         }
+    }
+
+    /// GW2EI's override table supplies art for ids `/v2/skills` does not
+    /// list at all, which is why this catalog exists: 84 of the committed
+    /// fixture's 508 skill ids come back `invalid` from the live API.
+    #[test]
+    fn an_id_the_api_does_not_know_gets_its_icon_from_the_override_table() {
+        // 5703 is Arcane Shield (Explosion) -- a real skill in real logs and
+        // in real Elite Insights exports, absent from `/v2/skills`.
+        assert!(axilog_core::analysis::skill_icons::icon(5703).is_none(), "not an API skill");
+        let expected = axilog_core::analysis::skill_icon_overrides::icon(5703)
+            .expect("GW2EI overrides Arcane Shield (Explosion)");
+        let mut b = CatalogBuilder::default();
+        b.reference_skill(5703);
+        let c = b.finish(&metrics_with_skills(), None);
+        assert_eq!(c.skills[&5703].icon.as_deref(), Some(expected));
+    }
+
+    /// An override BEATS the API, which is the order GW2EI itself uses.
+    /// The two tables overlap on only 29 ids and disagree on 19, so this is
+    /// a small deliberate change -- but it is a change, and it needs a test
+    /// that fails if the precedence is ever flipped back.
+    #[test]
+    fn the_override_table_wins_over_the_api() {
+        let overlapping = axilog_core::analysis::skill_icon_overrides::SKILL_ICON_OVERRIDES
+            .iter()
+            .find(|(id, url)| {
+                axilog_core::analysis::skill_icons::icon(*id).is_some_and(|api| api != *url)
+            });
+        let Some(&(id, override_url)) = overlapping else {
+            return; // no disagreement in the current tables; nothing to assert
+        };
+        let mut b = CatalogBuilder::default();
+        b.reference_skill(id);
+        let c = b.finish(&metrics_with_skills(), None);
+        assert_eq!(
+            c.skills[&id].icon.as_deref(),
+            Some(override_url),
+            "skill {id}: the override must win over the API"
+        );
     }
 
     #[test]
