@@ -200,6 +200,11 @@ blocks.healing.by_entity.<id>.downed_healing_out
 blocks.healing.by_entity.<id>.outgoing_allies
 blocks.healing.by_entity.<id>.outgoing_self
 blocks.healing.by_entity.<id>.outgoing_total
+blocks.healing.by_entity.<id>.runs_extension
+blocks.healing.extension
+blocks.healing.extension.revision
+blocks.healing.extension.signature
+blocks.healing.extension.version
 blocks.hit_stats
 blocks.hit_stats.by_entity
 blocks.hit_stats.by_entity.<id>

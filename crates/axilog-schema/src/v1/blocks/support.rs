@@ -151,7 +151,27 @@ pub struct ContributionRow {
 
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct HealingBlock {
+    /// The addon's own registration descriptor -- GW2EI's `usedExtensions`
+    /// entry minus the roster (which lives per-entity on
+    /// [`HealingEntity::runs_extension`]). `None` only on a block that
+    /// somehow exists without a registration; the block itself is omitted
+    /// when the extension is absent, so in practice this is `Some`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension: Option<HealingExtensionDesc>,
     pub by_entity: ByEntity<HealingEntity>,
+}
+
+/// Mirrors GW2EI's `ExtensionDesc` minus `runningExtension`. `name` is
+/// omitted: this descriptor hangs off the healing block, so the extension it
+/// describes is never in question.
+#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+pub struct HealingExtensionDesc {
+    /// The addon's self-reported version string, e.g. `"2.16rc1"`.
+    /// `"Unknown"` when the registration row carries no decodable one --
+    /// GW2EI's own default for the same field.
+    pub version: String,
+    pub revision: u32,
+    pub signature: u32,
 }
 
 impl HealingBlock {
@@ -173,6 +193,17 @@ pub struct HealingEntity {
     pub outgoing_self: u64,
     pub barrier_out: u64,
     pub downed_healing_out: u64,
+    /// Whether this player's own arcdps healing-stats addon reported to the
+    /// log -- GW2EI's `RunningExtension` roster, mirrored per-entity rather
+    /// than as a separate name list because every other per-player fact in
+    /// this format lives on its entity row.
+    ///
+    /// Consumers use this to say "these healing numbers are complete for
+    /// this player" vs "partial, relayed by someone else's addon". A row
+    /// with `outgoing_total > 0` and `runs_extension: false` is normal and
+    /// expected -- see
+    /// `axilog_core::analysis::healing::running_extension`.
+    pub runs_extension: bool,
     /// The per-ally and per-skill breakdowns behind the five scalars above
     /// (`axilog_core::analysis::healing_detail`), when the `--skill-damage`
     /// gate ran that pass.
@@ -453,6 +484,7 @@ pub fn build_healing(
     index: &EntityIndex,
     detail: Option<&axilog_core::analysis::healing_detail::HealingDetail>,
     cats: &mut CatalogBuilder,
+    extension: Option<&axilog_core::evtc::ext_healing::Registration>,
 ) -> HealingBlock {
     let detail = positional(report, detail);
     // Entity id per `report.players` position -- the join `detail`'s ally
@@ -472,11 +504,19 @@ pub fn build_healing(
                 outgoing_self: h.healing_out_self,
                 barrier_out: h.barrier_out,
                 downed_healing_out: h.downed_healing_out,
+                runs_extension: h.runs_extension,
                 detail: detail.map(|d| build_healing_detail(&d[i], &ally_ids, cats)),
             },
         );
     }
-    HealingBlock { by_entity }
+    HealingBlock {
+        extension: extension.map(|r| HealingExtensionDesc {
+            version: r.version.clone(),
+            revision: r.revision,
+            signature: r.signature,
+        }),
+        by_entity,
+    }
 }
 
 /// The positional-join guard the ally matrix needs.

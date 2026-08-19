@@ -10,6 +10,26 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## Unreleased
+
+### Added
+- The arcdps healing-extension ROSTER — which players' own addon reported,
+  GW2EI's `RunningExtension`. `blocks.healing.by_entity[].runs_extension`
+  carries it per player, `blocks.healing.extension` carries the addon's
+  registration descriptor (version/revision/signature), and `--format
+  ei-json` reproduces GW2EI's `usedExtensions[]` entry from both.
+
+  This was the one healing fact the native format could not answer, and its
+  absence was not cosmetic: a consumer marking healing numbers "complete"
+  vs. "partial" had nothing to key on, so an EI-shaped consumer that read
+  `usedExtensions` flagged EVERY player partial on an axilog-parsed log.
+  Nonzero healing is not a substitute — a peer's addon relays heals on other
+  players' behalf, so 46 players had healing numbers on one real 55-player
+  log where only 26 were running the addon.
+
+  Roster verified EXACT against Elite Insights on 8 real WvW logs (zero set
+  differences); see `docs/EI-PARITY.md`.
+
 ## v1.1.0 — 2026-08-18
 
 ### Added

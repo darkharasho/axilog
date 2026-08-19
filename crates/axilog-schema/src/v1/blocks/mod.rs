@@ -76,6 +76,10 @@ impl<T> ByEntity<T> {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+    /// Entity id / row pairs in ascending id order.
+    pub fn iter(&self) -> impl Iterator<Item = (u32, &T)> {
+        self.0.iter().map(|(&id, row)| (id, row))
+    }
 }
 
 #[cfg(test)]
@@ -162,7 +166,7 @@ pub(crate) mod tests_support {
             boon_uptime: Default::default(),
             boon_generation: Default::default(),
             warnings: Default::default(),
-            has_healing_extension: Default::default(),
+            healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
             instance_ids: Default::default(),
             enemy_damage_out: Default::default(),

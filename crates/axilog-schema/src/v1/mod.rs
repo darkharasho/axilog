@@ -398,11 +398,12 @@ pub fn build_report_v1(
     coverage.set(BlockName::Support, computed(support_block.is_empty()));
     let contribution = support::build_contribution(legacy, &index, &mut cats);
     coverage.set(BlockName::Contribution, computed(contribution.is_empty()));
-    let healing = support::build_healing(legacy, &index, passes.healing_detail, &mut cats);
+    let healing =
+        support::build_healing(legacy, &index, passes.healing_detail, &mut cats, metrics.healing_extension.as_ref());
     // The one block whose absence has a THIRD cause, and the reason
     // `Unsupported` stops being reserved vocabulary (Task 10).
     //
-    // `has_healing_extension` is a property of the LOG, not of any gate:
+    // `healing_extension` is a property of the LOG, not of any gate:
     // arcdps only writes the healing extension when the user runs the plugin
     // that produces it, and on a log without it no flag and no future pass
     // can ever produce these numbers. That is exactly `Unsupported` -- and
@@ -412,7 +413,7 @@ pub fn build_report_v1(
     // ambiguity and wrong about the answer.
     coverage.set(
         BlockName::Healing,
-        if metrics.has_healing_extension {
+        if metrics.healing_extension.is_some() {
             computed(healing.is_empty())
         } else {
             CoverageState::Unsupported
@@ -720,7 +721,7 @@ mod tests {
             boon_uptime: Default::default(),
             boon_generation: Default::default(),
             warnings: Default::default(),
-            has_healing_extension: Default::default(),
+            healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
             instance_ids: Default::default(),
             enemy_damage_out: Default::default(),
@@ -786,7 +787,7 @@ mod tests {
             boon_uptime: Default::default(),
             boon_generation: Default::default(),
             warnings: Default::default(),
-            has_healing_extension: Default::default(),
+            healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
             instance_ids: Default::default(),
             enemy_damage_out: Default::default(),
@@ -853,7 +854,7 @@ mod tests {
             boon_uptime: Default::default(),
             boon_generation: Default::default(),
             warnings: Default::default(),
-            has_healing_extension: Default::default(),
+            healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
             instance_ids: Default::default(),
             enemy_damage_out: Default::default(),

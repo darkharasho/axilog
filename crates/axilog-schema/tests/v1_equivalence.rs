@@ -902,7 +902,7 @@ fn a_log_without_the_healing_extension_reports_unsupported_not_empty() {
             downs: vec![0],
         },
         // The whole point of the witness: no healing addon on this log.
-        has_healing_extension: false,
+        healing_extension: None,
         ..Default::default()
     };
     let legacy = axilog_schema::build_report(
@@ -965,7 +965,7 @@ fn a_computed_block_with_no_rows_still_reports_empty() {
         // The extension IS present -- so `healing` is answerable here, and
         // its emptiness is a measurement rather than an absence. That is the
         // whole difference between this witness and the one above.
-        has_healing_extension: true,
+        healing_extension: Some(axilog_core::evtc::ext_healing::Registration { signature: axilog_core::evtc::ext_healing::HEALING_SIGNATURE, revision: 2, version: "test".into() }),
         timeline: Timeline {
             resolution_ms: 1000,
             squad_damage: vec![0],

@@ -1571,6 +1571,17 @@ export interface HealingEntity {
   barrier_out: number
   downed_healing_out: number
   /**
+   * Whether this player's OWN arcdps healing-stats addon reported to the
+   * log -- GW2EI's `RunningExtension` roster membership.
+   *
+   * This is NOT implied by `outgoing_total > 0`. A peer's addon can relay
+   * heals on a player's behalf, so a row with real healing numbers and
+   * `runs_extension: false` is normal: those numbers are what someone else
+   * saw, not a complete self-report. Use this, not the totals, to decide
+   * whether to mark a player's healing "partial".
+   */
+  runs_extension: boolean
+  /**
    * The per-ally / per-skill breakdowns. Omitted when that pass did not
    * run -- the "not measured" signal, as distinct from a measured zero.
    *
@@ -1637,7 +1648,31 @@ export interface HealSkillRow {
 }
 
 export interface HealingBlock {
+  /**
+   * The addon's own registration descriptor -- GW2EI's `usedExtensions`
+   * entry minus the roster, which lives per-entity on
+   * `HealingEntity.runs_extension`. Absent only on a block that somehow
+   * exists without a registration row; the whole block is omitted when the
+   * extension is absent, so in practice this is present.
+   */
+  extension?: HealingExtensionDesc
   by_entity: ByEntity<HealingEntity>
+}
+
+/**
+ * Mirrors GW2EI's `ExtensionDesc` minus `runningExtension` and `name` --
+ * this descriptor hangs off the healing block, so which extension it
+ * describes is never in question.
+ */
+export interface HealingExtensionDesc {
+  /**
+   * The addon's self-reported version string, e.g. `"2.16rc1"`.
+   * `"Unknown"` when the registration row carries no decodable one --
+   * GW2EI's own default for the same field.
+   */
+  version: string
+  revision: number
+  signature: number
 }
 
 /* --- rotation / damage_mods / missiles / replay / series blocks ---------- */

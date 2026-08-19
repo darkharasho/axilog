@@ -1479,6 +1479,12 @@ class _HealingEntityRequired(TypedDict):
     outgoing_self: int
     barrier_out: int
     downed_healing_out: int
+    # Whether this player's OWN arcdps healing-stats addon reported --
+    # GW2EI's `RunningExtension` roster membership. NOT implied by
+    # `outgoing_total > 0`: a peer's addon can relay heals on a player's
+    # behalf, so real numbers with `runs_extension = False` mean "partial,
+    # someone else saw this", which is the distinction to surface.
+    runs_extension: bool
 
 class HealingEntity(_HealingEntityRequired, total=False):
     """Mirrors the legacy `HealingOut`, plus the gated `detail`
@@ -1490,8 +1496,25 @@ class HealingEntity(_HealingEntityRequired, total=False):
 
     detail: HealingDetailCols
 
-class HealingBlock(TypedDict):
+class HealingExtensionDesc(TypedDict):
+    """GW2EI's `ExtensionDesc` minus `runningExtension` and `name` -- this
+    descriptor hangs off the healing block, so which extension it describes
+    is never in question. `version` is the addon's self-reported string
+    (e.g. `"2.16rc1"`), or `"Unknown"`."""
+
+    version: str
+    revision: int
+    signature: int
+
+class _HealingBlockRequired(TypedDict):
     by_entity: Dict[str, HealingEntity]
+
+class HealingBlock(_HealingBlockRequired, total=False):
+    """`extension` is absent only on a block that somehow exists without a
+    registration row; the whole block is omitted when the extension is
+    absent, so in practice it is present."""
+
+    extension: HealingExtensionDesc
 
 # --- conditions / minions blocks (native 1.0) ------------------------------
 

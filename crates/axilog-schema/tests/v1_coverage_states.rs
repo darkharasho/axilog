@@ -74,7 +74,7 @@ fn no_healing_extension_reports_unsupported() {
          if that changes, assert Unsupported off the fixture directly and drop the flip"
     );
 
-    metrics.has_healing_extension = false;
+    metrics.healing_extension = None;
     let v1 = axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,

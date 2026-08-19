@@ -143,6 +143,11 @@ pub struct HealingMetrics {
     /// exactly (both self- and ally-directed downed healing, matching EI's
     /// own scalar -- EI does not split this further by self/ally).
     pub downed_healing_out: u64,
+    /// Whether THIS player's own arcdps healing-stats addon reported to the
+    /// log -- GW2EI's `RunningExtension` roster membership. See
+    /// [`running_extension`] for the rule and why this is not the same
+    /// question as "has nonzero healing".
+    pub runs_extension: bool,
 }
 
 /// Apply healing-extension stats to `players` (mutates each entry's
@@ -196,7 +201,22 @@ pub fn apply_with_registry(
     let idx: BTreeMap<u64, usize> =
         players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
 
-    for r in attributed_events(raw, registry, squad, addr_to_rep) {
+    // One resolve pass feeds both answers. `running_extension`/
+    // `attributed_events` each re-resolve for their standalone callers; this
+    // pass runs under `analyze()` on every log with the extension, so it goes
+    // through the shared halves directly rather than scanning every event
+    // twice.
+    let resolved = resolve_rows(raw, registry);
+
+    // EI's `IsPlayer` gate is "this agent is one of the log's players", which
+    // here is "this addr has a `PlayerMetrics` row".
+    for addr in running_extension_from(&resolved, |addr| idx.contains_key(&addr)) {
+        if let Some(&pi) = idx.get(&addr) {
+            players[pi].healing.runs_extension = true;
+        }
+    }
+
+    for r in attributed_from(&resolved, registry, squad, addr_to_rep) {
         let Some(&pi) = idx.get(&r.healer_rep) else { continue };
         let m = &mut players[pi].healing;
         if r.is_barrier {
@@ -247,6 +267,119 @@ pub struct AttributedHeal {
     pub against_downed: bool,
 }
 
+/// One healing-extension data row after instid resolution, before peer
+/// sanitization, the pet/minion owner fold and the account fold -- i.e. at
+/// exactly the identity GW2EI's own `GroupBy(x => x.From)` / `GroupBy(x =>
+/// x.To)` key off. Shared by [`attributed_events`] and [`running_extension`]
+/// so neither can drift from the other's view of the same wire rows.
+#[derive(Clone, Copy)]
+struct Resolved {
+    time: u64,
+    healer: u64,
+    target: u64,
+    src_master_instid: u16,
+    skill_id: u32,
+    amount: u64,
+    is_direct: bool,
+    is_barrier: bool,
+    against_downed: bool,
+    src_is_peer: bool,
+    dst_is_peer: bool,
+}
+
+/// Decode every healing-extension data row and resolve both ends via the
+/// instid registry (module doc: raw `src_agent`/`dst_agent` on these rows
+/// are not valid addrs). Rows that fail to resolve -- no registration yet at
+/// that time for that instid -- are dropped, matching [`InstidRegistry`]'s
+/// own "leave uncredited rather than guess" convention. Wire order is
+/// preserved, which `healing_detail`'s 1S graph relies on.
+fn resolve_rows(raw: &RawLog, registry: &InstidRegistry) -> Vec<Resolved> {
+    let mut resolved: Vec<Resolved> = Vec::new();
+    for e in &raw.events {
+        let Some(ev) = ext_healing::decode_data_event(e, ext_healing::HEALING_SIGNATURE) else {
+            continue;
+        };
+        if !ev.to_friendly {
+            continue;
+        }
+        let Some(healer) = registry.resolve_at(ev.src_instid, ev.time) else { continue };
+        let Some(target) = registry.resolve_at(ev.dst_instid, ev.time) else { continue };
+        resolved.push(Resolved {
+            time: ev.time,
+            healer,
+            target,
+            src_master_instid: ev.src_master_instid,
+            skill_id: ev.skill_id,
+            amount: ev.amount,
+            is_direct: ev.is_direct,
+            is_barrier: ev.is_barrier,
+            against_downed: ev.against_downed,
+            src_is_peer: ev.src_is_peer,
+            dst_is_peer: ev.dst_is_peer,
+        });
+    }
+    resolved
+}
+
+/// The set of agent addrs whose OWN arcdps healing-stats addon reported to
+/// this log -- GW2EI's `RunningExtension` roster
+/// (`HealingStatsExtensionHandler.AttachToCombatData`), restricted to
+/// `is_player` by the caller-supplied predicate (EI's `agent.IsPlayer`
+/// gate).
+///
+/// EI adds an agent when ANY of four groupings says its addon spoke:
+/// healing by `From` and barrier by `From` via `SanitizeForSrc` (the group
+/// contains at least one `SrcIsPeer` row), healing by `To` and barrier by
+/// `To` via `SanitizeForDst` (at least one `DstIsPeer` row). Heal and
+/// barrier are independent event streams there (`_healingEvents` vs
+/// `_barrierEvents`), grouped and sanitized separately, so they are keyed
+/// separately here too.
+///
+/// **This is not "has nonzero healing".** `decode_data_event` defaults
+/// `src_is_peer` to `true` for a row carrying neither peer bit -- a
+/// self-report, so its healer is on the roster. But a row flagged
+/// `DstPeerMask` was RELAYED by the target's addon: it credits real healing
+/// to a healer whose own addon never spoke, and puts only the target on the
+/// roster. That is why a squad log routinely shows far more players with
+/// healing numbers than players actually running the addon, and why the
+/// roster is the only honest answer to "is this player's healing complete".
+///
+/// Grouping is by the RAW resolved identity, pre-owner-fold, matching EI's
+/// `GroupBy(x => x.From)` exactly: a pet/minion's rows are sanitized in
+/// their own group and then fail `IsPlayer`, so neither the minion nor its
+/// owner joins the roster on their account.
+pub fn running_extension(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    is_player: impl Fn(u64) -> bool,
+) -> BTreeSet<u64> {
+    if !ext_healing::healing_extension_present(raw) {
+        return BTreeSet::new();
+    }
+    running_extension_from(&resolve_rows(raw, registry), is_player)
+}
+
+fn running_extension_from(
+    resolved: &[Resolved],
+    is_player: impl Fn(u64) -> bool,
+) -> BTreeSet<u64> {
+    // (agent, is_barrier) -> whether that group has seen a peer-flagged row,
+    // one map per side because EI groups by `From` and by `To` separately.
+    let mut by_src: BTreeMap<(u64, bool), bool> = BTreeMap::new();
+    let mut by_dst: BTreeMap<(u64, bool), bool> = BTreeMap::new();
+    for r in resolved {
+        *by_src.entry((r.healer, r.is_barrier)).or_insert(false) |= r.src_is_peer;
+        *by_dst.entry((r.target, r.is_barrier)).or_insert(false) |= r.dst_is_peer;
+    }
+    by_src
+        .into_iter()
+        .chain(by_dst)
+        .filter(|&(_, any_peer)| any_peer)
+        .map(|((agent, _), _)| agent)
+        .filter(|&agent| is_player(agent))
+        .collect()
+}
+
 /// Decode, resolve, peer-sanitize and attribute every healing-extension
 /// data row in `raw`, in wire order (so the result is already sorted by
 /// `time`, which `healing_detail`'s 1S graph relies on).
@@ -282,43 +415,18 @@ pub fn attributed_events(
     // non-squad healers at THIS point (the pre-fix-round behavior) silently
     // dropped every pet/minion-sourced heal -- e.g. Water Blast fields,
     // Spirit of Nature-style pet skills, guardian tome-summoned constructs.
-    #[derive(Clone, Copy)]
-    struct Resolved {
-        time: u64,
-        healer: u64,
-        target: u64,
-        src_master_instid: u16,
-        skill_id: u32,
-        amount: u64,
-        is_direct: bool,
-        is_barrier: bool,
-        against_downed: bool,
-        src_is_peer: bool,
-    }
-    let mut resolved: Vec<Resolved> = Vec::new();
-    for e in &raw.events {
-        let Some(ev) = ext_healing::decode_data_event(e, ext_healing::HEALING_SIGNATURE) else {
-            continue;
-        };
-        if !ev.to_friendly {
-            continue;
-        }
-        let Some(healer) = registry.resolve_at(ev.src_instid, ev.time) else { continue };
-        let Some(target) = registry.resolve_at(ev.dst_instid, ev.time) else { continue };
-        resolved.push(Resolved {
-            time: ev.time,
-            healer,
-            target,
-            src_master_instid: ev.src_master_instid,
-            skill_id: ev.skill_id,
-            amount: ev.amount,
-            is_direct: ev.is_direct,
-            is_barrier: ev.is_barrier,
-            against_downed: ev.against_downed,
-            src_is_peer: ev.src_is_peer,
-        });
-    }
+    attributed_from(&resolve_rows(raw, registry), registry, squad, addr_to_rep)
+}
 
+/// [`attributed_events`] over an already-resolved row list -- the half
+/// [`apply_with_registry`] shares with [`running_extension_from`] so one
+/// pass over the log answers both.
+fn attributed_from(
+    resolved: &[Resolved],
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) -> Vec<AttributedHeal> {
     // Peer sanitization (module doc): group by (healer, is_barrier) -- heal
     // and barrier events are independent streams in GW2EI (`_healingEvents`
     // vs `_barrierEvents`, sanitized separately) -- and drop non-peer rows
@@ -499,6 +607,90 @@ mod tests {
         assert_eq!(players[0].healing.healing_out_total, 150);
         assert_eq!(players[0].healing.healing_out_self, 150);
         assert_eq!(players[0].healing.healing_out_allies, 0);
+    }
+
+    /// GW2EI's `HealingStatsExtensionHandler.AttachToCombatData` roster rule
+    /// (`RunningExtensionInternal`), source case: heal events grouped by
+    /// `From`, added when `SanitizeForSrc` finds any `SrcIsPeer` in that
+    /// healer's group. A plain self-reported row carries NEITHER peer bit, and
+    /// `decode_data_event` defaults `src_is_peer` to `true` for exactly that
+    /// shape -- so the healer's own addon reported it, and the healer (only)
+    /// is running the extension.
+    #[test]
+    fn self_reported_heal_puts_the_healer_on_the_roster_not_the_target() {
+        let raw = raw_from(vec![
+            registration(1),
+            instid_reg(0, 1, 11),
+            instid_reg(0, 2, 22),
+            direct_heal(100, 11, 22, 300),
+        ]);
+        let mut players = vec![player_metrics(1), player_metrics(2)];
+        let squad: BTreeSet<u64> = [1, 2].into_iter().collect();
+        apply(&mut players, &raw, &squad, &BTreeMap::new());
+        assert!(players[0].healing.runs_extension, "healer self-reported, so their addon is running");
+        assert!(!players[1].healing.runs_extension, "being healed proves nothing about the target");
+    }
+
+    /// Same rule, destination case (`SanitizeForDst` over the `To` grouping):
+    /// a row flagged `DstPeerMask` was relayed by the TARGET's addon, so the
+    /// target is running it and the healer -- whose own addon never reported
+    /// this heal -- is not. This is the case that makes the roster smaller
+    /// than "everyone with nonzero healing".
+    #[test]
+    fn dst_peer_heal_puts_the_target_on_the_roster_not_the_healer() {
+        let mut relayed = direct_heal(100, 11, 22, 300);
+        relayed.is_offcycle = 1 << 6; // DstPeerMask
+        let raw = raw_from(vec![
+            registration(1),
+            instid_reg(0, 1, 11),
+            instid_reg(0, 2, 22),
+            relayed,
+        ]);
+        let mut players = vec![player_metrics(1), player_metrics(2)];
+        let squad: BTreeSet<u64> = [1, 2].into_iter().collect();
+        apply(&mut players, &raw, &squad, &BTreeMap::new());
+        assert!(!players[0].healing.runs_extension, "only the target's addon relayed this heal");
+        assert!(players[1].healing.runs_extension);
+    }
+
+    /// EI adds to the same roster from the barrier streams (`_barrierEvents`
+    /// grouped by `From`/`To`), so a player who only ever granted barrier is
+    /// still on it.
+    #[test]
+    fn barrier_only_healer_is_on_the_roster() {
+        let mut shielded = direct_heal(100, 11, 22, 200);
+        shielded.is_shields = 1;
+        let raw = raw_from(vec![
+            registration(1),
+            instid_reg(0, 1, 11),
+            instid_reg(0, 2, 22),
+            shielded,
+        ]);
+        let mut players = vec![player_metrics(1), player_metrics(2)];
+        let squad: BTreeSet<u64> = [1, 2].into_iter().collect();
+        apply(&mut players, &raw, &squad, &BTreeMap::new());
+        assert!(players[0].healing.runs_extension);
+        assert!(!players[1].healing.runs_extension);
+    }
+
+    /// The roster is a PLAYER roster (`agent.IsPlayer` in EI). A pet/minion
+    /// that sourced a heal is not a player, and folding its heal onto its
+    /// owner must not put the owner on the roster either -- EI groups by the
+    /// raw `From` agent, which is the minion, and then fails `IsPlayer`.
+    #[test]
+    fn minion_sourced_heal_puts_nobody_on_the_roster() {
+        let raw = raw_from(vec![
+            registration(1),
+            instid_reg(0, 1, 11),
+            instid_reg(0, 2, 22),
+            instid_reg(0, 99, 33),
+            direct_heal_from_minion(100, 33, 11, 22, 400, false),
+        ]);
+        let mut players = vec![player_metrics(1), player_metrics(2)];
+        let squad: BTreeSet<u64> = [1, 2].into_iter().collect();
+        apply(&mut players, &raw, &squad, &BTreeMap::new());
+        assert_eq!(players[0].healing.healing_out_total, 400, "the heal still folds onto the owner");
+        assert!(!players[0].healing.runs_extension, "but the minion is not a player agent");
     }
 
     #[test]

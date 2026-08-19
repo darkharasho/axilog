@@ -732,6 +732,7 @@ struct EiDoc<'a> {
     skill_map: BTreeMap<String, Value>,
     damage_mod_map: Option<BTreeMap<String, Value>>,
     combat_replay_meta: Option<Value>,
+    used_extensions: Option<Value>,
     wvw_map_data: Value,
 }
 
@@ -761,6 +762,9 @@ impl serde::Serialize for EiDoc<'_> {
             "targets",
             &LazySeq { len: self.target_count, rows: &self.target_json },
         )?;
+        if let Some(ext) = &self.used_extensions {
+            m.serialize_entry("usedExtensions", ext)?;
+        }
         m.serialize_entry("wvWMapData", &self.wvw_map_data)?;
         m.end()
     }
@@ -2707,6 +2711,48 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
         .recorded_by
         .and_then(|id| report.entities.get(id as usize))
         .and_then(|e| e.account.as_deref());
+    // `usedExtensions` (GW2EI `JsonLogBuilder`'s `ExtensionDesc` list): the
+    // healing block's registration facts, plus the roster of CHARACTER names
+    // whose own addon reported -- `blocks.healing.by_entity[].runs_extension`,
+    // which is `axilog_core::analysis::healing::running_extension`'s answer
+    // carried through the native format.
+    //
+    // Two EI behaviours are deliberately reproduced rather than "improved":
+    // the set is SEEDED with the PoV's character (`set.Add(log.FindActor(
+    // log.LogMetadata.PoV).Character)` -- the recorder always counts, since
+    // its addon is by definition the one writing the log), and the whole
+    // entry is omitted when there is no PoV. Emitting the raw roster instead
+    // would silently drop the recorder on the common case where their own
+    // heals were all peer-relayed.
+    let used_extensions = report.blocks.healing.as_ref().and_then(|h| {
+        let desc = h.extension.as_ref()?;
+        let pov = report
+            .encounter
+            .recorded_by
+            .and_then(|id| report.entities.get(id as usize))
+            .and_then(|e| e.character.as_deref())?;
+        let mut roster: Vec<&str> = vec![pov];
+        for (id, row) in h.by_entity.iter() {
+            if !row.runs_extension {
+                continue;
+            }
+            let Some(character) =
+                report.entities.get(id as usize).and_then(|e| e.character.as_deref())
+            else {
+                continue;
+            };
+            if !roster.contains(&character) {
+                roster.push(character);
+            }
+        }
+        Some(serde_json::json!([{
+            "name": "Healing Stats",
+            "version": desc.version,
+            "revision": desc.revision,
+            "signature": desc.signature,
+            "runningExtension": roster,
+        }]))
+    });
     EiDoc {
         fight_name: format!("Detailed WvW - {}", report.encounter.map),
         duration_ms: report.encounter.duration_ms,
@@ -2719,6 +2765,7 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
         skill_map,
         damage_mod_map,
         combat_replay_meta,
+        used_extensions,
         wvw_map_data,
     }
 }
@@ -2860,7 +2907,7 @@ mod tests {
             timeline:Timeline{resolution_ms:1000,squad_damage:vec![800],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(),
+            healing_extension: Default::default(),
             // M10 Task 3: enemy 9 (player) took damage -- a real combat
             // participant; enemy 10 (gadget) never interacted, matching what
             // `analyze()` would actually compute for this exact scenario.
@@ -3042,7 +3089,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime, boon_generation,
             warnings: Default::default(),
-            has_healing_extension: Default::default(),
+            healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
             skill_map: Default::default(),
         };
@@ -3097,6 +3144,58 @@ mod tests {
         assert_eq!(support["stunBreak"], 0);
     }
 
+    /// GW2EI's `usedExtensions` descriptor, reproduced from the native
+    /// healing block: the addon's registration facts plus the roster of
+    /// CHARACTER names whose own addon reported (`JsonLogBuilder`'s
+    /// `ExtensionDesc`). EI seeds that set with the PoV's character before
+    /// adding `RunningExtension`, and emits nothing at all when there is no
+    /// PoV -- both replicated here, because a consumer reading this field to
+    /// decide "are this player's healing numbers complete" gets the wrong
+    /// answer from a roster that quietly dropped the recorder.
+    #[test]
+    fn used_extensions_carries_the_addon_descriptor_and_character_roster() {
+        use axilog_schema::v1::blocks::support::{HealingBlock, HealingEntity, HealingExtensionDesc};
+        let mut v1 = sample_report_v1();
+        let mut healing = HealingBlock {
+            extension: Some(HealingExtensionDesc {
+                version: "2.16rc1".into(),
+                revision: 2,
+                signature: 0x9c9b_3c99,
+            }),
+            ..Default::default()
+        };
+        // Entity 0 is character "A" (the PoV, per `sample_inputs`); entity 1
+        // is "B", who has healing numbers but never ran the addon.
+        healing.by_entity.insert(0, HealingEntity { runs_extension: true, ..Default::default() });
+        healing.by_entity.insert(
+            1,
+            HealingEntity { outgoing_total: 999, runs_extension: false, ..Default::default() },
+        );
+        v1.blocks.healing = Some(healing);
+
+        let v = to_ei_json(&v1, None);
+        let ext = &v["usedExtensions"][0];
+        assert_eq!(ext["name"], "Healing Stats");
+        assert_eq!(ext["version"], "2.16rc1");
+        assert_eq!(ext["revision"], 2);
+        assert_eq!(ext["signature"], 0x9c9b_3c99u32);
+        assert_eq!(
+            ext["runningExtension"],
+            serde_json::json!(["A"]),
+            "only the character whose own addon reported, PoV included"
+        );
+    }
+
+    /// No healing block (the extension was absent) means no descriptor --
+    /// EI omits `usedExtensions` entirely rather than emitting an empty
+    /// list, and a consumer must be able to tell "no addon anywhere" from
+    /// "addon present, nobody on the roster".
+    #[test]
+    fn used_extensions_is_absent_without_a_healing_block() {
+        let v = to_ei_json(&sample_report_v1(), None);
+        assert!(v.get("usedExtensions").is_none());
+    }
+
     /// M10 Task 1: `extHealingStats`/`extBarrierStats` are present only for
     /// a player whose native `healing` block is `Some` (i.e. the log
     /// carries the healing extension), using EI's exact real field names
@@ -3142,7 +3241,7 @@ mod tests {
             players: vec![
                 base_player(":A.1", Some(HealingOut {
                     healing_out_total: 5000, healing_out_allies: 3000, healing_out_self: 2000,
-                    barrier_out: 1000, downed_healing_out: 500,
+                    barrier_out: 1000, downed_healing_out: 500, runs_extension: true,
                 })),
                 base_player(":B.1", None),
             ],
@@ -3399,6 +3498,7 @@ mod tests {
                         outgoing_self: h.healing_out_self,
                         barrier_out: h.barrier_out,
                         downed_healing_out: h.downed_healing_out,
+                        runs_extension: h.runs_extension,
                         detail: None,
                     },
                 );
