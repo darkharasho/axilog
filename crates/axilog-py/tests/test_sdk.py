@@ -23,6 +23,7 @@ interpreter running this suite (`maturin develop --release` in
 
 import json
 import os
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -58,8 +59,10 @@ EXPECTED_SUPPORT_SUMS = {
 # `axilog_core::analysis::buffs::uptime`'s module doc). Cross-checked live
 # below against the golden fixture file rather than hardcoded only, per
 # the Task 2 brief's "cross-checked against fixtures/wvw-small.ei.json".
-STABLE_BOON_ACCOUNT = ":Anon132.5884"
-STABLE_BOON_GOLDEN_ACCOUNT = "Anon132.5884"  # golden JSON has no leading ':'
+# Both sides spell the account bare: the golden EI JSON never carried
+# arcdps's leading colon, and ReportV1 now strips it at the model boundary
+# too, so one constant serves both lookups.
+STABLE_BOON_ACCOUNT = "Anon132.5884"
 STABLE_BOON_NAME = "Quickness"
 STABLE_BOON_ID = "1187"
 
@@ -120,11 +123,31 @@ def decode_series(test, series):
     return out
 
 
+def as_f32(x):
+    """`x` rounded to the nearest f32, or None if it does not fit in one."""
+    try:
+        return struct.unpack("<f", struct.pack("<f", x))[0]
+    except (OverflowError, ValueError):
+        return None
+
+
 def first_diff_paths(a, b, limit=10, path="$", out=None):
     """First `limit` paths where `a` and `b` differ, DFS over plain
-    dicts/lists. Used only to produce a readable failure message for the
-    dual-path CLI-parity test -- a bare assertEqual on two large parsed
-    reports just dumps the entire diff.
+    dicts/lists.
+
+    This IS the dual-path parity comparison, not just its failure message:
+    a bare `assertEqual` cannot be used because the two paths render f32
+    fields through different serializers. PyO3 hands Python an f64 widened
+    from the f32 and `repr` prints every bit of it (`-74.0970458984375`);
+    Rust's `serde_json` prints the shortest decimal that round-trips back
+    to the same f32 (`-74.097046`). Those are the same f32, so two numbers
+    count as equal here when `as_f32` maps them to one value -- an exact
+    identity, not an epsilon tolerance.
+
+    The one thing this rule cannot see is two genuinely different f64s that
+    collapse onto the same f32. ReportV1 stores its measurements as f32, so
+    that case does not arise today; if an f64 field is ever added, it needs
+    its own comparison. Mirrors `firstDiffPaths` in the Node suite.
     """
     if out is None:
         out = []
@@ -132,6 +155,15 @@ def first_diff_paths(a, b, limit=10, path="$", out=None):
         return out
     if a == b:
         return out
+    # Both sides must be floats: two differing i64 counts can collapse onto
+    # one f32, and ReportV1 carries i64 damage totals, so widening this to
+    # ints would blind the test to a real divergence. An int on one side and
+    # a float on the other is itself a divergence worth reporting.
+    # (`isinstance(x, float)` excludes bool, which subclasses int, not float.)
+    if isinstance(a, float) and isinstance(b, float):
+        a32, b32 = as_f32(a), as_f32(b)
+        if a32 is not None and a32 == b32:
+            return out
     a_is_obj = isinstance(a, (dict, list))
     b_is_obj = isinstance(b, (dict, list))
     if not a_is_obj or not b_is_obj:
@@ -213,11 +245,11 @@ class ParseFileTests(unittest.TestCase):
         with open(GOLDEN_EI_JSON, encoding="utf-8") as f:
             golden = json.load(f)
         golden_player = next(
-            (p for p in golden["players"] if p["account"] == STABLE_BOON_GOLDEN_ACCOUNT), None
+            (p for p in golden["players"] if p["account"] == STABLE_BOON_ACCOUNT), None
         )
         self.assertIsNotNone(
             golden_player,
-            f"expected golden EI fixture to contain account {STABLE_BOON_GOLDEN_ACCOUNT}",
+            f"expected golden EI fixture to contain account {STABLE_BOON_ACCOUNT}",
         )
         golden_presence_pct = golden_player["boons"][STABLE_BOON_ID]["uptime"]
 
@@ -798,12 +830,13 @@ class CliParityTests(unittest.TestCase):
         ).stdout
         cli_report = json.loads(stdout)
 
-        if py_report != cli_report:
-            diffs = first_diff_paths(py_report, cli_report, 10)
-            self.fail(
-                "axilog.parse_file output diverges from CLI --format json output at "
-                f"{len(diffs)} path(s):\n" + "\n".join(diffs)
-            )
+        diffs = first_diff_paths(py_report, cli_report, 10)
+        self.assertEqual(
+            diffs,
+            [],
+            "axilog.parse_file output diverges from CLI --format json output at "
+            f"{len(diffs)} path(s):\n" + "\n".join(diffs),
+        )
 
 
 if __name__ == "__main__":
