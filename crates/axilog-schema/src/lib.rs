@@ -826,6 +826,13 @@ pub struct HealingOut {
     pub healing_out_self: u64,
     pub barrier_out: u64,
     pub downed_healing_out: u64,
+    /// Whether this player's OWN addon reported -- GW2EI's
+    /// `RunningExtension` roster membership, the "are these numbers
+    /// complete for this player" signal. See
+    /// `axilog_core::analysis::healing::running_extension`; notably this is
+    /// NOT implied by nonzero healing, which a peer's addon can report on a
+    /// player's behalf.
+    pub runs_extension: bool,
 }
 /// Outgoing hit-quality stats (M13, Task 1) -- mirrors
 /// `axilog_core::analysis::hit_stats::HitStats` field-for-field. See that
@@ -1494,15 +1501,17 @@ pub fn build_report(
                 strips: m.support.strips, strips_duration_ms: m.support.strips_duration_ms,
                 resurrects: m.support.resurrects,
             }).unwrap_or(SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 }),
-            healing: if metrics.has_healing_extension {
+            healing: if metrics.healing_extension.is_some() {
                 Some(m.map(|m| HealingOut {
                     healing_out_total: m.healing.healing_out_total,
                     healing_out_allies: m.healing.healing_out_allies,
                     healing_out_self: m.healing.healing_out_self,
                     barrier_out: m.healing.barrier_out,
                     downed_healing_out: m.healing.downed_healing_out,
+                    runs_extension: m.healing.runs_extension,
                 }).unwrap_or(HealingOut { healing_out_total: 0, healing_out_allies: 0,
-                    healing_out_self: 0, barrier_out: 0, downed_healing_out: 0 }))
+                    healing_out_self: 0, barrier_out: 0, downed_healing_out: 0,
+                    runs_extension: false }))
             } else {
                 None
             },
@@ -1724,7 +1733,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(),
+            healing_extension: Default::default(),
             combat_participant_enemies: [9u64, 11u64].into_iter().collect(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         // Native surface: combat participants, NPC or player alike.
@@ -1886,7 +1895,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(),
+            healing_extension: Default::default(),
             combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         assert_eq!(report.ei_targets.len(), 1, "a non-WvW encounter keeps its NPC targets");
@@ -1906,7 +1915,7 @@ mod tests {
             cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
+            healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["schema_version"], "0.2");
@@ -1917,7 +1926,7 @@ mod tests {
         assert!(v.get("missiles").is_none(), "missiles must be omitted when not requested");
         assert!(
             v["players"][0].get("healing").is_none(),
-            "healing must be omitted when has_healing_extension is false"
+            "healing must be omitted when healing_extension is None"
         );
     }
 
@@ -1943,14 +1952,15 @@ mod tests {
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 healing: HealingMetrics { healing_out_total: 500, healing_out_allies: 300,
-                    healing_out_self: 200, barrier_out: 50, downed_healing_out: 10 },
+                    healing_out_self: 200, barrier_out: 50, downed_healing_out: 10,
+                    runs_extension: true },
                 ..Default::default()},
             PlayerMetrics{agent_addr:2, ..Default::default()}, // never healed
         ],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: true, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
+            healing_extension: Some(axilog_core::evtc::ext_healing::Registration { signature: axilog_core::evtc::ext_healing::HEALING_SIGNATURE, revision: 2, version: "test".into() }), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["players"][0]["healing"]["healing_out_total"], 500);
@@ -1994,7 +2004,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: false, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
+            healing_extension: None, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&omitted).unwrap();
@@ -2048,7 +2058,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0,0],cc_applied:vec![0,0],downs:vec![0,0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: false, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
+            healing_extension: None, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&omitted).unwrap();
@@ -2101,7 +2111,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: false, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
+            healing_extension: None, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&omitted).unwrap();
@@ -2198,7 +2208,7 @@ mod tests {
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
+            healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
         let report = build_report(&enc, &m, "0.1.0", Some(&replay), None, false, false, false, None);
         assert!(report.replay.is_some());
@@ -2250,7 +2260,7 @@ mod tests {
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
             boon_generation: Default::default(), warnings: Default::default(),
-            has_healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
+            healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let missiles = build_missiles(&raw, &enc);
         let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles), false, false, false, None);
         assert!(report.missiles.is_some());

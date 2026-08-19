@@ -10,6 +10,50 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.2.0 — 2026-08-18
+
+### Added
+- The arcdps healing-extension ROSTER — which players' own addon reported,
+  GW2EI's `RunningExtension`. `blocks.healing.by_entity[].runs_extension`
+  carries it per player, `blocks.healing.extension` carries the addon's
+  registration descriptor (version/revision/signature), and `--format
+  ei-json` reproduces GW2EI's `usedExtensions[]` entry from both.
+
+  This was the one healing fact the native format could not answer, and its
+  absence was not cosmetic: a consumer marking healing numbers "complete"
+  vs. "partial" had nothing to key on, so an EI-shaped consumer that read
+  `usedExtensions` flagged EVERY player partial on an axilog-parsed log.
+  Nonzero healing is not a substitute — a peer's addon relays heals on other
+  players' behalf, so 46 players had healing numbers on one real 55-player
+  log where only 26 were running the addon.
+
+  Roster verified EXACT against Elite Insights on 8 real WvW logs (zero set
+  differences); see `docs/EI-PARITY.md`.
+
+## v1.1.0 — 2026-08-18
+
+### Added
+- `axilog-api`: a shared `parse_report_v1` entry point. The native paths of
+  `axilog-node` (`parseFile`, `parseBuffer`) and `axilog-cli` (`--format
+  json`) now call it instead of each hand-rolling the same ~90-line analysis
+  orchestration. The ei-json paths (`parseFileEi`, `--format ei-json`) and
+  `axilog-py` still hand-roll their own: ei-json needs a per-target
+  `damage_mods` split and the replay inputs that the facade does not
+  compute.
+- `blocks.series.by_entity[].healing_received_1s` and
+  `.barrier_received_1s`: cumulative per-receiver healing and barrier, on
+  the same 1s grid as `healing_1s` and behind the same `timeseries` gate.
+
+### Changed
+- `parse --format json` no longer filters `recorded_by_unresolved` out of
+  stderr. Every `ReportV1` warning now reaches stderr unfiltered, so a log
+  that trips this diagnostic emits a `warning:` line 1.0.0 suppressed.
+  Stdout is unaffected.
+
+### Unchanged
+- ei-json output is byte-identical to 1.0.0. The compat projection gains
+  nothing from this release.
+
 ## v1.0.0 — 2026-08-18
 
 **1.0 is a promise, not a feature.** Nothing in this release changes an output — the native

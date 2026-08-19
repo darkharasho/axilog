@@ -65,17 +65,17 @@
 //!   CUMULATIVE fill-forward array. Same helpers, so the healing series and
 //!   the damage series cannot land on different grids.
 //!
-//! ## Scope: the audit's five rows, and nothing adjacent
+//! ## Scope
 //!
-//! `healingReceived1S`, `alliedHealing1S`, `alliedHealingDist`,
-//! `totalIncomingHealingDist`, `barrier1S` and every `*PowerHealing*` /
-//! `*Conversion*` / `*Hybrid*` variant EI also emits are NOT produced here.
-//! None appears in axibridge's audit gap rows and none is read anywhere in
-//! `packages/bridge-metrics`; `alliedHealing1S` alone would be
-//! `players x players x seconds`, the single largest array the payload
-//! could carry.
+//! `healingReceived1S` and the per-receiver barrier series ARE produced
+//! here (see `healing_received_1s`/`barrier_received_1s`), added for the
+//! AxiPulse native cutover, which renders both. `alliedHealing1S`,
+//! `alliedHealingDist`, `totalIncomingHealingDist` and every
+//! `*PowerHealing*` / `*Conversion*` / `*Hybrid*` variant EI also emits
+//! are still NOT produced: no consumer reads them, and `alliedHealing1S`
+//! alone would be `players x players x seconds`.
 //!
-//! ## `barrier1S` is deliberately absent while `healing1S` is present
+//! ## The outgoing `barrier1S` is deliberately absent while `healing1S` is present
 //!
 //! That asymmetry is the audit's, not this module's: its gap rows name
 //! `extHealingStats.healing1S` and stop there. `healing1S` is also unread
@@ -198,6 +198,19 @@ pub struct PlayerHealingDetail {
     /// `healing1S[0]` -- CUMULATIVE outgoing healing per 1s bucket, on
     /// `timeseries::ei_grid`'s grid.
     pub healing_1s: Vec<u64>,
+    /// CUMULATIVE **incoming** healing per 1s bucket, on
+    /// `timeseries::ei_grid`'s grid -- the receiver-indexed transpose of
+    /// `healing_1s`. GW2EI calls this `healingReceived1S`.
+    ///
+    /// Unlike `healing_1s`, this is ALLY-ATTRIBUTED: a heal only lands
+    /// here when its recipient is one of the enumerated players, because
+    /// there is no row to put it on otherwise.
+    pub healing_received_1s: Vec<u64>,
+    /// CUMULATIVE **incoming** barrier per 1s bucket, same grid and same
+    /// ally attribution. GW2EI's counterpart is
+    /// `extBarrierStats.barrierReceived1S`, whose attribution differs --
+    /// see the ally-attribution note on `healing_received_1s`.
+    pub barrier_received_1s: Vec<u64>,
 }
 
 /// Per-player healing detail, positionally joined to `enc.players`.
@@ -263,6 +276,8 @@ pub fn build_with_registry(
             // Per-bucket DELTAS while accumulating; turned into GW2EI's
             // cumulative fill-forward graph in the final pass below.
             healing_1s: vec![0u64; buckets],
+            healing_received_1s: vec![0u64; buckets],
+            barrier_received_1s: vec![0u64; buckets],
         })
         .collect();
     let mut healing_dist: Vec<BTreeMap<u32, HealDistEntry>> = vec![BTreeMap::new(); n];
@@ -284,6 +299,9 @@ pub fn build_with_registry(
         if is_barrier {
             if let Some(ai) = ally {
                 out[hi].ally_barrier[ai] += amount;
+                if let Some(b) = ei_bucket(time, t0, buckets) {
+                    out[ai].barrier_received_1s[b] += amount;
+                }
             }
             barrier_dist[hi]
                 .entry(skill_id)
@@ -298,6 +316,9 @@ pub fn build_with_registry(
             cell.healing += amount;
             if against_downed {
                 cell.downed_healing += amount;
+            }
+            if let Some(b) = ei_bucket(time, t0, buckets) {
+                out[ai].healing_received_1s[b] += amount;
             }
         }
         healing_dist[hi]
@@ -321,6 +342,16 @@ pub fn build_with_registry(
         // (`ComputeHealingGraph`'s `graph[i] = graph[previousTime]` loops).
         let mut running = 0u64;
         for v in p.healing_1s.iter_mut() {
+            running += *v;
+            *v = running;
+        }
+        let mut running = 0u64;
+        for v in p.healing_received_1s.iter_mut() {
+            running += *v;
+            *v = running;
+        }
+        let mut running = 0u64;
+        for v in p.barrier_received_1s.iter_mut() {
             running += *v;
             *v = running;
         }
@@ -502,5 +533,73 @@ mod tests {
         let squad: BTreeSet<u64> = [1, 2].into_iter().collect();
         healing::apply(&mut players, &raw, &squad, &BTreeMap::new());
         assert_eq!(players[0].healing.healing_out_total, 1200);
+    }
+
+    /// Incoming is the transpose of outgoing: every healing/barrier amount
+    /// that lands on an enumerated ally must appear in that ALLY's
+    /// received series, on the same grid, cumulative in the same way.
+    /// Three players (A, B, C) plus a pet-shaped agent (99, registered but
+    /// not in `enc.players`) exercise the transpose across two buckets:
+    /// A heals B (bucket 0) and downed-heals C (bucket 2); B heals A
+    /// (bucket 2); A barriers B and C barriers A (both bucket 2); and A
+    /// heals the pet (bucket 3) -- a heal with no ally row to land on.
+    #[test]
+    fn received_series_is_the_transpose_of_outgoing() {
+        let raw = raw_from(vec![
+            registration(),
+            instid_reg(0, 1, 10),
+            instid_reg(0, 2, 20),
+            instid_reg(0, 3, 30),
+            // 99 is a pet-shaped agent: registered, but not in `enc.players`.
+            instid_reg(0, 99, 90),
+            heal(0, 10, 20, 100, 500, false),      // A -> B
+            heal(1_500, 10, 30, 100, 300, true),   // A -> C, downed
+            heal(1_500, 20, 10, 200, 250, false),  // B -> A
+            barrier(2_000, 10, 20, 300, 400),      // A -> B
+            barrier(2_000, 30, 10, 300, 150),      // C -> A
+            heal(2_400, 10, 90, 100, 700, false),  // A -> pet (no ally row)
+        ]);
+        let enc = enc_with(vec![player(1, "A"), player(2, "B"), player(3, "C")], 2_400);
+        let d = build(&raw, &enc).expect("extension present");
+        let buckets = d[0].healing_1s.len();
+
+        for p in &d {
+            assert_eq!(p.healing_received_1s.len(), buckets, "same grid as healing_1s");
+            assert_eq!(p.barrier_received_1s.len(), buckets, "same grid as healing_1s");
+            assert!(p.healing_received_1s.windows(2).all(|w| w[1] >= w[0]));
+            assert!(p.barrier_received_1s.windows(2).all(|w| w[1] >= w[0]));
+        }
+
+        // A received B's 250 heal in bucket 2, and C's 150 barrier in
+        // bucket 2. A's own outgoing heal to the pet does NOT appear here.
+        assert_eq!(d[0].healing_received_1s, vec![0, 0, 250, 250]);
+        assert_eq!(d[0].barrier_received_1s, vec![0, 0, 150, 150]);
+        // B received A's 500 heal in bucket 0 and 400 barrier in bucket 2.
+        assert_eq!(d[1].healing_received_1s, vec![500, 500, 500, 500]);
+        assert_eq!(d[1].barrier_received_1s, vec![0, 0, 400, 400]);
+        // C received A's 300 downed heal in bucket 2, no barrier.
+        assert_eq!(d[2].healing_received_1s, vec![0, 0, 300, 300]);
+        assert_eq!(d[2].barrier_received_1s, vec![0, 0, 0, 0]);
+
+        // The pet-heal proves the ally-attribution boundary: it inflates
+        // A's OUTGOING healing_1s (last element 1500 = 500 + 300 + 700)
+        // but has no receiver row to land on, so it is invisible to every
+        // player's healing_received_1s.
+        assert_eq!(*d[0].healing_1s.last().unwrap(), 1500);
+
+        // Squad-wide, the last cumulative value of every RECEIVED series
+        // must equal the summed ally_healing across every healer --
+        // received is ally-attributed, unlike healing_1s which counts
+        // every outgoing heal whether or not the recipient is an
+        // enumerated ally.
+        let received_total: u64 = d.iter().map(|p| *p.healing_received_1s.last().unwrap()).sum();
+        let ally_total: u64 =
+            d.iter().flat_map(|p| p.ally_healing.iter().map(|c| c.healing)).sum();
+        assert_eq!(received_total, ally_total);
+
+        let barrier_received_total: u64 =
+            d.iter().map(|p| *p.barrier_received_1s.last().unwrap()).sum();
+        let barrier_total: u64 = d.iter().flat_map(|p| p.ally_barrier.iter().copied()).sum();
+        assert_eq!(barrier_received_total, barrier_total);
     }
 }

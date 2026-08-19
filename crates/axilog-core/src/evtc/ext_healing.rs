@@ -114,10 +114,38 @@ use super::{RawEvent, RawLog};
 pub const HEALING_SIGNATURE: u32 = 0x9c9b_3c99;
 
 /// A decoded extension signature-registration row (module doc, step 1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registration {
     pub signature: u32,
     pub revision: u32,
+    /// The addon's self-reported version string (e.g. `"2.16rc1"`), NUL-
+    /// terminated and packed across the registration row's numeric fields --
+    /// see [`decode_version`]. `"Unknown"` when it does not decode, matching
+    /// GW2EI's `ExtensionHandler.Version` default.
+    pub version: String,
+}
+
+/// Decode the version string GW2EI's `HealingStatsExtensionHandler.
+/// SetVersion` reads off a registration row: the addon packs UTF-8 bytes
+/// across the row's numeric fields, which SetVersion re-serializes in
+/// native (little-endian) order as `dst_agent` (8) + `value` (4) +
+/// `buff_dmg` (4) + `overstack` (4) + `skillid` (4) + `src_instid` (2) +
+/// `dst_instid` (2) + `src_master_instid` (2) + `dst_master_instid` (2),
+/// then truncates at the first NUL. Non-UTF-8 bytes yield `None`, which
+/// callers turn into EI's own `"Unknown"` default.
+fn decode_version(e: &RawEvent) -> Option<String> {
+    let mut bytes = Vec::with_capacity(32);
+    bytes.extend_from_slice(&e.dst_agent.to_le_bytes());
+    bytes.extend_from_slice(&e.value.to_le_bytes());
+    bytes.extend_from_slice(&e.buff_dmg.to_le_bytes());
+    bytes.extend_from_slice(&e.overstack.to_le_bytes());
+    bytes.extend_from_slice(&e.skillid.to_le_bytes());
+    bytes.extend_from_slice(&e.src_instid.to_le_bytes());
+    bytes.extend_from_slice(&e.dst_instid.to_le_bytes());
+    bytes.extend_from_slice(&e.src_master_instid.to_le_bytes());
+    bytes.extend_from_slice(&e.dst_master_instid.to_le_bytes());
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8(bytes[..end].to_vec()).ok().filter(|v| !v.is_empty())
 }
 
 /// Decode `e` as a registration row IF it is shaped like one
@@ -131,7 +159,18 @@ pub fn decode_registration(e: &RawEvent) -> Option<Registration> {
     }
     let signature = (e.src_agent & 0x0000_0000_FFFF_FFFF) as u32;
     let revision = ((e.src_agent & 0x00FF_FFFF_0000_0000) >> 32) as u32;
-    Some(Registration { signature, revision })
+    let version = decode_version(e).unwrap_or_else(|| "Unknown".to_string());
+    Some(Registration { signature, revision, version })
+}
+
+/// The healing extension's registration row, if this log has a valid one --
+/// the [`healing_extension_present`] gate, but keeping the decoded
+/// signature/revision/version an EI-shaped consumer needs to reproduce
+/// GW2EI's `usedExtensions` descriptor.
+pub fn healing_registration(raw: &RawLog) -> Option<Registration> {
+    raw.events.iter().filter_map(decode_registration).find(|r| {
+        r.signature == HEALING_SIGNATURE && (r.revision == 1 || r.revision == 2)
+    })
 }
 
 /// Whether `raw` carries a valid healing-extension registration row

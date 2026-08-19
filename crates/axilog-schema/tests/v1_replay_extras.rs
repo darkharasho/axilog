@@ -76,7 +76,7 @@ fn document(extras: &ReplayExtras) -> serde_json::Value {
         boon_uptime: Default::default(),
         boon_generation: Default::default(),
         warnings: Default::default(),
-        has_healing_extension: Default::default(),
+        healing_extension: Default::default(),
         combat_participant_enemies: Default::default(),
         instance_ids: Default::default(),
         enemy_damage_out: Default::default(),

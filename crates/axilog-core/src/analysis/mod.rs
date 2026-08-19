@@ -175,7 +175,7 @@ pub mod dist_outcomes;
 /// `replay::build_replay`, not by `analyze()`; see `distance`'s module doc.
 pub mod distance;
 
-use crate::evtc::RawLog;
+use crate::evtc::{ext_healing, RawLog};
 use crate::model::Encounter;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -192,7 +192,7 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     /// `healing::HealingMetrics`. All-zero (the `Default`) on a log that
     /// doesn't carry the extension at all, OR on a real extension log for a
     /// player who never healed/granted barrier -- `Metrics::
-    /// has_healing_extension` is the flag that distinguishes "genuinely
+    /// healing_extension` is the flag that distinguishes "genuinely
     /// zero" from "extension absent", used to gate schema/warning output.
     pub healing: healing::HealingMetrics,
     /// Outgoing arcdps-methodology contribution toward downing enemy
@@ -343,12 +343,14 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// Whether the arcdps healing extension (M10 Task 1) was present in
     /// this log at all (a valid signature+revision registration row was
     /// found -- see `evtc::ext_healing::healing_extension_present`).
-    /// `false` means every player's `PlayerMetrics::healing` is
+    /// `None` means every player's `PlayerMetrics::healing` is
     /// meaningfully "no data", not "genuinely zero healing" -- native
     /// schema uses this to omit the `healing` block entirely (rather than
     /// emit a block of misleading zeros) and `warnings` carries a matching
-    /// "healing extension not present" note in that case.
-    pub has_healing_extension: bool,
+    /// "healing extension not present" note in that case. `Some` carries
+    /// the addon's own registration descriptor, which an EI-shaped
+    /// consumer needs to reproduce GW2EI's `usedExtensions` entry.
+    pub healing_extension: Option<ext_healing::Registration>,
     /// Combat-participant enemy ids (M10 Task 3), keyed by `Enemy::id`
     /// (representative addr) -- the subset of `enc.enemies` that actually
     /// interacted with the squad in some way. Real WvW logs enumerate every
@@ -631,10 +633,11 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // M10 Task 1: cheap (a handful of linear scans over `raw.events`), so
     // computed unconditionally like every other pass above -- returns
     // whether the extension was present at all (see `Metrics::
-    // has_healing_extension`'s doc comment for why that matters beyond just
+    // healing_extension`'s doc comment for why that matters beyond just
     // "were all totals zero").
-    let has_healing_extension =
-        healing::apply_with_registry(&mut players, raw, &registry, &squad, &addr_to_rep);
+    let healing_extension = healing::apply_with_registry(&mut players, raw, &registry, &squad, &addr_to_rep)
+        .then(|| ext_healing::healing_registration(raw))
+        .flatten();
     // M12 Task 1: per-skill damage distribution -- a grouped refinement of
     // the `dmg_by_rep`/`taken_by_rep` totals already computed above (same
     // predicate + `InstidRegistry` pet-fold, just also keyed by `skillid`),
@@ -787,7 +790,7 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
             agent_addr: None,
         });
     }
-    if !has_healing_extension {
+    if healing_extension.is_none() {
         warnings.push(Warning {
             code: "healing_extension_absent",
             severity: WarningSeverity::Info,
@@ -809,7 +812,7 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
         .chain(enc.enemies.iter().map(|e| e.id))
         .filter_map(|addr| registry.instid_of(addr).map(|instid| (addr, instid)))
         .collect();
-    Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings, has_healing_extension,
+    Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings, healing_extension,
         combat_participant_enemies, instance_ids, enemy_damage_out, skill_map }
 }
 

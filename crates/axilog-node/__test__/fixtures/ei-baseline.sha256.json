@@ -1,0 +1,8 @@
+{
+  "_comment": "ei-json baseline digest for the axibridge byte-identity guard (M17 Task 2). See ei-byte-identity.test.mjs for the regeneration procedure. Regenerated for the healing-extension roster change: the document gained a top-level `usedExtensions[]` entry (GW2EI's `ExtensionDesc` — name/version/revision/signature plus the roster of characters whose own addon reported), which the ei-json surface previously omitted entirely. That absence made every EI-shaped consumer reading `usedExtensions` flag all players' healing as partial. Additive only, +341 chars. Determinism verified: two independent captures produced byte-identical output and identical sha256 digests.",
+  "fixture": "fixtures/wvw-small.anon.zevtc",
+  "sourceCommit": "healing-extension-roster",
+  "parseFileEiOpts": { "everything": true },
+  "jsonStringLength": 3571535,
+  "sha256": "41af0cb1f9fc03c9405cd8fbe16c1f76fd0e74b36fbdb5e8b531225be0d96cf3"
+}

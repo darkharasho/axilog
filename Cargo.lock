@@ -89,21 +89,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
-name = "axilog-cli"
-version = "1.0.0"
+name = "axilog-api"
+version = "1.2.0"
 dependencies = [
+ "axilog-core",
+ "axilog-schema",
+ "serde_json",
+]
+
+[[package]]
+name = "axilog-cli"
+version = "1.2.0"
+dependencies = [
+ "axilog-api",
  "axilog-core",
  "axilog-ei",
  "axilog-html",
  "axilog-schema",
  "clap",
  "criterion",
+ "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
 name = "axilog-core"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "flate2",
  "serde_json",
@@ -113,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "axilog-ei"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "axilog-core",
  "axilog-schema",
@@ -123,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "axilog-html"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "axilog-core",
  "axilog-schema",
@@ -132,8 +144,9 @@ dependencies = [
 
 [[package]]
 name = "axilog-node"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
+ "axilog-api",
  "axilog-core",
  "axilog-ei",
  "axilog-schema",
@@ -145,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "axilog-py"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "axilog-core",
  "axilog-ei",
@@ -157,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "axilog-schema"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "axilog-core",
  "serde",

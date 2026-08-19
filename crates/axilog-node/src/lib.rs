@@ -98,10 +98,13 @@ pub struct ParseOptions {
 
 /// The six compute gates, resolved once from [`ParseOptions`].
 ///
-/// Every entry point reads its gates through this rather than unpacking
+/// `parse_file_ei` reads its gates through this rather than unpacking
 /// `opts` itself: `everything` is folded in HERE, so a pass added later
-/// cannot be left out of it by forgetting one `|| all` at one of three
-/// call sites (which is exactly the drift `everything` exists to prevent).
+/// cannot be left out of it by forgetting one `|| all` at its call site
+/// (which is exactly the drift `everything` exists to prevent). `parse_file`
+/// and `parse_buffer` no longer use `Gates` at all -- they pass `opts`
+/// straight through to `axilog_api::ParseOpts`, whose own `want_*`
+/// resolvers fold in `everything` the same way.
 #[derive(Clone, Copy)]
 struct Gates {
     replay: bool,
@@ -128,134 +131,45 @@ impl Gates {
     }
 }
 
-/// Shared decode -> resolve -> analyze -> build_report -> build_report_v1
-/// pipeline (identical up through `build_report` to `axilog-cli`'s
-/// `Cmd::Parse` handler) over an already-read byte buffer, returning the
-/// native 1.0 container (Task 12: the native entry points -- `parseFile`/
-/// `parseBuffer` -- emit the 1.0 document, mirroring the CLI's `--format
-/// json`; `parseFileEi` is untouched and keeps consuming the legacy
-/// `Report` via `build_report_and_ei_inputs_from_bytes` below).
-/// `want_replay` mirrors `ParseOptions.replay`; `want_skill_damage` mirrors
-/// `ParseOptions.skill_damage`; `want_missiles` mirrors
-/// `ParseOptions.missiles` (all defaulted to `false` by callers that pass
-/// no options at all). `generated_from` is the origin file NAME (never a
-/// full path -- paths are environment-specific and routinely contain a
-/// user name, which the PII policy scrubs); `parseBuffer` has no file name
-/// to offer and passes `None`.
-#[allow(clippy::too_many_arguments)]
+/// Maps the napi-facing `ParseOptions` (with `everything`'s union
+/// semantics already folded in by `axilog_api::ParseOpts`'s own
+/// `want_*` resolvers) onto the facade's `ParseOpts`. `None` (no options
+/// passed at all) maps to every flag off, matching `Gates::resolve`'s
+/// existing `opts.is_some_and(..)` behavior for the same input.
+fn opts_to_parse_opts(o: Option<&ParseOptions>) -> axilog_api::ParseOpts {
+    let o = match o {
+        Some(o) => o,
+        None => return Default::default(),
+    };
+    axilog_api::ParseOpts {
+        replay: o.replay.unwrap_or(false),
+        skill_damage: o.skill_damage.unwrap_or(false),
+        timeseries: o.timeseries.unwrap_or(false),
+        missiles: o.missiles.unwrap_or(false),
+        rotation: o.rotation.unwrap_or(false),
+        modifiers: o.modifiers.unwrap_or(false),
+        everything: o.everything.unwrap_or(false),
+    }
+}
+
+/// Thin adapter over `axilog_api::parse_report_v1` (M17 side-channel
+/// absorption: the decode -> resolve -> analyze -> build_report ->
+/// build_report_v1 pipeline this used to hand-roll now lives once in
+/// `axilog-api`, shared with `axilog-cli` and any other native consumer).
+/// `parseFileEi` is untouched and keeps consuming the legacy `Report` via
+/// `build_report_and_ei_inputs_from_bytes` below -- that pipeline needs an
+/// `EiReplay` alongside the `ReportV1` the facade returns, so it is not (yet)
+/// a candidate for this facade. `generated_from` is the origin file NAME
+/// (never a full path -- paths are environment-specific and routinely
+/// contain a user name, which the PII policy scrubs); `parseBuffer` has no
+/// file name to offer and passes `None`.
 fn build_report_v1_from_bytes(
     bytes: &[u8],
-    want_replay: bool,
-    want_skill_damage: bool,
-    want_timeseries: bool,
-    want_missiles: bool,
-    want_rotation: bool,
-    want_modifiers: bool,
+    opts: Option<&ParseOptions>,
     generated_from: Option<&str>,
 ) -> Result<axilog_schema::v1::ReportV1> {
-    let raw = axilog_core::evtc::decode_raw(bytes).map_err(napi_err)?;
-    let enc = axilog_core::model::resolve(&raw);
-    let metrics = axilog_core::analysis::analyze(&enc, &raw);
-    let replay = want_replay.then(|| {
-        axilog_core::analysis::replay::build_replay(
-            &raw,
-            &enc,
-            axilog_core::analysis::replay::DEFAULT_POLL_MS,
-        )
-    });
-    let missiles = want_missiles
-        .then(|| axilog_core::analysis::missiles::build_missiles(&raw, &enc));
-    // Native path: whole-fight only -- the per-target split has no native
-    // counterpart on this path -- it is the expensive half, and only the
-    // ei-json builder below asks for it (absorption Task 13 gave it a native
-    // home on `blocks.damage_mods`, but not a reason to always pay for it).
-    let damage_mods = want_modifiers.then(|| {
-        axilog_core::analysis::damage_mods::evaluate_catalog_full(
-            &raw, &axilog_core::analysis::damage::InstidRegistry::build(&raw), &enc, false,
-        )
-    });
-    // Side-channel absorption Task 6: these two passes were previously run
-    // only on the ei-json path, so the NATIVE path emitted no `minions`
-    // block and no `healthPercents` even when the caller asked for the
-    // gates that produce them. They are native blocks now, so they run
-    // here on the same options that gate them everywhere else.
-    let minion_rollups =
-        want_skill_damage.then(|| axilog_core::analysis::minions::build(&raw, &enc));
-    let health_percents =
-        want_timeseries.then(|| axilog_core::analysis::health::ei_health_percents(&raw, &enc));
-    // Tasks 7 and 8, same story: enemy per-skill damage and the per-enemy
-    // outgoing series now land on the native `damage` and `series` blocks,
-    // so the native path has to run both passes too. The addr set and the
-    // representative fold are shared, and built at most once.
-    let enemy_sets = (want_skill_damage || want_timeseries).then(|| {
-        let enemies: std::collections::BTreeSet<u64> =
-            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
-        let rep: std::collections::BTreeMap<u64, u64> = enc
-            .enemies
-            .iter()
-            .flat_map(|e| e.agent_addrs.iter().map(move |&a| (a, e.id)))
-            .collect();
-        (enemies, rep)
-    });
-    let enemy_dist = enemy_sets
-        .as_ref()
-        .filter(|_| want_skill_damage)
-        .map(|(en, rep)| axilog_core::analysis::skill_damage::build_enemy_dist(&raw, en, rep));
-    let enemy_series = enemy_sets.as_ref().filter(|_| want_timeseries).map(|(en, rep)| {
-        axilog_core::analysis::timeseries::build_enemy_series(
-            &enc,
-            &raw,
-            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
-            en,
-            rep,
-        )
-    });
-    // Task 9, same story again: the outcome columns are native now, so the
-    // native path runs the pass on the gate that produces them.
-    let dist_outcomes =
-        want_skill_damage.then(|| axilog_core::analysis::dist_outcomes::build(&raw, &enc));
-    // Task 11: ungated on purpose. `blocks.replay.by_entity` is the
-    // always-on half of that block, so the native document carries
-    // down/dead intervals whether or not positions were asked for.
-    let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
-    let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
-    // Task 10, the last of the same story: one pass, two families, two
-    // flags -- so it runs on EITHER gate and each `Passes` field is
-    // re-filtered to the flag that family actually rides.
-    let healing_detail = (want_skill_damage || want_timeseries)
-        .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
-        .flatten();
-    let report = axilog_schema::build_report(
-        &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
-        want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
-    );
-    // Task 12: the native path needs these too -- they feed
-    // `blocks.boons`/`blocks.conditions`, not just the ei-json adapter.
-    let boon_states = want_timeseries
-        .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
-    let target_conditions =
-        want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
-    Ok(axilog_schema::v1::build_report_v1(
-        &enc,
-        &metrics,
-        &report,
-        env!("CARGO_PKG_VERSION"),
-        generated_from,
-        &axilog_schema::v1::Passes {
-            damage_mods: damage_mods.as_ref(),
-            minions: minion_rollups.as_ref(),
-            health_percents: health_percents.as_ref(),
-            enemy_dist: enemy_dist.as_ref(),
-            enemy_series: enemy_series.as_ref(),
-            dist_outcomes: dist_outcomes.as_ref(),
-            healing_detail: healing_detail.as_ref().filter(|_| want_skill_damage),
-            healing_series: healing_detail.as_ref().filter(|_| want_timeseries),
-            activity: Some(&activity),
-            replay_extras: Some(&replay_extras),
-            boon_states: boon_states.as_ref(),
-            target_conditions: target_conditions.as_ref(),
-        },
-    ))
+    axilog_api::parse_report_v1(bytes, &opts_to_parse_opts(opts), generated_from)
+        .map_err(napi_err)
 }
 
 /// Same decode -> resolve -> analyze pipeline as `build_report_from_bytes`,
@@ -428,13 +342,9 @@ fn report_v1_to_value(report: &axilog_schema::v1::ReportV1) -> Result<Value> {
 #[napi]
 pub fn parse_file(path: String, opts: Option<ParseOptions>) -> Result<Value> {
     let bytes = std::fs::read(&path).map_err(napi_err)?;
-    let g = Gates::resolve(opts.as_ref());
     let generated_from =
         std::path::Path::new(&path).file_name().and_then(|s| s.to_str());
-    let report = build_report_v1_from_bytes(
-        &bytes, g.replay, g.skill_damage, g.timeseries, g.missiles, g.rotation,
-        g.modifiers, generated_from,
-    )?;
+    let report = build_report_v1_from_bytes(&bytes, opts.as_ref(), generated_from)?;
     report_v1_to_value(&report)
 }
 
@@ -447,11 +357,7 @@ pub fn parse_file(path: String, opts: Option<ParseOptions>) -> Result<Value> {
 /// file name to offer, so `generated_from` is always absent here.
 #[napi]
 pub fn parse_buffer(buf: Buffer, opts: Option<ParseOptions>) -> Result<Value> {
-    let g = Gates::resolve(opts.as_ref());
-    let report = build_report_v1_from_bytes(
-        buf.as_ref(), g.replay, g.skill_damage, g.timeseries, g.missiles, g.rotation,
-        g.modifiers, None,
-    )?;
+    let report = build_report_v1_from_bytes(buf.as_ref(), opts.as_ref(), None)?;
     report_v1_to_value(&report)
 }
 

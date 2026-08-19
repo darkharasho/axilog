@@ -87,3 +87,60 @@ fn all_flag_unions_with_the_individual_flags() {
         "--all and --all --replay --modifiers must produce the same document"
     );
 }
+
+/// M17 Task 3 review fix: `--format json` must surface every warning
+/// `ReportV1` reports on stderr, unfiltered -- including
+/// `recorded_by_unresolved` (`crates/axilog-schema/src/v1/mod.rs`'s
+/// deliberately-designed diagnostic for an unresolvable recording-player
+/// account), which a prior version of this CLI path filtered out to force
+/// byte-identical stderr with the pre-facade CLI. That filter suppressed a
+/// diagnostic the schema layer exists to surface; this test guards against
+/// it coming back.
+///
+/// The committed fixture (`fixtures/wvw-small.anon.zevtc`) does not trigger
+/// `recorded_by_unresolved` or any other warning today, so this cannot
+/// assert on that specific code -- `axilog-schema`'s own unit test
+/// (`crates/axilog-schema/src/v1/mod.rs`, search for
+/// `recorded_by_unresolved`) already covers that condition with a
+/// synthetic `Encounter`/`Metrics`, and manufacturing a `.zevtc` fixture
+/// here to reach the same condition through a real log would be a heavier,
+/// less direct duplicate of that coverage. Instead this asserts the
+/// general contract directly against the real facade output: whatever
+/// `axilog_api::parse_report_v1` reports in `warnings`, `--format json`
+/// must print to stderr, one `warning: {message}` line per entry, with no
+/// filtering in between -- true today (zero warnings, zero lines) and
+/// still true if this fixture, or a future one, ever starts triggering
+/// one.
+#[test]
+fn json_format_surfaces_every_report_v1_warning_on_stderr_unfiltered() {
+    let bytes = std::fs::read(FIXTURE).expect("read committed fixture");
+    let report_v1 = axilog_api::parse_report_v1(
+        &bytes,
+        &axilog_api::ParseOpts::everything(),
+        None,
+    )
+    .expect("facade parses the committed fixture");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_axilog"))
+        .args(["parse", FIXTURE, "--format", "json", "--all"])
+        .output()
+        .expect("run axilog parse");
+    assert!(out.status.success(), "parse failed: {}", String::from_utf8_lossy(&out.stderr));
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let warning_lines: Vec<&str> =
+        stderr.lines().filter(|l| l.starts_with("warning: ")).collect();
+
+    assert_eq!(
+        warning_lines.len(),
+        report_v1.warnings.len(),
+        "every warning ReportV1 reports must reach stderr unfiltered -- got {} stderr warning \
+         line(s) but ReportV1 reports {} -- if this fixture starts triggering a warning (e.g. \
+         recorded_by_unresolved) and this count stops matching, a filter has come back",
+        warning_lines.len(),
+        report_v1.warnings.len(),
+    );
+    for (line, w) in warning_lines.iter().zip(report_v1.warnings.iter()) {
+        assert_eq!(*line, format!("warning: {}", w.message));
+    }
+}
