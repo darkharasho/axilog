@@ -85,11 +85,11 @@ fn received_series_ride_the_timeseries_gate() {
     // received series -- one gate, three fields.
     let mut checked = 0;
     for (id, e) in &series.by_entity.0 {
-        if e.healing_1s.is_some() {
+        if let Some(healing) = &e.healing_1s {
             assert!(e.healing_received_1s.is_some(), "entity {id} missing healing_received_1s");
             assert!(e.barrier_received_1s.is_some(), "entity {id} missing barrier_received_1s");
             let h = e.healing_received_1s.as_ref().unwrap();
-            assert_eq!(h.len, e.healing_1s.as_ref().unwrap().len, "same grid length");
+            assert_eq!(h.len, healing.len, "same grid length");
             assert_eq!(h.interval_ms, 1000);
             checked += 1;
         }

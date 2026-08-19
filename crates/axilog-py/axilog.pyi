@@ -1936,6 +1936,9 @@ class EntitySeries(_EntitySeriesRequired, total=False):
     `extHealingStats.healing1S`). Absent for enemies, and for everyone on a
     log with no healing extension.
 
+    `healing_received_1s` and `barrier_received_1s` are the receiver-indexed
+    counterparts of `healing_1s`, on the same grid and the same gate.
+
     `health_percents` is `[[time_ms, percent], ...]` -- a STEP function,
     which is why it is a plain pair list rather than a `SeriesOut`:
     re-sampling it onto a fixed grid would either invent readings between
@@ -1947,6 +1950,8 @@ class EntitySeries(_EntitySeriesRequired, total=False):
     power_damage: SeriesOut
     health_percents: List[List[float]]
     healing_1s: SeriesOut
+    healing_received_1s: SeriesOut
+    barrier_received_1s: SeriesOut
 
 class SeriesBlock(TypedDict):
     """`squad` is REQUIRED (see `MissilesBlock`). The squad series is

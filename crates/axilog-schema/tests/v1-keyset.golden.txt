@@ -308,6 +308,11 @@ blocks.rotation.by_entity.<id>.casts[].time_gained_ms
 blocks.series
 blocks.series.by_entity
 blocks.series.by_entity.<id>
+blocks.series.by_entity.<id>.barrier_received_1s
+blocks.series.by_entity.<id>.barrier_received_1s.data
+blocks.series.by_entity.<id>.barrier_received_1s.enc
+blocks.series.by_entity.<id>.barrier_received_1s.interval_ms
+blocks.series.by_entity.<id>.barrier_received_1s.len
 blocks.series.by_entity.<id>.damage
 blocks.series.by_entity.<id>.damage.data
 blocks.series.by_entity.<id>.damage.enc
@@ -323,6 +328,11 @@ blocks.series.by_entity.<id>.healing_1s.data
 blocks.series.by_entity.<id>.healing_1s.enc
 blocks.series.by_entity.<id>.healing_1s.interval_ms
 blocks.series.by_entity.<id>.healing_1s.len
+blocks.series.by_entity.<id>.healing_received_1s
+blocks.series.by_entity.<id>.healing_received_1s.data
+blocks.series.by_entity.<id>.healing_received_1s.enc
+blocks.series.by_entity.<id>.healing_received_1s.interval_ms
+blocks.series.by_entity.<id>.healing_received_1s.len
 blocks.series.by_entity.<id>.health_percents
 blocks.series.by_entity.<id>.per_target
 blocks.series.by_entity.<id>.per_target.<id>
