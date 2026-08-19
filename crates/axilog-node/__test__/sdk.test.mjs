@@ -41,9 +41,8 @@ const EXPECTED_SUPPORT_SUMS = { cleanses: 801, cleanses_self: 97, strips: 437, r
 // `boons_golden.rs`). Picked because it needs no float/rounding
 // gymnastics: EI publishes it pre-rounded to 3 decimals (6.016) and our
 // own computation lands within a hundredth of a percentage point of that.
-// The golden EI JSON spells this account with arcdps's leading colon
-// (`:Anon132.5884`); ReportV1 strips it at the model boundary, so the
-// value to match on here is the bare account name.
+// Both sides spell the account bare: the golden EI JSON never carried
+// arcdps's leading colon, and ReportV1 strips it at the model boundary too.
 const STABLE_BOON_ACCOUNT = 'Anon132.5884'
 const STABLE_BOON_NAME = 'Quickness'
 const STABLE_BOON_EXPECTED_PRESENCE_PCT = 6.016
