@@ -87,13 +87,55 @@ an id outside `CONDITION_BUFFS`, so the new pass needs its own lookup over
 both tables. Nor may it fall through to `simulator::capacity_for`, whose
 `_ => 5` arm is documented as unreachable for the ids it knows.
 
-**Unresolved value, to be measured not invented.** The correct
-`ctor_capacity` and `is_intensity` for Stun and Daze are not recorded
-anywhere in this repo. Implementation must determine them from the
-arcdps-reported capacities on the fixture and from Elite Insights' own buff
-definitions, and record what was measured in the table's comment. The
-fallback only binds on logs that report no capacity, but a wrong constant
-there is silent.
+**Stun and Daze are Force-type, capacity 1 — measured.** Neither id
+appears in any table in this repo, so both values were read off the
+fixture's own `sc::BUFF_INFO` rows (build 20260114), calibrated against
+nineteen ids whose classification is already known:
+
+| id | name | max stacks | category | arcdps stack type |
+|---|---|---|---|---|
+| 740 | Might | 25 | 0 | 4 — `Stacking` |
+| 1122 | Stability | 25 | 0 | 0 — `StackingConditionalLoss` |
+| 736 | Bleeding | 1500 | 2 | 4 — `Stacking` |
+| 722 | Chilled | 9 | 2 | 1 — `Queue` |
+| 1187 | Quickness | 99 | 0 | 1 — `Queue` |
+| **872** | **Stun** | **1** | **1** | **5 — `Force`** |
+| **833** | **Daze** | **1** | **1** | **5 — `Force`** |
+
+The calibration is what makes this readable rather than guessed: every
+known intensity id reports stack type 4 or 0, every known duration id
+reports 1, and the two unknowns report a third value, 5, which is
+`BuffStackType::Force` in the enum this repo already defines in
+`analysis::buffs::mod`. Category 1 likewise separates them from conditions
+(2) and boons (0). So:
+
+- `is_intensity` = **false** for both (`Force` maps to
+  `BuffSimulatorDuration`, per `BuffStackType::is_intensity`)
+- `ctor_capacity` = **1** for both, which is also what arcdps reports, so
+  the two agree and the fallback never has to disagree with the log
+
+One incidental note from the same table: the intensity conditions report a
+max-stacks of 1500, which `extract_buff_capacities` clamps to its
+`MAX_BUFF_CAPACITY` of 99. That is pre-existing behaviour shared with
+`blocks.conditions` and needs no change here — it is recorded only so the
+1500 in the table above is not read as a discrepancy.
+
+**No simulator change is needed, and this was checked rather than assumed.**
+`Force` uses `ForceOverrideLogic` where `Queue` uses `QueueLogic` — a new
+application overrides the active stack instead of being compared against
+it — and `generation::run_segments` takes only `(capacity, is_intensity)`,
+with no notion of stack type. It happens not to matter: `run_duration`'s
+at-capacity branch splits on `stack.len() > 1`, and the `capacity == 1`
+arm below it does `stack[0] = duration_ms` unconditionally, which *is*
+override semantics. `ForceOverrideLogic.IsFull => stacks.Count == 1` caps
+Force at one stack regardless of catalogued capacity, so the two paths
+coincide exactly.
+
+That arm currently carries the comment "capacity == 1 edge case; never hit
+for the 12 tracked boons (minimum real capacity is 5)". This pass is the
+first caller to reach it, so the comment must be updated in the same
+change — leaving a live path documented as dead is precisely the failure
+this project keeps finding.
 
 **Output shape:**
 
