@@ -2,9 +2,10 @@
 //!
 //! Both `axilog-node` and `axilog-cli` previously hand-rolled this
 //! sequence independently; a third consumer (`arcdps-axipulse`) made the
-//! drift risk concrete. Adding an analysis pass now means editing one
-//! function.
+//! drift risk concrete. The native paths now share this function; the
+//! ei-json paths and `axilog-py` still carry their own sequence.
 
+pub use axilog_core::evtc::EvtcError;
 pub use axilog_schema::v1;
 
 /// Per-call parse settings. Mirrors the Node SDK's `ParseOptions`

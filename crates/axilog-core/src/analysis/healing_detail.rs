@@ -207,8 +207,9 @@ pub struct PlayerHealingDetail {
     /// there is no row to put it on otherwise.
     pub healing_received_1s: Vec<u64>,
     /// CUMULATIVE **incoming** barrier per 1s bucket, same grid and same
-    /// ally attribution. GW2EI's `barrier1S` counterpart, which GW2EI
-    /// itself does not emit per-receiver.
+    /// ally attribution. GW2EI's counterpart is
+    /// `extBarrierStats.barrierReceived1S`, whose attribution differs --
+    /// see the ally-attribution note on `healing_received_1s`.
     pub barrier_received_1s: Vec<u64>,
 }
 

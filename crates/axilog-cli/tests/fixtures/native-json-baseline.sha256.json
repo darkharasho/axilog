@@ -1,8 +1,8 @@
 {
-  "_comment": "Native `--format json` baseline digest for the axilog-cli facade regression guard (M17 Task 3). See facade_identity.rs for the regeneration procedure. Regenerated for M17 Task 5 (spec 2026-08-18-axilog-v1.1.0-parse-facade), which intentionally added the opt-in EntitySeries.healing_received_1s / barrier_received_1s fields under --all. Captured from commit d243922 (the commit that added those fields), release-built. Determinism verified: two independent captures produced byte-identical output and identical sha256 digests.",
+  "_comment": "Native `--format json` baseline digest for the axilog-cli facade regression guard (M17 Task 3). See facade_identity.rs for the regeneration procedure. Regenerated for M17 Task 6 (spec 2026-08-18-axilog-v1.1.0-parse-facade), the 1.1.0 release-version bump: the only byte that moved is the embedded `encounter.version`/tool-version literal going from \"1.0.0\" to \"1.1.0\" (same length, so byteLength is unchanged from the Task 5 capture). Captured from the workspace at the v1.1.0 release commit (Cargo.toml/package.json versions bumped, no parser or schema change), release-built. Determinism verified: two independent captures produced byte-identical output and identical sha256 digests.",
   "fixture": "fixtures/wvw-small.anon.zevtc",
-  "sourceCommit": "d243922",
+  "sourceCommit": "v1.1.0",
   "cliArgs": ["parse", "fixtures/wvw-small.anon.zevtc", "--format", "json", "--all"],
   "byteLength": 8249635,
-  "sha256": "88113cbacf623a98b026ccf9f9ff065f0398a8e2b464d07431f77180e8abc051"
+  "sha256": "35685d95f4a5709e75f82dd70a7ba4e41714931b3914ef4d92e2fa2b66496462"
 }
