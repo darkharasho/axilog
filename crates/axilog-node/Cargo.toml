@@ -16,6 +16,7 @@ crate-type = ["cdylib"]
 axilog-core = { path = "../axilog-core" }
 axilog-schema = { path = "../axilog-schema" }
 axilog-ei = { path = "../axilog-ei" }
+axilog-api = { path = "../axilog-api" }
 serde_json.workspace = true
 napi = { version = "3.12.0", default-features = false, features = ["napi4", "serde-json"] }
 napi-derive = "3.6.2"

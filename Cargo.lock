@@ -143,6 +143,7 @@ dependencies = [
 name = "axilog-node"
 version = "1.0.0"
 dependencies = [
+ "axilog-api",
  "axilog-core",
  "axilog-ei",
  "axilog-schema",
