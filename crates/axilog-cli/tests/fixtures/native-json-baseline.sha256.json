@@ -1,8 +1,14 @@
 {
-  "_comment": "Native `--format json` baseline digest for the axilog-cli facade regression guard (M17 Task 3). See facade_identity.rs for the regeneration procedure. Regenerated for M17 Task 6 (spec 2026-08-18-axilog-v1.1.0-parse-facade), the 1.1.0 release-version bump: the only byte that moved is the embedded `encounter.version`/tool-version literal going from \"1.0.0\" to \"1.1.0\" (same length, so byteLength is unchanged from the Task 5 capture). Captured from the workspace at the v1.1.0 release commit (Cargo.toml/package.json versions bumped, no parser or schema change), release-built. Determinism verified: two independent captures produced byte-identical output and identical sha256 digests.",
+  "_comment": "Native `--format json` baseline digest for the axilog-cli facade regression guard (M17 Task 3). See facade_identity.rs for the regeneration procedure. Regenerated for the healing-extension roster change: `blocks.healing` gained an `extension` descriptor (version/revision/signature, decoded from the addon's registration row) and every `blocks.healing.by_entity` row gained `runs_extension` — GW2EI's `RunningExtension` roster, which the native format previously did not carry at all, leaving EI-shaped consumers unable to tell 'this player's healing numbers are complete' from 'partial, relayed by a peer'. Both are intentional new fields, so byteLength grew by 1563 from the pre-roster baseline. Re-digested (byteLength unchanged) for the 1.2.0 version bump: the document embeds `axilog.version`, so every release bump moves this digest by exactly that string. Determinism verified at each regeneration: two independent captures produced byte-identical output and identical sha256 digests.",
   "fixture": "fixtures/wvw-small.anon.zevtc",
-  "sourceCommit": "v1.1.0",
-  "cliArgs": ["parse", "fixtures/wvw-small.anon.zevtc", "--format", "json", "--all"],
-  "byteLength": 8249635,
-  "sha256": "35685d95f4a5709e75f82dd70a7ba4e41714931b3914ef4d92e2fa2b66496462"
+  "sourceCommit": "healing-extension-roster @ 1.2.0",
+  "cliArgs": [
+    "parse",
+    "fixtures/wvw-small.anon.zevtc",
+    "--format",
+    "json",
+    "--all"
+  ],
+  "byteLength": 8251198,
+  "sha256": "d46a30d9ea1e88063b77b926e239f2c214e26d2a3e0a445ae704ccae3256ef47"
 }

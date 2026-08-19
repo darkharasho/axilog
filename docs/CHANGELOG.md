@@ -10,7 +10,7 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
-## Unreleased
+## v1.2.0 — 2026-08-18
 
 ### Added
 - The arcdps healing-extension ROSTER — which players' own addon reported,
