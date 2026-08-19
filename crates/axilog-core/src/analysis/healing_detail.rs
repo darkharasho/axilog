@@ -75,7 +75,7 @@
 //! are still NOT produced: no consumer reads them, and `alliedHealing1S`
 //! alone would be `players x players x seconds`.
 //!
-//! ## `barrier1S` is deliberately absent while `healing1S` is present
+//! ## The outgoing `barrier1S` is deliberately absent while `healing1S` is present
 //!
 //! That asymmetry is the audit's, not this module's: its gap rows name
 //! `extHealingStats.healing1S` and stop there. `healing1S` is also unread
