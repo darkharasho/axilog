@@ -41,7 +41,10 @@ const EXPECTED_SUPPORT_SUMS = { cleanses: 801, cleanses_self: 97, strips: 437, r
 // `boons_golden.rs`). Picked because it needs no float/rounding
 // gymnastics: EI publishes it pre-rounded to 3 decimals (6.016) and our
 // own computation lands within a hundredth of a percentage point of that.
-const STABLE_BOON_ACCOUNT = ':Anon132.5884'
+// The golden EI JSON spells this account with arcdps's leading colon
+// (`:Anon132.5884`); ReportV1 strips it at the model boundary, so the
+// value to match on here is the bare account name.
+const STABLE_BOON_ACCOUNT = 'Anon132.5884'
 const STABLE_BOON_NAME = 'Quickness'
 const STABLE_BOON_EXPECTED_PRESENCE_PCT = 6.016
 
@@ -91,10 +94,26 @@ function decodeSeries(series) {
   return out
 }
 
-/** First `limit` paths where `a` and `b` differ, DFS over plain objects/arrays. Used only to produce a readable failure message for the dual-path parity test -- `assert.deepStrictEqual` alone just dumps the entire (huge) report object on mismatch. */
+/**
+ * First `limit` paths where `a` and `b` differ, DFS over plain objects/arrays.
+ * This IS the dual-path parity comparison, not just its failure message:
+ * `assert.deepStrictEqual` cannot be used directly because the two paths
+ * render f32 fields through different serializers. napi hands JS an f64
+ * widened from the f32 and `JSON.stringify` prints every bit of it
+ * (`-26768.70703125`); Rust's `serde_json` prints the shortest decimal that
+ * round-trips back to the same f32 (`-26768.707`). Those are the same f32,
+ * so two numbers count as equal here when `Math.fround` maps them to one
+ * value -- an exact identity, not an epsilon tolerance.
+ *
+ * The one thing this rule cannot see is two genuinely different f64s that
+ * collapse onto the same f32. ReportV1 stores its measurements as f32, so
+ * that case does not arise today; if an f64 field is ever added, it needs
+ * its own comparison.
+ */
 function firstDiffPaths(a, b, limit = 10, path = '$', out = []) {
   if (out.length >= limit) return out
   if (a === b) return out
+  if (typeof a === 'number' && typeof b === 'number' && Math.fround(a) === Math.fround(b)) return out
   const aIsObj = a !== null && typeof a === 'object'
   const bIsObj = b !== null && typeof b === 'object'
   if (!aIsObj || !bIsObj) {
@@ -644,15 +663,13 @@ test('dual-path parity: node parseFile matches the CLI\'s --format json output',
   })
   const cliReport = JSON.parse(stdout.toString('utf8'))
 
-  try {
-    assert.deepStrictEqual(nodeReport, cliReport)
-  } catch {
-    const diffs = firstDiffPaths(nodeReport, cliReport, 10)
-    assert.fail(
-      `node parseFile output diverges from CLI --format json output at ${diffs.length} path(s):\n` +
-        diffs.join('\n'),
-    )
-  }
+  const diffs = firstDiffPaths(nodeReport, cliReport, 10)
+  assert.equal(
+    diffs.length,
+    0,
+    `node parseFile output diverges from CLI --format json output at ${diffs.length} path(s):\n` +
+      diffs.join('\n'),
+  )
 })
 
 test('parseFile: { everything: true } computes every gate -- nothing left not_computed', () => {
@@ -705,7 +722,13 @@ test('map geometry: encounter.map_id is ungated, tracks.arena projects onto GW2E
   assert.ok(arena, 'arena must be present alongside tracks')
   assert.equal(arena.image_width, 697)
   assert.equal(arena.image_height, 1000)
-  assert.equal(arena.image_url, 'https://i.imgur.com/nVu2ivF.png')
+  // Upstream GW2EI hosts this tile on imgur; we mirror every off-domain
+  // icon and keep the origin id in the filename, so the mirrored URL
+  // still names GW2EI's own asset.
+  assert.equal(
+    arena.image_url,
+    'https://darkharasho.github.io/axibridge-map-tiles/icons/imgur-nVu2ivF.png',
+  )
   assert.deepEqual(
     [arena.world_min_x, arena.world_min_y, arena.world_max_x, arena.world_max_y],
     [-30720, -43008, 30720, 43008],
