@@ -749,6 +749,14 @@ pub struct EntitySeries {
     /// zero-filled array would claim a squad healed for nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub healing_1s: Option<SeriesOut>,
+    /// Cumulative INCOMING healing from the arcdps healing extension --
+    /// the receiver-indexed counterpart of `healing_1s`, on the same grid.
+    /// Same gate: `timeseries: true` on a log carrying the extension.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub healing_received_1s: Option<SeriesOut>,
+    /// Cumulative INCOMING barrier, same grid and same gate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub barrier_received_1s: Option<SeriesOut>,
 }
 
 /// Mirrors the real `PlayerTargetSeriesOut`, minus `enemy_id` (that's the
@@ -771,6 +779,8 @@ fn empty_series(res: u64) -> EntitySeries {
         per_target: BTreeMap::new(),
         health_percents: None,
         healing_1s: None,
+        healing_received_1s: None,
+        barrier_received_1s: None,
     }
 }
 
@@ -808,6 +818,12 @@ pub fn build_series(
         // which is what the length guard above exists to make safe.
         let healing: Option<SeriesOut> =
             healing_1s.map(|d| SeriesOut::encode_u64(res, &d[i].healing_1s));
+        // Receiver-indexed counterparts of `healing`, same grid, same gate
+        // -- see `EntitySeries::healing_received_1s`'s doc comment.
+        let healing_received =
+            healing_1s.map(|d| SeriesOut::encode_u64(res, &d[i].healing_received_1s));
+        let barrier_received =
+            healing_1s.map(|d| SeriesOut::encode_u64(res, &d[i].barrier_received_1s));
         // Keyed by the account's REPRESENTATIVE agent address, which is
         // what `PlayerOut::agent_addr` already is -- a relogged account is
         // one player here and one folded series there. Looking the map up
@@ -831,6 +847,8 @@ pub fn build_series(
                     EntitySeries {
                         health_percents: health,
                         healing_1s: healing,
+                        healing_received_1s: healing_received,
+                        barrier_received_1s: barrier_received,
                         ..empty_series(res)
                     },
                 );
@@ -862,6 +880,8 @@ pub fn build_series(
                 per_target,
                 health_percents: health,
                 healing_1s: healing,
+                healing_received_1s: healing_received,
+                barrier_received_1s: barrier_received,
             },
         );
     }

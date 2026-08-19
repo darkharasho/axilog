@@ -3432,6 +3432,8 @@ mod tests {
                             .collect(),
                         health_percents: None,
                         healing_1s: None,
+                        healing_received_1s: None,
+                        barrier_received_1s: None,
                     },
                 );
             }
