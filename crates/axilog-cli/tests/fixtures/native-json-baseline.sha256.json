@@ -1,0 +1,8 @@
+{
+  "_comment": "Pre-refactor native `--format json` baseline digest for the axilog-cli facade regression guard (M17 Task 3). See facade_identity.rs for the regeneration procedure. Captured from commit 831ad3d (the last commit before the axilog-api facade refactor touched axilog-cli) in a throwaway git worktree, release-built. Determinism verified: two independent captures in that worktree produced byte-identical output and identical sha256 digests.",
+  "fixture": "fixtures/wvw-small.anon.zevtc",
+  "sourceCommit": "831ad3d",
+  "cliArgs": ["parse", "fixtures/wvw-small.anon.zevtc", "--format", "json", "--all"],
+  "byteLength": 8192255,
+  "sha256": "436c303fbd30ef2abc9ef6f0d7e8fa95afc81ddfed2eef050cabca0aa3dc853b"
+}

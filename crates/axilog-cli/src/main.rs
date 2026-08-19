@@ -231,6 +231,73 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let rotation = rotation || all;
             let modifiers = modifiers || all;
             let bytes = std::fs::read(&path)?;
+
+            // M17 Task 3: the native `--format json` path now calls the
+            // shared `axilog-api` facade instead of hand-rolling this
+            // orchestration -- see `axilog-node`'s
+            // `build_report_v1_from_bytes` (M17 Task 2) for the same call
+            // shape; a third consumer duplicating this sequence is exactly
+            // the drift risk the facade exists to remove.
+            //
+            // `--format ei-json` below deliberately keeps its own,
+            // untouched sequence: it asks `damage_mods::evaluate_catalog_full`
+            // for the per-target split (`format == Format::EiJson`) that the
+            // facade does not compute (the facade always passes `false`),
+            // and it needs several of that pipeline's other intermediate
+            // passes directly (e.g. `ei_replay_data`) that the facade does
+            // not expose. ei-json byte-identity is a hard downstream
+            // contract -- axibridge consumes it exclusively -- so the two
+            // format arms are NOT unified here.
+            if format == Format::Json {
+                let opts = axilog_api::ParseOpts {
+                    replay,
+                    skill_damage,
+                    timeseries,
+                    missiles,
+                    rotation,
+                    modifiers,
+                    everything: all,
+                };
+                let report_v1 = axilog_api::parse_report_v1(
+                    &bytes,
+                    &opts,
+                    path.file_name().and_then(|s| s.to_str()),
+                )?;
+                // Same stderr surfacing as every other format (see the
+                // `report.warnings` loop below): `WarningOut::message` is
+                // the same text `Report::warnings` carried
+                // (`axilog_schema::build_report` sets both from
+                // `Metrics::warnings[].message`), MINUS the one warning
+                // (`recorded_by_unresolved`) that `build_report_v1`
+                // synthesizes afterward from data the legacy `Report`
+                // never carried -- filtered out here so this path's
+                // stderr output matches the pre-facade CLI exactly.
+                for w in
+                    report_v1.warnings.iter().filter(|w| w.code != "recorded_by_unresolved")
+                {
+                    eprintln!("warning: {}", w.message);
+                }
+                // Same streaming write as the pre-facade `--format json`
+                // arm (MSTREAM): byte-identical `PrettyFormatter`, same
+                // trailing newline, `-o/--output` handled the same way.
+                let sink: Box<dyn std::io::Write> = match &output {
+                    Some(path) => Box::new(std::fs::File::create(path)?),
+                    None => Box::new(std::io::stdout().lock()),
+                };
+                use std::io::Write as _;
+                let mut w = std::io::BufWriter::with_capacity(1 << 20, sink);
+                serde_json::to_writer_pretty(&mut w, &report_v1)?;
+                w.write_all(b"\n")?;
+                // Explicit flush: a `BufWriter`'s `Drop` swallows write
+                // errors, which on a full disk would silently truncate.
+                w.flush()?;
+                drop(w);
+                if let Some(path) = &output {
+                    eprintln!("wrote {}", path.display());
+                }
+                return Ok(());
+            }
+
             let raw = axilog_core::evtc::decode_raw(&bytes)?;
             let enc = axilog_core::model::resolve(&raw);
             let metrics = axilog_core::analysis::analyze(&enc, &raw);
@@ -464,38 +531,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 return Ok(());
             }
-            // `--format json` streams, for the same reason `--format
-            // ei-json` above does (MSTREAM): `to_string_pretty` holds the
-            // whole pretty-printed document in a `String` ALONGSIDE the
-            // document it was rendered from, so peak memory was the sum of
-            // the two. Measured on the committed fixture with `--all`
-            // (Task 14 Step 3), that second copy was 7.4 MB of a 45 MB
-            // peak. Byte-identical output: same `PrettyFormatter`, same
-            // trailing newline.
+            // `--format json` is handled entirely by the facade branch
+            // near the top of this function (M17 Task 3) -- it returns
+            // before `report_v1` is even built here, so there is no
+            // streaming arm left for it at this point.
             //
-            // The document itself is still fully resident here -- it is
-            // built before anything is written, unlike ei-json's row-at-a-
-            // time `LazyRows`. Removing THAT is a reprojection-direction
-            // change, not a serializer change, and is out of this task's
-            // scope.
-            if format == Format::Json {
-                let sink: Box<dyn std::io::Write> = match &output {
-                    Some(path) => Box::new(std::fs::File::create(path)?),
-                    None => Box::new(std::io::stdout().lock()),
-                };
-                use std::io::Write as _;
-                let mut w = std::io::BufWriter::with_capacity(1 << 20, sink);
-                serde_json::to_writer_pretty(&mut w, &report_v1)?;
-                w.write_all(b"\n")?;
-                // Explicit flush: a `BufWriter`'s `Drop` swallows write
-                // errors, which on a full disk would silently truncate.
-                w.flush()?;
-                drop(w);
-                if let Some(path) = &output {
-                    eprintln!("wrote {}", path.display());
-                }
-                return Ok(());
-            }
             // Every other format renders to a single `String` (with its own
             // trailing newline where appropriate) so `-o/--output` (M7,
             // Task 1) can apply uniformly regardless of `--format`.

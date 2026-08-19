@@ -101,13 +101,16 @@ dependencies = [
 name = "axilog-cli"
 version = "1.0.0"
 dependencies = [
+ "axilog-api",
  "axilog-core",
  "axilog-ei",
  "axilog-html",
  "axilog-schema",
  "clap",
  "criterion",
+ "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 axilog-core = { path = "../axilog-core" }
 axilog-schema = { path = "../axilog-schema" }
+axilog-api = { path = "../axilog-api" }
 axilog-ei = { path = "../axilog-ei" }
 axilog-html = { path = "../axilog-html" }
 clap.workspace = true
@@ -28,6 +29,11 @@ serde_json.workspace = true
 # still a new edge vs. zero new edges here).
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false }
+# facade_identity.rs (M17 Task 3): hashes CLI stdout against a committed
+# digest instead of shipping the multi-megabyte baseline JSON itself. Same
+# version pin axilog-core already uses.
+sha2 = "0.10.9"
+serde.workspace = true
 
 [[bench]]
 name = "pipeline"
