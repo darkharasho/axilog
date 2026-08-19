@@ -2061,10 +2061,15 @@ export interface EntitySeries {
    * Cumulative INCOMING healing from the arcdps healing extension -- the
    * receiver-indexed counterpart of `healing_1s`, on the same grid.
    * Absent for enemies, and for everyone on a log with no healing
-   * extension.
+   * extension. ALLY-ATTRIBUTED: a heal only counts here when its
+   * recipient is one of the tracked players, so this is incoming healing
+   * from tracked recipients, not total incoming healing.
    */
   healing_received_1s?: SeriesOut
-  /** Cumulative INCOMING barrier. Same grid and same gate as `healing_received_1s`. */
+  /**
+   * Cumulative INCOMING barrier. Same grid, same gate, and same
+   * ally-attribution caveat as `healing_received_1s`.
+   */
   barrier_received_1s?: SeriesOut
 }
 

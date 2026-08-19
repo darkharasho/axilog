@@ -752,9 +752,16 @@ pub struct EntitySeries {
     /// Cumulative INCOMING healing from the arcdps healing extension --
     /// the receiver-indexed counterpart of `healing_1s`, on the same grid.
     /// Same gate: `timeseries: true` on a log carrying the extension.
+    ///
+    /// ALLY-ATTRIBUTED, unlike `healing_1s`: a heal only lands here when
+    /// its recipient is one of the enumerated players, so this is
+    /// "incoming healing from tracked recipients", not "total incoming
+    /// healing" -- see `PlayerHealingDetail::healing_received_1s`'s doc
+    /// comment for why (no row to put an untracked recipient's heal on).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub healing_received_1s: Option<SeriesOut>,
-    /// Cumulative INCOMING barrier, same grid and same gate.
+    /// Cumulative INCOMING barrier, same grid and same gate, and the same
+    /// ally attribution as [`Self::healing_received_1s`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub barrier_received_1s: Option<SeriesOut>,
 }

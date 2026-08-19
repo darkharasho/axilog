@@ -1937,7 +1937,11 @@ class EntitySeries(_EntitySeriesRequired, total=False):
     log with no healing extension.
 
     `healing_received_1s` and `barrier_received_1s` are the receiver-indexed
-    counterparts of `healing_1s`, on the same grid and the same gate.
+    counterparts of `healing_1s`, on the same grid and the same gate. Both
+    are ALLY-ATTRIBUTED, unlike `healing_1s`: a heal/barrier only lands
+    here when its recipient is one of the tracked players, so these are
+    incoming amounts from tracked recipients, not the total incoming
+    amount.
 
     `health_percents` is `[[time_ms, percent], ...]` -- a STEP function,
     which is why it is a plain pair list rather than a `SeriesOut`:

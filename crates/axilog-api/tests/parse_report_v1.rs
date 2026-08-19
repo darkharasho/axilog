@@ -63,15 +63,22 @@ fn received_series_ride_the_timeseries_gate() {
     // `series = activity::build_series(...)` with no `.then()` gate,
     // unlike `missiles`/`damage_mods`), so it is `Some` even with the
     // gate off. What the `--timeseries` flag controls is the per-entity
-    // rows within it: `healing_1s` (and now its two received siblings)
-    // are absent until the flag turns the healing pass on.
+    // rows within it: `build_series` only inserts a `by_entity` row when
+    // `p.per_second`, `health_percents`, or `healing_1s` is `Some` for
+    // that player, and all three of those inputs are themselves gated on
+    // `want_timeseries` in `axilog-api`'s `parse_report_v1` (see
+    // `PlayerOut::per_second`'s `include_timeseries` gate in
+    // `axilog-schema/src/lib.rs`, mirrored by `health_percents`/
+    // `healing_series` in `axilog-api/src/lib.rs`). So under default
+    // opts `by_entity` isn't merely free of healing data -- it is
+    // EMPTY, and that (not a per-row `.all()` over zero rows, which
+    // would hold vacuously even if the gate did nothing) is the
+    // assertion that actually exercises the gate.
     let off = parse_report_v1(&bytes, &ParseOpts::default(), None).unwrap();
     let off_series = off.blocks.series.expect("series block is built unconditionally");
     assert!(
-        off_series.by_entity.0.values().all(|e| e.healing_1s.is_none()
-            && e.healing_received_1s.is_none()
-            && e.barrier_received_1s.is_none()),
-        "healing series are gated on --timeseries, not present by default"
+        off_series.by_entity.0.is_empty(),
+        "by_entity rows require --timeseries; none of its inputs run without the gate"
     );
 
     let on = parse_report_v1(
