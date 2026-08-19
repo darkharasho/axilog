@@ -1,0 +1,8 @@
+{
+  "_comment": "Pre-refactor ei-json baseline digest for the axibridge byte-identity guard (M17 Task 2). See ei-byte-identity.test.mjs for the regeneration procedure. Captured from commit 6dd5953 (the last commit before the axilog-api facade refactor touched axilog-node) in a throwaway git worktree, npm-built in release mode. Determinism verified: two independent captures in that worktree produced byte-identical output and identical sha256 digests.",
+  "fixture": "fixtures/wvw-small.anon.zevtc",
+  "sourceCommit": "6dd5953",
+  "parseFileEiOpts": { "everything": true },
+  "jsonStringLength": 3571194,
+  "sha256": "c110c4ab01562f4cbfb5a6460ad896d421b406e14627ba34097957679929eb12"
+}

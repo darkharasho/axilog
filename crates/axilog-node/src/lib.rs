@@ -98,10 +98,13 @@ pub struct ParseOptions {
 
 /// The six compute gates, resolved once from [`ParseOptions`].
 ///
-/// Every entry point reads its gates through this rather than unpacking
+/// `parse_file_ei` reads its gates through this rather than unpacking
 /// `opts` itself: `everything` is folded in HERE, so a pass added later
-/// cannot be left out of it by forgetting one `|| all` at one of three
-/// call sites (which is exactly the drift `everything` exists to prevent).
+/// cannot be left out of it by forgetting one `|| all` at its call site
+/// (which is exactly the drift `everything` exists to prevent). `parse_file`
+/// and `parse_buffer` no longer use `Gates` at all -- they pass `opts`
+/// straight through to `axilog_api::ParseOpts`, whose own `want_*`
+/// resolvers fold in `everything` the same way.
 #[derive(Clone, Copy)]
 struct Gates {
     replay: bool,
