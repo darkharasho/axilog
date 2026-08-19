@@ -264,17 +264,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     path.file_name().and_then(|s| s.to_str()),
                 )?;
                 // Same stderr surfacing as every other format (see the
-                // `report.warnings` loop below): `WarningOut::message` is
-                // the same text `Report::warnings` carried
+                // `report.warnings` loop below): `WarningOut::message`
+                // carries the same text `Report::warnings` did
                 // (`axilog_schema::build_report` sets both from
-                // `Metrics::warnings[].message`), MINUS the one warning
-                // (`recorded_by_unresolved`) that `build_report_v1`
-                // synthesizes afterward from data the legacy `Report`
-                // never carried -- filtered out here so this path's
-                // stderr output matches the pre-facade CLI exactly.
-                for w in
-                    report_v1.warnings.iter().filter(|w| w.code != "recorded_by_unresolved")
-                {
+                // `Metrics::warnings[].message`), PLUS one warning this
+                // path can surface that the pre-facade CLI could not:
+                // `build_report_v1` additionally synthesizes
+                // `recorded_by_unresolved` when the recording player's
+                // account doesn't resolve to a tracked entity -- a
+                // deliberately-designed diagnostic (see
+                // `crates/axilog-schema/src/v1/mod.rs`'s doc comment on
+                // that push) that the legacy `Report::warnings` had no way
+                // to carry. Surfacing it here is an improvement, not a
+                // behavior change worth suppressing.
+                for w in &report_v1.warnings {
                     eprintln!("warning: {}", w.message);
                 }
                 // Same streaming write as the pre-facade `--format json`
