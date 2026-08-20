@@ -18,8 +18,9 @@
 //! active, which is this pass's `presence_pct`, and EI's `presence` field
 //! is never populated. For an INTENSITY buff `uptime` is a time-weighted
 //! mean stack count -- this pass's `avg_stacks` -- and `presence` is the
-//! percentage. Every one of the 6 damaging conditions is intensity; the
-//! other 10 tracked ids are duration.
+//! percentage. Every one of the 6 `BuffStackType.Stacking` conditions
+//! (`CommonBuffs.cs:36-40` + `:49`) is intensity; the other 10 tracked ids
+//! are duration.
 
 use axilog_core::analysis::self_effects::{self, effect_ids, effect_kind};
 use axilog_core::evtc::decode_raw;
@@ -129,7 +130,14 @@ fn cells(
     let mut out = Vec::new();
     for p in golden["players"].as_array().expect("players") {
         let account = account_key(p["account"].as_str().expect("account"));
-        let Some(&addr) = by_account.get(account) else { continue };
+        let Some(&addr) = by_account.get(account) else {
+            // Skipped here, but NOT unaccounted for: this `continue` is
+            // the one place the comparison can silently shrink, so
+            // `the_key_set_matches_the_ei_export` asserts separately that
+            // the only players it ever fires for are EI's `notInSquad`
+            // entries -- every in-squad player must join.
+            continue;
+        };
         for b in p["buffUptimes"].as_array().into_iter().flatten() {
             let id = b["id"].as_u64().expect("buff id") as u32;
             if !ids.contains(&id) {
@@ -257,8 +265,50 @@ fn stun_and_daze_are_covered_and_agree() {
 fn the_key_set_matches_the_ei_export() {
     let Some((ours, accounts, golden)) = calibration() else { return };
     let cells = cells(&ours, &accounts, &golden);
+    assert!(cells.len() > 200, "the comparison must not be vacuous, got {} cells", cells.len());
     let by_account: BTreeMap<&str, u64> =
         accounts.iter().map(|(&addr, acc)| (acc.as_str(), addr)).collect();
+
+    // The join must be total over the SQUAD: `cells` silently `continue`s
+    // past any EI player whose account key we do not carry, so an
+    // account-naming drift on either side would shrink the comparison
+    // without failing anything. Pin it.
+    //
+    // The scope is squad-only on both sides. Elite Insights' `players`
+    // array on a WvW capture also carries the enemy players it saw, flagged
+    // `notInSquad: true` and named `"Non Squad Player <n>"` rather than by
+    // account -- 4 of the 48 entries here. Those legitimately do not join:
+    // `self_effects` is squad-scoped by construction (`build_with_registry`
+    // drops any event whose owner is not a squad addr) and the enemy side is
+    // `target_conditions`' job. So the invariant is that every IN-SQUAD EI
+    // player joins, and separately that the excluded ones are excluded for
+    // that reason and no other.
+    let players = golden["players"].as_array().expect("players");
+    let (squad, non_squad): (Vec<&Value>, Vec<&Value>) =
+        players.iter().partition(|p| !p["notInSquad"].as_bool().unwrap_or(false));
+    assert!(!squad.is_empty(), "the export must carry squad players");
+    let unjoined: Vec<&str> = squad
+        .iter()
+        .map(|p| account_key(p["account"].as_str().expect("account")))
+        .filter(|acc| !by_account.contains_key(acc))
+        .collect();
+    assert!(
+        unjoined.is_empty(),
+        "{} of {} in-squad Elite Insights players did not join to a squad \
+         representative: {}",
+        unjoined.len(),
+        squad.len(),
+        unjoined.join(", ")
+    );
+    // ...and nothing joins that should not have: the out-of-squad entries
+    // are exactly the ones we skip, so the skip count is fully explained.
+    for p in &non_squad {
+        let acc = account_key(p["account"].as_str().expect("account"));
+        assert!(
+            !by_account.contains_key(acc),
+            "{acc} is flagged notInSquad by EI but joined a squad representative"
+        );
+    }
     let mut missing: Vec<String> = Vec::new();
     for c in &cells {
         if c.theirs <= 0.0 {
