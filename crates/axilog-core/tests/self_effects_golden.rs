@@ -31,10 +31,13 @@ use std::collections::BTreeMap;
 ///
 /// MEASURED on `fixtures/local/wvw-postrework.ei.json`: worst cell
 /// 0.000500pp on buff 720 (Blind, account `BreakN.5496`), across 231
-/// duration cells spanning all 10 duration ids. Every duration id's worst
-/// cell sat between 0.000292 and 0.000500 -- i.e. the whole family already
-/// agrees with EI to the full precision EI emits, and no id is an outlier.
-/// The bound below leaves ~10x margin over that.
+/// duration cells spanning 9 of the 10 duration ids -- Taunt (27705)
+/// appears in no player's `buffUptimes` on this WvW capture and is
+/// therefore UNCOVERED by this oracle. Across the 9 that are covered (720,
+/// 721, 722, 727, 742, 791, 833, 872, 26766) each id's worst cell sat
+/// between 0.000292 and 0.000500 -- i.e. every measured id already agrees
+/// with EI to the full precision EI emits, and none is an outlier. The
+/// bound below leaves ~10x margin over that.
 ///
 /// The floor is 0.0005pp: Elite Insights rounds every emitted number
 /// through `Math.Round(x, ParserHelper.BuffDigit)` with `BuffDigit = 3`
@@ -51,7 +54,9 @@ const DURATION_TOLERANCE_PP: f64 = 0.005;
 /// MEASURED on the same export: worst cell 0.000497 on buff 738
 /// (Vulnerability, account `Gawna.6519`), across 245 intensity cells over
 /// all 6 intensity ids (723, 736, 737, 738, 861, 19426), whose per-id worst
-/// cells ranged 0.000292-0.000497. The bound leaves ~10x margin.
+/// cells ranged 0.000467 (861) to 0.000497 (738). Unlike the duration
+/// family, all 6 intensity ids are covered by this capture. The bound
+/// leaves ~10x margin.
 ///
 /// Because the comparison divides by `max(|theirs|, 1.0)` and nearly every
 /// avg-stacks value on this capture is below 1.0, this relative bound is in
