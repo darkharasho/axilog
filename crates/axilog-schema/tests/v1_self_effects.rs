@@ -95,6 +95,11 @@ fn avg_stacks_is_present_exactly_for_intensity_effects() {
 
 /// `states` is NOT optional here, and every emitted timeline is a real one
 /// -- the one-gate argument, asserted rather than asserted-in-prose.
+///
+/// "Real" means it reaches a nonzero stack count, not merely that it has
+/// two entries: a zero-length buff application fuses into `[[0, 0], [t, 0]]`,
+/// which has two entries and no information, and the core pass drops
+/// exactly those rows.
 #[test]
 fn every_row_carries_a_nontrivial_timeline() {
     let (_e, _m, _l, v1) = common::fixture_report_all_gates();
@@ -106,7 +111,10 @@ fn every_row_carries_a_nontrivial_timeline() {
                 Some(&(0u64, 0u32)),
                 "entity {entity} buff {id} must open with [0, 0]"
             );
-            assert!(row.states.len() >= 2, "entity {entity} buff {id} carries no transition");
+            assert!(
+                row.states.iter().any(|&(_, stacks)| stacks > 0),
+                "entity {entity} buff {id} never leaves 0 stacks"
+            );
         }
     }
 }

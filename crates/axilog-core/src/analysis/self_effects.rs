@@ -173,11 +173,24 @@ pub fn build_with_registry(
         let clamp = !is_intensity;
         let steps = timeline.states.iter().map(move |&(t, v)| (t, if clamp { v.min(1) } else { v }));
         let ei_states = states::to_ei_states(steps, log_start);
-        // A timeline that never leaves 0 is the mandatory leading pair and
-        // nothing else -- no information, so it is dropped rather than
-        // emitted, the same rule `target_conditions` applies. Both maps are
-        // written together so their key sets cannot diverge.
-        if ei_states.len() < 2 {
+        // A timeline that never leaves 0 carries no information, so it is
+        // dropped rather than emitted -- the same rule `target_conditions`
+        // reaches by a different route (its `overlap_steps` skips every
+        // `end <= start` segment, so a zero-length hold never survives to
+        // `to_ei_states` in the first place). Elite Insights likewise omits
+        // such a buff from `buffUptimes` entirely.
+        //
+        // Testing the VALUES, not the length: a length test is insufficient
+        // here. A zero-length application emits two simulator states at the
+        // same instant -- `push_state` dedupes only CONSECUTIVE EQUAL
+        // counts, so `[(t, 1), (t, 0)]` survives it -- and `to_ei_states`
+        // fuses that pair at one timestamp into `[[0, 0], [t, 0]]`, which is
+        // two entries and would sneak past `len() < 2`. Two such rows really
+        // do occur on the committed fixture. Do not re-simplify this back to
+        // a length check.
+        //
+        // Both maps are written together so their key sets cannot diverge.
+        if !ei_states.iter().any(|&(_, v)| v > 0) {
             continue;
         }
         out.uptime.insert(key, uptime::compute(&timeline, log_start, log_end));
@@ -290,15 +303,21 @@ mod tests {
     }
 
     /// Every timeline opens with the mandatory leading `[0, 0]` pair and
-    /// carries at least one real transition -- a timeline that never
-    /// leaves 0 carries no information and is dropped rather than emitted,
-    /// the same rule `target_conditions` applies.
+    /// reaches a nonzero stack count somewhere -- a timeline that never
+    /// leaves 0 carries no information and is dropped rather than emitted.
+    ///
+    /// The nonzero assertion is the point: a `len() >= 2` check passes over
+    /// a fused zero-length application (`[[0, 0], [t, 0]]`), which is
+    /// exactly the row the drop rule exists to remove.
     #[test]
     fn every_emitted_timeline_is_nontrivial_and_starts_at_zero() {
         let out = fixture();
         for (key, timeline) in &out.states {
             assert_eq!(timeline.first(), Some(&(0u64, 0u32)), "{key:?} must open with [0, 0]");
-            assert!(timeline.len() >= 2, "{key:?} must carry a real transition");
+            assert!(
+                timeline.iter().any(|&(_, stacks)| stacks > 0),
+                "{key:?} never leaves 0 stacks, so it carries no information"
+            );
         }
     }
 
