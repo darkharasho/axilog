@@ -138,6 +138,8 @@ __all__ = [
     "HealingBlock",
     "ConditionRow",
     "ConditionsBlock",
+    "SelfEffectRow",
+    "SelfEffectsBlock",
     "MinionSkillTakenRow",
     "MinionRow",
     "MinionsBlock",
@@ -1535,6 +1537,32 @@ class ConditionsBlock(TypedDict):
 
     by_entity: Dict[str, Dict[str, ConditionRow]]
 
+class _SelfEffectRowRequired(TypedDict):
+    uptime_pct: float
+    states: StateTimeline
+
+class SelfEffectRow(_SelfEffectRowRequired, total=False):
+    """One condition or control effect held BY a squad player.
+
+    The squad-side counterpart to `ConditionRow` (enemy-side) and the
+    missing half of `BoonRow` (squad-side, but only the 12 boons).
+    `CcBlock` is not a substitute -- it counts crowd-control events, which
+    carries no timeline.
+
+    `avg_stacks` is present for intensity-stacking effects (the 6 damaging
+    conditions) and omitted for duration ones, the same rule
+    `BoonRow.avg_stacks` follows. `states` is REQUIRED, unlike
+    `BoonRow.states`: this whole block rides one gate, so if the block is
+    here the timeline is."""
+
+    avg_stacks: float
+
+class SelfEffectsBlock(TypedDict):
+    """squad entity id -> buff id -> row, for the 14 conditions plus Stun
+    (872) and Daze (833). Wholly gated on `timeseries=True`."""
+
+    by_entity: Dict[str, Dict[str, SelfEffectRow]]
+
 class MinionSkillTakenRow(TypedDict):
     """One minion group's damage-TAKEN row for one skill.
 
@@ -2007,6 +2035,7 @@ class Blocks(TypedDict, total=False):
     replay: ReplayBlock
     series: SeriesBlock
     conditions: ConditionsBlock
+    self_effects: SelfEffectsBlock
     minions: MinionsBlock
 
 class _ReportV1Required(TypedDict):
