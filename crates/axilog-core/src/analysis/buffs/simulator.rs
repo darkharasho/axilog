@@ -194,8 +194,23 @@ fn run_duration(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) -> V
                     stack[idx] = duration_ms;
                     idx
                 } else {
-                    // capacity == 1 edge case; never hit for the 12 tracked
-                    // boons (minimum real capacity is 5).
+                    // capacity == 1: unreachable for the 12 tracked boons
+                    // (minimum real capacity 5) and for the 14 conditions
+                    // (minimum 3), but LIVE since
+                    // `analysis::self_effects` -- Stun and Daze are
+                    // capacity 1, both by table and by arcdps's own
+                    // `sc::BUFF_INFO` row.
+                    //
+                    // The unconditional overwrite is correct for them and
+                    // not merely a fallback: both are
+                    // `BuffStackType::Force`, whose `ForceOverrideLogic`
+                    // has a new application REPLACE the active stack
+                    // instead of being compared against it, and whose
+                    // `IsFull => stacks.Count == 1` caps it at one stack
+                    // regardless of the catalogued capacity. So the
+                    // capacity-1 arm and Force semantics coincide exactly,
+                    // and `run_segments`/`run_duration` need no notion of
+                    // stack type to get Stun right.
                     stack[0] = duration_ms;
                     0
                 };

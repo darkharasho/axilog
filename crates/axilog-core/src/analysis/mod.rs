@@ -103,6 +103,7 @@ pub mod defenses;
 /// synthesized casts and the log's `CBTS_WEAPSWAP` rows into the same
 /// per-player list.
 pub mod rotation;
+pub mod self_effects;
 /// Generated reference tables, not analysis passes: skill art from the GW2
 /// API and buff art from GW2EI's own buff list. They are grouped here, ahead
 /// of `skill_map`, because nothing in the pipeline computes them -- they are
