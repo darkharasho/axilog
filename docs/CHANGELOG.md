@@ -10,6 +10,34 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## Unreleased
+
+### Added
+- `blocks.self_effects` — what was on a SQUAD player. The 14 conditions plus
+  Stun (872) and Daze (833), each with `uptime_pct`, an optional
+  `avg_stacks`, and a fused `states` stack timeline. Rides the existing
+  `--timeseries` gate; one gate, so `coverage.self_effects` settles the
+  whole question.
+
+  This closes a real hole rather than adding a convenience. `blocks.boons`
+  covered squad players but only the 12 boons; `blocks.conditions` covered
+  the 14 conditions but only on enemies; nothing answered "what was on me".
+  `blocks.cc` is not a substitute — it counts crowd-control events, a
+  different measurement that carries no timeline — so a consumer rendering
+  hard- and soft-CC timelines had nothing to read and rendered empty lanes.
+
+  Stun and Daze needed a new id table (`analysis::control_catalog`): Elite
+  Insights classifies both `Other`, so neither appeared in any table here.
+  Both are duration-stacking with capacity 1, measured off the log's own
+  `sc::BUFF_INFO` rows and agreeing with EI's `buffMap`. They are also the
+  first buffs this project simulates at capacity 1, which reaches an arm of
+  `run_duration` that no boon (minimum capacity 5) and no condition (minimum
+  3) ever did; that arm already implemented the correct `ForceOverrideLogic`
+  semantics, and only its comment needed correcting.
+
+  Calibrated against a real Elite Insights export's per-player
+  `buffUptimes`: values and key set both.
+
 ## v1.2.0 — 2026-08-18
 
 ### Added

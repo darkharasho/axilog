@@ -477,7 +477,7 @@ Real example (default flags — no `--replay`/`--rotation`/`--modifiers`):
   "contribution": "present", "damage": "present", "damage_mods": "not_computed",
   "defenses": "present", "healing": "present", "hit_stats": "present",
   "minions": "not_computed", "missiles": "not_computed", "replay": "present",
-  "rotation": "not_computed", "series": "present", "support": "present"
+  "rotation": "not_computed", "self_effects": "not_computed", "series": "present", "support": "present"
 }
 ```
 
@@ -612,10 +612,11 @@ Both decoders were executed against `v1.json` (default flags) and
 real RLE row) as part of writing this document; both round-tripped `len`
 correctly and matched the raw/RLE encoding the binary actually chose.
 
-## Buff stack timelines — `boons`' second gate, and `conditions`
+## Buff stack timelines — `boons`' second gate, `conditions`, and `self_effects`
 
-Two blocks carry per-buff **stack timelines**: when a buff was up, and at
-what stack count. Both ride `--timeseries` (`timeseries: true` in the SDKs).
+Three blocks carry per-buff **stack timelines**: when a buff was up, and at
+what stack count. All three ride `--timeseries` (`timeseries: true` in the
+SDKs).
 
 `blocks.boons` rows gain two fields under that flag — `states`, the fused
 timeline, and `per_source`, the same split by applier. This makes `boons`
@@ -629,6 +630,40 @@ present. Check for the fields.
 `per_source` and no fused `states`: summing appliers would not reconstruct
 one, because two players holding the same duration condition overlap rather
 than stack.
+
+`blocks.self_effects` is the squad-side counterpart: the same 14 conditions
+plus **Stun (`872`) and Daze (`833`)**, held BY a squad player rather than
+put onto an enemy. It is wholly gated too, and unlike `boons` it carries
+both halves — `uptime_pct`, an optional `avg_stacks`, and an unconditional
+`states` — so `coverage.self_effects` settles the whole question. It has no
+`per_source`.
+
+The two control effects are here and not in `conditions` because Elite
+Insights classifies them `Other`, not `Condition`; they are in this block
+because a consumer asking "what crowd control landed on me, and when" needs
+a timeline, and `blocks.cc` answers a different question — it counts
+crowd-control *events*, with no notion of stacks over time. The
+instantaneous control effects (Knockdown, Launch, Pull, Knockback, Float,
+Sink) are deliberately absent from `self_effects`: they produce no
+apply/remove pair, so no timeline exists to carry. `blocks.cc` counts those,
+which is the right shape for them.
+
+```json
+{
+  "self_effects": {
+    "by_entity": {
+      "22": {
+        "872": { "uptime_pct": 0.232, "states": [[0, 0], [65670, 1], [66479, 0]] },
+        "736": { "uptime_pct": 41.9, "avg_stacks": 3.7, "states": [[0, 0], [1204, 2], "..."] }
+      }
+    }
+  }
+}
+```
+
+`avg_stacks` is present exactly for the intensity-stacking effects (the six
+damaging conditions) and omitted for the rest, the same rule `boons` rows
+follow — an absent `avg_stacks` means "duration-stacking", never zero.
 
 Real excerpt (`--timeseries`), showing only the fields this section adds —
 entity `22`'s Might (`740`), and a condition on enemy entity `42`:
