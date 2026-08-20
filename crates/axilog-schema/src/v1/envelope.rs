@@ -19,12 +19,13 @@ pub enum BlockName {
     Missiles,
     Replay,
     Rotation,
+    SelfEffects,
     Series,
     Support,
 }
 
 impl BlockName {
-    pub const ALL: [BlockName; 15] = [
+    pub const ALL: [BlockName; 16] = [
         BlockName::Boons,
         BlockName::Cc,
         BlockName::Conditions,
@@ -38,6 +39,7 @@ impl BlockName {
         BlockName::Missiles,
         BlockName::Replay,
         BlockName::Rotation,
+        BlockName::SelfEffects,
         BlockName::Series,
         BlockName::Support,
     ];
@@ -57,6 +59,7 @@ impl BlockName {
             BlockName::Missiles => "missiles",
             BlockName::Replay => "replay",
             BlockName::Rotation => "rotation",
+            BlockName::SelfEffects => "self_effects",
             BlockName::Series => "series",
             BlockName::Support => "support",
         }
@@ -199,9 +202,9 @@ mod tests {
 
     #[test]
     fn block_name_enum_makes_typos_compile_errors_and_strings_stay_unique() {
-        assert_eq!(BlockName::ALL.len(), 15, "all 15 known blocks are enumerated");
+        assert_eq!(BlockName::ALL.len(), 16, "all 16 known blocks are enumerated");
 
         let strings: BTreeSet<&'static str> = BlockName::ALL.iter().map(|b| b.as_str()).collect();
-        assert_eq!(strings.len(), 15, "all block names serialize to unique strings; no duplicates allowed");
+        assert_eq!(strings.len(), 16, "all block names serialize to unique strings; no duplicates allowed");
     }
 }

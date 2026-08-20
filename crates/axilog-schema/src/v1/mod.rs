@@ -9,7 +9,7 @@ pub mod envelope;
 pub mod order;
 pub mod series;
 
-use crate::v1::blocks::{activity, conditions, damage, defense, minions, support};
+use crate::v1::blocks::{activity, conditions, damage, defense, minions, self_effects, support};
 use crate::v1::catalogs::{CatalogBuilder, Catalogs};
 use crate::v1::entities::build_entities;
 use crate::v1::envelope::{AxilogMeta, BlockName, Coverage, CoverageState, Severity, WarningOut};
@@ -212,6 +212,8 @@ pub struct Blocks {
     pub minions: Option<minions::MinionsBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conditions: Option<conditions::ConditionsBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_effects: Option<self_effects::SelfEffectsBlock>,
 }
 
 /// The coverage state for a block that DID run: [`CoverageState::Empty`]
@@ -347,6 +349,13 @@ pub struct Passes<'a> {
     /// block spec #1 reserved the name for.
     pub target_conditions:
         Option<&'a axilog_core::analysis::target_conditions::TargetConditionStates>,
+    /// `--timeseries`: per-(squad player, effect) uptime and fused stack
+    /// timelines for the 14 conditions plus Stun and Daze. Lands on
+    /// `blocks.self_effects`, the squad-side counterpart to
+    /// `blocks.conditions`. ONE gate, unlike `boon_states`: this pass
+    /// produces the whole block, so `coverage.self_effects` settles the
+    /// question by itself.
+    pub self_effects: Option<&'a axilog_core::analysis::self_effects::SelfEffects>,
 }
 
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
@@ -494,6 +503,19 @@ pub fn build_report_v1(
     });
     if conditions_block.is_none() {
         coverage.set(BlockName::Conditions, CoverageState::NotComputed);
+    }
+
+    // The squad-side counterpart to `conditions` above, and gated the same
+    // way: the pass runs only under `--timeseries`, so its presence IS the
+    // gate signal. Unlike `boons`, there is no always-on half here, which
+    // is why `coverage.self_effects` answers the whole question.
+    let self_effects_block = passes.self_effects.map(|effects| {
+        let block = self_effects::build_self_effects(effects, &index, &mut cats);
+        coverage.set(BlockName::SelfEffects, computed(block.is_empty()));
+        block
+    });
+    if self_effects_block.is_none() {
+        coverage.set(BlockName::SelfEffects, CoverageState::NotComputed);
     }
 
     // `Metrics::warnings` carries a code at the source as of this task --
@@ -652,6 +674,7 @@ pub fn build_report_v1(
             series: Some(series),
             minions: minions_block,
             conditions: conditions_block,
+            self_effects: self_effects_block,
         },
         coverage,
         warnings,

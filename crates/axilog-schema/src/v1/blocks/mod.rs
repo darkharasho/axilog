@@ -8,6 +8,7 @@ pub mod conditions;
 pub mod damage;
 pub mod defense;
 pub mod minions;
+pub mod self_effects;
 pub mod support;
 
 /// One `[[time_ms_from_log_start, stacks], ...]` step timeline, in the

@@ -137,6 +137,8 @@ pub fn parse_report_v1(
         .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
     let target_conditions =
         want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+    let self_effects =
+        want_timeseries.then(|| axilog_core::analysis::self_effects::build(&raw, &enc));
     Ok(axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
@@ -156,6 +158,7 @@ pub fn parse_report_v1(
             replay_extras: Some(&replay_extras),
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
+            self_effects: self_effects.as_ref(),
         },
     ))
 }
