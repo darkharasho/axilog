@@ -10,7 +10,7 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
-## Unreleased
+## v1.3.0 — 2026-08-19
 
 ### Added
 - `blocks.self_effects` — what was on a SQUAD player. The 14 conditions plus
