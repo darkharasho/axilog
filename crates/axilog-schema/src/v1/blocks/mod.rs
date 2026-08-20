@@ -12,7 +12,8 @@ pub mod self_effects;
 pub mod support;
 
 /// One `[[time_ms_from_log_start, stacks], ...]` step timeline, in the
-/// shared shape `blocks.boons` and `blocks.conditions` both use.
+/// shared shape `blocks.boons`, `blocks.conditions` and
+/// `blocks.self_effects` all use.
 ///
 /// Times are relative to log start, and the list carries the leading
 /// `[0, 0]` pair and the no-two-pairs-at-one-timestamp property that

@@ -37,9 +37,20 @@ Sixteen buff ids, held by squad entities:
   classifies both as `Other` — and therefore appear in no existing table
 
 Stun and Daze are in scope because leaving them out would have left the
-hard-CC lane showing Fear alone. Measured on the frozen WvW fixture, Stun
-is on 12 squad players and Daze on 5; against Fear's 7, dropping them
-would discard most of the family the lane exists to show.
+hard-CC lane showing Fear alone. Two captures were measured, and this spec
+now names which is which, because an earlier draft mixed them:
+
+- the **committed fixture** (`fixtures/wvw-small.anon.zevtc`, 37 squad
+  entities with rows): Stun on 3, Daze on 8, against Fear's 11
+- the **local post-rework capture** (`fixtures/local/wvw-postrework.zevtc`,
+  gitignored, 44 squad entities with rows): Stun on 11, Daze on 11,
+  against Fear's 8
+
+On either capture the two control effects together roughly match or exceed
+Fear on their own, so dropping them would discard about half the family the
+lane exists to show. (An earlier draft cited "12 squad players and Daze on
+5" over "46 squad players"; those figures match neither capture in this
+repo and have been removed rather than re-attributed.)
 
 **Out of scope: the instantaneous control effects.** Knockdown, Launch,
 Pull, Knockback, Float and Sink appear on no player in the fixture, because
@@ -222,40 +233,54 @@ possible.
 
 Measured on the frozen WvW fixture: `blocks.conditions` is 78,714 bytes
 across 56 enemy rows, `blocks.boons` is 331,865 bytes, and the whole report
-is 3,287,078 bytes. A squad-side block over 16 ids and 46 players lands
-well under 5% of the document — the payload argument that scoped
+is 3,287,078 bytes. A squad-side block over 16 ids and the capture's 44
+squad players lands well under 5% of the document — the payload argument that scoped
 `target_conditions` narrowly does not bind here.
 
 ## Testing — an equality oracle against the frozen export
 
 The same discipline the rest of this repo uses: every value computed twice
-and asserted to agree. For each of the 16 ids and each of the 46 squad
-players, the block's `states` and uptime are compared against Elite
-Insights' `buffUptimes` entry for the same player and buff.
+and asserted to agree. The oracle runs on the **local post-rework capture**
+(`fixtures/local/wvw-postrework.{zevtc,ei.json}`, gitignored), which Elite
+Insights' export covers: for each of the 16 ids and each of that capture's
+44 squad players, the block's `states` and uptime are compared against
+Elite Insights' `buffUptimes` entry for the same player and buff. EI's
+`players` array on this capture holds 48 entries, the extra 4 being enemy
+players flagged `notInSquad`, which this squad-scoped block correctly does
+not carry.
 
-The fixture gives this real teeth rather than a vacuous pass. Measured
-player counts and state-pair counts for the ids that matter most:
+Both captures give this real teeth rather than a vacuous pass. Rows emitted
+per id, on each capture — the two columns are DIFFERENT logs and are not
+expected to agree with each other:
 
-| id | name | players | state pairs |
+| id | name | committed: rows / pairs | local: rows / pairs |
 |---|---|---|---|
-| 722 | Chilled | 43 | 287 |
-| 721 | Crippled | 42 | — |
-| 720 | Blind | 24 | — |
-| 727 | Immobile | 16 | 56 |
-| 26766 | Slow | 16 | 52 |
-| **872** | **Stun** | **12** | **38** |
-| 791 | Fear | 7 | 27 |
-| **833** | **Daze** | **5** | **21** |
-| 27705 | Taunt | 1 | 3 |
+| 737 | Burning | 35 / 437 | 44 / 1511 |
+| 738 | Vulnerability | 34 / 564 | 44 / 1050 |
+| 722 | Chilled | 33 / 187 | 44 / 372 |
+| 19426 | Torment | 31 / 327 | 36 / 252 |
+| 723 | Poison | 30 / 255 | 44 / 2670 |
+| 742 | Weakness | 30 / 142 | 41 / 295 |
+| 720 | Blind | 30 / 198 | 40 / 198 |
+| 721 | Crippled | 29 / 205 | 44 / 573 |
+| 736 | Bleeding | 27 / 162 | 44 / 512 |
+| 727 | Immobile | 19 / 68 | 22 / 102 |
+| 861 | Confusion | 17 / 60 | 33 / 166 |
+| 791 | Fear | 11 / 39 | 8 / 26 |
+| **833** | **Daze** | **8 / 34** | **11 / 37** |
+| 26766 | Slow | 6 / 19 | 10 / 29 |
+| **872** | **Stun** | **3 / 9** | **11 / 37** |
+| 27705 | Taunt | 2 / 6 | — (absent) |
 
-A `—` in the pairs column means the player count was measured and the
-pair count was not; the oracle covers those ids regardless, since it
-compares against whatever Elite Insights emits rather than against a
-hardcoded count.
+"pairs" counts the `[time, stacks]` entries emitted, including the leading
+`[0, 0]`. Taunt appears on no player in the local capture, so the oracle
+does not cover it; the committed fixture does, which is why the id-coverage
+test lives there.
 
-Stun and Daze — the two ids that motivated the change — are covered by 38
-and 21 pairs across 12 and 5 players, so a pass that silently emitted
-nothing for them cannot go green.
+Stun and Daze — the two ids that motivated the change — are covered on both
+captures, by 9 and 34 pairs on the committed fixture and 37 pairs each on
+the local one, so a pass that silently emitted nothing for them cannot go
+green.
 
 Additionally: the coverage map must report `not_computed` without
 `--timeseries` and `computed` with it, and every one of the 16 ids must

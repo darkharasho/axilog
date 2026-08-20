@@ -114,7 +114,7 @@ Seven keyword arguments, all `False` by default:
 | Keyword | Adds |
 | --- | --- |
 | `skill_damage=True` | `blocks.damage.by_entity[].by_skill` / `.by_skill_taken` — per-skill outgoing and incoming splits |
-| `timeseries=True` | `blocks.series` per-entity channels, and the buff stack timelines in `blocks.boons`/`blocks.conditions` |
+| `timeseries=True` | `blocks.series` per-entity channels, the buff stack timelines in `blocks.boons`/`blocks.conditions`, and all of `blocks.self_effects` — squad-side condition/Stun/Daze uptime and stack timelines, which is gated on this flag in its entirety |
 | `rotation=True` | `blocks.rotation.by_entity[].{casts, aftercast}` |
 | `replay=True` | `blocks.replay.tracks` — position samples. The down/dead intervals under `blocks.replay.by_entity` are computed on **every** parse; only the positions are gated |
 | `missiles=True` | `blocks.missiles` — projectile fired/hit/denied counts |

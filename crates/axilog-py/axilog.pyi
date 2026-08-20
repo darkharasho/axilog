@@ -1549,8 +1549,9 @@ class SelfEffectRow(_SelfEffectRowRequired, total=False):
     `CcBlock` is not a substitute -- it counts crowd-control events, which
     carries no timeline.
 
-    `avg_stacks` is present for intensity-stacking effects (the 6 damaging
-    conditions) and omitted for duration ones, the same rule
+    `avg_stacks` is present for intensity-stacking effects (the 6
+    `BuffStackType.Stacking` conditions) and omitted for duration ones,
+    the same rule
     `BoonRow.avg_stacks` follows. `states` is REQUIRED, unlike
     `BoonRow.states`: this whole block rides one gate, so if the block is
     here the timeline is."""

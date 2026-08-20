@@ -47,7 +47,8 @@ pub struct SelfEffectRow {
     /// Percent of the fight this entity held at least one stack.
     pub uptime_pct: f64,
     /// Time-weighted mean stack count -- present for intensity-stacking
-    /// effects (the 6 damaging conditions), omitted for duration ones
+    /// effects (the 6 `BuffStackType.Stacking` conditions,
+    /// `CommonBuffs.cs:36-40` + `:49`), omitted for duration ones
     /// rather than reported as a meaningless zero. The same convention
     /// [`super::support::BoonRow::avg_stacks`] follows, for the same
     /// reason: Elite Insights never populates it for a duration buff.

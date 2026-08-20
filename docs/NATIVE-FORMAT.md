@@ -653,8 +653,8 @@ which is the right shape for them.
   "self_effects": {
     "by_entity": {
       "22": {
-        "872": { "uptime_pct": 0.232, "states": [[0, 0], [65670, 1], [66479, 0]] },
-        "736": { "uptime_pct": 41.9, "avg_stacks": 3.7, "states": [[0, 0], [1204, 2], "..."] }
+        "736": { "uptime_pct": 41.9, "avg_stacks": 3.7, "states": [[0, 0], [1204, 2], "..."] },
+        "872": { "uptime_pct": 0.232, "states": [[0, 0], [65670, 1], [66479, 0]] }
       }
     }
   }
@@ -662,8 +662,8 @@ which is the right shape for them.
 ```
 
 `avg_stacks` is present exactly for the intensity-stacking effects (the six
-damaging conditions) and omitted for the rest, the same rule `boons` rows
-follow — an absent `avg_stacks` means "duration-stacking", never zero.
+`BuffStackType.Stacking` conditions, `CommonBuffs.cs:36-40` + `:49`) and
+omitted for the rest, the same rule `boons` rows follow — an absent `avg_stacks` means "duration-stacking", never zero.
 
 Real excerpt (`--timeseries`), showing only the fields this section adds —
 entity `22`'s Might (`740`), and a condition on enemy entity `42`:

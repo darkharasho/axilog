@@ -1493,7 +1493,8 @@ export interface SelfEffectRow {
   uptime_pct: number
   /**
    * Time-weighted mean stack count. Present for intensity-stacking effects
-   * (the 6 damaging conditions), omitted for duration ones rather than
+   * (the 6 `BuffStackType.Stacking` conditions), omitted for duration ones
+   * rather than
    * reported as a meaningless zero — the same rule `BoonRow.avg_stacks`
    * follows.
    */
