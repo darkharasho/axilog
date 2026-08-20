@@ -256,9 +256,9 @@ expected to agree with each other:
 | id | name | committed: rows / pairs | local: rows / pairs |
 |---|---|---|---|
 | 737 | Burning | 35 / 437 | 44 / 1511 |
-| 738 | Vulnerability | 34 / 564 | 44 / 1050 |
+| 738 | Vulnerability | 33 / 562 | 44 / 1050 |
 | 722 | Chilled | 33 / 187 | 44 / 372 |
-| 19426 | Torment | 31 / 327 | 36 / 252 |
+| 19426 | Torment | 31 / 327 | 35 / 250 |
 | 723 | Poison | 30 / 255 | 44 / 2670 |
 | 742 | Weakness | 30 / 142 | 41 / 295 |
 | 720 | Blind | 30 / 198 | 40 / 198 |
@@ -268,7 +268,7 @@ expected to agree with each other:
 | 861 | Confusion | 17 / 60 | 33 / 166 |
 | 791 | Fear | 11 / 39 | 8 / 26 |
 | **833** | **Daze** | **8 / 34** | **11 / 37** |
-| 26766 | Slow | 6 / 19 | 10 / 29 |
+| 26766 | Slow | 5 / 17 | 9 / 27 |
 | **872** | **Stun** | **3 / 9** | **11 / 37** |
 | 27705 | Taunt | 2 / 6 | — (absent) |
 
