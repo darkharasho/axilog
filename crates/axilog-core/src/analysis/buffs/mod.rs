@@ -186,16 +186,17 @@ pub const BOON_IDS: [(u32, &str, bool); 12] = [
     (ALACRITY, "Alacrity", false),
 ];
 
-/// Display name for a buff id, from whichever of the two tracked name
-/// tables (the 12 [`BOON_IDS`] or the 14
-/// [`crate::analysis::condition_catalog::CONDITION_BUFFS`]) carries it.
+/// Display name for a buff id, from whichever of the three tracked name
+/// tables carries it: the 12 [`BOON_IDS`], the 14
+/// [`crate::analysis::condition_catalog::CONDITION_BUFFS`], or the 2
+/// [`crate::analysis::control_catalog::CONTROL_EFFECTS`].
 ///
 /// Added for the native-format-1.0 buff catalog (NFCAT Task 4), which needs
 /// a name for an arbitrary referenced buff id without owning a second copy
-/// of either table -- this project has no crate-wide buff catalog (see
-/// `damage_mods::catalog::buff_stack`'s module doc), so composing the two
-/// existing name-carrying tables is the calibration-safe option: neither
-/// table's data is duplicated, only looked up.
+/// of any table -- this project has no crate-wide buff catalog (see
+/// `damage_mods::catalog::buff_stack`'s module doc), so composing the
+/// existing name-carrying tables is the calibration-safe option: no table's
+/// data is duplicated, only looked up.
 pub fn name(id: u32) -> Option<&'static str> {
     BOON_IDS
         .iter()
@@ -203,6 +204,12 @@ pub fn name(id: u32) -> Option<&'static str> {
         .map(|&(_, n, _)| n)
         .or_else(|| {
             crate::analysis::condition_catalog::CONDITION_BUFFS
+                .iter()
+                .find(|&&(i, _, _, _)| i == id)
+                .map(|&(_, n, _, _)| n)
+        })
+        .or_else(|| {
+            crate::analysis::control_catalog::CONTROL_EFFECTS
                 .iter()
                 .find(|&&(i, _, _, _)| i == id)
                 .map(|&(_, n, _, _)| n)
@@ -220,15 +227,25 @@ pub fn name(id: u32) -> Option<&'static str> {
 ///    only happens to carry one of the 14 (Vulnerability), so consulting it
 ///    first silently produced `stacking: "duration"`/no `max_stacks` for
 ///    the other 13.
-/// 2. [`stack_type_for`] (boons, auras, forms, and anything else the
+/// 2. [`crate::analysis::control_catalog::CONTROL_EFFECTS`] -- Stun and
+///    Daze, which appear in NO other table in this repo: EI classifies both
+///    `Other`, and the damage-modifier stack table does not carry them. A
+///    miss here fell through to step 4's `(false, None)`, which is the
+///    answer for an UNKNOWN id -- indistinguishable from a measured one.
+/// 3. [`stack_type_for`] (boons, auras, forms, and anything else the
 ///    damage-modifier catalog's stack table knows about).
-/// 3. Otherwise `(false, None)` -- duration, no known capacity. Matches
+/// 4. Otherwise `(false, None)` -- duration, no known capacity. Matches
 ///    GW2EI's own `Buff.cs:120` default.
 ///
 /// [`damage_mods::catalog::buff_stack`]: crate::analysis::damage_mods::catalog::buff_stack
 pub fn stacking(id: u32) -> (bool, Option<u32>) {
     if let Some(&(_, _, is_intensity, capacity)) =
         crate::analysis::condition_catalog::CONDITION_BUFFS.iter().find(|&&(i, _, _, _)| i == id)
+    {
+        return (is_intensity, Some(capacity));
+    }
+    if let Some(&(_, _, is_intensity, capacity)) =
+        crate::analysis::control_catalog::CONTROL_EFFECTS.iter().find(|&&(i, _, _, _)| i == id)
     {
         return (is_intensity, Some(capacity));
     }
@@ -268,6 +285,17 @@ mod stacking_tests {
     fn an_unknown_id_defaults_to_duration_with_no_capacity() {
         assert_eq!(stacking(u32::MAX), (false, None));
     }
+
+    #[test]
+    fn a_control_effect_resolves_through_the_control_table() {
+        // Neither id is in the condition catalog (EI classifies both
+        // `Other`) nor in the damage-mod stack table, so before the third
+        // table both silently defaulted to `(false, None)` -- duration with
+        // NO capacity, which is the shape of an unknown id, not of a
+        // measured one.
+        assert_eq!(stacking(crate::analysis::control_catalog::STUN), (false, Some(1)));
+        assert_eq!(stacking(crate::analysis::control_catalog::DAZE), (false, Some(1)));
+    }
 }
 
 #[cfg(test)]
@@ -288,6 +316,12 @@ mod name_tests {
     #[test]
     fn unknown_id_resolves_to_none() {
         assert_eq!(name(u32::MAX), None);
+    }
+
+    #[test]
+    fn resolves_a_control_effect_name() {
+        assert_eq!(name(crate::analysis::control_catalog::STUN), Some("Stun"));
+        assert_eq!(name(crate::analysis::control_catalog::DAZE), Some("Daze"));
     }
 }
 

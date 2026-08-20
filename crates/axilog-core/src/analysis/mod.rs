@@ -47,6 +47,7 @@ pub mod health;
 /// retired `downs::apply` 10s-window approximation. See `contribution`'s
 /// module doc for the full methodology writeup.
 pub mod contribution;
+pub mod control_catalog;
 /// Per-skill damage distribution (outgoing + taken, per-target) (M12 Task 1)
 /// -- unlike `health`/`replay`/`missiles` above, this IS wired into
 /// [`analyze`] below (`PlayerMetrics::skill_damage`), computed unconditionally
