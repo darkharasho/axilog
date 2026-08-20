@@ -310,6 +310,13 @@ blocks.rotation.by_entity.<id>.casts[].duration_ms
 blocks.rotation.by_entity.<id>.casts[].quickness
 blocks.rotation.by_entity.<id>.casts[].skill_id
 blocks.rotation.by_entity.<id>.casts[].time_gained_ms
+blocks.self_effects
+blocks.self_effects.by_entity
+blocks.self_effects.by_entity.<id>
+blocks.self_effects.by_entity.<id>.<id>
+blocks.self_effects.by_entity.<id>.<id>.avg_stacks
+blocks.self_effects.by_entity.<id>.<id>.states
+blocks.self_effects.by_entity.<id>.<id>.uptime_pct
 blocks.series
 blocks.series.by_entity
 blocks.series.by_entity.<id>
@@ -432,6 +439,7 @@ coverage.minions
 coverage.missiles
 coverage.replay
 coverage.rotation
+coverage.self_effects
 coverage.series
 coverage.support
 encounter

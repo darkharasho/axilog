@@ -47,6 +47,7 @@ pub mod health;
 /// retired `downs::apply` 10s-window approximation. See `contribution`'s
 /// module doc for the full methodology writeup.
 pub mod contribution;
+pub mod control_catalog;
 /// Per-skill damage distribution (outgoing + taken, per-target) (M12 Task 1)
 /// -- unlike `health`/`replay`/`missiles` above, this IS wired into
 /// [`analyze`] below (`PlayerMetrics::skill_damage`), computed unconditionally
@@ -102,6 +103,7 @@ pub mod defenses;
 /// synthesized casts and the log's `CBTS_WEAPSWAP` rows into the same
 /// per-player list.
 pub mod rotation;
+pub mod self_effects;
 /// Generated reference tables, not analysis passes: skill art from the GW2
 /// API and buff art from GW2EI's own buff list. They are grouped here, ahead
 /// of `skill_map`, because nothing in the pipeline computes them -- they are

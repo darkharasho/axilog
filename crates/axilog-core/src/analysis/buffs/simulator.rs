@@ -194,8 +194,34 @@ fn run_duration(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) -> V
                     stack[idx] = duration_ms;
                     idx
                 } else {
-                    // capacity == 1 edge case; never hit for the 12 tracked
-                    // boons (minimum real capacity is 5).
+                    // capacity == 1: unreachable for the 12 tracked boons
+                    // (minimum real capacity 5) and for the 14 conditions
+                    // (minimum 3), but LIVE since
+                    // `analysis::self_effects` -- Stun and Daze are
+                    // capacity 1, both by table and by arcdps's own
+                    // `sc::BUFF_INFO` row.
+                    //
+                    // The unconditional overwrite is correct for them and
+                    // not merely a fallback: both are
+                    // `BuffStackType::Force`, whose `ForceOverrideLogic`
+                    // has a new application REPLACE the active stack
+                    // instead of being compared against it, and whose
+                    // `IsFull => stacks.Count == 1` caps it at one stack
+                    // regardless of the catalogued capacity. So for the
+                    // capacity actually RESOLVED on every log measured so
+                    // far -- 1, from both the static table and arcdps's own
+                    // reported row -- this arm and Force semantics coincide
+                    // exactly, and `run_segments`/`run_duration` need no
+                    // notion of stack type to get Stun right.
+                    //
+                    // The coincidence is bounded to that resolved value, not
+                    // universal: `self_effects::capacity_and_kind` lets an
+                    // arcdps-reported capacity WIN over the table, so a log
+                    // claiming `max_stacks > 1` for 872/833 would route them
+                    // through the queue arms above and give a Force buff
+                    // Queue semantics. No observed log does; if one turns
+                    // up, this arm is not the thing to change -- the stack
+                    // TYPE would have to become an input.
                     stack[0] = duration_ms;
                     0
                 };
@@ -424,6 +450,7 @@ fn run_intensity(mut events: Vec<BuffEvent>, capacity: u32, log_end_ms: u64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::control_catalog::STUN;
 
     fn apply(time: u64, buff_id: u32, owner: u64, duration_ms: u32) -> BuffEvent {
         apply_shields(time, buff_id, owner, duration_ms, false)
@@ -477,6 +504,36 @@ mod tests {
             states,
             vec![(0, 1), (100, 2), (1000, 1), (6000, 0)],
             "queued stack must be frozen until promoted at t=1000, then run its full 5000ms to expire at 6000 -- not 5100"
+        );
+    }
+
+    /// Capacity 1 (Stun, Daze -- `analysis::self_effects`): a second apply
+    /// landing while the first is still held must OVERWRITE the active
+    /// stack, not queue behind it. This is the branch's central semantic
+    /// claim, and it is the only capacity-1 arm in `run_duration`; the two
+    /// `duration_apply_while_active_*` tests above both run at capacity 5+,
+    /// so nothing else in the always-on suite reaches it.
+    ///
+    /// Overwrite (correct, Force semantics): count never exceeds 1, and the
+    /// buff expires 3000ms after the SECOND apply (100 + 3000 = 3100).
+    /// Queue (wrong): the count would step to 2 at t=100 and the frozen
+    /// second stack would only start ticking at 1000, expiring at 4000.
+    #[test]
+    fn capacity_one_overwrites_the_active_stack_instead_of_queueing() {
+        let events = vec![
+            apply(0, STUN, 1, 1000),   // active: would expire at 1000
+            apply(100, STUN, 1, 3000), // lands while the first is still held
+        ];
+        let states = run(events, 1, false, 10_000);
+        assert_eq!(
+            states,
+            vec![(0, 1), (3100, 0)],
+            "capacity 1 must overwrite: one stack throughout, expiring on the SECOND \
+             application's 3000ms (100+3000=3100), not the first's"
+        );
+        assert!(
+            states.iter().all(|&(_, n)| n <= 1),
+            "capacity 1 must never report more than one stack"
         );
     }
 

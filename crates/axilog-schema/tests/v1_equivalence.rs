@@ -66,6 +66,7 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
     // the source and by source ENTITY ID once native reprojects them.
     let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
     let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
+    let self_effects = axilog_core::analysis::self_effects::build(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -96,6 +97,7 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
             replay_extras: Some(&replay_extras),
             boon_states: Some(&boon_states),
             target_conditions: Some(&target_conditions),
+            self_effects: Some(&self_effects),
         },
     );
     (legacy, v1)

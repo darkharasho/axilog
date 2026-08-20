@@ -123,6 +123,8 @@ fn render_both(flags: Flags) -> (String, String) {
         .then(|| axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons));
     let target_conditions =
         flags.timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+    let self_effects =
+        flags.timeseries.then(|| axilog_core::analysis::self_effects::build(&raw, &enc));
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, "0.0.0-test", None,
         &axilog_schema::v1::Passes {
@@ -131,6 +133,7 @@ fn render_both(flags: Flags) -> (String, String) {
             damage_mods: damage_mods.as_ref(),
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
+            self_effects: self_effects.as_ref(),
             minions: minion_rollups.as_ref(),
             health_percents: health_percents.as_ref(),
             enemy_dist: enemy_dist.as_ref(),

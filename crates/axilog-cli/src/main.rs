@@ -388,6 +388,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // format-restricted.
             let target_conditions =
                 timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
+            let self_effects =
+                timeseries.then(|| axilog_core::analysis::self_effects::build(&raw, &enc));
             // MEIGAP Task 2c: `targets[].totalDamageDist` rides
             // `--skill-damage`, the flag that already gates every other
             // per-skill block (GW2EI itself emits it unconditionally; this
@@ -490,6 +492,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     replay_extras: Some(&replay_extras),
                     boon_states: boon_states.as_ref(),
                     target_conditions: target_conditions.as_ref(),
+                    self_effects: self_effects.as_ref(),
                 },
             );
             // Final-review fix wave: surface analysis warnings (e.g. a

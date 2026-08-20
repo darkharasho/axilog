@@ -2502,6 +2502,16 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
     // consistent` checks, and which axibridge's `resolveBuffMetaById`
     // depends on (it DROPS any target-buff entry whose id misses).
     //
+    // Since `analysis::self_effects`, `--timeseries` adds two MORE ids to
+    // this map: `build_self_effects` calls `cats.reference_buff` for every
+    // id it emits, so `b872` (Stun) and `b833` (Daze) join the reference-
+    // scoped catalog and therefore `buffMap`, even though neither appears
+    // in any emitted `buffUptimes` or `targets[].buffs` array. That is a
+    // superset, not a mismatch -- real Elite Insights carries both ids in
+    // its own `buffMap` -- and axibridge only ever LOOKS UP ids it already
+    // has, so an extra entry is inert. Do not "fix" it by narrowing the
+    // catalog.
+    //
     // `stacking` narrows from native's `"intensity"|"duration"` to EI's
     // boolean. That is the direction that loses nothing: the native string
     // is the richer spelling of the same two-valued fact.

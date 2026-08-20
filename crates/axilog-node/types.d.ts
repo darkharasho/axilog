@@ -1092,7 +1092,8 @@ export type CoverageState = 'present' | 'not_computed' | 'empty' | 'unsupported'
  * Per-block computation/presence status, keyed by block name
  * (`"damage"`, `"defenses"`, `"hit_stats"`, `"cc"`, `"boons"`, `"support"`,
  * `"contribution"`, `"healing"`, `"rotation"`, `"damage_mods"`,
- * `"missiles"`, `"replay"`, `"series"`, `"conditions"`, `"minions"`).
+ * `"missiles"`, `"replay"`, `"series"`, `"conditions"`, `"self_effects"`,
+ * `"minions"`).
  * Always names every known block, including ones a given parse did not
  * compute -- those read `"not_computed"`.
  *
@@ -1477,6 +1478,41 @@ export interface ConditionRow {
  */
 export interface ConditionsBlock {
   by_entity: ByEntity<Record<string, ConditionRow>>
+}
+
+/**
+ * One condition or control effect held BY a squad player: how long it was
+ * up, and when.
+ *
+ * The squad-side counterpart to `ConditionRow` (enemy-side) and the missing
+ * half of `BoonRow` (squad-side, but only the 12 boons). `CcBlock` is not a
+ * substitute — it counts crowd-control events, which carries no timeline.
+ */
+export interface SelfEffectRow {
+  /** Percent of the fight with at least one stack held. */
+  uptime_pct: number
+  /**
+   * Time-weighted mean stack count. Present for intensity-stacking effects
+   * (the 6 `BuffStackType.Stacking` conditions), omitted for duration ones
+   * rather than
+   * reported as a meaningless zero — the same rule `BoonRow.avg_stacks`
+   * follows.
+   */
+  avg_stacks?: number
+  /**
+   * The fused stack timeline. NOT optional, unlike `BoonRow.states`: this
+   * whole block rides one gate, so if the block is here the timeline is.
+   */
+  states: StateTimeline
+}
+
+/**
+ * squad entity id -> buff id -> row, for the 14 conditions plus Stun (872)
+ * and Daze (833). Wholly gated on `{ timeseries: true }`, so unlike `boons`
+ * its `coverage` entry does settle the question.
+ */
+export interface SelfEffectsBlock {
+  by_entity: ByEntity<Record<string, SelfEffectRow>>
 }
 
 /**
@@ -2137,6 +2173,7 @@ export interface Blocks {
   replay?: ReplayBlock
   series?: SeriesBlock
   conditions?: ConditionsBlock
+  self_effects?: SelfEffectsBlock
   minions?: MinionsBlock
 }
 
