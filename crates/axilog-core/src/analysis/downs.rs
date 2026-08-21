@@ -122,7 +122,7 @@ mod tests {
         ];
         let mut pm = vec![PlayerMetrics { agent_addr: 1, ..Default::default() }];
         // build enc with duration only
-        let enc = crate::model::Encounter { kind: "wvw".into(), map: "".into(),
+        let enc = crate::model::Encounter { kind: "wvw".into(), pve: None, map: "".into(),
             duration_ms: 2000, build: "".into(), revision: 1, recorded_by: None,
             teams: vec![], players: vec![], enemies: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None };
         let addr_to_rep: BTreeMap<u64, u64> = [(1u64, 1u64)].into_iter().collect();

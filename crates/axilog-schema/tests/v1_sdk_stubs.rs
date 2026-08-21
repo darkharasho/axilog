@@ -39,8 +39,26 @@ const EXEMPT: &[(&str, &str)] = &[
     ("<id>", "an id-keyed map slot, not a field name"),
 ];
 
+/// Wire keys the key-set golden cannot see, because they are emitted only
+/// for a PvE encounter and that golden is built from the committed WvW
+/// fixture.
+///
+/// All four are `skip_serializing_if = "Option::is_none"` on
+/// `v1::EncounterOut`, and `None` is exactly what a WvW log produces --
+/// so they are absent from `v1-keyset.golden.txt` by construction, and
+/// without this list the stub check would pass while both SDK stubs stayed
+/// silent about PvE entirely. That is the same "a field lands in the schema
+/// and no one transcribes it" failure this file exists to catch; it just
+/// arrives through a blind spot in the golden rather than through neglect.
+///
+/// The real fix is a PvE key-set golden (the fixtures for it are committed,
+/// `fixtures/pve/`). Until then, this list is the seam -- keep it in sync
+/// with `v1::EncounterOut`'s optional PvE fields.
+const PVE_ONLY_WIRE_FIELDS: &[&str] =
+    &["encounter_name", "trigger_id", "sub_category", "success"];
+
 /// Every distinct leaf field name the 1.0 container can emit, from the
-/// committed key-set golden.
+/// committed key-set golden plus [`PVE_ONLY_WIRE_FIELDS`].
 fn wire_field_names() -> Vec<String> {
     let mut names: Vec<String> = GOLDEN
         .lines()
@@ -50,6 +68,7 @@ fn wire_field_names() -> Vec<String> {
         .map(|seg| seg.trim_end_matches("[]").to_string())
         .filter(|seg| !seg.is_empty())
         .filter(|seg| !EXEMPT.iter().any(|(name, _)| name == seg))
+        .chain(PVE_ONLY_WIRE_FIELDS.iter().map(|s| s.to_string()))
         .collect();
     names.sort();
     names.dedup();

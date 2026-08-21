@@ -871,7 +871,7 @@ fn a_log_without_the_healing_extension_reports_unsupported_not_empty() {
     use axilog_schema::v1::envelope::CoverageState;
 
     let enc = Encounter { log_start_ms: 0,
-        kind: "wvw".into(),
+        kind: "wvw".into(), pve: None,
         map: String::new(),
         duration_ms: 1000,
         build: String::new(),
@@ -953,7 +953,7 @@ fn a_computed_block_with_no_rows_still_reports_empty() {
     use axilog_schema::v1::envelope::CoverageState;
 
     let enc = Encounter { log_start_ms: 0,
-        kind: "wvw".into(),
+        kind: "wvw".into(), pve: None,
         map: String::new(),
         duration_ms: 1000,
         build: String::new(),

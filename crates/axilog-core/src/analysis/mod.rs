@@ -850,7 +850,7 @@ mod tests {
             agent_addrs: vec![1, 2], // pre-relog addr 1, post-relog addr 2
         };
         let enc = Encounter {
-            kind: "wvw".into(), map: "".into(), duration_ms: 2000,
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 2000,
             build: "".into(), revision: 1, recorded_by: None, teams: vec![],
             players: vec![player],
             enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None,
@@ -878,7 +878,7 @@ mod tests {
             agent_addrs: vec![1, 2],
         };
         let enc = Encounter {
-            kind: "wvw".into(), map: "".into(), duration_ms: 2000,
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 2000,
             build: "".into(), revision: 1, recorded_by: None, teams: vec![],
             players: vec![player],
             enemies: vec![Enemy { id: 9, instid: 0, name: "Foe".into(), team: "blue".into(), is_player: true, marker: None,
@@ -907,7 +907,7 @@ mod tests {
             agent_addrs: vec![1],
         };
         let enc = Encounter {
-            kind: "wvw".into(), map: "".into(), duration_ms: 2000,
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 2000,
             build: "".into(), revision: 1, recorded_by: None, teams: vec![],
             players: vec![player],
             // Enemy deduped from a relog: representative addr 9, but also
@@ -945,7 +945,7 @@ mod tests {
             agent_addrs: vec![1],
         };
         let enc = Encounter {
-            kind: "wvw".into(), map: "".into(), duration_ms: 2000,
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 2000,
             build: "".into(), revision: 1, recorded_by: None, teams: vec![],
             players: vec![player],
             enemies: vec![
@@ -994,7 +994,7 @@ mod tests {
     }
 
     fn empty_enc() -> Encounter {
-        Encounter { kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
+        Encounter { kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![], enemies: vec![],
             markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None }
     }

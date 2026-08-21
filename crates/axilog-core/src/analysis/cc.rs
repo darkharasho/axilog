@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn buckets_squad_damage_per_second() {
         let enc = Encounter {
-            kind: "wvw".into(),
+            kind: "wvw".into(), pve: None,
             map: "".into(),
             duration_ms: 2500,
             build: "".into(),
@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn timeline_post_era_buff_cc_excluded_from_damage_but_counted_as_cc() {
         let enc = Encounter {
-            kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![], enemies: vec![],
             markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         };

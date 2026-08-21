@@ -597,7 +597,7 @@ mod tests {
     }
     #[test]
     fn dedupes_players_by_account() {
-        let mut enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:0,
+        let mut enc = Encounter { kind: "wvw".into(), pve: None, map:"".into(), duration_ms:0,
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1"), player(3, ":B.2")],
             enemies: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None };
@@ -609,7 +609,7 @@ mod tests {
         // Same account, two raw agent addrs (relog / build swap). The
         // survivor must retain BOTH addrs so downstream analysis can sum
         // damage across the full account, not just the representative.
-        let mut enc = Encounter { kind:"wvw".into(), map:"".into(), duration_ms:0,
+        let mut enc = Encounter { kind: "wvw".into(), pve: None, map:"".into(), duration_ms:0,
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1")],
             enemies: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None };

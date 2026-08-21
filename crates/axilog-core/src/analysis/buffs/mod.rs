@@ -594,7 +594,7 @@ mod tests {
 
     fn enc(players: Vec<Player>) -> Encounter {
         Encounter {
-            kind: "wvw".into(), map: "".into(), duration_ms: 20_000, build: "20260114".into(),
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 20_000, build: "20260114".into(),
             revision: 1, recorded_by: None, teams: vec![], players, enemies: vec![],
             markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         }

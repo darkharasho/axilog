@@ -67,6 +67,7 @@ mod tests {
             encounter: EncounterOut {
                 kind: "wvw".into(),
                 map: "Eternal Battlegrounds".into(),
+                encounter_name: None, trigger_id: None, sub_category: None, success: None,
                 duration_ms: 125_000,
                 build: "20260114".into(),
                 revision: 1,

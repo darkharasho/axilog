@@ -29,3 +29,10 @@ __pycache__/
 
 # SDD isolated worktrees (scratch, never committed)
 .worktrees/
+
+# Raw .zevtc drops carry real account names. Only anonymized copies are
+# committed, and they are named for it -- see fixtures/pve. This is a rule
+# rather than a per-folder entry because the drops arrive under whatever
+# name they were dragged in under, and an un-ignored one is a PII leak.
+/fixtures/**/*.zevtc
+!/fixtures/**/*.anon.zevtc

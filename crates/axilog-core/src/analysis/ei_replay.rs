@@ -2255,7 +2255,7 @@ mod tests {
 
     fn enc_with(players: Vec<Player>, enemies: Vec<Enemy>, duration_ms: u64) -> Encounter {
         Encounter {
-            kind: "wvw".into(),
+            kind: "wvw".into(), pve: None,
             map: "Blue Alpine Borderlands".into(),
             duration_ms,
             build: String::new(),

@@ -28,8 +28,47 @@ use serde::Serialize;
 /// because the EI adapter still reads it by `agent_addr`.
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct EncounterOut {
+    /// `"wvw"`, or GW2EI's PvE `LogCategory` slug (`"raid_wing"`,
+    /// `"fractal"`, `"raid_encounter"`, `"golem"`, `"story"`,
+    /// `"open_world"`, `"convergence"`, `"unknown_encounter"`,
+    /// `"unknown"`). Was `"wvw"` for every log until PvE encounter
+    /// identification landed -- a consumer that treats any non-`"wvw"`
+    /// value as unreachable predates that.
     pub kind: String,
+    /// WvW map display name. EMPTY STRING for a PvE log: `map_id` below is
+    /// still the real instance map, but there is no id->name table for PvE
+    /// maps here, and the WvW fallback ("World vs World") would be a lie on
+    /// a raid log. Read [`Self::encounter_name`] for what to show instead.
     pub map: String,
+    /// The fight's name, for a PvE log -- `"Gorseval the Multifarious"`,
+    /// `"Twin Largos"`, `"Harvest Temple"`. Omitted (not `null`) for WvW
+    /// logs, which have no encounter identity separate from their map.
+    ///
+    /// This carries NO challenge-mote suffix: GW2EI would render a
+    /// challenge-mode Skorvald as `"Skorvald CM"`, this says `"Skorvald"`.
+    /// See [`axilog_core::pve`]'s module doc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encounter_name: Option<String>,
+    /// arcdps's header trigger species id (evtc bytes 13-14), for a PvE
+    /// log. Omitted for WvW. This is the one fact arcdps records about
+    /// which encounter was fought, and the join key into GW2EI's tables.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_id: Option<u32>,
+    /// GW2EI's `SubLogCategory`: the wing or fractal grouping
+    /// (`"SpiritVale"`, `"ShatteredObservatory"`). Omitted for WvW logs and
+    /// for trigger ids GW2EI declares no grouping for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_category: Option<String>,
+    /// Whether the squad won. Omitted for WvW, which has no failure state.
+    ///
+    /// **`true` is reliable, `false` is not.** Only GW2EI's generic
+    /// success rule is implemented -- "every agent of the trigger species
+    /// died" ([`axilog_core::pve::succeeded`]). Encounters GW2EI succeeds
+    /// by reward chest or scripted event (Siege the Stronghold, Twisted
+    /// Castle, River of Souls, the Hall of Chains statues) report `false`
+    /// on a clean kill.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success: Option<bool>,
     /// The raw `CBTS_MAPID` (`sc::MAP_ID`) value that `map` is the display
     /// name for. Carried alongside the name, not instead of it: the name is
     /// for people, the id is the join key. A consumer that wants to place
@@ -669,6 +708,10 @@ pub fn build_report_v1(
         encounter: EncounterOut {
             kind: legacy.encounter.kind.clone(),
             map: legacy.encounter.map.clone(),
+            encounter_name: legacy.encounter.encounter_name.clone(),
+            trigger_id: legacy.encounter.trigger_id,
+            sub_category: legacy.encounter.sub_category.clone(),
+            success: legacy.encounter.success,
             map_id: legacy.encounter.map_id,
             duration_ms: legacy.encounter.duration_ms,
             build: legacy.encounter.build.clone(),
@@ -746,7 +789,7 @@ mod tests {
     #[test]
     fn a_marker_on_an_unrostered_agent_survives_with_no_entity_id() {
         let enc = Encounter { log_start_ms: 0, ground_markers: vec![],
-            kind: "wvw".into(),
+            kind: "wvw".into(), pve: None,
             map: "".into(),
             duration_ms: 1000,
             build: String::new(),
@@ -815,7 +858,7 @@ mod tests {
     #[test]
     fn an_unresolvable_recorder_drops_recorded_by_but_warns_loudly() {
         let enc = Encounter { log_start_ms: 0,
-            kind: "wvw".into(),
+            kind: "wvw".into(), pve: None,
             map: "".into(),
             duration_ms: 1000,
             build: String::new(),
@@ -885,7 +928,7 @@ mod tests {
     #[test]
     fn no_recorded_by_at_all_produces_no_warning() {
         let enc = Encounter { log_start_ms: 0,
-            kind: "wvw".into(),
+            kind: "wvw".into(), pve: None,
             map: "".into(),
             duration_ms: 1000,
             build: String::new(),

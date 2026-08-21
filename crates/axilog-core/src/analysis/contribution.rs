@@ -721,7 +721,7 @@ mod tests {
     fn enc_with(squad_addrs: Vec<u64>, enemy_player_addrs: Vec<u64>) -> Encounter {
         use crate::model::{Enemy, Player};
         Encounter {
-            kind: "wvw".into(), map: "".into(), duration_ms: 100_000, build: "".into(),
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 100_000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![],
             players: squad_addrs.iter().map(|&a| Player {
                 agent_addr: a, account: format!(":P{a}.1"), character: format!("P{a}"),
@@ -759,7 +759,7 @@ mod tests {
     fn enc_with_relogged_enemy(squad_addrs: Vec<u64>, enemy_id: u64, enemy_addrs: Vec<u64>) -> Encounter {
         use crate::model::{Enemy, Player};
         Encounter {
-            kind: "wvw".into(), map: "".into(), duration_ms: 100_000, build: "".into(),
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 100_000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![],
             players: squad_addrs.iter().map(|&a| Player {
                 agent_addr: a, account: format!(":P{a}.1"), character: format!("P{a}"),

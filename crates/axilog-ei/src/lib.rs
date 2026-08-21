@@ -723,6 +723,7 @@ fn ei_skill_id(id: u32) -> i64 {
 
 struct EiDoc<'a> {
     fight_name: String,
+    success: bool,
     duration_ms: u64,
     recorded_by: Option<&'a str>,
     player_count: usize,
@@ -758,7 +759,7 @@ impl serde::Serialize for EiDoc<'_> {
         )?;
         m.serialize_entry("recordedBy", &self.recorded_by)?;
         m.serialize_entry("skillMap", &self.skill_map)?;
-        m.serialize_entry("success", &true)?;
+        m.serialize_entry("success", &self.success)?;
         m.serialize_entry(
             "targets",
             &LazySeq { len: self.target_count, rows: &self.target_json },
@@ -2805,7 +2806,26 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
         }]))
     });
     EiDoc {
-        fight_name: format!("Detailed WvW - {}", report.encounter.map),
+        // GW2EI's `LogData.LogName`. For a PvE log that is the encounter's
+        // own name, resolved by `axilog_core::pve`; for WvW it is
+        // `WvWLogic.GetLogicName`'s `"Detailed WvW"` plus the map, which is
+        // what this rendered UNCONDITIONALLY before PvE identification
+        // existed -- so every raid, strike and fractal log came out of this
+        // function claiming to be a WvW fight.
+        //
+        // NOT included, unlike GW2EI's `LogName`: the ` CM`/` LCM` mode
+        // suffix, and the `(Late Start)`/`(No Pre-Event)` qualifiers. See
+        // `axilog_core::pve`'s module doc for why challenge-mote detection
+        // is out of scope.
+        fight_name: report
+            .encounter
+            .encounter_name
+            .clone()
+            .unwrap_or_else(|| format!("Detailed WvW - {}", report.encounter.map)),
+        // WvW has no failure state in GW2EI (`WvWLogic` never calls
+        // `SetSuccess(false)`), which is why this was a hardcoded `true`;
+        // `None` here means WvW, so the old answer is preserved exactly.
+        success: report.encounter.success.unwrap_or(true),
         duration_ms: report.encounter.duration_ms,
         recorded_by,
         player_count,
@@ -2892,7 +2912,7 @@ mod tests {
                 version: String::new(),
                 generated_from: None,
             },
-            encounter: axilog_schema::v1::EncounterOut { log_start_ms: 0,
+            encounter: axilog_schema::v1::EncounterOut { log_start_ms: 0, encounter_name: None, trigger_id: None, sub_category: None, success: None,
                 kind: String::new(),
                 map: String::new(),
                 duration_ms: 0,
@@ -2923,7 +2943,7 @@ mod tests {
         use axilog_core::model::{Encounter, Player};
         use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
         use axilog_core::model::Enemy;
-        let enc = Encounter{log_start_ms: 0,kind:"wvw".into(),map:"Eternal Battlegrounds".into(),
+        let enc = Encounter{log_start_ms: 0,kind: "wvw".into(), pve: None,map:"Eternal Battlegrounds".into(),
             duration_ms:1000,build:"".into(),revision:1,recorded_by:Some(":A.1".into()),
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"Daredevil".into(),
@@ -3120,7 +3140,7 @@ mod tests {
         use axilog_core::analysis::{Metrics, PlayerMetrics, Timeline};
         use axilog_core::analysis::buffs::{self, BoonUptime, GenerationStats};
         use axilog_core::analysis::support::SupportMetrics;
-        let enc = Encounter{log_start_ms: 0,kind:"wvw".into(),map:"Eternal Battlegrounds".into(),
+        let enc = Encounter{log_start_ms: 0,kind: "wvw".into(), pve: None,map:"Eternal Battlegrounds".into(),
             duration_ms:1000,build:"".into(),revision:1,recorded_by:None,
             teams:vec![],players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"Nim Iss".into(),profession:"Thief".into(),elite_spec:"".into(),
@@ -3287,7 +3307,7 @@ mod tests {
         }
         let report = Report {
             schema_version: "0.2", axilog_version: "0.1.0".to_string(),
-            encounter: EncounterOut { kind: "wvw".into(), map: "".into(), duration_ms: 10_000,
+            encounter: EncounterOut { kind: "wvw".into(), encounter_name: None, trigger_id: None, sub_category: None, success: None, map: "".into(), duration_ms: 10_000,
                 build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None },
             players: vec![
                 base_player(":A.1", Some(HealingOut {
@@ -3431,7 +3451,7 @@ mod tests {
         use axilog_schema::{EncounterOut, PerSecondOut, Report, TimelineOut};
         Report {
             schema_version: "0.2", axilog_version: "0.1.0".to_string(),
-            encounter: EncounterOut { kind: "wvw".into(), map: "".into(), duration_ms: 2_000,
+            encounter: EncounterOut { kind: "wvw".into(), encounter_name: None, trigger_id: None, sub_category: None, success: None, map: "".into(), duration_ms: 2_000,
                 build: "".into(), revision: 1, recorded_by: None, teams: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None },
             players,
             enemies: vec![],

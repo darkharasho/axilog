@@ -10,6 +10,107 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.5.0 — 2026-08-21
+
+### Added
+- **PvE encounter identification.** Every log this project had ever parsed
+  came out as a WvW log: `model::resolve` hardcoded `kind: "wvw"` and
+  `map: "World vs World"`, and `axilog_ei` rendered `fightName` as
+  `"Detailed WvW - {map}"` unconditionally. A raid, a strike and a fractal
+  were therefore indistinguishable from each other and from a borderlands
+  zerg — axibridge listed a night of Wing 1–4 raids as four "World vs World"
+  fights, which is how this was found.
+
+  arcdps records exactly one fact about the encounter: the trigger species
+  id, in bytes 13–14 of the evtc header. The new `pve` module turns it into
+  a name, a category and a success verdict:
+
+  - **Name.** GW2EI's *default* rule (`LogLogic.GetLogicName`) is "the
+    character name of the target whose species is the trigger id" — the
+    boss's own agent name, already in the log. So the general case needs no
+    table, and names encounters GW2EI has never heard of as readily as ones
+    it has. `pve::encounters` is the correction layer: a generated
+    transcription of GW2EI's 90 `LogData.DetectLogic` cases, supplying the
+    category (which nothing in the log states) plus a fixed name for the 38
+    fights that are not named after any one agent — "Twin Largos", "Bandit
+    Trio", "Harvest Temple", "Siege the Stronghold".
+  - **Category.** `Encounter::kind` now carries GW2EI's own `LogCategory`
+    slug: `raid_wing`, `raid_encounter`, `fractal`, `golem`, `story`,
+    `open_world`, `convergence`, `unknown_encounter`, or `wvw` as before.
+    EI's vocabulary is kept verbatim rather than collapsed to
+    "raid"/"strike", because `RaidEncounter` spans festival bosses, IBS/EoD
+    strikes *and* the SotO and Visions of Eternity encounters.
+  - **Success.** Only GW2EI's *generic* rule (`SetSuccessByDeath`): every
+    agent of the trigger species died. Asymmetric on purpose and documented
+    as such — `true` is reliable, `false` is not, because encounters GW2EI
+    succeeds by reward chest or scripted event (Twisted Castle, River of
+    Souls, the Hall of Chains statues) report `false` on a clean kill.
+
+  New wire fields on `encounter`, all omitted for WvW so no existing
+  document changes shape: `encounter_name`, `trigger_id`, `sub_category`,
+  `success`. `map` is now an EMPTY STRING for a PvE log — `map_id` is still
+  the real instance id, but there is no PvE map-name table here and the WvW
+  fallback string was the lie being fixed.
+
+  Thirteen anonymized fixtures are committed (`fixtures/pve/`, 18 MB) — the
+  repo's first PvE goldens, and the reason this class of bug could survive a
+  fully green suite for as long as it did. They are picked to exercise
+  branches, not to be a pile of raid logs: four `LogCategory` kinds, eight
+  sub-categories, a matched kill/wipe pair on the same boss (Keep
+  Construct), the gadget-triggered Dragonvoid (which is also the one fight
+  named from the catalog rather than from its own agent), a conditional
+  `DetectLogic` case (Xera), and three golem benchmarks.
+
+### Fixed
+- **`targets[]` was empty on every PvE log, and would have been 265 rows
+  long.** Target selection was written twice and the two copies disagreed
+  the moment non-WvW encounters became possible: `build_report`'s
+  `ei_targets` gated on `kind != "wvw"` (which would have kept *every*
+  ambient NPC in a raid instance — 265 of them on the Gorseval fixture,
+  including 46 "Spirit Energy" and 21 crows), while `v1::entities`'
+  `SourceOrder` filtered on `is_player` with no gate at all. `axilog_ei`
+  reads the row COUNT from one and the ROWS from the other, so the
+  disagreement rendered as an empty `targets[]` rather than as any error.
+  Both now call one predicate, `Encounter::is_ei_target`, and a PvE log
+  reports its boss.
+- **Damage modifiers ran in the wrong mode for PvE.** `ModeContext::
+  from_encounter` mapped anything not `"wvw"` to `ParseMode::Unknown` +
+  `SkillMode::PvE`, under a comment noting that no such encounter existed.
+  It now transcribes GW2EI's per-category assignment, so raids, strikes,
+  fractals and convergences get `ParseMode::Instanced` — several modifiers
+  are WvW/sPvP-only or are dropped outside instanced content, so the old
+  answer selected the wrong modifier set.
+
+### Known gaps
+- **No challenge-mote detection.** A CM Skorvald is named `"Skorvald"`,
+  where GW2EI says `"Skorvald CM"`. GW2EI decides this per encounter, with
+  45 bespoke detectors keyed on boss health pools, specific skill casts and
+  game-build gates; none of that is transcribed. A few encounters get it
+  free, because ArenaNet gave the challenge version its own species id
+  (`MinisterLiCM`, `DecimaCM`, the Old Lion's Court prototypes).
+- **No per-encounter success rules.** The fixtures do cover the negative
+  (five of the thirteen are failures, including a matched Keep Construct
+  kill/wipe pair), but the rule itself is still only GW2EI's generic one.
+  Two measured near-misses worth knowing:
+  - GW2EI's `Golem.CheckSuccess` counts a benchmark as a success if the
+    golem died **or** ended below 2% health. The death half is implemented;
+    the two aborted golem fixtures end at 97% and 60%, so they agree with
+    GW2EI by a wide margin — but a benchmark ending at, say, 1.5% would
+    diverge. `golem_success_agrees_with_gw2ei_2_percent_rule` measures this
+    rather than assuming it, and is where such a capture would surface.
+  - Kanaxai's trigger id IS the challenge-mode species, and the fixture
+    still reads `"Kanaxai, Scythe of House Aurkus"` with no suffix — which
+    is EI-exact, because its `GetLogMode` returns `Mode.CMNoName` and
+    `CompleteLogName` only appends for `CM`/`LegendaryCM`. Correct here by
+    coincidence rather than by implementing anything.
+- **No PvE key-set golden.** `v1-keyset.golden.txt` is built from the WvW
+  fixture, so the four new `encounter` keys are absent from it by
+  construction and `v1_sdk_stubs` cannot see them; they are listed
+  explicitly in `PVE_ONLY_WIRE_FIELDS` as a stopgap.
+- **No PvE target analysis beyond the trigger species.** GW2EI promotes
+  split phases, adds friendly NPCs and names sub-targets per encounter;
+  `targets[]` here is the boss and nothing else.
+
 ## v1.4.1 — 2026-08-21
 
 ### Fixed

@@ -69,7 +69,7 @@ fn enemy(addr: u64) -> Enemy {
 
 fn encounter(players: Vec<Player>, enemies: Vec<Enemy>) -> Encounter {
     Encounter {
-        kind: "wvw".into(),
+        kind: "wvw".into(), pve: None,
         map: String::new(),
         duration_ms: 10_000,
         build: "20260114".into(),

@@ -215,19 +215,40 @@ pub struct ModeContext {
 impl ModeContext {
     /// Derive the modes from an already-resolved [`Encounter`].
     ///
-    /// This project only produces `kind == "wvw"` encounters today (see
-    /// `crate::wvw`), which maps to GW2EI's `ParseModeEnum.WvW` +
-    /// `SkillModeEnum.WvW`; anything else is reported as
-    /// [`ParseMode::Unknown`] + [`SkillMode::PvE`], which is GW2EI's own
-    /// fallback pair for a log whose logic it could not classify
-    /// (`LogLogic.cs:25,40`: `ParseModeEnum.Unknown`, `SkillMode` defaults
-    /// to `PvE`).
+    /// [`Encounter::kind`] carries GW2EI's own `LogCategory` slug, so this
+    /// is a transcription of where GW2EI sets `ParseMode` -- on the base
+    /// logic each category's encounters inherit from, not per boss:
+    ///
+    /// | `kind`                          | GW2EI                                | here |
+    /// |---------------------------------|--------------------------------------|------|
+    /// | `wvw`                           | `WvWLogic.cs:27` `WvW`               | [`ParseMode::WvW`] + [`SkillMode::WvW`] |
+    /// | `raid_wing`, `raid_encounter`   | `RaidLogic.cs:12` `Instanced10`      | [`ParseMode::Instanced`] + [`SkillMode::PvE`] |
+    /// | `fractal`                       | `FractalLogic.cs:20` `Instanced5`    | same |
+    /// | `convergence`                   | `ConvergenceLogic.cs:15` `Instanced50` | same |
+    /// | `golem`                         | `Golem.cs:20` `Benchmark`            | same |
+    /// | `open_world`                    | `OpenWorldLogic.cs:10` `OpenWorld`   | [`ParseMode::OpenWorld`] + [`SkillMode::PvE`] |
+    /// | `story`, `unknown*`, anything else | inherits `LogLogic.cs:39` `Unknown` | [`ParseMode::Unknown`] + [`SkillMode::PvE`] |
+    ///
+    /// GW2EI's four `Instanced*`/`Benchmark` values collapse into one here
+    /// because no modifier in the catalog distinguishes them -- see
+    /// [`ParseMode::Instanced`]'s doc.
+    ///
+    /// The distinction matters: several modifiers are WvW/sPvP-only or are
+    /// dropped outside instanced content ([`super::model::DamageModifier::
+    /// keep`]), so a raid log left on the old blanket `"wvw"` answer got
+    /// the wrong modifier set entirely, and one left on `Unknown` gets a
+    /// third, also-wrong one.
     pub fn from_encounter(enc: &Encounter) -> Self {
-        if enc.kind == "wvw" {
-            ModeContext { parse_mode: ParseMode::WvW, skill_mode: SkillMode::WvW }
-        } else {
-            ModeContext { parse_mode: ParseMode::Unknown, skill_mode: SkillMode::PvE }
-        }
+        let parse_mode = match enc.kind.as_str() {
+            "wvw" => ParseMode::WvW,
+            "raid_wing" | "raid_encounter" | "fractal" | "convergence" | "golem" => {
+                ParseMode::Instanced
+            }
+            "open_world" => ParseMode::OpenWorld,
+            _ => ParseMode::Unknown,
+        };
+        let skill_mode = if parse_mode == ParseMode::WvW { SkillMode::WvW } else { SkillMode::PvE };
+        ModeContext { parse_mode, skill_mode }
     }
 }
 

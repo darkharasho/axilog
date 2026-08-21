@@ -397,7 +397,41 @@ pub fn build_replay_out(replay: &Replay) -> ReplayOut {
     }
 }
 #[derive(Serialize, Clone)]
-pub struct EncounterOut { pub kind: String, pub map: String, pub duration_ms: u64,
+pub struct EncounterOut {
+    /// `"wvw"`, or GW2EI's PvE `LogCategory` slug -- see
+    /// [`axilog_core::model::Encounter::kind`].
+    pub kind: String,
+    /// WvW map display name; empty string for a PvE log (`map_id` is still
+    /// the real one). See [`axilog_core::model::Encounter::map`].
+    pub map: String,
+    /// The fight's display name, for a PvE log: `"Gorseval the
+    /// Multifarious"`, `"Twin Largos"`, `"Harvest Temple"`. Omitted (not
+    /// `null`) for WvW logs, which are named after their map and have no
+    /// separate encounter identity -- `axilog_ei` renders those as
+    /// `"Detailed WvW - {map}"`, unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encounter_name: Option<String>,
+    /// arcdps's header trigger species id, for a PvE log. Omitted for WvW.
+    /// The join key into GW2EI's own tables, and the only thing arcdps
+    /// actually records about which encounter this is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger_id: Option<u32>,
+    /// GW2EI's `SubLogCategory` -- the wing or fractal this encounter
+    /// belongs to (`"SpiritVale"`, `"ShatteredObservatory"`). Omitted for
+    /// WvW logs and for trigger ids GW2EI declares no grouping for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_category: Option<String>,
+    /// Whether the squad won. Omitted for WvW logs, which have no failure
+    /// state (GW2EI's `WvWLogic` reports success unconditionally).
+    ///
+    /// **Asymmetric confidence.** Only GW2EI's generic success rule is
+    /// implemented -- see [`axilog_core::pve::succeeded`]. `Some(true)`
+    /// means the boss died and is reliable; `Some(false)` means it did
+    /// not, which is NOT the same as "the squad wiped" for the encounters
+    /// GW2EI succeeds by reward chest or scripted event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success: Option<bool>,
+    pub duration_ms: u64,
     /// The raw `CBTS_MAPID` value `map` is the display name for. See
     /// [`axilog_core::model::Encounter::map_id`]. Omitted (not `null`) when
     /// the log carries no MAP_ID event.
@@ -1612,6 +1646,10 @@ pub fn build_report(
         // doc / the M11 plan's "grep-audit for the old field name" gate).
         schema_version: "0.2", axilog_version: axilog_version.to_string(),
         encounter: EncounterOut { kind: enc.kind.clone(), map: enc.map.clone(),
+            encounter_name: enc.pve.as_ref().map(|p| p.name.clone()),
+            trigger_id: enc.pve.as_ref().map(|p| p.trigger_id),
+            sub_category: enc.pve.as_ref().and_then(|p| p.sub_category).map(str::to_string),
+            success: enc.pve.as_ref().map(|p| p.success),
             map_id: enc.map_id,
             duration_ms: enc.duration_ms, build: enc.build.clone(), revision: enc.revision,
             recorded_by: enc.recorded_by.clone(),
@@ -1645,7 +1683,10 @@ pub fn build_report(
                 damage_out: metrics.enemy_damage_out.get(&e.id).copied().unwrap_or(0)})
             .collect(),
         ei_targets: enc.enemies.iter()
-            .filter(|e| enc.kind != "wvw" || e.is_player)
+            // One predicate, shared with `v1::entities`' `SourceOrder` --
+            // see `Encounter::is_ei_target` for the rule and for what went
+            // wrong when the two were written separately.
+            .filter(|e| enc.is_ei_target(e))
             .map(|e| EnemyOut{id:e.id,name:e.name.clone(),
                 team:e.team.clone(),is_player:e.is_player,marker:e.marker.clone(),
                 profession: e.profession.clone(), elite_spec: e.elite_spec.clone(),
@@ -1714,7 +1755,7 @@ mod tests {
     #[test]
     fn enemies_keeps_fighting_npcs_while_ei_targets_keeps_only_enemy_players() {
         use axilog_core::model::Enemy;
-        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(), duration_ms:1000,
+        let enc = Encounter { log_start_ms: 0, kind: "wvw".into(), pve: None, map:"".into(), duration_ms:1000,
             build:"".into(), revision:1, recorded_by:None, teams:vec![], players:vec![],
             enemies: vec![
                 Enemy { id: 9, instid: 0, name: "Participant".into(), team: "blue".into(),
@@ -1832,7 +1873,7 @@ mod tests {
         use axilog_core::model::Team;
         use axilog_core::wvw::objectives::{ObjectiveStatus, ObjectiveType};
 
-        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(), duration_ms:1000,
+        let enc = Encounter { log_start_ms: 0, kind: "wvw".into(), pve: None, map:"".into(), duration_ms:1000,
             build:"".into(), revision:1, recorded_by:None,
             teams: vec![
                 Team { color: "blue".into(), team_id: 433, guid: None, shard_id: Some(1009) },
@@ -1876,20 +1917,34 @@ mod tests {
         );
     }
 
-    /// MROSTER: the `enc.kind == "wvw"` guard. GW2EI picks `targets[]` per
-    /// `LogLogic`; the enemy-players-only rule is WvW's, so a non-WvW
-    /// encounter (none exist today) keeps the full roster rather than
-    /// silently rendering an empty `targets[]`.
+    /// MROSTER: `targets[]` is curated per encounter kind, because GW2EI
+    /// picks it per `LogLogic`. WvW's rule is "enemy players"; PvE's is
+    /// "the trigger species", which is what `pve::Identity::target_addrs`
+    /// carries.
+    ///
+    /// This test used to assert the OPPOSITE for the PvE branch -- that a
+    /// non-WvW encounter "keeps the full roster" -- under a comment noting
+    /// that no such encounter existed. Once PvE identification made them
+    /// real, that rule meant a raid log shipped every ambient NPC in the
+    /// instance as a target (265 of them on the Gorseval fixture: crows,
+    /// spirit energy, braziers), so it was replaced rather than preserved.
     #[test]
-    fn ei_targets_curation_is_gated_on_the_wvw_encounter_kind() {
+    fn ei_targets_for_a_pve_encounter_are_the_trigger_species_only() {
         use axilog_core::model::Enemy;
-        let enc = Encounter { log_start_ms: 0, kind:"raid".into(), map:"".into(), duration_ms:1000,
+        let npc = |id: u64, name: &str| Enemy {
+            id, instid: 0, name: name.into(), team: "red".into(),
+            is_player: false, marker: None, profession: None, elite_spec: None,
+            agent_addrs: vec![id],
+        };
+        let enc = Encounter { log_start_ms: 0, kind:"raid_wing".into(), map:"".into(),
+            pve: Some(axilog_core::pve::Identity {
+                trigger_id: 15429, kind: "raid_wing", name: "Gorseval the Multifarious".into(),
+                sub_category: Some("SpiritVale"), catalogued: true, success: true,
+                target_addrs: vec![9],
+            }),
+            duration_ms:1000,
             build:"".into(), revision:1, recorded_by:None, teams:vec![], players:vec![],
-            enemies: vec![
-                Enemy { id: 9, instid: 0, name: "Boss".into(), team: "red".into(),
-                    is_player: false, marker: None, profession: None, elite_spec: None,
-                    agent_addrs: vec![9] },
-            ],
+            enemies: vec![npc(9, "Gorseval the Multifarious"), npc(10, "Charged Soul")],
             markers:vec![], ground_markers: vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None, map_id: None };
         let m = Metrics { players: vec![],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![]},
@@ -1898,12 +1953,16 @@ mod tests {
             healing_extension: Default::default(),
             combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
-        assert_eq!(report.ei_targets.len(), 1, "a non-WvW encounter keeps its NPC targets");
+        assert_eq!(
+            report.ei_targets.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            ["Gorseval the Multifarious"],
+            "a PvE encounter's targets are the boss, not every NPC in the instance",
+        );
     }
 
     #[test]
     fn serializes_report_with_versions() {
-        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"Eternal Battlegrounds".into(),
+        let enc = Encounter { log_start_ms: 0, kind: "wvw".into(), pve: None, map:"Eternal Battlegrounds".into(),
             duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![Player{agent_addr:1,account:":A.1".into(),
             character:"A".into(),profession:"Thief".into(),elite_spec:"".into(),
@@ -1938,7 +1997,7 @@ mod tests {
     #[test]
     fn healing_block_present_when_extension_detected() {
         use axilog_core::analysis::healing::HealingMetrics;
-        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(),
+        let enc = Encounter { log_start_ms: 0, kind: "wvw".into(), pve: None, map:"".into(),
             duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
@@ -1983,7 +2042,7 @@ mod tests {
     #[test]
     fn skill_damage_is_opt_in_like_replay_and_missiles() {
         use axilog_core::analysis::skill_damage::{PerTargetSkills, SkillDamageMetrics, SkillEntry};
-        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(),
+        let enc = Encounter { log_start_ms: 0, kind: "wvw".into(), pve: None, map:"".into(),
             duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
@@ -2032,7 +2091,7 @@ mod tests {
     #[test]
     fn per_second_and_dps_targets_are_both_gated_by_include_timeseries() {
         use axilog_core::analysis::timeseries::{DpsTargetEntry, TargetSeries, TimeseriesMetrics};
-        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(),
+        let enc = Encounter { log_start_ms: 0, kind: "wvw".into(), pve: None, map:"".into(),
             duration_ms:2000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
@@ -2092,7 +2151,7 @@ mod tests {
     #[test]
     fn rotation_is_opt_in_like_skill_damage_and_timeseries() {
         use axilog_core::analysis::rotation::{Cast, SkillRotation};
-        let enc = Encounter { log_start_ms: 0, kind:"wvw".into(), map:"".into(),
+        let enc = Encounter { log_start_ms: 0, kind: "wvw".into(), pve: None, map:"".into(),
             duration_ms:1000, build:"20260114".into(), revision:1, recorded_by:None,
             teams:vec![], players:vec![
                 Player{agent_addr:1,account:":A.1".into(),character:"A".into(),
@@ -2186,7 +2245,7 @@ mod tests {
             agent_addrs: vec![1],
         };
         let enc = Encounter { log_start_ms: 0,
-            kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
             enemies: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
         };
@@ -2235,7 +2294,7 @@ mod tests {
             agent_addrs: vec![1],
         };
         let enc = Encounter { log_start_ms: 0,
-            kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
             enemies: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, map_id: None,
         };

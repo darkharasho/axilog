@@ -159,7 +159,32 @@ pub struct Team {
     pub shard_id: Option<u32>,
 }
 #[derive(Debug, Clone)]
-pub struct Encounter { pub kind: String, pub map: String, pub duration_ms: u64,
+pub struct Encounter {
+    /// The encounter category: `"wvw"`, or one of GW2EI's PvE
+    /// `LogCategory` slugs (`"raid_wing"`, `"fractal"`, `"raid_encounter"`,
+    /// `"golem"`, `"story"`, `"open_world"`, `"convergence"`,
+    /// `"unknown_encounter"`, `"unknown"`) -- see
+    /// [`crate::pve::Identity::kind`].
+    ///
+    /// This was hardcoded `"wvw"` for every log until PvE encounter
+    /// identification landed, which is why several consumers still read it
+    /// as a two-state "WvW or not": `crate::analysis::damage_mods::
+    /// ModeContext::from_encounter` and `axilog_schema`'s `ei_targets`
+    /// both branch on it, and both were written when `"wvw"` was the only
+    /// value they could ever see.
+    pub kind: String,
+    /// WvW map display name. EMPTY for a PvE log: [`Self::map_id`] is
+    /// still the real instance's map id, but this project has no id->name
+    /// table for PvE maps, and the WvW fallback string ("World vs World")
+    /// would be an outright lie on a raid log -- which is exactly the bug
+    /// PvE identification fixed. The fight's name lives in
+    /// [`Self::pve`]'s [`crate::pve::Identity::name`] instead.
+    pub map: String,
+    /// PvE encounter identity -- name, category, success, boss agents --
+    /// or `None` for a WvW log (and for a log with no trigger id at all).
+    /// See [`crate::pve::identify`], which is the only thing that fills it.
+    pub pve: Option<crate::pve::Identity>,
+    pub duration_ms: u64,
     /// The raw `CBTS_MAPID` (`sc::MAP_ID`) `src_agent` value that `map` is
     /// the display name for. Carried alongside the name rather than instead
     /// of it because the two answer different questions: the name is for
@@ -366,6 +391,36 @@ fn normalize_account(raw: &str) -> String {
     }
 }
 
+impl Encounter {
+    /// Whether `enemy` belongs in Elite Insights' `targets[]` for this
+    /// encounter -- the enemies the fight is ABOUT, as opposed to
+    /// [`Self::enemies`], which is every hostile agent in the log.
+    ///
+    /// GW2EI picks this per `LogLogic`, so there is no one rule; these are
+    /// the two this project implements:
+    ///
+    /// - **WvW** -- enemy PLAYERS. NPCs in a WvW log are guards, dolyaks
+    ///   and siege, none of which are the point (MROSTER).
+    /// - **PvE** -- the trigger species, from
+    ///   [`crate::pve::Identity::target_addrs`]. A raid instance is mostly
+    ///   ambient NPCs: the committed Gorseval fixture carries 265 enemies,
+    ///   of which one is Gorseval.
+    ///
+    /// This exists as ONE function because it had been written twice, and
+    /// the two copies disagreed the moment PvE kinds became possible:
+    /// `axilog_schema::build_report`'s `ei_targets` gated on
+    /// `kind != "wvw"`, while `v1::entities`' `SourceOrder` filtered on
+    /// `is_player` with no gate at all -- and `axilog_ei` reads the LENGTH
+    /// from one and the ROWS from the other, so a disagreement between them
+    /// renders as an empty `targets[]` rather than as any error.
+    pub fn is_ei_target(&self, enemy: &Enemy) -> bool {
+        match &self.pve {
+            None => enemy.is_player,
+            Some(pve) => pve.target_addrs.contains(&enemy.id),
+        }
+    }
+}
+
 pub fn resolve(raw: &RawLog) -> Encounter {
     let mut players = Vec::new();
     let mut enemies = Vec::new();
@@ -410,8 +465,17 @@ pub fn resolve(raw: &RawLog) -> Encounter {
     }
     let duration_ms = raw.events.last().map(|e| e.time).unwrap_or(0)
         .saturating_sub(raw.log_start_ms());
+    // Encounter identity BEFORE `wvw::apply`, because `kind` decides
+    // whether that pass's map-name result is meaningful at all. Everything
+    // else `apply` does -- teams, commander tags, markers, tick rate,
+    // player dedupe -- is as load-bearing on a raid log as on a WvW one, so
+    // it still runs unconditionally.
+    let pve = crate::pve::identify(raw);
     let mut enc = Encounter {
-        kind: "wvw".into(), map: "World vs World".into(), duration_ms,
+        kind: pve.as_ref().map(|p| p.kind).unwrap_or("wvw").into(),
+        map: "World vs World".into(),
+        pve,
+        duration_ms,
         build: raw.header.build.clone(), revision: raw.header.revision,
         recorded_by: None, teams: Vec::new(), players, enemies,
         markers: Vec::new(), ground_markers: Vec::new(),
@@ -419,6 +483,15 @@ pub fn resolve(raw: &RawLog) -> Encounter {
         log_start_ms: raw.log_start_ms(),
     };
     crate::wvw::apply(&mut enc, raw);
+    // `wvw::apply` resolves `map` from the MAP_ID event against the WvW map
+    // table, and falls back to the literal "World vs World" for any id that
+    // table does not know -- which is EVERY PvE map. Clearing it here is
+    // what keeps a Spirit Vale log from claiming to be a WvW borderland;
+    // `map_id` survives, so a consumer with its own PvE map table can still
+    // name it.
+    if enc.pve.is_some() {
+        enc.map = String::new();
+    }
     enc
 }
 

@@ -646,7 +646,7 @@ mod tests {
 
     fn enc_with_duration(duration_ms: u64) -> Encounter {
         Encounter {
-            kind: "wvw".into(), map: "".into(), duration_ms, build: "".into(), revision: 1,
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms, build: "".into(), revision: 1,
             recorded_by: None, teams: vec![], players: vec![], enemies: vec![],
             markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         }
@@ -856,7 +856,7 @@ mod tests {
             agent_addrs: vec![1, 2], // relogged: two raw addrs, one rep
         };
         let enc = Encounter {
-            kind: "wvw".into(), map: "".into(), duration_ms: 1000, build: "".into(),
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 1000, build: "".into(),
             revision: 1, recorded_by: None, teams: vec![], players: vec![player],
             enemies: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
         };

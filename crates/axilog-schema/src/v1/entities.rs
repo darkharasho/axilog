@@ -300,10 +300,17 @@ pub fn build_entities(
         "every encounter player must resolve to an entity"
     );
 
+    // Same predicate `Report::ei_targets` uses -- `axilog_ei` reads the
+    // target COUNT from this order and the target ROWS from `ei_targets`,
+    // so the two filters agreeing is load-bearing, not tidiness. This was
+    // a hardcoded `is_player` (the WvW rule) under a comment claiming it
+    // mirrored `ei_targets`; it stopped mirroring it the moment PvE
+    // encounters became possible, and `targets[]` came out empty on every
+    // raid log.
     let targets = enc
         .enemies
         .iter()
-        .filter(|e| e.is_player)
+        .filter(|e| enc.is_ei_target(e))
         .filter_map(|e| index.by_enemy_id(e.id))
         .collect::<Vec<_>>();
 
@@ -350,7 +357,7 @@ mod tests {
 
     fn encounter(players: Vec<Player>, enemies: Vec<Enemy>) -> Encounter {
         Encounter { log_start_ms: 0,
-            kind: "wvw".into(),
+            kind: "wvw".into(), pve: None,
             map: "Green Alpine Borderlands".into(),
             duration_ms: 1000,
             build: String::new(),

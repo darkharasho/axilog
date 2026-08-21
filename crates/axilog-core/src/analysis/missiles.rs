@@ -392,7 +392,7 @@ mod tests {
 
     fn empty_enc() -> Encounter {
         Encounter {
-            kind: "wvw".into(),
+            kind: "wvw".into(), pve: None,
             map: "".into(),
             duration_ms: 0,
             build: "".into(),

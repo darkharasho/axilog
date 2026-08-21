@@ -630,8 +630,52 @@ export interface TimelineOut {
 }
 
 export interface EncounterOut {
+  /**
+   * `"wvw"`, or an Elite Insights PvE category slug: `"raid_wing"`,
+   * `"raid_encounter"`, `"fractal"`, `"golem"`, `"story"`, `"open_world"`,
+   * `"convergence"`, `"unknown_encounter"`, `"unknown"`.
+   */
   kind: string
+  /**
+   * WvW map display name. An EMPTY STRING for a PvE log -- `map_id` below
+   * is still the real instance map, but there is no PvE map name table
+   * here, and the WvW fallback ("World vs World") would be a lie on a raid
+   * log. Label a PvE fight with `encounter_name`.
+   */
   map: string
+  /**
+   * The fight's name, for a PvE log: `"Gorseval the Multifarious"`,
+   * `"Twin Largos"`, `"Harvest Temple"`. Omitted (not `null`) for WvW
+   * logs, which have no encounter identity apart from their map -- test
+   * for this key rather than for `kind === "wvw"`.
+   *
+   * Carries NO challenge-mote suffix: a CM Skorvald reads `"Skorvald"`,
+   * where Elite Insights would say `"Skorvald CM"`.
+   */
+  encounter_name?: string
+  /**
+   * arcdps's header trigger species id -- the one fact the log records
+   * about which encounter this is, and the join key into Elite Insights'
+   * own tables. Omitted for WvW logs.
+   */
+  trigger_id?: number
+  /**
+   * The wing or fractal this encounter belongs to (`"SpiritVale"`,
+   * `"ShatteredObservatory"`), from Elite Insights' `SubLogCategory`.
+   * Omitted for WvW logs and for encounters with no declared grouping.
+   */
+  sub_category?: string
+  /**
+   * Whether the squad won. Omitted for WvW logs, which have no failure
+   * state.
+   *
+   * `true` is reliable; `false` is NOT the same as "wiped". Only the
+   * generic "every trigger-species agent died" rule is implemented, so
+   * encounters won by reward chest or scripted event (Siege the
+   * Stronghold, Twisted Castle, River of Souls, the Hall of Chains
+   * statues) report `false` on a clean kill.
+   */
+  success?: boolean
   /**
    * The raw `CBTS_MAPID` value that `map` is the display name for. Carried
    * alongside the name, not instead of it: the name is for people, the id is
@@ -868,8 +912,52 @@ export interface GroundMarkerOutV1 {
  * with `markers[]` rekeyed from `agent_addr` to `entity_id`.
  */
 export interface EncounterOutV1 {
+  /**
+   * `"wvw"`, or an Elite Insights PvE category slug: `"raid_wing"`,
+   * `"raid_encounter"`, `"fractal"`, `"golem"`, `"story"`, `"open_world"`,
+   * `"convergence"`, `"unknown_encounter"`, `"unknown"`.
+   */
   kind: string
+  /**
+   * WvW map display name. An EMPTY STRING for a PvE log -- `map_id` below
+   * is still the real instance map, but there is no PvE map name table
+   * here, and the WvW fallback ("World vs World") would be a lie on a raid
+   * log. Label a PvE fight with `encounter_name`.
+   */
   map: string
+  /**
+   * The fight's name, for a PvE log: `"Gorseval the Multifarious"`,
+   * `"Twin Largos"`, `"Harvest Temple"`. Omitted (not `null`) for WvW
+   * logs, which have no encounter identity apart from their map -- test
+   * for this key rather than for `kind === "wvw"`.
+   *
+   * Carries NO challenge-mote suffix: a CM Skorvald reads `"Skorvald"`,
+   * where Elite Insights would say `"Skorvald CM"`.
+   */
+  encounter_name?: string
+  /**
+   * arcdps's header trigger species id -- the one fact the log records
+   * about which encounter this is, and the join key into Elite Insights'
+   * own tables. Omitted for WvW logs.
+   */
+  trigger_id?: number
+  /**
+   * The wing or fractal this encounter belongs to (`"SpiritVale"`,
+   * `"ShatteredObservatory"`), from Elite Insights' `SubLogCategory`.
+   * Omitted for WvW logs and for encounters with no declared grouping.
+   */
+  sub_category?: string
+  /**
+   * Whether the squad won. Omitted for WvW logs, which have no failure
+   * state.
+   *
+   * `true` is reliable; `false` is NOT the same as "wiped". Only the
+   * generic "every trigger-species agent died" rule is implemented, so
+   * encounters won by reward chest or scripted event (Siege the
+   * Stronghold, Twisted Castle, River of Souls, the Hall of Chains
+   * statues) report `false` on a clean kill.
+   */
+  success?: boolean
   /**
    * The raw `CBTS_MAPID` value that `map` is the display name for. Carried
    * alongside the name, not instead of it: the name is for people, the id is

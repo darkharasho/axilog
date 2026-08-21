@@ -1,8 +1,10 @@
 {
-  "_comment": "ei-json baseline digest for the axibridge byte-identity guard (M17 Task 2). See ei-byte-identity.test.mjs for the regeneration procedure. Regenerated for the healing-extension roster change: the document gained a top-level `usedExtensions[]` entry (GW2EI's `ExtensionDesc` — name/version/revision/signature plus the roster of characters whose own addon reported), which the ei-json surface previously omitted entirely. That absence made every EI-shaped consumer reading `usedExtensions` flag all players' healing as partial. Additive only, +341 chars. Determinism verified: two independent captures produced byte-identical output and identical sha256 digests.",
+  "_comment": "ei-json baseline digest for the axibridge byte-identity guard (M17 Task 2). See ei-byte-identity.test.mjs for the regeneration procedure. Regenerated 2026-08-21, during MPVE. The baseline had been STALE since v1.4.0 -- it was last captured at c3b59a8 (2026-08-18) and two releases moved the document without anyone recapturing it, so this guard was already red before MPVE touched it. The drift is +86,605 chars, attributed by top-level key: players +77,314 and buffMap +9,088 (v1.4.0's buff/skill naming work) and skillMap +203. MPVE itself contributed ZERO bytes here, which was verified rather than assumed: a v1.4.1 worktree build and the MPVE build produce the SAME length and the SAME sha256 (4c53bf51...) on this WvW fixture. That is the expected result -- every new field is `skip_serializing_if = Option::is_none` and `None` for WvW, and both target-selection branches reduce to the old `is_player` rule for a WvW log. A PvE fixture would exercise the new fields; this guard deliberately stays WvW-only, since its job is to prove axibridge's existing consumption did not move.",
   "fixture": "fixtures/wvw-small.anon.zevtc",
-  "sourceCommit": "healing-extension-roster",
-  "parseFileEiOpts": { "everything": true },
-  "jsonStringLength": 3571535,
-  "sha256": "41af0cb1f9fc03c9405cd8fbe16c1f76fd0e74b36fbdb5e8b531225be0d96cf3"
+  "sourceCommit": "mpve-pve-encounter-identification",
+  "parseFileEiOpts": {
+    "everything": true
+  },
+  "jsonStringLength": 3658140,
+  "sha256": "4c53bf513986b2839e87da7af3004213aeef5154aefd7f74e8297706b5918f77"
 }

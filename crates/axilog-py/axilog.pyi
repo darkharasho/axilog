@@ -226,7 +226,14 @@ class ObjectiveOut(TypedDict):
     owners: List[ObjectiveOwnerOut]
 
 class _EncounterOutRequired(TypedDict):
+    #: `"wvw"`, or an Elite Insights PvE category slug: `"raid_wing"`,
+    #: `"raid_encounter"`, `"fractal"`, `"golem"`, `"story"`,
+    #: `"open_world"`, `"convergence"`, `"unknown_encounter"`,
+    #: `"unknown"`.
     kind: str
+    #: WvW map display name -- an EMPTY STRING for a PvE log, where
+    #: `map_id` is still the real instance map. Use `encounter_name` to
+    #: label a PvE fight.
     map: str
     duration_ms: int
     build: str
@@ -253,6 +260,29 @@ class EncounterOut(_EncounterOutRequired, total=False):
     #: distinguishable from map id 0. Match on this, not on `map`, when
     #: joining against your own per-map assets.
     map_id: int
+    #: The fight's name, for a PvE log: `"Gorseval the Multifarious"`,
+    #: `"Twin Largos"`, `"Harvest Temple"`. Omitted (not `None`) for WvW
+    #: logs, which have no encounter identity apart from their map --
+    #: check for this key rather than testing `kind == "wvw"`.
+    #:
+    #: Carries NO challenge-mote suffix: a CM Skorvald reads `"Skorvald"`,
+    #: where Elite Insights would say `"Skorvald CM"`.
+    encounter_name: str
+    #: arcdps's header trigger species id -- the one fact the log records
+    #: about which encounter this is, and the join key into Elite
+    #: Insights' own tables. Omitted for WvW logs.
+    trigger_id: int
+    #: The wing or fractal this encounter belongs to (`"SpiritVale"`,
+    #: `"ShatteredObservatory"`), from Elite Insights' `SubLogCategory`.
+    #: Omitted for WvW logs and for encounters with no declared grouping.
+    sub_category: str
+    #: Whether the squad won. Omitted for WvW logs, which have no failure
+    #: state. `True` is reliable; `False` is NOT the same as "wiped" --
+    #: only the generic "every trigger-species agent died" rule is
+    #: implemented, so encounters won by reward chest or scripted event
+    #: (Siege the Stronghold, Twisted Castle, River of Souls, the Hall of
+    #: Chains statues) report `False` on a clean kill.
+    success: bool
 
 # --- damage / cc --------------------------------------------------------
 
@@ -878,7 +908,14 @@ class MarkerAssignmentOutV1(_MarkerAssignmentOutV1Required, total=False):
     marker_icon: str
 
 class _EncounterOutV1Required(TypedDict):
+    #: `"wvw"`, or an Elite Insights PvE category slug: `"raid_wing"`,
+    #: `"raid_encounter"`, `"fractal"`, `"golem"`, `"story"`,
+    #: `"open_world"`, `"convergence"`, `"unknown_encounter"`,
+    #: `"unknown"`.
     kind: str
+    #: WvW map display name -- an EMPTY STRING for a PvE log, where
+    #: `map_id` is still the real instance map. Use `encounter_name` to
+    #: label a PvE fight.
     map: str
     duration_ms: int
     build: str
@@ -906,6 +943,29 @@ class EncounterOutV1(_EncounterOutV1Required, total=False):
 
     recorded_by: int
     tick_rate: TickRateOut
+    #: The fight's name, for a PvE log: `"Gorseval the Multifarious"`,
+    #: `"Twin Largos"`, `"Harvest Temple"`. Omitted (not `None`) for WvW
+    #: logs, which have no encounter identity apart from their map --
+    #: check for this key rather than testing `kind == "wvw"`.
+    #:
+    #: Carries NO challenge-mote suffix: a CM Skorvald reads `"Skorvald"`,
+    #: where Elite Insights would say `"Skorvald CM"`.
+    encounter_name: str
+    #: arcdps's header trigger species id -- the one fact the log records
+    #: about which encounter this is, and the join key into Elite
+    #: Insights' own tables. Omitted for WvW logs.
+    trigger_id: int
+    #: The wing or fractal this encounter belongs to (`"SpiritVale"`,
+    #: `"ShatteredObservatory"`), from Elite Insights' `SubLogCategory`.
+    #: Omitted for WvW logs and for encounters with no declared grouping.
+    sub_category: str
+    #: Whether the squad won. Omitted for WvW logs, which have no failure
+    #: state. `True` is reliable; `False` is NOT the same as "wiped" --
+    #: only the generic "every trigger-species agent died" rule is
+    #: implemented, so encounters won by reward chest or scripted event
+    #: (Siege the Stronghold, Twisted Castle, River of Souls, the Hall of
+    #: Chains statues) report `False` on a clean kill.
+    success: bool
     #: Wall-clock log start, SECONDS since the Unix epoch, from arcdps's
     #: `CBTS_LOGSTART`. Omitted (not `None`) when the log carries no such
     #: event -- absence stays distinguishable from epoch zero, so do not

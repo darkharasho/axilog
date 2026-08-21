@@ -125,7 +125,7 @@ fn player_with(addr: u64, profession: &str, elite: &str) -> Player {
 
 fn enc(players: Vec<Player>) -> Encounter {
     Encounter {
-        kind: "wvw".into(),
+        kind: "wvw".into(), pve: None,
         map: String::new(),
         duration_ms: 10_000,
         build: String::new(),

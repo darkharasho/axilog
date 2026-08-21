@@ -600,7 +600,7 @@ mod tests {
 
     fn encounter(players: Vec<Player>) -> Encounter {
         Encounter {
-            kind: "wvw".into(),
+            kind: "wvw".into(), pve: None,
             map: String::new(),
             duration_ms: 10_000,
             build: String::new(),

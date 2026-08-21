@@ -255,7 +255,7 @@ fn distance_semantics_match_ei_exactly() {
     let addrs: Vec<u64> = players.iter().map(|p| p.agent_addr).collect();
     let raw = raw_with_participants(&addrs);
     let enc = Encounter {
-        kind: "wvw".into(),
+        kind: "wvw".into(), pve: None,
         map: String::new(),
         duration_ms: LOG_END_MS,
         build: String::new(),

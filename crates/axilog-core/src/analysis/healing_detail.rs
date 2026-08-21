@@ -429,7 +429,7 @@ mod tests {
 
     fn enc_with(players: Vec<Player>, duration_ms: u64) -> Encounter {
         Encounter {
-            kind: "wvw".into(), map: String::new(), duration_ms,
+            kind: "wvw".into(), pve: None, map: String::new(), duration_ms,
             build: String::new(), revision: 1, recorded_by: None,
             teams: vec![Team { color: "red".into(), team_id: 1, guid: None, shard_id: None }],
             players, enemies: Vec::new(), markers: Vec::new(), ground_markers: Vec::new(), tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None,
