@@ -10,7 +10,7 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
-## Unreleased
+## v1.4.0 — 2026-08-20
 
 ### Added
 - **GW2 API skill names.** `skill_icons` gained a second generated table,
