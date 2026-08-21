@@ -10,6 +10,56 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## Unreleased
+
+### Added
+- **GW2 API skill names.** `skill_icons` gained a second generated table,
+  `SKILL_NAMES` (4,610 of the API's 4,702 skills), and `skill_map::
+  resolve_name` consults it before falling back to the `"Skill <id>"`
+  placeholder. arcdps writes no display name for a skill the client had not
+  cached, so a rotation entry could render as `"Skill 14404"` where the
+  skill is Signet of Might. Ranked BELOW the log's own table on purpose: it
+  can only displace the placeholder, never rename something the log already
+  named. `catalogs::finish` gained the same rung for referenced-but-unmapped
+  ids, which had their own copy of the placeholder. Machine-diffed against
+  the previous baseline: exactly 61 leaves moved, every one a
+  `catalogs.skills.*.name`, every one placeholder → real name.
+
+- **`blocks.squad_buffs`** — squad-side uptime for every buff that is
+  neither one of the 12 boons nor a condition/control effect: sigils,
+  relics, food, utilities, auras, signets, trait buffs. `uptime_pct` and an
+  optional `avg_stacks` per (squad player, buff).
+
+  This is the third and last piece of the population Elite Insights keeps in
+  one `buffUptimes` array. `blocks.boons` owned the 12 boons and
+  `blocks.self_effects` the 16 conditions and control effects; the long tail
+  had no home at all, so an EI-shaped consumer reading it got nothing.
+  Measured on one real WvW log: EI emitted 36 `buffUptimes` rows for its
+  first player where axilog emitted 12.
+
+  ALWAYS-ON, unlike its two siblings: it emits uptime only, at the cost
+  `blocks.boons`' own always-on half already carries. The three id sets are
+  disjoint by construction, which is what lets the EI adapter concatenate
+  `blocks.boons` and this block back into EI's single array.
+
+  Calibrated against a real Elite Insights export: **1,196 cells, agreeing
+  to 0.0005pp / 0.00055rel — the floor EI's own `Math.Round(x, 3)`
+  serialization imposes** — outside 11 enumerated ids whose residual is
+  locked by its own test rather than hidden under a loose tolerance. Two
+  GW2EI rules are ported with it: `BuffClassification.Hidden` buffs are
+  dropped from the array (`JsonPlayerBuilder.cs:266-269`), and a non-Weaver
+  elementalist's four Weaver dual-attunement ids are deleted
+  (`ElementalistHelper.RemoveDualBuffs`) rather than reported as duplicates
+  of that player's plain attunement rows.
+
+### Fixed
+- `buffs::stack_type_for` consulted only `damage_mods::catalog::buff_stack`,
+  whose own module doc says it is not a general buff catalog. Every
+  conditional-loss buff outside it silently skipped the `RemovedDuration`
+  band aid and simulated with the wrong stack count. It now falls back to
+  the generated GW2EI catalog, which took Unblockable from 0.293 relative
+  error against EI to the serialization floor.
+
 ## v1.3.0 — 2026-08-19
 
 ### Added

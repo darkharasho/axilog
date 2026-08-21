@@ -477,7 +477,8 @@ Real example (default flags — no `--replay`/`--rotation`/`--modifiers`):
   "contribution": "present", "damage": "present", "damage_mods": "not_computed",
   "defenses": "present", "healing": "present", "hit_stats": "present",
   "minions": "not_computed", "missiles": "not_computed", "replay": "present",
-  "rotation": "not_computed", "self_effects": "not_computed", "series": "present", "support": "present"
+  "rotation": "not_computed", "self_effects": "not_computed", "series": "present",
+  "squad_buffs": "present", "support": "present"
 }
 ```
 
@@ -664,6 +665,51 @@ which is the right shape for them.
 `avg_stacks` is present exactly for the intensity-stacking effects (the six
 `BuffStackType.Stacking` conditions, `CommonBuffs.cs:36-40` + `:49`) and
 omitted for the rest, the same rule `boons` rows follow — an absent `avg_stacks` means "duration-stacking", never zero.
+
+## `squad_buffs` — the rest of what a player held
+
+Elite Insights keeps boons, conditions and everything else a player held in
+one `buffUptimes` array. This format splits that population by family, and
+`blocks.squad_buffs` is the third piece: every buff that is neither one of
+the 12 boons nor a condition/control effect — **sigils, relics, food,
+utilities, auras, signets, trait buffs**. A consumer rebuilding EI's single
+array concatenates `boons` and this block; the three id sets are disjoint by
+construction, so no id appears twice.
+
+Unlike `conditions` and `self_effects` this block is **always-on**. It emits
+uptime only — no `states` — which is the cost `boons`' own always-on uptime
+half already carries, so no flag gates it and `coverage.squad_buffs` is
+`present` on a default parse. Nothing plots a sigil's stack count over time;
+a timeline per player per buff would multiply the block's payload by an
+order of magnitude for a graph no consumer draws. Adding `states` later is
+additive.
+
+```json
+{
+  "squad_buffs": {
+    "by_entity": {
+      "0": {
+        "9286": { "uptime_pct": 99.9655, "avg_stacks": 24.9913 },
+        "10332": { "uptime_pct": 6.087 }
+      }
+    }
+  }
+}
+```
+
+`avg_stacks` follows the same rule as everywhere else in this format:
+present exactly for intensity-stacking buffs, omitted — never zero — for
+duration ones.
+
+An id is admitted only when some catalog states its stack type; a buff
+whose stack type is unknown cannot be simulated without guessing between
+the duration and intensity machines, which produce different numbers, and
+Elite Insights likewise tracks only the buffs its own container defines.
+One deliberate deletion mirrors EI: a non-Weaver elementalist's log carries
+the four Weaver dual-attunement ids alongside the plain ones, and EI drops
+them for such a player (`ElementalistHelper.RemoveDualBuffs`), so this
+block does too — otherwise every Tempest would carry a duplicate of its own
+attunement row at a plausible uptime.
 
 Real excerpt (`--timeseries`), showing only the fields this section adds —
 entity `22`'s Might (`740`), and a condition on enemy entity `42`:

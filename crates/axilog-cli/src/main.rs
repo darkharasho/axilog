@@ -390,6 +390,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
             let self_effects =
                 timeseries.then(|| axilog_core::analysis::self_effects::build(&raw, &enc));
+            // Always-on: uptime only, at the cost `blocks.boons`' own
+            // always-on half already carries. See
+            // `axilog_core::analysis::squad_buffs`' module doc.
+            let squad_buffs = axilog_core::analysis::squad_buffs::build(&raw, &enc);
             // MEIGAP Task 2c: `targets[].totalDamageDist` rides
             // `--skill-damage`, the flag that already gates every other
             // per-skill block (GW2EI itself emits it unconditionally; this
@@ -493,6 +497,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     boon_states: boon_states.as_ref(),
                     target_conditions: target_conditions.as_ref(),
                     self_effects: self_effects.as_ref(),
+                    squad_buffs: Some(&squad_buffs),
                 },
             );
             // Final-review fix wave: surface analysis warnings (e.g. a

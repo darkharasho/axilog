@@ -1564,6 +1564,35 @@ class SelfEffectsBlock(TypedDict):
 
     by_entity: Dict[str, Dict[str, SelfEffectRow]]
 
+class _SquadBuffRowRequired(TypedDict):
+    uptime_pct: float
+
+class SquadBuffRow(_SquadBuffRowRequired, total=False):
+    """One squad player's uptime for one non-boon, non-condition buff.
+
+    No `states`: nothing plots a sigil's stack count over time, and a
+    timeline per player per buff would multiply this block's payload by an
+    order of magnitude for a graph no consumer draws.
+
+    `avg_stacks` is present for intensity-stacking buffs and omitted for
+    duration ones, the same rule `BoonRow.avg_stacks` and
+    `SelfEffectRow.avg_stacks` follow."""
+
+    avg_stacks: float
+
+class SquadBuffsBlock(TypedDict):
+    """squad entity id -> buff id -> row, for every buff that is neither one
+    of the 12 boons nor a condition/control effect: sigils, relics, food,
+    utilities, auras, signets, trait buffs.
+
+    The third piece of the population Elite Insights keeps in one
+    `buffUptimes` array, and the only one of the three that is ALWAYS-ON --
+    it emits uptime only, at the cost `boons`' own always-on half already
+    carries, so no option gates it. The three id sets are disjoint by
+    construction, which is what lets a consumer concatenate them."""
+
+    by_entity: Dict[str, Dict[str, SquadBuffRow]]
+
 class MinionSkillTakenRow(TypedDict):
     """One minion group's damage-TAKEN row for one skill.
 
@@ -2037,6 +2066,7 @@ class Blocks(TypedDict, total=False):
     series: SeriesBlock
     conditions: ConditionsBlock
     self_effects: SelfEffectsBlock
+    squad_buffs: SquadBuffsBlock
     minions: MinionsBlock
 
 class _ReportV1Required(TypedDict):

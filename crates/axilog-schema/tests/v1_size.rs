@@ -205,6 +205,7 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
     let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
     let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
     let self_effects = axilog_core::analysis::self_effects::build(&raw, &enc);
+    let squad_buffs = axilog_core::analysis::squad_buffs::build(&raw, &enc);
     let v1 = axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
@@ -225,6 +226,7 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
             boon_states: Some(&boon_states),
             target_conditions: Some(&target_conditions),
             self_effects: Some(&self_effects),
+            squad_buffs: Some(&squad_buffs),
         },
     );
     let v = serde_json::to_value(&v1).expect("serializable");

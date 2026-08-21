@@ -139,6 +139,11 @@ pub fn parse_report_v1(
         want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     let self_effects =
         want_timeseries.then(|| axilog_core::analysis::self_effects::build(&raw, &enc));
+    // Always-on, like `activity` above: this pass emits uptime only, at
+    // the cost `blocks.boons`' own always-on half already carries. Gating
+    // it would empty axibridge's Special Buffs and Sigil/Relic sections on
+    // every default parse.
+    let squad_buffs = axilog_core::analysis::squad_buffs::build(&raw, &enc);
     Ok(axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
@@ -159,6 +164,7 @@ pub fn parse_report_v1(
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
             self_effects: self_effects.as_ref(),
+            squad_buffs: Some(&squad_buffs),
         },
     ))
 }

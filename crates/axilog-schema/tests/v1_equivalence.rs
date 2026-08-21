@@ -67,6 +67,7 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
     let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
     let target_conditions = axilog_core::analysis::target_conditions::build(&raw, &enc);
     let self_effects = axilog_core::analysis::self_effects::build(&raw, &enc);
+    let squad_buffs = axilog_core::analysis::squad_buffs::build(&raw, &enc);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -98,6 +99,7 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
             boon_states: Some(&boon_states),
             target_conditions: Some(&target_conditions),
             self_effects: Some(&self_effects),
+            squad_buffs: Some(&squad_buffs),
         },
     );
     (legacy, v1)

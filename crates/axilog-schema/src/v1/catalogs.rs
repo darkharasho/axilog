@@ -240,8 +240,18 @@ impl CatalogBuilder {
                         // A referenced id ALWAYS resolves, even when the log
                         // table never named it -- a dangling reference would
                         // break the invariant the integrity test asserts.
+                        //
+                        // The fallback chain mirrors `skill_map::resolve_name`
+                        // minus its first rung: there is no log-table name to
+                        // consult for an id the map never covered, so the GW2
+                        // API catalog is consulted directly and the
+                        // placeholder stays the last resort. Both halves of
+                        // this catalog must agree about what an id is called.
                         name: entry
                             .map(|e| e.name.clone())
+                            .or_else(|| {
+                                axilog_core::analysis::skill_icons::name(id).map(str::to_owned)
+                            })
                             .unwrap_or_else(|| format!("Skill {id}")),
                         icon: resolve_icon(id),
                         is_swap: entry.map(|e| e.is_swap).unwrap_or(false),
@@ -440,6 +450,32 @@ mod tests {
             Some("https://render.guildwars2.com/file/E57B9C0358A6B1CE4631E336D22614E9E544DD4B/102965.png")
         );
         assert_eq!(e.auto_attack, Some(true), "Fireball is Weapon_1");
+    }
+
+    /// A referenced id the skill map never covered still gets a real name
+    /// when the GW2 API knows one.
+    ///
+    /// This path is not `skill_map::resolve_name` -- it is the union half
+    /// of `finish`, which fabricates an entry for an id referenced by a
+    /// block but absent from the map. Its `"Skill {id}"` placeholder needs
+    /// the same recovery, or the two halves of the same catalog disagree
+    /// about what id 14404 is called.
+    #[test]
+    fn a_referenced_id_outside_the_skill_map_is_named_from_the_api_catalog() {
+        let mut b = CatalogBuilder::default();
+        b.reference_skill(14404);
+        let c = b.finish(&metrics_with_skills(), None);
+        assert_eq!(c.skills[&14404].name, "Signet of Might");
+    }
+
+    /// ...and keeps the placeholder when neither source knows the id, so
+    /// the dangling-reference invariant still holds.
+    #[test]
+    fn a_referenced_id_no_catalog_knows_keeps_the_placeholder_name() {
+        let mut b = CatalogBuilder::default();
+        b.reference_skill(4_000_000);
+        let c = b.finish(&metrics_with_skills(), None);
+        assert_eq!(c.skills[&4_000_000].name, "Skill 4000000");
     }
 
     /// A buff id the log records as a skill (717 = Protection) has no

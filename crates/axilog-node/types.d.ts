@@ -1093,6 +1093,7 @@ export type CoverageState = 'present' | 'not_computed' | 'empty' | 'unsupported'
  * (`"damage"`, `"defenses"`, `"hit_stats"`, `"cc"`, `"boons"`, `"support"`,
  * `"contribution"`, `"healing"`, `"rotation"`, `"damage_mods"`,
  * `"missiles"`, `"replay"`, `"series"`, `"conditions"`, `"self_effects"`,
+ * `"squad_buffs"`,
  * `"minions"`).
  * Always names every known block, including ones a given parse did not
  * compute -- those read `"not_computed"`.
@@ -1513,6 +1514,40 @@ export interface SelfEffectRow {
  */
 export interface SelfEffectsBlock {
   by_entity: ByEntity<Record<string, SelfEffectRow>>
+}
+
+/**
+ * One squad player's uptime for one non-boon, non-condition buff.
+ *
+ * No `states`: nothing plots a sigil's stack count over time, and a
+ * timeline per player per sigil would multiply this block's payload by an
+ * order of magnitude for a graph no consumer draws.
+ */
+export interface SquadBuffRow {
+  /** Percent of the fight with at least one stack held. */
+  uptime_pct: number
+  /**
+   * Time-weighted mean stack count. Present for intensity-stacking buffs,
+   * omitted for duration ones rather than reported as a meaningless zero --
+   * the same rule `BoonRow.avg_stacks` and `SelfEffectRow.avg_stacks`
+   * follow.
+   */
+  avg_stacks?: number
+}
+
+/**
+ * squad entity id -> buff id -> row, for every buff that is neither one of
+ * the 12 boons nor a condition/control effect: sigils, relics, food,
+ * utilities, auras, signets, trait buffs.
+ *
+ * The third piece of the population Elite Insights keeps in one
+ * `buffUptimes` array, and the only one of the three that is ALWAYS-ON --
+ * it emits uptime only, at the cost `boons`' own always-on half already
+ * carries, so no option gates it. The three id sets are disjoint by
+ * construction, which is what lets a consumer concatenate them.
+ */
+export interface SquadBuffsBlock {
+  by_entity: ByEntity<Record<string, SquadBuffRow>>
 }
 
 /**
@@ -2174,6 +2209,7 @@ export interface Blocks {
   series?: SeriesBlock
   conditions?: ConditionsBlock
   self_effects?: SelfEffectsBlock
+  squad_buffs?: SquadBuffsBlock
   minions?: MinionsBlock
 }
 

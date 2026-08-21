@@ -130,7 +130,17 @@ pub const INFINITE_REMOVED_DURATION_MS: u32 = i32::MAX as u32;
 /// surface for no measurable gain). This accessor keeps every buff-side
 /// caller pointed at one place in the meantime.
 pub fn stack_type_for(buff_id: u32) -> Option<BuffStackType> {
-    crate::analysis::damage_mods::catalog::buff_stack::stack_info(buff_id).map(|b| b.stack_type)
+    crate::analysis::damage_mods::catalog::buff_stack::stack_info(buff_id)
+        .map(|b| b.stack_type)
+        // `buff_stack`'s own module doc says it is not a general buff
+        // catalog -- it carries the ids the damage modifiers happen to
+        // need. Every other buff fell through to `None`, which silently
+        // disabled the `StackingConditionalLoss` band aid this function
+        // gates, so those buffs simulated with the wrong stack count. The
+        // generated GW2EI table states the stack type for all 2,267 buffs
+        // GW2EI defines, and is consulted second so the hand-verified
+        // table above stays authoritative for the ids it owns.
+        .or_else(|| crate::analysis::buff_icons::meta(buff_id).map(|m| m.stack_type))
 }
 
 use crate::evtc::RawLog;
@@ -214,6 +224,12 @@ pub fn name(id: u32) -> Option<&'static str> {
                 .find(|&&(i, _, _, _)| i == id)
                 .map(|&(_, n, _, _)| n)
         })
+        // Everything else a log can carry -- sigils, relics, food, trait
+        // buffs, auras, signets -- from the generated GW2EI table. Last,
+        // so the three hand-verified tables above stay authoritative for
+        // the ids they own; additive, so no name that already resolved can
+        // move.
+        .or_else(|| crate::analysis::buff_icons::meta(id).map(|m| m.name))
 }
 
 /// `(is_intensity, max_stacks)` for a buff id, consulted in this order
@@ -249,9 +265,87 @@ pub fn stacking(id: u32) -> (bool, Option<u32>) {
     {
         return (is_intensity, Some(capacity));
     }
-    let info = crate::analysis::damage_mods::catalog::buff_stack::stack_info(id);
-    let is_intensity = info.map(|b| b.stack_type.is_intensity()).unwrap_or(false);
-    (is_intensity, info.map(|b| b.capacity))
+    if let Some(info) = crate::analysis::damage_mods::catalog::buff_stack::stack_info(id) {
+        return (info.stack_type.is_intensity(), Some(info.capacity));
+    }
+    // The generated GW2EI table, for every buff the three narrow tables
+    // and the damage-mod stack table miss. Ranked last for the same reason
+    // `name` ranks it last, and it is what makes a sigil or relic simulate
+    // as the intensity buff it actually is rather than defaulting to a
+    // duration one.
+    if let Some(m) = crate::analysis::buff_icons::meta(id) {
+        return (m.stack_type.is_intensity(), Some(m.capacity));
+    }
+    (false, None)
+}
+
+#[cfg(test)]
+mod catalog_fallback_tests {
+    use super::*;
+
+    /// A gear buff -- neither boon, condition nor control effect -- must
+    /// still name itself. Before the GW2EI buff catalog was consulted this
+    /// returned `None`, which `catalogs::finish` turned into an EMPTY name
+    /// on the catalog row, and axibridge's Sigil/Relic Uptime section
+    /// selects its tables by matching `/sigil|relic/` against exactly that
+    /// name -- so an unnamed row could never appear there at all.
+    #[test]
+    fn a_sigil_outside_the_three_narrow_tables_is_named_from_the_gw2ei_catalog() {
+        assert_eq!(name(9286), Some("Superior Sigil of Bloodlust"));
+    }
+
+    #[test]
+    fn a_relic_outside_the_three_narrow_tables_is_named_from_the_gw2ei_catalog() {
+        assert_eq!(name(70767), Some("Relic of the Thief"));
+    }
+
+    /// Stack type has to come along with the name: an intensity buff
+    /// simulated as a duration one reports the wrong uptime entirely.
+    /// 9286 is `Stacking`, capacity 25 -- Elite Insights reports
+    /// `stacking: true` for it.
+    #[test]
+    fn the_catalog_also_supplies_stack_type_and_capacity() {
+        assert_eq!(stacking(9286), (true, Some(25)));
+    }
+
+    /// A 5-argument `new Buff(...)` has no explicit stack type: GW2EI's
+    /// constructor defaults it to `Force`/1, which is a DURATION buff.
+    /// 9283 is Reinforced Armor, `stacking: false` in EI's own buffMap.
+    #[test]
+    fn a_five_argument_definition_defaults_to_force_capacity_one() {
+        assert_eq!(stacking(9283), (false, Some(1)));
+    }
+
+    /// The three narrow tables still win. Bleeding is in the condition
+    /// catalog with capacity 1500; GW2EI's own table agrees, but the
+    /// ordering must not depend on that agreement.
+    #[test]
+    fn the_condition_table_still_wins_over_the_gw2ei_catalog() {
+        assert_eq!(name(736), Some("Bleeding"));
+        assert_eq!(stacking(736), (true, Some(1500)));
+    }
+
+    /// `stack_type_for` gates the `StackingConditionalLoss` `RemovedDuration`
+    /// band aid (`events::apply_conditional_loss_band_aid`). It used to read
+    /// ONE narrow table -- `damage_mods::catalog::buff_stack`, whose own
+    /// module doc says it is not a general buff catalog -- so every
+    /// conditional-loss buff outside it silently skipped the band aid and
+    /// simulated with the wrong stack count. Measured against a real Elite
+    /// Insights export before this fallback existed: Relic of the Thief
+    /// 0.847 vs EI's 1.046, Unblockable 1.065 vs 0.772.
+    #[test]
+    fn the_band_aid_gate_sees_conditional_loss_buffs_outside_the_damage_mod_table() {
+        assert_eq!(stack_type_for(70767), Some(BuffStackType::StackingConditionalLoss));
+        assert_eq!(stack_type_for(36781), Some(BuffStackType::StackingConditionalLoss));
+    }
+
+    /// An id no catalog knows still reports nothing rather than a guess.
+    #[test]
+    fn an_unknown_id_is_still_unknown() {
+        assert_eq!(name(4_000_000), None);
+        assert_eq!(stacking(4_000_000), (false, None));
+        assert_eq!(stack_type_for(4_000_000), None);
+    }
 }
 
 #[cfg(test)]

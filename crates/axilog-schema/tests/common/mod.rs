@@ -112,6 +112,10 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
     let target_conditions =
         all_gates.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     let self_effects = all_gates.then(|| axilog_core::analysis::self_effects::build(&raw, &enc));
+    // Always-on, deliberately NOT `all_gates.then(...)`: nothing gates
+    // this pass, and building it only under the all-gates fixture would
+    // make `no_gate_turns_the_block_off` pass for the wrong reason.
+    let squad_buffs = axilog_core::analysis::squad_buffs::build(&raw, &enc);
     let v1 = axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
@@ -132,6 +136,7 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
             self_effects: self_effects.as_ref(),
+            squad_buffs: Some(&squad_buffs),
         },
     );
     (enc, metrics, legacy, v1)

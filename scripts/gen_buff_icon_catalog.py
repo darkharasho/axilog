@@ -278,6 +278,78 @@ def resolve_icon(sym, qualified, bare):
     raise Skip("icon symbol unresolved")
 
 
+STACK_TYPES = {
+    # `ArcDPSEnums.BuffStackType` -> `analysis::buffs::BuffStackType`.
+    # `Unknown` is deliberately absent: it is GW2EI's "we do not know",
+    # and transcribing it as any concrete variant would be a guess.
+    "Queue": "Queue",
+    "Regeneration": "Regeneration",
+    "Force": "Force",
+    "Stacking": "Stacking",
+    "StackingUniquePerSrc": "StackingUniquePerSrc",
+    "StackingConditionalLoss": "StackingConditionalLoss",
+}
+
+
+CLASSIFICATIONS = {
+    "Condition", "Boon", "Offensive", "Defensive", "Support", "Debuff",
+    "Gear", "Other", "Enhancement", "Nourishment", "OtherConsumable",
+    "Hidden", "Unknown",
+}
+
+
+def resolve_meta(args):
+    """`(name, stack_type, capacity, classification)` for one `new Buff(...)`.
+
+    GW2EI declares buffs at exactly two arities (measured across the whole
+    parser: 1,868 five-argument and 471 seven-argument, nothing else):
+
+      5: (name, source(s), classification, link)        -- with `id` 2nd
+      7: (name, id, source(s), StackType, capacity, classification, link)
+
+    The five-argument form is not missing information; it is the
+    `Buff(name, id, source, nature, link)` overload, whose body reads
+    `this(name, id, source, BuffStackType.Force, 1, nature, link)`
+    (`EIData/Buffs/Buff.cs:119-126`). Force/1 is therefore transcribed,
+    not assumed.
+    """
+    name = args[0].strip()
+    if not (name.startswith('"') and name.endswith('"')):
+        raise Skip("name argument is not a string literal")
+    name = name[1:-1]
+    if not name:
+        raise Skip("name is empty")
+    if len(args) == 5:
+        return name, "Force", 1, classification(args[3])
+    sym = args[3].rsplit(".", 1)[-1].strip()
+    if sym not in STACK_TYPES:
+        raise Skip("stack type is Unknown or unrecognised")
+    cap = args[4].strip()
+    if not re.fullmatch(r"\d+", cap):
+        raise Skip("capacity argument is not an integer literal")
+    return name, STACK_TYPES[sym], int(cap), classification(args[5])
+
+
+def classification(arg):
+    """`BuffClassification` (`EIData/Buffs/Buff.cs:15-30`) for one argument.
+
+    Load bearing for `Hidden` in particular: GW2EI's own
+    `JsonPlayerBuilder.GetPlayerJsonBuffsUptime`
+    (`JsonModels/JsonActors/JsonPlayerBuilder.cs:266-269`) SKIPS a hidden
+    buff when building `buffUptimes`, so tracking one would report a row
+    Elite Insights does not have.
+    """
+    sym = arg.rsplit(".", 1)[-1].strip()
+    if sym not in CLASSIFICATIONS:
+        raise Skip("classification is not a BuffClassification constant")
+    return sym
+
+
+def rust_str(value):
+    """A Rust string literal. Buff names carry quotes and backslashes."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def main():
     ids, qualified, bare = load_tables()
     builds = load_builds()
@@ -286,6 +358,14 @@ def main():
     skipped = collections.Counter()
     by_id = collections.defaultdict(list)
     declarations = collections.Counter()
+    # The metadata table is accounted SEPARATELY, for the same reason the
+    # skill catalog splits its two tables: the absences do not coincide. A
+    # definition whose icon symbol is unresolvable still names itself and
+    # still states its stack type, and dropping it from the metadata table
+    # because of an unrelated art problem would lose a fact we have.
+    meta_by_id = collections.defaultdict(list)
+    meta_declarations = collections.Counter()
+    meta_skipped = collections.Counter()
 
     for path in sorted(glob.glob(os.path.join(PARSER, "**/*.cs"), recursive=True)):
         raw = open(path, encoding="utf-8-sig").read()
@@ -302,11 +382,26 @@ def main():
                 # defaultdict, so indexing it first would leave an empty
                 # entry behind when a later step raises `Skip`.
                 buff_id = resolve_id(args[1], ids)
+            except Skip as e:
+                skipped[str(e)] += 1
+                meta_skipped[str(e)] += 1
+                continue
+            try:
                 entry = (min_build(chain, builds), resolve_icon(args[-1], qualified, bare))
                 by_id[buff_id].append(entry)
                 declarations[buff_id] += 1
             except Skip as e:
                 skipped[str(e)] += 1
+            try:
+                # Resolve BEFORE indexing `meta_by_id`: it is a defaultdict,
+                # so `meta_by_id[id].append(f())` creates the entry before
+                # `f()` runs and leaves an empty list behind when `f`
+                # raises. Same trap the icon path's comment above names.
+                entry = (min_build(chain, builds), resolve_meta(args))
+                meta_by_id[buff_id].append(entry)
+                meta_declarations[buff_id] += 1
+            except Skip as e:
+                meta_skipped[str(e)] += 1
 
     # An id is declared once per build window, so most of the repeats below
     # are the same buff re-stated across a balance patch. They agree on the
@@ -336,7 +431,29 @@ def main():
             repeats += declarations[buff_id] - 1
         rows.append((buff_id, mirror(icon)))
 
+    # Same build-window winner rule as the icons above, applied to the
+    # metadata triple: ArenaNet reuses ids across balance patches, and the
+    # definition whose window opens latest is the one a log parsed today
+    # matches.
+    meta_rows, meta_repeats, meta_superseded = [], 0, 0
+    for buff_id, defs in sorted(meta_by_id.items()):
+        metas = {m for _, m in defs}
+        if len(metas) > 1:
+            newest = max(build for build, _ in defs)
+            winners = {m for build, m in defs if build == newest}
+            if len(winners) > 1:
+                meta_skipped["id declared with conflicting metadata in the same build window"] += \
+                    meta_declarations[buff_id]
+                continue
+            meta = next(iter(winners))
+            meta_superseded += meta_declarations[buff_id] - 1
+        else:
+            meta = next(iter(metas))
+            meta_repeats += meta_declarations[buff_id] - 1
+        meta_rows.append((buff_id, *meta))
+
     total_skipped = sum(skipped.values())
+    total_meta_skipped = sum(meta_skipped.values())
     with open(OUT, "w") as f:
         f.write(HEADER.format(
             count=len(rows),
@@ -349,33 +466,65 @@ def main():
             skip_table="\n".join(
                 f"//! - {n} {reason}" for reason, n in skipped.most_common()
             ),
+            meta_count=len(meta_rows),
+            meta_repeats=meta_repeats,
+            meta_superseded=meta_superseded,
+            meta_skipped=total_meta_skipped,
+            meta_skip_table="\n".join(
+                f"//! - {n} {reason}" for reason, n in meta_skipped.most_common()
+            ),
         ))
         for buff_id, url in rows:
             f.write(f'    ({buff_id}, "{url}"),\n')
         f.write("];\n")
+        f.write(META_HEADER.format(meta_count=len(meta_rows)))
+        for buff_id, name, stack_type, capacity, klass in meta_rows:
+            f.write(
+                f"    ({buff_id}, {rust_str(name)}, BuffStackType::{stack_type}, "
+                f"{capacity}, {rust_str(klass)}),\n"
+            )
+        f.write("];\n")
 
-    print(f"considered {considered} = transcribed {len(rows)} "
-          f"+ repeat declarations {repeats} + superseded by a later build {superseded} "
-          f"+ skipped {total_skipped}")
-    for reason, n in skipped.most_common():
-        print(f"  skipped {n}: {reason}")
-    assert considered == len(rows) + repeats + superseded + total_skipped, \
-        "accounting must balance"
+    for label, transcribed, reps, sup, counter in (
+        ("icons", len(rows), repeats, superseded, skipped),
+        ("metadata", len(meta_rows), meta_repeats, meta_superseded, meta_skipped),
+    ):
+        total = sum(counter.values())
+        print(f"{label}: considered {considered} = transcribed {transcribed} "
+              f"+ repeat declarations {reps} + superseded by a later build {sup} "
+              f"+ skipped {total}")
+        for reason, n in counter.most_common():
+            print(f"  skipped {n}: {reason}")
+        assert considered == transcribed + reps + sup + total, \
+            f"{label} accounting must balance"
 
 
-HEADER = '''//! Buff icons, from the GW2EI buff table.
+HEADER = '''//! Buff icons and metadata, from the GW2EI buff table.
 //!
 //! GENERATED by `scripts/gen_buff_icon_catalog.py` -- do not hand-edit.
-//! Re-run it and `git diff` to verify this table against GW2EI's source.
+//! Re-run it and `git diff` to verify these tables against GW2EI's source.
 //!
 //! Boons and conditions reach us through the log's skill table -- id 717
 //! is Protection, and arcdps reports it exactly as it reports a skill --
 //! but ArenaNet's `/v2/skills` endpoint has no record of them, so
-//! [`super::skill_icons`] cannot supply their art. This table covers that
-//! gap and only that gap; the two are complements, and where both have an
-//! entry the API is the better source.
+//! [`super::skill_icons`] cannot supply their art. [`BUFF_ICONS`] covers
+//! that gap; the two are complements, and where both have an entry the
+//! API is the better source.
 //!
-//! The generator's accounting for this table:
+//! [`BUFF_META`] is the second half, and the reason this module is no
+//! longer only about art: `analysis::buffs::name`/`stacking` need a NAME
+//! and a stack type for every buff a log can carry, not just for the 12
+//! boons, 14 conditions and 2 control effects the three narrow static
+//! tables cover. Without it a sigil, relic, food buff or trait buff
+//! reaches the catalog nameless, and a consumer that selects rows by name
+//! -- axibridge's Sigil/Relic Uptime section matches `/sigil|relic/` --
+//! can never see it.
+//!
+//! The two tables are accounted SEPARATELY because their absences do not
+//! coincide: a definition whose icon symbol is ambiguous still names
+//! itself and still states its stack type.
+//!
+//! The generator's accounting for [`BUFF_ICONS`]:
 //!
 //! considered {considered} = transcribed {count} + repeat declarations
 //! {repeats} + superseded by a later build {superseded} + skipped {skipped}
@@ -388,7 +537,17 @@ HEADER = '''//! Buff icons, from the GW2EI buff table.
 //!
 {skip_table}
 //!
-//! Entries are sorted by id so lookups can binary-search.
+//! and for [`BUFF_META`]:
+//!
+//! considered {considered} = transcribed {meta_count} + repeat declarations
+//! {meta_repeats} + superseded by a later build {meta_superseded} + skipped
+//! {meta_skipped}
+//!
+{meta_skip_table}
+//!
+//! Entries in both are sorted by id so lookups can binary-search.
+
+use super::buffs::BuffStackType;
 
 /// The icon URL for buff `id`, or `None` when GW2EI has no unambiguous
 /// art for it.
@@ -403,8 +562,62 @@ pub fn icon(id: u32) -> Option<&'static str> {{
         .map(|i| BUFF_ICONS[i].1)
 }}
 
+/// GW2EI's definition for buff `id`, or `None` when its table has no
+/// unambiguous one.
+///
+/// This is a FALLBACK for [`super::buffs::name`] and
+/// [`super::buffs::stacking`], consulted only after the three narrow
+/// static tables (boons, conditions, control effects) miss. Those three
+/// are hand-verified against their own calibrations and stay
+/// authoritative; this one covers everything else a log can carry.
+pub fn meta(id: u32) -> Option<BuffMeta> {{
+    BUFF_META
+        .binary_search_by_key(&id, |&(bid, _, _, _, _)| bid)
+        .ok()
+        .map(|i| {{
+            let (_, name, stack_type, capacity, classification) = BUFF_META[i];
+            BuffMeta {{ name, stack_type, capacity, classification }}
+        }})
+}}
+
+/// One row of [`BUFF_META`], named rather than a 4-tuple because three of
+/// its fields are consulted independently by different callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuffMeta {{
+    pub name: &'static str,
+    pub stack_type: BuffStackType,
+    pub capacity: u32,
+    /// GW2EI's `BuffClassification` (`EIData/Buffs/Buff.cs:15-30`), as
+    /// written. `"Hidden"` is the one value with behaviour attached: see
+    /// [`BuffMeta::is_hidden`].
+    pub classification: &'static str,
+}}
+
+impl BuffMeta {{
+    /// GW2EI drops a hidden buff from `buffUptimes` outright
+    /// (`JsonModels/JsonActors/JsonPlayerBuilder.cs:266-269`). These are
+    /// internal state markers -- "Tome of Justice Open", "Dual Fire
+    /// Attunement" -- that a player holds for real but that no uptime
+    /// table should list.
+    pub fn is_hidden(self) -> bool {{
+        self.classification == "Hidden"
+    }}
+}}
+
 /// `(buff_id, icon_url)`, sorted by id.
 pub static BUFF_ICONS: &[(u32, &str)] = &[
+'''
+
+META_HEADER = '''
+/// `(buff_id, name, stack_type, capacity, classification)`, sorted by id,
+/// for the {meta_count} buffs GW2EI defines unambiguously.
+///
+/// `capacity` is the CONSTRUCTOR value. arcdps' own `BUFF_INFO` row wins
+/// over it wherever the log carries one -- the preference order
+/// `simulate_boons_with_inputs` and `target_conditions::capacity_and_kind`
+/// already use, for the reason MBUFFSIM measured: several real capacities
+/// sit far above the static tables' values.
+pub static BUFF_META: &[(u32, &str, BuffStackType, u32, &str)] = &[
 '''
 
 if __name__ == "__main__":

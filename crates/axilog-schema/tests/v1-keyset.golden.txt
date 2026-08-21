@@ -384,6 +384,12 @@ blocks.series.squad.downs.data
 blocks.series.squad.downs.enc
 blocks.series.squad.downs.interval_ms
 blocks.series.squad.downs.len
+blocks.squad_buffs
+blocks.squad_buffs.by_entity
+blocks.squad_buffs.by_entity.<id>
+blocks.squad_buffs.by_entity.<id>.<id>
+blocks.squad_buffs.by_entity.<id>.<id>.avg_stacks
+blocks.squad_buffs.by_entity.<id>.<id>.uptime_pct
 blocks.support
 blocks.support.by_entity
 blocks.support.by_entity.<id>
@@ -441,6 +447,7 @@ coverage.replay
 coverage.rotation
 coverage.self_effects
 coverage.series
+coverage.squad_buffs
 coverage.support
 encounter
 encounter.build

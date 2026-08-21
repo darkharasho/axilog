@@ -94,21 +94,34 @@ fn skill_map_scoped_to_referenced_ids_on_committed_fixture() {
     let skill_names: std::collections::BTreeMap<u32, &str> =
         raw.skills.iter().map(|s| (s.id, s.name.as_str())).collect();
     let mut fallback_count = 0usize;
+    let mut api_name_count = 0usize;
     let mut real_name_count = 0usize;
     for (&id, entry) in &metrics.skill_map {
         assert!(!entry.name.is_empty(), "skill {id}: name must never be empty");
         let raw_name = skill_names.get(&id).map(|s| s.trim()).unwrap_or("");
         let numeric_or_empty = raw_name.is_empty() || raw_name.chars().all(|c| c.is_ascii_digit());
         if numeric_or_empty {
-            // A NEGATIVE pseudo id (`-2` weapon swap, and the instant-cast
-            // catalog's own set) is never in the log's skill table -- no
-            // such game skill exists -- so it lands here, but resolves to
-            // EI's own name via `skill_map::PSEUDO_SKILL_NAMES` rather than
-            // to the `"Skill <id>"` fallback.
+            // With no usable log-table name, `resolve_name` walks two more
+            // rungs before the placeholder:
+            //
+            // - a NEGATIVE pseudo id (`-2` weapon swap, and the
+            //   instant-cast catalog's own set) is never in the log's skill
+            //   table -- no such game skill exists -- and resolves to EI's
+            //   own name via `skill_map::PSEUDO_SKILL_NAMES`;
+            // - a real API skill arcdps simply had not cached at capture
+            //   time resolves from the generated `skill_icons::name`
+            //   catalog. This is the common case: arcdps writes nothing for
+            //   most instant-cast utilities.
             let expected = axilog_core::analysis::skill_map::pseudo_name(id)
-                .map_or_else(|| format!("Skill {id}"), str::to_string);
-            assert_eq!(entry.name, expected, "skill {id}: expected fallback/pseudo name for empty/numeric/absent log-table row (raw: {raw_name:?})");
-            fallback_count += 1;
+                .map(str::to_string)
+                .or_else(|| axilog_core::analysis::skill_icons::name(id).map(str::to_string))
+                .unwrap_or_else(|| format!("Skill {id}"));
+            assert_eq!(entry.name, expected, "skill {id}: expected pseudo/API-catalog/placeholder name for empty/numeric/absent log-table row (raw: {raw_name:?})");
+            if axilog_core::analysis::skill_icons::name(id).is_some() {
+                api_name_count += 1;
+            } else {
+                fallback_count += 1;
+            }
         } else {
             assert_eq!(entry.name, raw_name, "skill {id}: expected the log table's own trimmed name verbatim");
             real_name_count += 1;
@@ -123,9 +136,9 @@ fn skill_map_scoped_to_referenced_ids_on_committed_fixture() {
     }
 
     println!(
-        "skill_map_scoped_to_referenced_ids: {} referenced ids ({} real log-table names, {} \"Skill <id>\" \
-         fallbacks) out of {} total log-table entries",
-        metrics.skill_map.len(), real_name_count, fallback_count, raw.skills.len()
+        "skill_map_scoped_to_referenced_ids: {} referenced ids ({} real log-table names, {} GW2 API \
+         catalog names, {} \"Skill <id>\" fallbacks) out of {} total log-table entries",
+        metrics.skill_map.len(), real_name_count, api_name_count, fallback_count, raw.skills.len()
     );
 }
 

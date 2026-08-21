@@ -112,6 +112,7 @@ pub mod buff_icons;
 pub mod marker_icons;
 pub mod skill_icon_overrides;
 pub mod skill_icons;
+pub mod squad_buffs;
 /// Best-effort `skillMap` built from the log's own skill table (M14, Task 2)
 /// -- like `hit_stats`/`defenses` above, wired into [`analyze`] below
 /// (`Metrics::skill_map`), computed ONCE after every per-player pass

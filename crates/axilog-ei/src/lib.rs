@@ -4,6 +4,7 @@ use axilog_core::analysis::ei_replay::EiReplay;
 use axilog_core::icons::prof_icon_url;
 use axilog_schema::v1::blocks::activity::DamageModRow;
 use axilog_schema::v1::blocks::support::{BoonRow, GenerationRow};
+use axilog_schema::v1::blocks::squad_buffs::SquadBuffRow;
 use axilog_schema::v1::ReportV1;
 
 mod join;
@@ -885,6 +886,17 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
             .iter()
             .filter_map(|&(id, _, _)| n_boons.and_then(|rows| rows.get(&id)).map(|r| (id, r)))
             .collect();
+        // The long tail of `buffUptimes` -- sigils, relics, food, auras --
+        // which real Elite Insights keeps in the SAME array as the boons
+        // above. Ascending id order (the native block's own key order);
+        // unlike `boon_rows` there is no EI table order to restore,
+        // because EI's own order here is its dictionary's and no golden
+        // pins it. Appended AFTER the boons so the existing goldens' boon
+        // prefix is untouched.
+        let squad_buff_rows: Vec<(u32, &SquadBuffRow)> = entity_id
+            .and_then(|id| report.blocks.squad_buffs.as_ref()?.by_entity.get(id))
+            .map(|rows| rows.iter().map(|(&id, row)| (id, row)).collect())
+            .unwrap_or_default();
         let n_healing = entity_id
             .and_then(|id| report.blocks.healing.as_ref()?.by_entity.get(id));
         let team_id_for = |color: &str| -> u64 {
@@ -1366,7 +1378,36 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
                     );
                 }
                 entry
-            }).collect::<Vec<_>>(),
+            })
+            // The concatenation this array exists to rebuild. The two
+            // blocks are disjoint by construction
+            // (`squad_buffs::is_squad_buff` subtracts the boon and
+            // self-effect id sets) and `v1_squad_buffs.rs` asserts that on
+            // a real fixture, so no id can appear twice -- which matters
+            // because EI's array has one entry per id and a consumer
+            // folding it into a map would silently keep only the last.
+            //
+            // `generated` is `{}` rather than the boon rows' `{ <character>:
+            // self_pct }`: this project computes boon GENERATION only for
+            // the 12 boons, and an empty map is the honest spelling of
+            // "no attribution was computed" -- a fabricated self-generation
+            // figure would read as a measurement. The field is present
+            // rather than omitted because every real EI row carries it.
+            .chain(squad_buff_rows.iter().map(|&(id, row)| {
+                let (uptime, presence) = match row.avg_stacks {
+                    Some(avg) => (avg, row.uptime_pct), // intensity buff
+                    None => (row.uptime_pct, 0.0),      // duration buff
+                };
+                json!({
+                    "id": id,
+                    "buffData": [ {
+                        "uptime": uptime,
+                        "presence": presence,
+                        "generated": {}
+                    } ]
+                })
+            }))
+            .collect::<Vec<_>>(),
             // `selfBuffs`/`groupBuffs`/`squadBuffs` (MEIGAP Task 1a): the
             // boon-generation ATTRIBUTION arrays, i.e. "how much boon-time
             // did THIS player generate, for himself / for his subgroup /

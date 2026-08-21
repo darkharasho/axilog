@@ -408,18 +408,40 @@ pub struct SkillMapEntry {
 /// -- NOT a dump of the whole log skill table.
 pub type SkillMap = BTreeMap<u32, SkillMapEntry>;
 
-/// Resolves one id's display name from its (possibly absent) log-table
-/// name: trims whitespace, then falls back to `"Skill <id>"` when the
-/// trimmed result is empty OR every remaining character is an ASCII digit
-/// (arcdps occasionally writes a bare numeric placeholder, or nothing, for
-/// an id it had no cached display name for at capture time).
+/// Resolves one id's display name, in descending order of authority:
+///
+/// 1. the log's own skill table, trimmed -- rejected when the trimmed
+///    result is empty OR every remaining character is an ASCII digit
+///    (arcdps writes a bare numeric placeholder, or nothing, for an id it
+///    had no cached display name for at capture time);
+/// 2. [`pseudo_name`], for the synthetic negative ids no log table can
+///    ever name because no such game skill exists;
+/// 3. [`super::skill_icons::name`], the generated GW2 API catalog;
+/// 4. `"Skill <id>"`.
+///
+/// # Why the API catalog ranks BELOW the log table
+///
+/// GW2EI prefers its own API-backed names, which are often the more
+/// specific ones (`"Flame Blast (Superior Sigil of Fire)"` where the log
+/// says `"Flame Blast"`). Adopting that preference here would re-name
+/// thousands of ids the log already names correctly and move every
+/// golden, for a readability gain -- a different change, with a different
+/// justification, from this one. Ranked third the catalog is purely
+/// additive: it can only displace the `"Skill <id>"` placeholder, so no
+/// name that resolved before this fallback existed can move.
+///
+/// It ranks below `pseudo_name` for a simpler reason: the two cannot
+/// collide. Pseudo ids are negative-as-`u32`, far past any API skill id.
 fn resolve_name(id: u32, raw_name: Option<&str>) -> String {
     let trimmed = raw_name.map(str::trim).unwrap_or("");
     let numeric_or_empty = trimmed.is_empty() || trimmed.chars().all(|c| c.is_ascii_digit());
     if !numeric_or_empty {
         return trimmed.to_string();
     }
-    match pseudo_name(id) {
+    if let Some(n) = pseudo_name(id) {
+        return n.to_string();
+    }
+    match super::skill_icons::name(id) {
         Some(n) => n.to_string(),
         None => format!("Skill {id}"),
     }
@@ -645,6 +667,54 @@ mod tests {
         let players = vec![player_referencing(&[], &[], &[], &[6000])];
         let map = build(&raw, &players, &[]);
         assert_eq!(map[&6000].name, "Skill 6000");
+    }
+
+    #[test]
+    fn unnamed_skill_falls_back_to_the_api_catalog_name() {
+        // arcdps writes no display name for an instant-cast utility it
+        // never had cached, so the log table is empty for it. The GW2 API
+        // knows the skill perfectly well -- 14404 is Signet of Might --
+        // and that name is what a reader should see instead of the
+        // `"Skill 14404"` placeholder.
+        let raw = raw_with_skills(vec![RawSkill { id: 14404, name: String::new() }]);
+        let players = vec![player_referencing(&[14404], &[], &[], &[])];
+        let map = build(&raw, &players, &[]);
+        assert_eq!(map[&14404].name, "Signet of Might");
+    }
+
+    #[test]
+    fn skill_absent_from_the_log_table_falls_back_to_the_api_catalog_name() {
+        // Referenced but with no `raw.skills` row at all -- the same
+        // recovery has to apply, since the two absences are the same
+        // absence as far as naming goes.
+        let raw = raw_with_skills(vec![]);
+        let players = vec![player_referencing(&[], &[], &[], &[30435])];
+        let map = build(&raw, &players, &[]);
+        assert_eq!(map[&30435].name, "Berserk");
+    }
+
+    #[test]
+    fn the_log_table_name_still_wins_over_the_api_catalog() {
+        // The catalog is a FALLBACK, not a replacement: GW2EI prefers its
+        // own API-backed disambiguations, but adopting that preference
+        // here would re-name thousands of ids the log already names
+        // correctly and move every golden. Only the placeholder is
+        // displaced.
+        let raw = raw_with_skills(vec![RawSkill { id: 14404, name: "Log Table Name".into() }]);
+        let players = vec![player_referencing(&[14404], &[], &[], &[])];
+        let map = build(&raw, &players, &[]);
+        assert_eq!(map[&14404].name, "Log Table Name");
+    }
+
+    #[test]
+    fn an_id_neither_source_knows_still_falls_back_to_skill_id() {
+        // 4_000_000 is past every real skill id: with no log-table row,
+        // no pseudo-name and no API record, the placeholder is still the
+        // honest answer.
+        let raw = raw_with_skills(vec![]);
+        let players = vec![player_referencing(&[4_000_000], &[], &[], &[])];
+        let map = build(&raw, &players, &[]);
+        assert_eq!(map[&4_000_000].name, "Skill 4000000");
     }
 
     #[test]

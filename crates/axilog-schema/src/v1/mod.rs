@@ -9,7 +9,9 @@ pub mod envelope;
 pub mod order;
 pub mod series;
 
-use crate::v1::blocks::{activity, conditions, damage, defense, minions, self_effects, support};
+use crate::v1::blocks::{
+    activity, conditions, damage, defense, minions, self_effects, squad_buffs, support,
+};
 use crate::v1::catalogs::{CatalogBuilder, Catalogs};
 use crate::v1::entities::build_entities;
 use crate::v1::envelope::{AxilogMeta, BlockName, Coverage, CoverageState, Severity, WarningOut};
@@ -214,6 +216,8 @@ pub struct Blocks {
     pub conditions: Option<conditions::ConditionsBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub self_effects: Option<self_effects::SelfEffectsBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub squad_buffs: Option<squad_buffs::SquadBuffsBlock>,
 }
 
 /// The coverage state for a block that DID run: [`CoverageState::Empty`]
@@ -356,6 +360,18 @@ pub struct Passes<'a> {
     /// produces the whole block, so `coverage.self_effects` settles the
     /// question by itself.
     pub self_effects: Option<&'a axilog_core::analysis::self_effects::SelfEffects>,
+    /// Squad-side uptime for every buff that is neither a boon nor a
+    /// condition/control effect. Lands on `blocks.squad_buffs`.
+    ///
+    /// ALWAYS-ON, like [`Self::activity`] and unlike the three fields
+    /// above it: the pass emits uptime only, which is the cost
+    /// `blocks.boons`' always-on half already carries, so no flag gates
+    /// it. `None` here therefore means a caller with no log to scan --
+    /// [`Passes::default`], or a reprojection driven from a `Report` alone
+    /// -- not a gate that was off, and `coverage.squad_buffs` reports
+    /// `not_computed` for exactly that case rather than an empty block a
+    /// consumer would read as real zeros.
+    pub squad_buffs: Option<&'a axilog_core::analysis::squad_buffs::SquadBuffs>,
 }
 
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
@@ -518,6 +534,21 @@ pub fn build_report_v1(
         coverage.set(BlockName::SelfEffects, CoverageState::NotComputed);
     }
 
+    // The long tail of `buffUptimes` -- sigils, relics, food, auras. NOT
+    // gated (see `Passes::squad_buffs`), so unlike the two blocks above,
+    // `None` here is a caller with no log rather than a flag that was off;
+    // the coverage spelling is the same either way, because a consumer's
+    // question is "may I read this as zero", and the answer is no in both
+    // cases.
+    let squad_buffs_block = passes.squad_buffs.map(|buffs| {
+        let block = squad_buffs::build_squad_buffs(buffs, &index, &mut cats);
+        coverage.set(BlockName::SquadBuffs, computed(block.is_empty()));
+        block
+    });
+    if squad_buffs_block.is_none() {
+        coverage.set(BlockName::SquadBuffs, CoverageState::NotComputed);
+    }
+
     // `Metrics::warnings` carries a code at the source as of this task --
     // see `axilog_core::analysis::Warning`. A catch-all code would defeat
     // the whole point of making warnings structured, so there is no `_ =>`
@@ -675,6 +706,7 @@ pub fn build_report_v1(
             minions: minions_block,
             conditions: conditions_block,
             self_effects: self_effects_block,
+            squad_buffs: squad_buffs_block,
         },
         coverage,
         warnings,

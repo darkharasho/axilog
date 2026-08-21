@@ -153,6 +153,11 @@ fn build_report_v1_from_bytes(
         want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     let self_effects =
         want_timeseries.then(|| axilog_core::analysis::self_effects::build(&raw, &enc));
+    // Always-on, like `activity` above: this pass emits uptime only, at
+    // the cost `blocks.boons`' own always-on half already carries. Gating
+    // it would empty axibridge's Special Buffs and Sigil/Relic sections on
+    // every default parse.
+    let squad_buffs = axilog_core::analysis::squad_buffs::build(&raw, &enc);
     Ok(axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
@@ -173,6 +178,7 @@ fn build_report_v1_from_bytes(
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
             self_effects: self_effects.as_ref(),
+            squad_buffs: Some(&squad_buffs),
         },
     ))
 }
@@ -318,6 +324,11 @@ fn build_report_and_ei_inputs_from_bytes(
         want_timeseries.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     let self_effects =
         want_timeseries.then(|| axilog_core::analysis::self_effects::build(&raw, &enc));
+    // Always-on, like `activity` above: this pass emits uptime only, at
+    // the cost `blocks.boons`' own always-on half already carries. Gating
+    // it would empty axibridge's Special Buffs and Sigil/Relic sections on
+    // every default parse.
+    let squad_buffs = axilog_core::analysis::squad_buffs::build(&raw, &enc);
     let report_v1 = axilog_schema::v1::build_report_v1(
         &enc, &metrics, &report, env!("CARGO_PKG_VERSION"), None,
         &axilog_schema::v1::Passes {
@@ -334,6 +345,7 @@ fn build_report_and_ei_inputs_from_bytes(
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
             self_effects: self_effects.as_ref(),
+            squad_buffs: Some(&squad_buffs),
         },
     );
     Ok((report_v1, ei_replay))
