@@ -10,6 +10,33 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.4.1 — 2026-08-21
+
+### Fixed
+- **Post-SotO elite specs 77/78/79 are named.** `profession_name`'s table had
+  holes at three elite-spec ids, so Antiquary (Thief), Galeshot (Ranger) and
+  Conduit (Revenant) all resolved to an empty `elite_spec`. Downstream that
+  does not read as "unknown" — it reads as *core build*, so a Conduit
+  rendered as a plain "Revenant" and a Galeshot as a plain "Ranger". Silent
+  by construction: the output looked like valid data.
+
+  The three ids were placed by elimination against the arcdps agent table's
+  raw `prof` column in two independent fixtures — `wvw-small.anon.zevtc`
+  (Thief/77, Revenant/79) and a WvW capture carrying Ranger/78 — leaving
+  Thief, Ranger and Revenant as the only professions still missing a
+  post-SotO spec and those three as the only unplaced names. `icons.rs`
+  corroborates independently: its catalog is grouped by profession and had
+  already filed the three names under exactly those professions.
+
+  Two pins moved with the fix. `unmapped_elite_spec_falls_back_to_the_base_
+  profession` used id 79 as its stand-in for "unnamed", so once Conduit
+  shipped in game that test had quietly become a regression test *for* this
+  bug; it now uses id 255. `no_agent_reports_a_numeric_elite_spec` pinned the
+  known-unnamed population at 5 agents and is now empty, which is the outcome
+  it existed to detect. Machine-diffed against the previous baseline: 206,050
+  leaves both sides, nothing added or removed, exactly 5 leaves changed, every
+  one an `elite_spec` blank → name.
+
 ## v1.4.0 — 2026-08-20
 
 ### Added
