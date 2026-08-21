@@ -421,10 +421,18 @@ fn no_agent_reports_a_numeric_elite_spec() {
     // spec cannot tell "core build, no elite spec" (`is_elite == 0`) apart
     // from "elite spec this table does not name". Only the raw column can.
     //
-    // The fixture holds exactly 5 of the latter: id 77 on a Thief, id 79 on
-    // four Revenants. If that number moves, either the mapping table gained
-    // a name (drop the count) or a fixture changed (re-derive it) -- both
-    // deserve a human look rather than a silently-passing test.
+    // The fixture used to hold exactly 5 of the latter: id 77 on a Thief, id
+    // 79 on four Revenants. Both are now named (Antiquary and Conduit), so
+    // the population is EMPTY -- every elite spec this fixture contains has a
+    // name. If that changes, either a fixture changed or the game shipped a
+    // spec id the table does not know, and the latter is exactly the bug this
+    // pin exists to catch: an unnamed id does not surface as "unknown", it
+    // silently renders as the base profession.
+    //
+    // Keep asserting on the raw agent column rather than on resolved output.
+    // `Enemy`/`Player` do not retain `is_elite`, so a resolved blank spec
+    // cannot tell "core build, no elite spec" (`is_elite == 0`) apart from
+    // "elite spec this table does not name". Only the raw column can.
     let mut unnamed: Vec<(u32, u32)> = raw
         .agents
         .iter()
@@ -435,8 +443,9 @@ fn no_agent_reports_a_numeric_elite_spec() {
     unnamed.sort_unstable();
     assert_eq!(
         unnamed,
-        vec![(5, 77), (9, 79), (9, 79), (9, 79), (9, 79)],
-        "expected exactly the known-unnamed specs (prof 5 Thief / id 77, prof 9 Revenant / id 79)"
+        Vec::<(u32, u32)>::new(),
+        "an elite spec id in this fixture has no name in `profession_name`, so every agent \
+         carrying it renders as its BASE profession instead -- listed as (prof, is_elite)"
     );
 }
 

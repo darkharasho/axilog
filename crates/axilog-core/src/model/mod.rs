@@ -235,7 +235,13 @@ pub fn profession_name(prof: u32, is_elite: u32) -> (String, String) {
     // covering HoT/PoF/EoD/SotO plus specs observed beyond that era in the
     // calibration fixture (73/75/80/81 — see fixtures/wvw-small.ei.json /
     // `professions_match_ei_golden`, which verified these against EI's
-    // golden `profession` field for the same accounts).
+    // golden `profession` field for the same accounts) and the 74/76/77/78/79
+    // tail named by elimination (see `post_soto_specs_are_named_by_profession`).
+    //
+    // An id missing from this table does not read as "unknown" downstream: it
+    // reads as the BASE profession, so a Conduit renders as a plain
+    // "Revenant". Audit this table against a fresh capture whenever a new
+    // expansion ships — the failure is silent and looks like correct data.
     let spec = if is_elite == 0 {
         String::new()
     } else {
@@ -291,6 +297,28 @@ pub fn profession_name(prof: u32, is_elite: u32) -> (String, String) {
                                     // a count match. The base profession is
                                     // Necromancer per that agent's arcdps
                                     // `prof` field.
+            77 => "Antiquary",      // Thief (post-SotO; fixture-verified)
+            78 => "Galeshot",       // Ranger (post-SotO; fixture-verified)
+            79 => "Conduit",        // Revenant (post-SotO; fixture-verified).
+                                    // 77/78/79 are the tail of the same
+                                    // batch as 73-76/80/81 and were named
+                                    // together, by the same elimination:
+                                    // Thief, Ranger and Revenant were the
+                                    // only professions still lacking a
+                                    // post-SotO spec, and Antiquary,
+                                    // Galeshot and Conduit the only unplaced
+                                    // names. Each id's BASE profession is
+                                    // read straight off the agent table --
+                                    // Thief/77 and Revenant/79 in
+                                    // `fixtures/wvw-small.anon.zevtc`,
+                                    // Ranger/78 and Revenant/79 in
+                                    // axibridge's
+                                    // `testdata/20260117-175120.zevtc` -- so
+                                    // only the name, not the profession, is
+                                    // inferred. `icons.rs` groups its
+                                    // catalog by profession and already
+                                    // files these three names under exactly
+                                    // those professions.
             80 => "Evoker",         // Elementalist (post-SotO; fixture-verified)
             81 => "Luminary",       // Guardian (post-SotO; fixture-verified)
             _ => "",
@@ -417,25 +445,61 @@ mod tests {
     }
     #[test]
     fn unmapped_elite_spec_falls_back_to_the_base_profession() {
-        // An elite-spec id this project's table does not name yet (77 and 79
-        // both appear on real agents in `fixtures/wvw-small.anon.zevtc` --
-        // a Thief spec and a Revenant spec respectively, neither nameable by
-        // elimination because the committed EI reference carries no
-        // `targets[]` to join against).
+        // An elite-spec id this project's table does not name. The spec name
+        // must degrade to EMPTY, not to the id rendered as a string. Every
+        // consumer treats `elite_spec` as a display name and falls back to
+        // `profession` when it is blank, so an unnamed spec should read as
+        // "Revenant" -- which is true -- rather than "255", which is a number
+        // masquerading as a class name. axibridge renders exactly this string
+        // in its class-breakdown panels.
         //
-        // The spec name must degrade to EMPTY, not to the id rendered as a
-        // string. Every consumer treats `elite_spec` as a display name and
-        // falls back to `profession` when it is blank, so an unnamed spec
-        // should read as "Revenant" -- which is true -- rather than "79",
-        // which is a number masquerading as a class name. axibridge renders
-        // exactly this string in its class-breakdown panels.
-        let (base, spec) = super::profession_name(9, 79);
+        // Uses an id no expansion has shipped rather than a real-but-unnamed
+        // one: 77/78/79 used to stand in here and the assertion silently
+        // became a regression test for the BUG once those specs existed in
+        // game (see `post_soto_specs_are_named_by_profession` below).
+        let (base, spec) = super::profession_name(9, 255);
         assert_eq!(base, "Revenant");
         assert_eq!(spec, "", "an unnamed elite spec must not render as its id");
 
         // Named specs are untouched.
         let (base, spec) = super::profession_name(9, 52);
         assert_eq!((base.as_str(), spec.as_str()), ("Revenant", "Herald"));
+    }
+
+    /// The three post-SotO specs that shipped after the 73/74/75/76/80/81
+    /// batch was named. Leaving them unmapped did not read as "unknown" to a
+    /// user -- it read as a WRONG class: axibridge's class breakdown showed a
+    /// Conduit as a plain "Revenant", reported from a live raid night.
+    ///
+    /// Identified by the same by-elimination method as 73/74/75/80/81, with
+    /// two independent fixtures supplying the base profession from the agent
+    /// table's `prof` field:
+    ///
+    /// - `fixtures/wvw-small.anon.zevtc` carries Thief/77 and Revenant/79.
+    /// - axibridge's `testdata/20260117-175120.zevtc` carries Ranger/78 and
+    ///   Revenant/79.
+    ///
+    /// Thief, Ranger and Revenant were exactly the three professions with no
+    /// named post-SotO spec, and Antiquary/Galeshot/Conduit were exactly the
+    /// three unplaced names. `icons.rs` corroborates each assignment
+    /// independently: its catalog is grouped by profession, and it already
+    /// lists Galeshot beside Untamed, Antiquary beside Specter, and Conduit
+    /// beside Vindicator.
+    #[test]
+    fn post_soto_specs_are_named_by_profession() {
+        let cases = [
+            (5u32, 77u32, "Thief", "Antiquary"),
+            (4, 78, "Ranger", "Galeshot"),
+            (9, 79, "Revenant", "Conduit"),
+        ];
+        for (prof, is_elite, want_base, want_spec) in cases {
+            let (base, spec) = super::profession_name(prof, is_elite);
+            assert_eq!(
+                (base.as_str(), spec.as_str()),
+                (want_base, want_spec),
+                "prof={prof} is_elite={is_elite}",
+            );
+        }
     }
 
     /// arcdps prefixes every account in the agent name buffer with `:`.
