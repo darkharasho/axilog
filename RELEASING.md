@@ -141,6 +141,19 @@ release needs both to agree.
 
 ## Cutting a release
 
+0. **Write the `docs/CHANGELOG.md` section for the new tag FIRST**, as
+   `## vX.Y.Z — <date>`. `scripts/release-notes.sh` reads the GitHub Release
+   body out of it and treats a missing section as a hard failure, so skipping
+   this does not degrade the notes — it fails the `release` job outright.
+
+   That failure is expensive and only partly recoverable: `release` runs
+   *after* `npm-publish`, so by the time it fails the version is already live
+   on npm and the tag cannot be moved to a fixed commit without breaking
+   anything that pinned `tag=vX.Y.Z#<sha>` (arcdps-axipulse's `Cargo.lock`
+   does). The repair is to create the Release by hand from the run's
+   artifacts rather than to re-run the job — see "If the release job fails
+   after npm-publish" below. v1.5.1 was released this way.
+
 1. Bump the version everywhere `scripts/check-versions.sh` checks:
    - `[workspace.package].version` in the root `Cargo.toml`
    - `crates/axilog-node/package.json` (`version`)
@@ -226,6 +239,39 @@ If the tag doesn't match `Cargo.toml`'s version, the workflow fails immediately 
 `version-guard` job (and again, redundantly, right before the Release is created) with a
 clear error — fix the version, delete the bad tag (`git tag -d vX.Y.Z && git push
 --delete origin vX.Y.Z`), and retag.
+
+### If the release job fails after npm-publish
+
+`release` is the last gated job, so a failure there (missing changelog section, a
+`gh` hiccup) leaves a half-finished release: npm has the new version, the tag exists,
+and `lockfile-refresh` may already have committed to `main` — but there is no GitHub
+Release, and therefore no PyPI publish either (that workflow fires on
+`release: published`).
+
+**Do not re-run the job, and do not move the tag.** The job checks out the tag ref, so
+re-running it reproduces the same failure unless the tag moves; and moving the tag
+silently breaks every consumer that pinned `tag=vX.Y.Z#<sha>` in a lockfile.
+
+Create the Release by hand from the artifacts the run already built and validated:
+
+```sh
+# 1. Fix the underlying cause on main (e.g. add the docs/CHANGELOG.md section).
+# 2. Pull down the run's artifacts.
+gh run download <run-id> --dir /tmp/rel
+# 3. Consolidate + checksum exactly as the job does.
+mkdir -p /tmp/rel/release
+find /tmp/rel -path /tmp/rel/release -prune -o -type f \
+  \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name '*.tgz' -o -name '*.whl' \) \
+  -exec cp {} /tmp/rel/release/ \;
+cd /tmp/rel/release && sha256sum -- *.tar.gz *.zip *.tgz *.whl > SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing   # verify before publishing
+# 4. Create the Release. This fires pypi-publish.yml just like the job would.
+scripts/release-notes.sh vX.Y.Z > /tmp/rel/notes.md
+gh release create vX.Y.Z /tmp/rel/release/* --title vX.Y.Z --notes-file /tmp/rel/notes.md
+```
+
+The one thing this does NOT do is the job's Discord post; run that by hand if the
+release warrants it.
 
 ## Publishing to npm / PyPI
 

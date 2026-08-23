@@ -10,6 +10,50 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.5.1 — 2026-08-23
+
+### Fixed
+- **WvW team resolution no longer splits the squad in half.** `wvw::resolve_teams`
+  built its agent -> team map **last-write-wins**, on an explicitly stated
+  assumption in the code that "every agent gets exactly one `TEAM_CHANGE`
+  event". That assumption is false, and the extra events are not mid-fight
+  noise: they are emitted at log *teardown*, as the recording player zones out
+  of the map. Since `friendly_team` is the recorder's team, one trailing stamp
+  decided friend/foe for the entire log.
+
+  In the reference log (`20260822-192239.zevtc`, duration 82623 ms, last real
+  combat event at t=68307 ms) the recorder emits
+  `[(1282, t=66760), (433, t=68512), (2543, t=82335)]`. Last-write-wins picked
+  **2543** — a team nobody fought on, stamped 14 seconds after combat ended.
+  Only the 20 agents still in tracking range at that instant carried the
+  matching stamp and stayed in `players[]`; the other 25 squad members fell to
+  the `else` branch and were emitted as enemies, while the 40 real enemies
+  dropped out of the report entirely. Per-agent histograms show the split
+  cleanly — FIRST team `{886: 40, 1282: 45}`, LAST team
+  `{707: 1, 886: 39, 1282: 25, 2543: 20}`.
+
+  Resolution is now **first-write-wins**, with team `0` treated as a
+  placeholder rather than a team: prefer any real id over it, but keep it when
+  it is all an agent ever emits (a disjoint set of 45-of-243 agents in the
+  reference log are `0` on every event they emit, never mixed with a real id).
+
+  Healthy logs differed only in that the recorder's trailing event happened to
+  still carry its real team, so this was a coin flip on whether a map
+  transition landed inside the recording window — not a property of the fight
+  or the map. Verified across all 12 EotM logs from the reporting session:
+  every fight now resolves a consistent roster against red enemies (192239:
+  45 squad / 40 enemy, was 20 / 25; 193429: 46 / 43, was 10 / 36), and the 10
+  previously-healthy logs are unchanged.
+
+  The M4 Keep Lord `iff` override's comment asserted last-write-wins and is
+  corrected. The override is deliberately kept: the Lord now resolves hostile
+  on its own, but `iff` remains the stronger signal and still covers an NPC
+  whose first observed team is already friendly. Both new regression tests were
+  flip-tested against the rules they pin.
+
+  Note this does not retroactively correct anything already parsed and
+  published — affected logs must be re-parsed with this build.
+
 ## v1.5.0 — 2026-08-21
 
 ### Added
