@@ -291,14 +291,47 @@ pub fn resolve_teams(raw: &RawLog) -> (BTreeMap<u64, u32>, Option<u64>) {
         if e.is_statechange == sc::TEAM_CHANGE {
             // The WvW team id is carried in the `value` field (i32 @ offset
             // 24), not `dst_agent` — verified against the golden fixture's
-            // teamID (Task 16A). Every agent (players, NPCs, gadgets) gets
-            // exactly one TEAM_CHANGE event.
+            // teamID (Task 16A).
             //
             // M10 Task 3: widened to `u32` (was a lossy `as u16` truncation)
             // -- dynamic WVWTEAMS ids (`DynamicWvwTeamIds`, parsed below)
             // are already u32, so a team id large enough to lose bits in the
             // old cast would have silently mismatched against them.
-            agent_team.insert(e.src_agent, e.value as u32);
+            let team = e.value as u32;
+
+            // FIRST-write-wins, not last (2026-08-23). An agent is NOT
+            // guaranteed exactly one TEAM_CHANGE, and the extra ones are
+            // overwhelmingly noise emitted *after* the fight is over, as the
+            // recording player zones out of the map. Taking the last one
+            // therefore resolves the whole log against a team nobody fought
+            // on.
+            //
+            // Calibrated against two real Edge of the Mists captures
+            // (`20260822-192239`, `20260822-193429`). In both, the recorder
+            // emits `1282` (its true team) mid-fight, then `433`, then
+            // `2543` in the log's final millisecond -- ~14s and ~0.3s after
+            // the last combat event respectively, i.e. map-transition
+            // teardown. Only the 20 (resp. 10) agents still in tracking
+            // range at that instant received the trailing stamp, so
+            // last-write-wins split one 45-player squad into "20 friendly +
+            // 25 enemy", and AxiBridge duly reported `Squad: 20` with the
+            // other 25 squadmates rendered as the enemy team, while the 40
+            // real enemies were dropped. First-write-wins recovers the exact
+            // 45/40 split on both logs, and leaves the 10 unaffected EotM
+            // logs from the same session byte-identical.
+            //
+            // Team `0` is not a team: it is carried by a disjoint set of
+            // agents (45 of 243 in the log above) that are `0` on every
+            // event they ever emit, never mixed with a real id. Prefer any
+            // real id over it, but keep it when it is all an agent has.
+            agent_team
+                .entry(e.src_agent)
+                .and_modify(|existing| {
+                    if *existing == 0 && team != 0 {
+                        *existing = team;
+                    }
+                })
+                .or_insert(team);
         } else if e.is_statechange == sc::POINT_OF_VIEW {
             recorded_by = Some(e.src_agent);
         }
@@ -422,11 +455,18 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     // M4 post-rework real-log calibration finding: objective NPCs (Keep/
     // Camp/Tower Lords) can emit a SECOND `TEAM_CHANGE` mid-recording when
     // the objective flips ownership (e.g. the squad captures the keep the
-    // Lord belongs to). `agent_team` above is a static last-write-wins map
-    // (`resolve_teams`), so an agent whose *final* recorded team happens to
-    // equal `friendly_team` reads as "ours" for its ENTIRE presence in the
-    // log — including the damage dealt to it while it was still on a
-    // hostile team, before the flip. Verified against a real post-rework
+    // Lord belongs to). `agent_team` above is a static single-value map
+    // (`resolve_teams`), so an agent that reads as "ours" does so for its
+    // ENTIRE presence in the log — including the damage dealt to it while
+    // it was still on a hostile team, before the flip.
+    //
+    // NOTE (2026-08-23): `resolve_teams` was last-write-wins when this
+    // retain was written, which is what made the flip resolve friendly. It
+    // is now FIRST-write-wins, so the Keep Lord below resolves to its
+    // pre-flip hostile team (433) on its own and this override is no longer
+    // load-bearing for that case. It is kept deliberately: `iff` remains
+    // the stronger signal, and it still covers an NPC whose first observed
+    // team is already the friendly one. Verified against a real post-rework
     // WvW capture (`fixtures/local/wvw-postrework.zevtc`): its Keep Lord
     // had `TEAM_CHANGE` to team 433 (hostile) followed ~0.5s later by
     // `TEAM_CHANGE` to 2767 (the recorder's own team), so the static map
@@ -1017,5 +1057,110 @@ mod tests {
     fn reports_absence_not_zero_without_a_log_start() {
         let enc = resolve_encounter_from(vec![]);
         assert_eq!(enc.started_at_unix, None);
+    }
+}
+
+#[cfg(test)]
+mod eotm_teardown_tests {
+    use super::*;
+    use crate::model::{Encounter, Player};
+    use crate::evtc::{RawAgent, RawHeader};
+
+    fn ev(addr: u64, sc_kind: u8, value: i32) -> RawEvent {
+        RawEvent { time: 0, src_agent: addr, dst_agent: 0, value, buff_dmg: 0,
+            overstack: 0, skillid: 0, src_instid: 0, dst_instid: 0,
+            src_master_instid: 0, dst_master_instid: 0, iff: 0, buff: 0, result: 0,
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0,
+            is_moving: 0, is_statechange: sc_kind, is_flanking: 0, is_shields: 0,
+            is_offcycle: 0, pad: 0 }
+    }
+
+    fn player(addr: u64) -> Player {
+        Player { agent_addr: addr, account: format!("A{addr}"), character: "C".into(),
+            profession: "Thief".into(), elite_spec: "".into(), team: "".into(),
+            subgroup: 1, in_squad: true, commander: false, marker: None,
+            commander_tag: None, guild_id: None, agent_addrs: vec![addr] }
+    }
+
+    /// Regression: an Edge of the Mists map-transition at log teardown must
+    /// not re-team the squad.
+    ///
+    /// Shape taken from the real capture `20260822-192239.zevtc`. The
+    /// recorder and a SUBSET of the squad (only those still in tracking
+    /// range at that instant) emit trailing `TEAM_CHANGE`s to `433` then
+    /// `2543` *after* the fight, as the player zones out. Under the old
+    /// last-write-wins rule `friendly_team` became `2543`, so only the
+    /// agents carrying that trailing stamp stayed in `players` and the rest
+    /// of the squad was emitted as the enemy team.
+    #[test]
+    fn eotm_post_fight_team_change_does_not_split_the_squad() {
+        const SQUAD: u32 = 1282;
+        const ENEMY: u32 = 886;
+        let recorder = 0x7d0u64;
+        // 6 squad members (incl. the recorder) + 4 enemies.
+        let squad: Vec<u64> = vec![recorder, 2, 3, 4, 5, 6];
+        let enemies: Vec<u64> = vec![101, 102, 103, 104];
+
+        let mut events = vec![ev(recorder, sc::POINT_OF_VIEW, 0)];
+        for &a in &squad { events.push(ev(a, sc::TEAM_CHANGE, SQUAD as i32)); }
+        for &a in &enemies { events.push(ev(a, sc::TEAM_CHANGE, ENEMY as i32)); }
+        // Teardown: the recorder and only HALF the squad get re-stamped.
+        for &a in &[recorder, 2, 3] {
+            events.push(ev(a, sc::TEAM_CHANGE, 433));
+            events.push(ev(a, sc::TEAM_CHANGE, 2543));
+        }
+
+        let agents: Vec<RawAgent> = squad.iter().chain(enemies.iter()).map(|&addr| {
+            RawAgent { addr, prof: 5, is_elite: 1, toughness: 0, concentration: 0,
+                healing: 0, hitbox_width: 0, condition: 0, hitbox_height: 0,
+                name_raw: b"C\0A\0".to_vec() }
+        }).collect();
+
+        let raw = crate::evtc::RawLog {
+            header: RawHeader { build: "20260101".into(), revision: 1, boss_id: 1 },
+            agents, skills: vec![], events, guid_map: vec![],
+        };
+
+        let (agent_team, recorded_by) = resolve_teams(&raw);
+        assert_eq!(recorded_by, Some(recorder));
+        assert_eq!(
+            agent_team.get(&recorder).copied(),
+            Some(SQUAD),
+            "recorder must keep the team it FOUGHT on, not the one it zoned into",
+        );
+
+        let mut enc = Encounter { kind: "wvw".into(), pve: None, map: "".into(),
+            duration_ms: 0, build: "".into(), revision: 1, recorded_by: None,
+            teams: vec![], enemies: vec![], markers: vec![], ground_markers: vec![],
+            tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+            log_start_ms: 0, map_id: None,
+            players: squad.iter().chain(enemies.iter()).map(|&a| player(a)).collect() };
+        apply(&mut enc, &raw);
+
+        assert_eq!(enc.players.len(), squad.len(), "whole squad must stay friendly");
+        assert_eq!(
+            enc.enemies.iter().filter(|e| e.is_player).count(),
+            enemies.len(),
+            "no squad member may be emitted as an enemy",
+        );
+    }
+
+    /// Team `0` is a placeholder, not a team: prefer any real id over it,
+    /// but keep it when it is all an agent ever emits.
+    #[test]
+    fn team_zero_never_shadows_a_real_team_id() {
+        let raw = crate::evtc::RawLog {
+            header: RawHeader { build: "20260101".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![],
+            events: vec![
+                ev(1, sc::TEAM_CHANGE, 0),
+                ev(1, sc::TEAM_CHANGE, 1282),
+                ev(2, sc::TEAM_CHANGE, 0),
+            ],
+            guid_map: vec![],
+        };
+        let (agent_team, _) = resolve_teams(&raw);
+        assert_eq!(agent_team.get(&1).copied(), Some(1282));
+        assert_eq!(agent_team.get(&2).copied(), Some(0));
     }
 }
