@@ -1309,6 +1309,18 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
                 "removedStunDuration": n_cc.map_or(0, |c| c.removed_stun_duration_ms) as f64 / 1000.0,
                 "condiCleanse": n_support.map_or(0, |s| s.cleanses),
                 "condiCleanseSelf": n_support.map_or(0, |s| s.cleanses_self),
+                // NOT an EI field -- an axilog extension. GW2EI's
+                // `ConditionCleanseCount` loops `foreach (Player p in
+                // log.PlayerList)`, so cleanses landed on a squad member's
+                // pet/minion are counted zero times; the in-game arcdps
+                // meter folds pets into their master and counts them, which
+                // is why arcdps reads ~3-4% higher than EI for the same
+                // fight. Emitted alongside (never folded into) `condiCleanse`
+                // so EI-parity consumers are unaffected; readers wanting
+                // arcdps parity sum all three. Absent on genuine EI exports,
+                // so consumers must treat a missing key as "unavailable"
+                // rather than zero.
+                "condiCleanseMinions": n_support.map_or(0, |s| s.cleanses_minions),
                 "boonStrips": n_support.map_or(0, |s| s.strips),
                 // MEIGAP Task 3e: the outgoing twin of
                 // `defenses[0].boonStripsTime`, and the same deliberate,
@@ -3155,7 +3167,7 @@ mod tests {
         boon_generation.insert((1u64, buffs::MIGHT), GenerationStats { self_pct: 1.5, group_pct: 2.0, squad_pct: 3.0, self_wasted: 0.5, group_wasted: 0.25, squad_wasted: 0.125 });
         let m = Metrics{ instance_ids: Default::default(), enemy_damage_out: Default::default(),
             players: vec![PlayerMetrics{agent_addr:1,
-                support: SupportMetrics { cleanses: 5, cleanses_self: 2, strips: 7, strips_duration_ms: 12345, resurrects: 1 },
+                support: SupportMetrics { cleanses: 5, cleanses_self: 2, cleanses_minions: 3, strips: 7, strips_duration_ms: 12345, resurrects: 1 },
                 ..Default::default()}],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0]},
             boons: Default::default(), boon_uptime, boon_generation,
@@ -3291,7 +3303,7 @@ mod tests {
                 per_target: None,
                 downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
                 boons: vec![],
-                support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 },
+                support: SupportOut { cleanses: 0, cleanses_self: 0, cleanses_minions: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 },
                 healing,
                 skill_damage: None,
                 per_second: None,
@@ -3431,7 +3443,7 @@ mod tests {
             per_target: None,
             downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
             boons: vec![],
-            support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 },
+            support: SupportOut { cleanses: 0, cleanses_self: 0, cleanses_minions: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 },
             healing: None,
             skill_damage, per_second, dps_targets,
             hit_stats: HitStatsOut::default(),

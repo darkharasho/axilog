@@ -107,7 +107,7 @@ mod tests {
                 per_target: None,
                 downed_by: ContributionOut { damage: 0, cc: 0, strips: 0, movement_impairing: 0 },
                 boons: vec![],
-                support: SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 },
+                support: SupportOut { cleanses: 0, cleanses_self: 0, cleanses_minions: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 },
                 healing: None,
                 skill_damage: None,
                 per_second: None,

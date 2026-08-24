@@ -272,6 +272,21 @@ export interface BoonOut {
 export interface SupportOut {
   cleanses: number
   cleanses_self: number
+  /**
+   * Conditions removed from a MINION owned by a genuine squad player --
+   * the arcdps-parity extra, NOT part of GW2EI's numbers.
+   *
+   * GW2EI's `ConditionCleanseCount` loops `foreach (Player p in
+   * log.PlayerList)`, so a condition cleansed off a ranger pet, necro
+   * minion, mesmer clone or revenant spirit is counted zero times. The
+   * in-game arcdps meter folds pets into their master and does count them,
+   * which is why arcdps reads a few percent higher than EI for the same
+   * fight (measured: +3.85% squad-wide on a 49-player WvW log).
+   *
+   * Never folded into `cleanses`, so EI-parity consumers are unaffected.
+   * For arcdps parity sum `cleanses + cleanses_self + cleanses_minions`.
+   */
+  cleanses_minions: number
   strips: number
   /**
    * True total remaining duration (ms) of every boon counted by `strips`
@@ -1687,6 +1702,21 @@ export interface MinionSkillTakenRow {
 export interface SupportEntity {
   cleanses: number
   cleanses_self: number
+  /**
+   * Conditions removed from a MINION owned by a genuine squad player --
+   * the arcdps-parity extra, NOT part of GW2EI's numbers.
+   *
+   * GW2EI's `ConditionCleanseCount` loops `foreach (Player p in
+   * log.PlayerList)`, so a condition cleansed off a ranger pet, necro
+   * minion, mesmer clone or revenant spirit is counted zero times. The
+   * in-game arcdps meter folds pets into their master and does count them,
+   * which is why arcdps reads a few percent higher than EI for the same
+   * fight (measured: +3.85% squad-wide on a 49-player WvW log).
+   *
+   * Never folded into `cleanses`, so EI-parity consumers are unaffected.
+   * For arcdps parity sum `cleanses + cleanses_self + cleanses_minions`.
+   */
+  cleanses_minions: number
   strips: number
   strips_duration_ms: number
   resurrects: number

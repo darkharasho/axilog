@@ -73,6 +73,35 @@ pub struct SupportMetrics {
     /// self-cleanse must still count as self, not cross-account), per the
     /// Task 3 brief.
     pub cleanses_self: u32,
+    /// Conditions removed from a MINION whose master is a genuine squad
+    /// player -- the arcdps-parity extra, and NOT part of GW2EI's numbers.
+    ///
+    /// GW2EI's `ConditionCleanseCount` loops `foreach (Player p in
+    /// log.PlayerList)` (`SupportStatistics.cs`), so a condition cleansed
+    /// off a ranger pet, a necro minion, a mesmer clone or a revenant
+    /// spirit is counted ZERO times by EI. The in-game arcdps meter has no
+    /// `PlayerList` concept and folds pets into their master, so it DOES
+    /// count these -- which is the entire reason arcdps reads a few percent
+    /// higher than EI for the same fight.
+    ///
+    /// Measured on `testdata/20260128-190427.zevtc` (34 squad accounts):
+    /// EI-equivalent `cleanses + cleanses_self` = 4473, minions-of-squad =
+    /// +151 (+3.38%). Two field reports of the arcdps/EI gap put it at
+    /// +3.3% and +4.1%, so this bucket accounts for the whole discrepancy.
+    ///
+    /// Deliberately EXCLUDES conditions removed off non-squad friendly
+    /// players (the `subgroup == 0` "Non Squad Player" agents `real_players`
+    /// also filters out): adding those too would make the same fixture read
+    /// +14.35%, far above the observed gap -- arcdps tracks the squad and
+    /// its pets, it does not adopt unrelated friendlies.
+    ///
+    /// Kept as a SEPARATE counter rather than folded into [`cleanses`] so
+    /// every existing golden-calibrated number is bit-identical; consumers
+    /// wanting arcdps parity sum `cleanses + cleanses_self +
+    /// cleanses_minions`.
+    ///
+    /// [`cleanses`]: SupportMetrics::cleanses
+    pub cleanses_minions: u32,
     /// Boon removed from an enemy. Verified against `SupportStatistics.cs`:
     /// `BoonStripCount` sums `FoeRemovals` (recipient IFF == Foe) +
     /// `UnknownRemovals` (recipient IFF == Unknown) per boon --
@@ -261,15 +290,16 @@ pub struct SupportMetrics {
 /// reproduces the identical `SupportMetrics` credit for a post-era log
 /// carrying the same logical removal/resurrect-cast sequence (see the
 /// `era_equivalence` tests at the bottom of this module).
-pub fn apply(
+pub fn apply_with_registry(
     players: &mut [PlayerMetrics],
     raw: &RawLog,
     enc: &Encounter,
     enemies: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
+    registry: &crate::analysis::damage::InstidRegistry,
 ) {
     if raw.header.is_post_buff_rework() {
-        return apply_post_era(players, raw, enc, enemies, addr_to_rep);
+        return apply_post_era(players, raw, enc, enemies, addr_to_rep, registry);
     }
 
     let idx: BTreeMap<u64, usize> =
@@ -336,6 +366,20 @@ pub fn apply(
                 // (Player p in log.PlayerList)`, which excludes the "Non
                 // Squad Player" friendlies (see doc comment).
                 if !real_players.contains(&owner) {
+                    // Not a genuine squad player. GW2EI stops here, but the
+                    // in-game arcdps meter folds pets into their master and
+                    // DOES credit a cleanse landed on a squad member's
+                    // pet/minion -- resolve the owner's master through the
+                    // shared `InstidRegistry` (single-hop, same resolution
+                    // `minions::build` and `dist_outcomes` use) and bucket
+                    // it into the separate arcdps-parity counter. Non-squad
+                    // friendly PLAYERS still fall through uncounted: they
+                    // have no master, so `resolve_at` yields `None`.
+                    if let Some(master) = registry.resolve_at(e.src_master_instid, e.time) {
+                        if real_players.contains(&master) {
+                            players[i].support.cleanses_minions += 1;
+                        }
+                    }
                     continue;
                 }
                 players[i].support.cleanses += 1;
@@ -365,8 +409,32 @@ pub fn apply(
     }
 }
 
-/// Post-era (arcdps `>= 20260501`) twin of `apply`'s pre-era body above --
-/// dispatches the cleanse/strip removal scan on the dedicated
+/// [`apply_with_registry`] against a freshly built
+/// [`InstidRegistry`](crate::analysis::damage::InstidRegistry) --
+/// the convenience entry point for callers (chiefly this module's tests)
+/// that have no registry already in hand. Mirrors the `build` /
+/// `build_with_registry` pairing in [`crate::analysis::minions`] and
+/// [`crate::analysis::squad_buffs`]. The full analysis pass shares one
+/// registry and calls [`apply_with_registry`] directly.
+pub fn apply(
+    players: &mut [PlayerMetrics],
+    raw: &RawLog,
+    enc: &Encounter,
+    enemies: &BTreeSet<u64>,
+    addr_to_rep: &BTreeMap<u64, u64>,
+) {
+    apply_with_registry(
+        players,
+        raw,
+        enc,
+        enemies,
+        addr_to_rep,
+        &crate::analysis::damage::InstidRegistry::build(raw),
+    );
+}
+
+/// Post-era (arcdps `>= 20260501`) twin of `apply_with_registry`'s pre-era
+/// body above -- dispatches the cleanse/strip removal scan on the dedicated
 /// `sc::BUFF_REMOVE_ALL` statechange instead of the `is_statechange == 0
 /// && is_buffremove == ALL` combat-event shape, and the resurrect-cast scan
 /// on `sc::ANIMATION_START` instead of `is_activation`. Every OTHER
@@ -413,6 +481,7 @@ fn apply_post_era(
     enc: &Encounter,
     enemies: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
+    registry: &crate::analysis::damage::InstidRegistry,
 ) {
     let idx: BTreeMap<u64, usize> =
         players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
@@ -450,6 +519,20 @@ fn apply_post_era(
                 players[i].support.cleanses_self += 1;
             } else {
                 if !real_players.contains(&owner) {
+                    // Not a genuine squad player. GW2EI stops here, but the
+                    // in-game arcdps meter folds pets into their master and
+                    // DOES credit a cleanse landed on a squad member's
+                    // pet/minion -- resolve the owner's master through the
+                    // shared `InstidRegistry` (single-hop, same resolution
+                    // `minions::build` and `dist_outcomes` use) and bucket
+                    // it into the separate arcdps-parity counter. Non-squad
+                    // friendly PLAYERS still fall through uncounted: they
+                    // have no master, so `resolve_at` yields `None`.
+                    if let Some(master) = registry.resolve_at(e.src_master_instid, e.time) {
+                        if real_players.contains(&master) {
+                            players[i].support.cleanses_minions += 1;
+                        }
+                    }
                     continue;
                 }
                 players[i].support.cleanses += 1;

@@ -824,7 +824,7 @@ pub struct BoonOut {
 /// counts stay on `CcOut` (already there since M1) rather than duplicated
 /// here -- see the Task 5 brief.
 #[derive(Serialize)]
-pub struct SupportOut { pub cleanses: u32, pub cleanses_self: u32, pub strips: u32,
+pub struct SupportOut { pub cleanses: u32, pub cleanses_self: u32, pub cleanses_minions: u32, pub strips: u32,
     /// True total remaining duration (ms) of every boon counted by
     /// `strips` (MEIGAP Task 3e) -- see
     /// `axilog_core::analysis::support::SupportMetrics::strips_duration_ms`
@@ -1532,9 +1532,10 @@ pub fn build_report(
             },
             support: m.map(|m| SupportOut {
                 cleanses: m.support.cleanses, cleanses_self: m.support.cleanses_self,
+                cleanses_minions: m.support.cleanses_minions,
                 strips: m.support.strips, strips_duration_ms: m.support.strips_duration_ms,
                 resurrects: m.support.resurrects,
-            }).unwrap_or(SupportOut { cleanses: 0, cleanses_self: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 }),
+            }).unwrap_or(SupportOut { cleanses: 0, cleanses_self: 0, cleanses_minions: 0, strips: 0, strips_duration_ms: 0, resurrects: 0 }),
             healing: if metrics.healing_extension.is_some() {
                 Some(m.map(|m| HealingOut {
                     healing_out_total: m.healing.healing_out_total,

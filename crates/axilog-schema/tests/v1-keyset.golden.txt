@@ -394,6 +394,7 @@ blocks.support
 blocks.support.by_entity
 blocks.support.by_entity.<id>
 blocks.support.by_entity.<id>.cleanses
+blocks.support.by_entity.<id>.cleanses_minions
 blocks.support.by_entity.<id>.cleanses_self
 blocks.support.by_entity.<id>.resurrects
 blocks.support.by_entity.<id>.strips

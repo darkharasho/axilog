@@ -93,6 +93,10 @@ impl SupportBlock {
 pub struct SupportEntity {
     pub cleanses: u32,
     pub cleanses_self: u32,
+    /// Conditions cleansed off a squad member's pet/minion -- the
+    /// arcdps-parity extra GW2EI's `PlayerList` loop omits entirely. See
+    /// [`axilog_core::analysis::support::SupportMetrics::cleanses_minions`].
+    pub cleanses_minions: u32,
     pub strips: u32,
     pub strips_duration_ms: u64,
     pub resurrects: u32,
@@ -426,6 +430,7 @@ pub fn build_support(report: &crate::Report, index: &EntityIndex) -> SupportBloc
             SupportEntity {
                 cleanses: p.support.cleanses,
                 cleanses_self: p.support.cleanses_self,
+                cleanses_minions: p.support.cleanses_minions,
                 strips: p.support.strips,
                 strips_duration_ms: p.support.strips_duration_ms,
                 resurrects: p.support.resurrects,

@@ -629,7 +629,7 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     }).collect();
     downs::apply_with_registry(&mut players, enc, raw, &registry, &squad, &enemies, &addr_to_rep);
     cc::apply_cc_with_registry(&mut players, raw, &registry, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep);
-    support::apply(&mut players, raw, enc, &enemies, &addr_to_rep);
+    support::apply_with_registry(&mut players, raw, enc, &enemies, &addr_to_rep, &registry);
     // M11 Task 2: the arcdps-methodology contribution family
     // (downs_contribution/downed_by) -- see `contribution`'s module doc.
     contribution::apply_with_registry(&mut players, raw, &registry, enc, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep);

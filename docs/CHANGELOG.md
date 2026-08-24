@@ -10,6 +10,68 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.6.0 — 2026-08-23
+
+### Added
+- **`cleanses_minions` — the arcdps-parity cleanse bucket GW2EI throws
+  away.** A player reported that AxiBridge showed fewer cleanses than the
+  in-game arcdps meter for the same fight, same recorder, same start time.
+  It is not a counting bug on either side. GW2EI's
+  `SupportStatistics.ConditionCleanseCount` accumulates inside
+  `foreach (Player p in log.PlayerList)` (`SupportStatistics.cs:61`), so a
+  condition cleansed off a **ranger pet, necro minion, mesmer clone or
+  revenant spirit is counted zero times**. The in-game meter has no
+  `PlayerList` concept — it folds pets into their master — so it counts
+  them. That single exclusion is the entire discrepancy.
+
+  The fix is a new `SupportMetrics::cleanses_minions` counter, surfaced as
+  `blocks.support.by_entity.<id>.cleanses_minions` on the v1 wire schema
+  and as `condiCleanseMinions` on the EI-shaped output. When the cleanse
+  recipient fails the `real_players` test, its `src_master_instid` is
+  resolved through the pass's shared `InstidRegistry` (single-hop, the same
+  resolution `minions::build` and `dist_outcomes` already use); if the
+  master is a squad player, the removal lands in the new bucket. Consumers
+  wanting arcdps parity sum `cleanses + cleanses_self + cleanses_minions`.
+
+  **Scope was calibrated against a real log, not assumed.** The obvious
+  reading — "arcdps just doesn't have EI's `PlayerList` guard, so drop it"
+  — is wrong. Bucketing every buff-removal row on
+  `testdata/20260128-190427.zevtc` (34 squad accounts) by recipient class
+  gives `self 1009, squad player 3464, non-squad player 479, minion of
+  squad 151, minion of other 12`. So:
+
+  | definition | total | vs EI |
+  |---|---|---|
+  | EI-equivalent (`self` + squad) | 4473 | — |
+  | **+ minions of squad** | **4624** | **+3.38%** |
+  | + all minions | 4636 | +3.64% |
+  | + all friendlies (drop the guard) | 5115 | +14.35% |
+
+  Two independent field reports put the arcdps/EI gap at +3.3% and +4.1%.
+  Only the minions-of-squad definition lands there; dropping the guard
+  overshoots by 4x. arcdps tracks the squad and its pets, it does not adopt
+  unrelated friendlies — so non-squad friendly *players* stay uncounted
+  (they have no master, so `resolve_at` yields `None` and they fall
+  through). `iff` was `Friend` on 100% of squad-remover rows, ruling out
+  enemy contamination. Both `BuffRemoveSingle` (3768) and
+  `BuffRemoveManual` (38739) remain ignored, as in EI: counting either
+  would put the gap above 40%, not 4%.
+
+  **Every existing number is bit-identical.** The new bucket is a separate
+  field, never folded into `cleanses`, so `support_matches_ei_golden`
+  passes unchanged. Verified structurally as well as by suite: the full
+  native JSON for the fixture was diffed leaf-by-leaf against a build of
+  the parent commit — 42 differences, every one an *added*
+  `cleanses_minions` key, nothing removed and no existing value moved.
+  On the AxiBridge fixture the field reads +3.85% squad-wide (+2.1% to
+  +5.2% per player), and the per-player counts match an independent probe
+  written directly against the raw EVTC bytes.
+
+  Note for consumers: this is **not** a GW2EI field, and a document
+  produced by any other parser will not have it. A missing key must be
+  treated as "unavailable", not as zero — reading it as zero silently
+  relabels an EI-scoped number as an arcdps-scoped one.
+
 ## v1.5.1 — 2026-08-23
 
 ### Fixed

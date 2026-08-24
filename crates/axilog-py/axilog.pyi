@@ -437,6 +437,12 @@ class BoonOut(_BoonOutRequired, total=False):
 class SupportOut(TypedDict):
     cleanses: int
     cleanses_self: int
+    #: Conditions removed from a MINION owned by a genuine squad player --
+    #: the arcdps-parity extra, NOT part of GW2EI's numbers. EI's cleanse
+    #: count is ``log.PlayerList``-scoped so it omits pets/minions entirely;
+    #: the in-game arcdps meter folds pets into their master and counts them,
+    #: hence the ~3-4%% gap. Never folded into ``cleanses``.
+    cleanses_minions: int
     strips: int
     #: True total remaining duration (ms) of every boon counted by
     #: ``strips`` (MEIGAP Task 3e). NOT EI's own ``boonStripsTime``, whose
@@ -1456,6 +1462,12 @@ class SupportEntity(TypedDict):
 
     cleanses: int
     cleanses_self: int
+    #: Conditions removed from a MINION owned by a genuine squad player --
+    #: the arcdps-parity extra, NOT part of GW2EI's numbers. EI's cleanse
+    #: count is ``log.PlayerList``-scoped so it omits pets/minions entirely;
+    #: the in-game arcdps meter folds pets into their master and counts them,
+    #: hence the ~3-4%% gap. Never folded into ``cleanses``.
+    cleanses_minions: int
     strips: int
     strips_duration_ms: int
     resurrects: int
