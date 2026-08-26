@@ -432,3 +432,82 @@ fn the_scalars_survive_with_every_gate_off() {
         "the always-on healing scalars must survive every gate being off"
     );
 }
+
+/// The committed WvW fixture parsed to a v1 report with the healing gate
+/// on, alongside the raw `HealingDetail` the block was built from.
+fn healing_report_and_detail() -> (
+    axilog_schema::v1::ReportV1,
+    axilog_core::analysis::healing_detail::HealingDetail,
+) {
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/wvw-small.anon.zevtc"
+    ))
+    .expect("read committed fixture");
+    let raw = axilog_core::evtc::decode_raw(&bytes).expect("decode fixture");
+    let enc = axilog_core::model::resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let detail = axilog_core::analysis::healing_detail::build(&raw, &enc)
+        .expect("the committed fixture carries the healing extension");
+    let legacy = axilog_schema::build_report(
+        &enc,
+        &metrics,
+        "0.0.0-test",
+        None,
+        None,
+        true,
+        true,
+        false,
+        None,
+    );
+    let passes = axilog_schema::v1::Passes {
+        healing_detail: Some(&detail),
+        healing_series: Some(&detail),
+        ..Default::default()
+    };
+    let v1 = axilog_schema::v1::build_report_v1(
+        &enc,
+        &metrics,
+        &legacy,
+        "0.0.0-test",
+        None,
+        &passes,
+    );
+    (v1, detail)
+}
+
+/// GW2EI's `BuildHealingDist` routes an indirect (healing-over-time) row's
+/// id into `buffMap` and a direct row's into `skillMap` -- checked against
+/// `fixtures/local/wvw-postrework.ei.json`, where 13721 and 77020 are
+/// buffs while 1066 and 53183 are skills. The block registered every row
+/// as a skill regardless.
+#[test]
+fn indirect_heal_rows_register_as_buffs_and_direct_rows_do_not() {
+    let (report_v1, detail) = healing_report_and_detail();
+    let mut indirect = std::collections::BTreeSet::new();
+    let mut direct = std::collections::BTreeSet::new();
+    for player in &detail {
+        for e in player.healing_dist.iter().chain(player.barrier_dist.iter()) {
+            if e.indirect {
+                indirect.insert(e.skill_id);
+            } else {
+                direct.insert(e.skill_id);
+            }
+        }
+    }
+    assert!(!indirect.is_empty(), "fixture must carry at least one indirect heal row");
+
+    for id in &indirect {
+        assert!(
+            report_v1.catalogs.buffs.contains_key(id),
+            "indirect heal id {id} must resolve in the buff catalog"
+        );
+    }
+    for id in direct.difference(&indirect) {
+        assert!(
+            !report_v1.catalogs.buffs.contains_key(id)
+                || axilog_core::analysis::buffs::name(*id).is_some(),
+            "a purely-direct heal id {id} must not be invented as a buff"
+        );
+    }
+}

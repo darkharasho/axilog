@@ -308,7 +308,27 @@ impl CatalogBuilder {
                 (
                     id,
                     BuffEntry {
-                        name: buffs::name(id).unwrap_or_default().to_string(),
+                        // The boon/condition/control tables first -- they
+                        // are authoritative for the ids they cover. Beyond
+                        // them this catalog now carries ids that are none
+                        // of the three (a healing-over-time skill routed
+                        // here by `blocks.healing`, per GW2EI's own
+                        // BuildHealingDist), and `unwrap_or_default` gave
+                        // those an EMPTY name: a consumer could not even
+                        // tell the lookup had failed. Same chain as the
+                        // skill half, for the same reason.
+                        name: buffs::name(id).map(str::to_owned).unwrap_or_else(|| {
+                            metrics
+                                .skill_map
+                                .get(&id)
+                                .map(|e| e.name.clone())
+                                .unwrap_or_else(|| {
+                                    axilog_core::analysis::skill_map::resolve_name(
+                                        id,
+                                        metrics.log_skill_names.get(&id).map(String::as_str),
+                                    )
+                                })
+                        }),
                         icon: resolve_icon(id),
                         kind,
                         stacking: if is_intensity { "intensity" } else { "duration" },
@@ -831,5 +851,38 @@ mod tests {
             !catalogs.skills[&9292].can_crit,
             "9292 is in EI's NonCritableSkills table; finish used to default it to true"
         );
+    }
+
+    /// A healing-over-time id is neither boon nor condition nor control
+    /// effect, so `buffs::name` misses and the entry used to be emitted
+    /// with an EMPTY name -- worse than a placeholder, because a consumer
+    /// cannot even tell it failed.
+    #[test]
+    fn finish_names_a_buff_that_is_not_a_boon_or_condition() {
+        let mut metrics = metrics_with_skills();
+        metrics.log_skill_names.insert(13721, "Restorative Mantras".to_string());
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_buff(13721);
+        let catalogs = cats.finish(&metrics, None);
+
+        let entry = &catalogs.buffs[&13721];
+        assert_eq!(entry.name, "Restorative Mantras");
+        assert_eq!(entry.kind, "effect", "not a boon and not a condition");
+    }
+
+    /// The boon and condition tables stay authoritative for the ids they
+    /// cover -- this fallback is purely additive.
+    #[test]
+    fn finish_still_prefers_the_boon_table_for_a_boon() {
+        let mut metrics = metrics_with_skills();
+        metrics.log_skill_names.insert(740, "SHOULD NOT WIN".to_string());
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_buff(740);
+        let catalogs = cats.finish(&metrics, None);
+
+        assert_eq!(catalogs.buffs[&740].name, "Might");
+        assert_eq!(catalogs.buffs[&740].kind, "boon");
     }
 }
