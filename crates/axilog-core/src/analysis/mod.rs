@@ -113,6 +113,7 @@ pub mod marker_icons;
 pub mod skill_icon_overrides;
 pub mod skill_icons;
 pub mod skill_name_overrides;
+pub mod skill_symbol_names;
 pub mod squad_buffs;
 /// Best-effort `skillMap` built from the log's own skill table (M14, Task 2)
 /// -- like `hit_stats`/`defenses` above, wired into [`analyze`] below
