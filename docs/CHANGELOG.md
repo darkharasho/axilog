@@ -10,6 +10,47 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.6.2 — 2026-08-26
+
+### Fixed
+- **The tail of `Skill <id>` placeholders, closed from one table instead of
+  one row at a time.** v1.6.1 fixed the naming *chain* and was verified on
+  the committed fixtures. Measured afterwards against a real ~4,000-log WvW
+  corpus — the evidence the fixtures could not supply, because none of them
+  contain these ids — **22 distinct ids still rendered as the literal
+  placeholder**. `resolve_name` gains a fifth and final named rung,
+  `skill_symbol_names`, generated from every `const long` in GW2EI's
+  `SkillIDs.cs`: 5,568 positive ids, de-camel-cased, so
+  `GladiatorsDefenseAnimation` becomes "Gladiators Defense Animation".
+  Measured on the same 60-log sample, distinct placeholders fall from **38
+  to 20**.
+
+  A symbol is not a display name, and that is the point of ranking it last.
+  `SkillIDs.cs` exists so GW2EI's own code can refer to an id, not so a
+  player can read it, so the result is clumsy where a real name would not
+  be — but the comparison at this rung is against `Skill 23288`, never
+  against a name. The rung sits below the log's own skill table, the pseudo
+  names, the GW2 API catalog and GW2EI's `OverridenSkillNames`, and
+  immediately above the placeholder, so it is **additive by construction**:
+  it can only displace the placeholder, never a name a higher-authority rung
+  produced. That property is guarded directly rather than asserted —
+  `symbol_rung_never_displaces_a_higher_rung` walks all 5,568 entries and
+  checks both directions.
+
+- **Weaver dual-attunement ids are named.** `41166`/`42264`/`43470`/`44857`
+  were a ledgered known gap expected to need a bespoke `WeaverHelper.cs`
+  port; they now resolve to "Dual Water/Air/Fire/Earth Attunement" from the
+  same generated table, so the follow-up is closed rather than deferred
+  again.
+
+### Known limits
+- **20 ids still render as `Skill <id>`, and cannot currently be named.**
+  Verified individually: they are absent from the log's skill table, from
+  `/v2/skills` (which does answer for real ids — `5491` returns Fireball),
+  and from every file in GW2EI's parser sources. Nothing available names
+  them, so they keep the placeholder deliberately: an honest "we do not
+  know" beats inventing a label.
+
 ## v1.6.1 — 2026-08-26
 
 ### Fixed

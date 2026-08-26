@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/axilog-core", "crates/axilog-schema", "crates/axilog-api", "crates/axilog-ei", "crates/axilog-html", "crates/axilog-cli", "crates/axilog-node", "crates/axilog-py"]
 
 [workspace.package]
-version = "1.6.1"
+version = "1.6.2"
 edition = "2021"
 rust-version = "1.74"
 license = "MIT"
