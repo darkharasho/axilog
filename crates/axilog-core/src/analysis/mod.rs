@@ -112,6 +112,7 @@ pub mod buff_icons;
 pub mod marker_icons;
 pub mod skill_icon_overrides;
 pub mod skill_icons;
+pub mod skill_name_overrides;
 pub mod squad_buffs;
 /// Best-effort `skillMap` built from the log's own skill table (M14, Task 2)
 /// -- like `hit_stats`/`defenses` above, wired into [`analyze`] below
@@ -425,7 +426,26 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// `rotation`/tracked-boons actually reference, not a dump of the whole
     /// log skill table. Always computed (not opt-in) -- see that module's
     /// doc for the measured-modest-size reasoning.
-    pub skill_map: skill_map::SkillMap }
+    pub skill_map: skill_map::SkillMap,
+    /// The log's OWN decoded `cbtskill` name table, whole -- id to the raw
+    /// string arcdps wrote, untrimmed and unfiltered.
+    ///
+    /// `skill_map` is REFERENCE-scoped by design (see its module doc): it
+    /// covers only ids some squad player's damage or rotation touched. Any
+    /// other block may legitimately reference an id outside that scope --
+    /// `blocks.healing` does, for every heal-only skill -- and
+    /// `CatalogBuilder::finish` is where those ids get named. Before this
+    /// field existed `finish` had no access to the log's own table at all,
+    /// so it skipped straight to the GW2 API catalog and emitted `"Skill
+    /// <id>"` for anything the API had never heard of. That is the MNAME
+    /// bug.
+    ///
+    /// Deliberately UNGATED and unscoped. A name is a property of the log,
+    /// not of which passes a caller asked for; scoping this to the current
+    /// reference set would make the same log name skills differently
+    /// depending on its flags. It costs a few hundred short strings -- the
+    /// committed WvW fixture's table is ~508 rows.
+    pub log_skill_names: BTreeMap<u32, String> }
 
 pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // MPERF Task 2: the ONE `InstidRegistry` for this whole analysis.
@@ -806,6 +826,11 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     // referenced, plus the always-tracked boon ids -- see `skill_map`'s
     // module doc.
     let skill_map = skill_map::build(raw, &players, &instants);
+    // Ungated and whole, unlike `skill_map` above -- see the field's doc
+    // comment. Last-wins on a duplicate id, the same tie-break rule
+    // `skill_map::build` documents for the same source.
+    let log_skill_names: BTreeMap<u32, String> =
+        raw.skills.iter().map(|s| (s.id, s.name.clone())).collect();
     // MEIGAP2 row 3: `instanceID`, read off the registry built at the top
     // of this function -- no extra scan (see `Metrics::instance_ids`).
     let instance_ids: BTreeMap<u64, u16> = enc
@@ -816,7 +841,7 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
         .filter_map(|addr| registry.instid_of(addr).map(|instid| (addr, instid)))
         .collect();
     Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings, healing_extension,
-        combat_participant_enemies, instance_ids, enemy_damage_out, skill_map }
+        combat_participant_enemies, instance_ids, enemy_damage_out, skill_map, log_skill_names }
 }
 
 #[cfg(test)]

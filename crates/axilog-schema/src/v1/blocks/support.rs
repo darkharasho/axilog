@@ -564,7 +564,25 @@ fn build_healing_detail(
                 // Every id this block joins on has to resolve in the
                 // catalog, or the row is a dangling reference -- the same
                 // hole Task 9 found on the damage side.
+                //
+                // WHICH catalog follows GW2EI's `BuildHealingDist`: an
+                // indirect (healing-over-time) row's id goes to `buffMap`,
+                // a direct row's to `skillMap`. Checked against
+                // `fixtures/local/wvw-postrework.ei.json`, where 13721 and
+                // 77020 are buffs while 1066 and 53183 are skills.
+                //
+                // An indirect id lands in BOTH, deliberately. It stays a
+                // skill reference so it keeps a `SkillEntry` with the log's
+                // own name and art, and gains a buff reference so a
+                // consumer following EI's routing finds it. Same superset
+                // this catalog already carries for Stun and Daze, and for
+                // the same reason: a consumer only ever looks up ids it
+                // already holds, so the extra entry is inert. Do not
+                // narrow it.
                 cats.reference_skill(e.skill_id);
+                if e.indirect {
+                    cats.reference_buff(e.skill_id);
+                }
                 (
                     e.skill_id,
                     HealSkillRow {

@@ -111,10 +111,16 @@ fn skill_map_scoped_to_referenced_ids_on_committed_fixture() {
             // - a real API skill arcdps simply had not cached at capture
             //   time resolves from the generated `skill_icons::name`
             //   catalog. This is the common case: arcdps writes nothing for
-            //   most instant-cast utilities.
+            //   most instant-cast utilities;
+            // - failing that, GW2EI's `OverridenSkillNames` table
+            //   (`skill_name_overrides::name`) -- ranked LAST because it is
+            //   last-resort only (Task 4 measured that ranking it first
+            //   would rename ids the log table already resolved; see
+            //   `skill_map::resolve_name`'s doc comment).
             let expected = axilog_core::analysis::skill_map::pseudo_name(id)
                 .map(str::to_string)
                 .or_else(|| axilog_core::analysis::skill_icons::name(id).map(str::to_string))
+                .or_else(|| axilog_core::analysis::skill_name_overrides::name(id).map(str::to_string))
                 .unwrap_or_else(|| format!("Skill {id}"));
             assert_eq!(entry.name, expected, "skill {id}: expected pseudo/API-catalog/placeholder name for empty/numeric/absent log-table row (raw: {raw_name:?})");
             if axilog_core::analysis::skill_icons::name(id).is_some() {

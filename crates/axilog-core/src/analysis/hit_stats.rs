@@ -255,11 +255,13 @@ const NON_CRITABLE_SKILLS: &[u32] = &[
     13752, 22499, 21795, 43630, 45534, 10606,
 ];
 
-/// `pub(crate)`: also reused by `analysis::skill_map` (M14, Task 2) for its
-/// `SkillMapEntry::can_crit` field -- see that module's doc comment for the
-/// citation trail (unchanged from this module's own, since it's the exact
-/// same `NonCritableSkills` table).
-pub(crate) fn can_crit(skillid: u32) -> bool {
+/// `pub`: reused by `analysis::skill_map` (M14, Task 2) for its
+/// `SkillMapEntry::can_crit` field, and by `axilog_schema::v1::catalogs`'s
+/// `CatalogBuilder::finish` to compute the flag for ids `skill_map` never
+/// covered -- see that module's doc comment for the citation trail
+/// (unchanged from this module's own, since it's the exact same
+/// `NonCritableSkills` table).
+pub fn can_crit(skillid: u32) -> bool {
     !NON_CRITABLE_SKILLS.contains(&skillid)
 }
 

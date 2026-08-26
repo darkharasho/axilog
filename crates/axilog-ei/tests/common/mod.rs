@@ -45,3 +45,17 @@ pub fn fixture_legacy_and_v1() -> (Report, ReportV1) {
     let v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &legacy, "0.0.0-test", None, &axilog_schema::v1::Passes { damage_mods: Some(&damage_mods), ..Default::default() });
     (legacy, v1)
 }
+
+/// Reads a fixture, printing a `skip: ... absent` message and returning
+/// `None` (rather than failing) when it is unreadable -- the same
+/// skip-gracefully pattern `crates/axilog-core/tests/common/mod.rs` uses.
+#[allow(dead_code)]
+pub fn read_bytes_or_skip(path: &str, label: &str) -> Option<Vec<u8>> {
+    match std::fs::read(path) {
+        Ok(b) => Some(b),
+        Err(_) => {
+            println!("skip: {path} absent ({label})");
+            None
+        }
+    }
+}

@@ -10,6 +10,95 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.6.1 — 2026-08-26
+
+### Fixed
+- **Healing skills render their real names instead of `Skill <id>`.** A WvW
+  player reported eleven skill ids showing as the literal placeholder
+  `Skill 13721`, `Skill 1066` and so on in AxiBridge's Support & Healing
+  tables. The cause was structural rather than a missing entry: the catalog
+  that names ids for the v1 document could reach the GW2 API name table and
+  the curated pseudo-id names, but **not the log's own skill table** — the
+  one source that names an id no public catalog covers. Damage skills were
+  unaffected because they are almost always in the API catalog; a skill that
+  only ever heals frequently is not. So the gap presented as "healing skills
+  have no names" while actually being "one naming rung was unreachable from
+  this call site."
+
+  `Metrics` now carries the log's skill-table text (`log_skill_names`),
+  ungated — a name is a property of the log, not of which analysis passes
+  were requested — and `skill_map::resolve_name` became the single shared
+  chain both the skill and buff catalogs terminate in. Any future block that
+  references an out-of-scope id is named for free, which was the point: the
+  request was explicitly for a systemic fix rather than eleven special cases.
+
+  The full ladder, in order: the log's own skill table (rejecting empty and
+  all-digit strings, since arcdps writes a bare numeric placeholder for some
+  ids) → curated pseudo-id names for negative synthetic ids → the GW2 API
+  `skill_icons` table → GW2EI's `OverridenSkillNames` → `Skill <id>`.
+
+- **Ids ArenaNet never published are named from GW2EI's override table.**
+  Id `1066` (`Resurrect`) is the case that proves the rung is needed: it is
+  absent from `/v2/skills` entirely, and arcdps writes its name into the log
+  as the literal string `"1066"`, which the chain correctly rejects as a
+  non-name. A new generated catalog, `skill_name_overrides` (293 positive
+  entries transcribed from GW2EI's `OverridenSkillNames`, 332 considered /
+  39 non-positive skipped), supplies it.
+
+  **That table ranks LAST by measurement, not by convention.** Ranked first,
+  it would have renamed 17 ids that an earlier rung had already resolved
+  correctly, against only 2 ids it actually rescued from the placeholder — so
+  it is demoted to a rung that can only ever displace `Skill <id>`. The
+  shipped chain's zero-rename property (`MAX_RENAMES = 0`) and the
+  `skill_icons`-beats-overrides ordering on all 35 double-covered ids are
+  both pinned by `crates/axilog-core/tests/name_override_precedence.rs`.
+
+- **Healing-over-time effects now resolve in both catalogs.** Following
+  GW2EI's own routing, an indirect (buff-based) healing row's id is
+  referenced into `catalogs.buffs` as well as `catalogs.skills`, so a report
+  reader that looks in either map finds it. `BuffEntry::name` shares the same
+  resolution chain, replacing the empty string those entries used to default
+  to — 13 of the 15 new buff entries on the reference fixture were empty
+  before. The EI-shaped `buffMap` is correspondingly no longer just the 12
+  tracked boons.
+
+- **Healing skills get correct `isSwap`/`canCrit` flags.** Ids the skill map
+  never covered previously fell back to hardcoded defaults, which assumed
+  every such skill could crit. Both flags are now computed from the id by the
+  same pure functions the skill map itself uses, so covered and uncovered ids
+  cannot disagree.
+
+### Testing
+- `crates/axilog-ei/tests/name_leak_golden.rs` walks every id-bearing row in
+  the EI-shaped output — nine arrays, 6,520 rows with all gates on — and
+  fails the build if any id renders as a placeholder or an empty name. Each
+  array carries an independently-stated non-vacuity floor, so an array
+  silently dropping out of the walk is itself a failure. This is the guard
+  that stops the class of bug from returning rather than just this instance.
+
+### Notes
+- **The honest residual.** Of the eleven reported ids, five are confirmed
+  against committed fixtures (`1066 → Resurrect`,
+  `13721 → Restorative Mantras`, `53183 → Illusionary Inspiration`, plus
+  `30301` and `77020` decoded from the reporter's own log). The remaining six
+  — `14219`, `28313`, `45103`, `72365`, `76947`, `78971` — appear in no
+  fixture available to this project. They have exactly one possible naming
+  source left, the log's own skill row, so they are fixed **iff** arcdps
+  wrote a real string for them in that log. If arcdps wrote a numeric
+  placeholder instead, as it did for `1066`, they will still show as
+  `Skill <id>` and will need an override-table entry.
+- **The invariant is an allowlist, not zero.** On the committed fixture the
+  output carries 508 skill and 205 buff catalog entries with **7 placeholders
+  remaining**, all seven on a documented allowlist: four Weaver dual-attunement
+  ids (`41166`, `42264`, `43470`, `44857`), nameable from GW2EI's buff table by
+  a rung deliberately deferred to a later release, and four (`30060`, `31311`,
+  `54960`, `69665`) that the live `/v2/skills` API reports as non-existent.
+- **Size.** The `catalogs` block grows 146,068 → 148,645 bytes on the
+  reference fixture (**+2,577, +1.76%**) — short name rows against a document
+  whose bulk is replay data.
+- AxiBridge picks this up with a dependency bump; no application-side change
+  is required.
+
 ## v1.6.0 — 2026-08-23
 
 ### Added

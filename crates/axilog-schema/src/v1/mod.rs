@@ -824,6 +824,7 @@ mod tests {
             instance_ids: Default::default(),
             enemy_damage_out: Default::default(),
             skill_map: Default::default(),
+            log_skill_names: Default::default(),
         };
         let legacy =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
@@ -890,6 +891,7 @@ mod tests {
             instance_ids: Default::default(),
             enemy_damage_out: Default::default(),
             skill_map: Default::default(),
+            log_skill_names: Default::default(),
         };
         let legacy =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);
@@ -957,6 +959,7 @@ mod tests {
             instance_ids: Default::default(),
             enemy_damage_out: Default::default(),
             skill_map: Default::default(),
+            log_skill_names: Default::default(),
         };
         let legacy =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);

@@ -1488,26 +1488,48 @@ The standing version-bump rule: diff the parsed output on the fixture rather
 than trusting the changelog, because `skillMap` and `buffMap` both change
 shape here.
 
+`cargo run -p axilog-cli -- --format json` emits the NATIVE container
+(top-level `axilog`/`encounter`/`entities`/`catalogs`/`blocks`/`coverage`),
+not EI's `skillMap`/`buffMap` keys — those live at `catalogs.skills` and
+`catalogs.buffs` here. Run with `--all` so every gated block (rotation,
+skill-damage, timeseries, modifiers) is present, the same coverage
+`no_emitted_id_goes_unnamed_with_all_gates_on` exercises:
+
 ```bash
-cargo run -p axilog-cli -- --format json fixtures/wvw-small.anon.zevtc > /tmp/mname-after.json
+cargo run -p axilog-cli -- parse --format json --all fixtures/wvw-small.anon.zevtc > /tmp/mname-after.json
 python3 - <<'PY'
 import json
 a = json.load(open('/tmp/mname-after.json'))
-sm, bm = a.get('skillMap', {}), a.get('buffMap', {})
-bad = [(k, v.get('name')) for k, v in list(sm.items()) + list(bm.items())
-       if not str(v.get('name', '')).strip() or str(v.get('name', '')).startswith('Skill ')]
-print(f"skillMap {len(sm)} entries, buffMap {len(bm)} entries, {len(bad)} unnamed")
-for k, n in bad[:20]:
-    print(' ', k, repr(n))
+c = a.get('catalogs', {})
+sm, bm = c.get('skills', {}), c.get('buffs', {})
+UNNAMEABLE = {41166, 42264, 43470, 44857, 30060, 31311, 54960, 69665}  # name_leak_golden.rs
+def placeholder(k, v):
+    name = str(v.get('name', ''))
+    if not name.strip():
+        return True
+    n = int(k)
+    return name == f"Skill {n}" or name == f"Skill {n & 0xFFFFFFFF}"
+bad = [(k, v.get('name')) for k, v in list(sm.items()) + list(bm.items()) if placeholder(k, v)]
+unexpected = [(k, n) for k, n in bad if int(k) not in UNNAMEABLE]
+print(f"skills {len(sm)} entries, buffs {len(bm)} entries, {len(bad)} unnamed")
+for k, n in bad:
+    print(' ', k, repr(n), "OK (UNNAMEABLE)" if int(k) in UNNAMEABLE else "UNEXPECTED")
+print("FAIL:", unexpected) if unexpected else print("PASS: every unnamed id is on UNNAMEABLE")
 PY
 ```
 
-Note: `--format json` goes through the `axilog-api` facade, not the CLI's
-own `Passes` literal — that is the intended path here, since it is what
+Note: `--format json` goes through the `axilog-api` facade
+(`crates/axilog-cli/src/main.rs`'s M17 Task 3 comment), not the CLI's own
+`Passes` literal — that is the intended path here, since it is what
 AxiBridge consumes.
 
-Expected: `0 unnamed`. A non-zero count that the leak test did not catch
-means an array is emitted that `collect_ids` does not walk — add it to
+Expected: **7 unnamed** on the committed fixture, all seven ids on the
+`UNNAMEABLE` allowlist in `crates/axilog-ei/tests/name_leak_golden.rs` —
+"0 unnamed" is wrong, since four Weaver dual-attunement ids and four
+unlisted internal ids are permanent, documented gaps, not a bug. The
+assertion that matters is that no unnamed id falls OUTSIDE that allowlist.
+An id that shows up as `UNEXPECTED` here, or that the leak test did not
+catch, means an array is emitted that `collect_ids` does not walk — add it to
 Task 6's collector.
 
 - [ ] **Step 4: Write the CHANGELOG entry**

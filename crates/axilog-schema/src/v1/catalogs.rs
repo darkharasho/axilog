@@ -241,21 +241,26 @@ impl CatalogBuilder {
                         // table never named it -- a dangling reference would
                         // break the invariant the integrity test asserts.
                         //
-                        // The fallback chain mirrors `skill_map::resolve_name`
-                        // minus its first rung: there is no log-table name to
-                        // consult for an id the map never covered, so the GW2
-                        // API catalog is consulted directly and the
-                        // placeholder stays the last resort. Both halves of
-                        // this catalog must agree about what an id is called.
-                        name: entry
-                            .map(|e| e.name.clone())
-                            .or_else(|| {
-                                axilog_core::analysis::skill_icons::name(id).map(str::to_owned)
-                            })
-                            .unwrap_or_else(|| format!("Skill {id}")),
+                        // One chain, shared with `skill_map::resolve_name`
+                        // -- see its "One chain, two callers" section. An
+                        // id the map covered keeps the name that pass
+                        // already resolved; anything else goes through the
+                        // full chain from its first rung, the log's own
+                        // table, which is the rung this site used to lack.
+                        name: entry.map(|e| e.name.clone()).unwrap_or_else(|| {
+                            axilog_core::analysis::skill_map::resolve_name(
+                                id,
+                                metrics.log_skill_names.get(&id).map(String::as_str),
+                            )
+                        }),
                         icon: resolve_icon(id),
-                        is_swap: entry.map(|e| e.is_swap).unwrap_or(false),
-                        can_crit: entry.map(|e| e.can_crit).unwrap_or(true),
+                        // Pure functions of the id -- the SAME two the skill
+                        // map itself calls, so a covered and an uncovered id
+                        // get the same answer. Defaulting them (`false` /
+                        // `true`) let an uncovered heal skill claim it could
+                        // crit.
+                        is_swap: axilog_core::analysis::skill_map::is_swap(id),
+                        can_crit: axilog_core::analysis::hit_stats::can_crit(id),
                         // The log never carries this; the generated GW2 API
                         // catalog is the only source. Kept as a fallback to
                         // whatever the pipeline resolved, which is `None`
@@ -303,7 +308,27 @@ impl CatalogBuilder {
                 (
                     id,
                     BuffEntry {
-                        name: buffs::name(id).unwrap_or_default().to_string(),
+                        // The boon/condition/control tables first -- they
+                        // are authoritative for the ids they cover. Beyond
+                        // them this catalog now carries ids that are none
+                        // of the three (a healing-over-time skill routed
+                        // here by `blocks.healing`, per GW2EI's own
+                        // BuildHealingDist), and `unwrap_or_default` gave
+                        // those an EMPTY name: a consumer could not even
+                        // tell the lookup had failed. Same chain as the
+                        // skill half, for the same reason.
+                        name: buffs::name(id).map(str::to_owned).unwrap_or_else(|| {
+                            metrics
+                                .skill_map
+                                .get(&id)
+                                .map(|e| e.name.clone())
+                                .unwrap_or_else(|| {
+                                    axilog_core::analysis::skill_map::resolve_name(
+                                        id,
+                                        metrics.log_skill_names.get(&id).map(String::as_str),
+                                    )
+                                })
+                        }),
                         icon: resolve_icon(id),
                         kind,
                         stacking: if is_intensity { "intensity" } else { "duration" },
@@ -744,5 +769,120 @@ mod tests {
         let e = c.damage_mods.get(&999).expect("referenced id must resolve");
         assert_eq!(e.skill_based, Some(true), "skill-based axis must survive");
         assert_eq!(e.non_multiplier, Some(false), "multiplier axis must survive too");
+    }
+
+    /// The bug from the MNAME report, reduced: an id that `blocks.healing`
+    /// referenced but `skill_map`'s damage/rotation scope never covered.
+    /// Before this task `finish` had no way to reach the log's own name for
+    /// it and emitted the `Skill <id>` placeholder -- the literal string the
+    /// reporter saw rendered in AxiBridge's healing table.
+    #[test]
+    fn finish_names_a_referenced_id_from_the_logs_own_skill_table() {
+        let mut metrics = metrics_with_skills();
+        metrics.log_skill_names.insert(13721, "Restorative Mantras".to_string());
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_skill(13721);
+        let catalogs = cats.finish(&metrics, None);
+
+        assert_eq!(
+            catalogs.skills[&13721].name, "Restorative Mantras",
+            "an id outside skill_map's scope must still resolve through the log table"
+        );
+    }
+
+    /// The log table is rung ONE, not a fallback: an id `skill_map` did
+    /// cover keeps the name that pass already resolved, so this change can
+    /// never move a name that resolved before it.
+    #[test]
+    fn finish_prefers_the_skill_map_entry_over_the_log_table() {
+        let mut metrics = metrics_with_skills();
+        let covered = *metrics.skill_map.keys().next().expect("helper seeds at least one skill");
+        let expected = metrics.skill_map[&covered].name.clone();
+        metrics.log_skill_names.insert(covered, "SHOULD NOT WIN".to_string());
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_skill(covered);
+        let catalogs = cats.finish(&metrics, None);
+
+        assert_eq!(catalogs.skills[&covered].name, expected);
+    }
+
+    /// Weapon Swap (-2 as u32) is the clearest `is_swap` case: it is true
+    /// for it by definition, but an id outside `skill_map`'s scope used to
+    /// get `is_swap: false` -- wrong, and computable from the id with no
+    /// log at all. `can_crit` is asserted `true` here too, but only
+    /// because Weapon Swap happens not to be one of EI's 20
+    /// `NonCritableSkills` entries -- see the sibling test below for the
+    /// case that actually exercises the `can_crit` fix.
+    #[test]
+    fn finish_computes_is_swap_for_an_id_the_skill_map_never_covered() {
+        let metrics = metrics_with_skills();
+        let weapon_swap = (-2i32) as u32;
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_skill(weapon_swap);
+        let catalogs = cats.finish(&metrics, None);
+
+        let entry = &catalogs.skills[&weapon_swap];
+        assert!(entry.is_swap, "is_swap is a pure function of the id");
+        assert!(
+            entry.can_crit,
+            "Weapon Swap is not in hit_stats::NON_CRITABLE_SKILLS, so the \
+             pure function and an uncovered skill_map entry agree by \
+             construction -- true, not a default"
+        );
+    }
+
+    /// 9292 (`LightningStrike_SigilOfAir`) IS one of EI's 20
+    /// `NonCritableSkills` entries (`hit_stats::NON_CRITABLE_SKILLS`) and is
+    /// deliberately NOT seeded by `metrics_with_skills()` (which only seeds
+    /// 5491 and 9999), so this proves `finish` computes `can_crit` for an
+    /// id `skill_map` never covered, rather than defaulting it to `true`.
+    #[test]
+    fn finish_computes_can_crit_for_an_id_the_skill_map_never_covered() {
+        let metrics = metrics_with_skills();
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_skill(9292);
+        let catalogs = cats.finish(&metrics, None);
+
+        assert!(
+            !catalogs.skills[&9292].can_crit,
+            "9292 is in EI's NonCritableSkills table; finish used to default it to true"
+        );
+    }
+
+    /// A healing-over-time id is neither boon nor condition nor control
+    /// effect, so `buffs::name` misses and the entry used to be emitted
+    /// with an EMPTY name -- worse than a placeholder, because a consumer
+    /// cannot even tell it failed.
+    #[test]
+    fn finish_names_a_buff_that_is_not_a_boon_or_condition() {
+        let mut metrics = metrics_with_skills();
+        metrics.log_skill_names.insert(13721, "Restorative Mantras".to_string());
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_buff(13721);
+        let catalogs = cats.finish(&metrics, None);
+
+        let entry = &catalogs.buffs[&13721];
+        assert_eq!(entry.name, "Restorative Mantras");
+        assert_eq!(entry.kind, "effect", "not a boon and not a condition");
+    }
+
+    /// The boon and condition tables stay authoritative for the ids they
+    /// cover -- this fallback is purely additive.
+    #[test]
+    fn finish_still_prefers_the_boon_table_for_a_boon() {
+        let mut metrics = metrics_with_skills();
+        metrics.log_skill_names.insert(740, "SHOULD NOT WIN".to_string());
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_buff(740);
+        let catalogs = cats.finish(&metrics, None);
+
+        assert_eq!(catalogs.buffs[&740].name, "Might");
+        assert_eq!(catalogs.buffs[&740].kind, "boon");
     }
 }
