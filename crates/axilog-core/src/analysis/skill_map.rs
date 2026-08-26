@@ -481,15 +481,21 @@ pub fn resolve_name(id: u32, raw_name: Option<&str>) -> String {
 /// pseudo skill ids -- the synthetic ids that have no `RawLog::skills` row
 /// to name them because no such game skill exists.
 ///
-/// # Why only the negative subset
+/// # Why this module only carries the negative subset
 ///
 /// The full override table is 577 entries wide and mostly re-names ids the
 /// log's own skill table already names perfectly well (EI prefers its
 /// API-backed disambiguations, e.g. `"Flame Blast (Superior Sigil of
-/// Fire)"`); adopting all of it is the same database-backed naming gap this
-/// module's doc comment already declares out of scope. The negative ids are
-/// different in kind: for those the log table is not merely less specific,
-/// it is EMPTY, so the alternative is not a worse name but `"Skill
+/// Fire)"`). That positive half IS adopted -- as the generated sibling
+/// module `skill_name_overrides`, which `resolve_name` consults as rung 4,
+/// last, below the API catalog (see "Why the API catalog ranks BELOW the
+/// log table" and the MEASURED demotion above). This module keeps only the
+/// negative ids because they are hand-curated with no generated source to
+/// draw from: they have no `RawLog::skills` row to name them, since no such
+/// game skill exists, so there is nothing for a generator to read. The
+/// negative ids are different in kind from the positive ones for the same
+/// reason: for those the log table is not merely less specific, it is
+/// EMPTY, so the alternative is not a worse name but `"Skill
 /// 4294967294"`.
 ///
 /// Every one of these is reachable: the entries are `SkillIDs.WeaponSwap`

@@ -98,8 +98,68 @@ const UNNAMEABLE: &[(i64, &str)] = &[
     (69665, "unlisted id, 12 events, outgoing on a Necromancer -- same three misses"),
 ];
 
+/// `resolve_name`'s own placeholder (`skill_map.rs`) formats `Skill {id}`
+/// with `id: u32` -- so a negative pseudo id (e.g. `-5`, one of the Weaver
+/// dual-attunement ids) is printed UNSIGNED, `"Skill 4294967291"`. This
+/// walker carries ids SIGNED (see `collect_ids`'s doc comment above), so
+/// comparing only against `format!("Skill {id}")` with the signed `id`
+/// checks `"Skill -5"` -- a spelling `resolve_name` never emits. That made
+/// this guard blind on exactly the ids the branch's documented gap covers.
+/// Match either spelling: the signed one in case a future caller starts
+/// formatting negative ids that way, and the unsigned one that
+/// `resolve_name` actually produces today.
 fn placeholder(name: &str, id: i64) -> bool {
-    name.trim().is_empty() || name == format!("Skill {id}")
+    if name.trim().is_empty() {
+        return true;
+    }
+    if name == format!("Skill {id}") {
+        return true;
+    }
+    if id < 0 {
+        if let Ok(unsigned) = u32::try_from(id as i128 & 0xFFFF_FFFF) {
+            if name == format!("Skill {unsigned}") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod placeholder_tests {
+    use super::placeholder;
+
+    /// Regression for the blind spot above: a negative pseudo id whose
+    /// emitted name is the UNSIGNED placeholder must still be caught. This
+    /// would fail against the pre-fix `name == format!("Skill {id}")`
+    /// (signed-only) comparison -- `"Skill 4294967291"` never equals
+    /// `"Skill -5"`.
+    #[test]
+    fn catches_unsigned_placeholder_for_negative_id() {
+        assert!(placeholder("Skill 4294967291", -5));
+    }
+
+    #[test]
+    fn still_catches_signed_placeholder() {
+        assert!(placeholder("Skill -5", -5));
+    }
+
+    #[test]
+    fn still_catches_positive_placeholder() {
+        assert!(placeholder("Skill 30060", 30060));
+    }
+
+    #[test]
+    fn does_not_flag_a_real_name() {
+        assert!(!placeholder("Protection", 717));
+        assert!(!placeholder("Weapon Swap", -2));
+    }
+
+    #[test]
+    fn empty_name_is_still_a_placeholder() {
+        assert!(placeholder("", 717));
+        assert!(placeholder("   ", -5));
+    }
 }
 
 /// Every id-bearing array in the emitted document, by the path a reader

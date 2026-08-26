@@ -1953,18 +1953,25 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
                     //    does the calibration, so nothing observes the
                     //    difference -- but a byte-diff against a real export
                     //    would.
-                    // 2. **Indirect ids are not added to `buffMap`.**
+                    // 2. **Indirect ids land in BOTH maps.**
                     //    `BuildHealingDist` routes an `IndirectHealing` row's
                     //    id into `buffMap` rather than `skillMap`, so EI's
-                    //    consumers can name it. This adapter's `buffMap` is
-                    //    the 12 tracked boons (plus Task 2d's conditions),
-                    //    and a healing-over-time id is neither -- so an
-                    //    indirect row here carries a correct
-                    //    `indirectHealing: true` and an id that resolves in
-                    //    neither map. axibridge's `resolveSkillMeta` falls
-                    //    back to `"Skill <id>"`, which is the same fallback
-                    //    the always-on `skillMap` already documents for ids
-                    //    whose name this project cannot resolve.
+                    //    consumers can name it. `blocks.healing`
+                    //    (`support.rs:582-585`) follows that routing for the
+                    //    buff half -- `cats.reference_buff(e.skill_id)` when
+                    //    `e.indirect` -- while ALSO keeping
+                    //    `cats.reference_skill(e.skill_id)` unconditionally,
+                    //    so every row stays a skill reference too. That is a
+                    //    deliberate superset, the same reasoning the
+                    //    Stun/Daze precedent documents near `buffMap`'s own
+                    //    construction below (:2573): a consumer only ever
+                    //    looks up ids it already holds, so the extra entry
+                    //    is inert. `BuffEntry::name` (`catalogs.rs:306-325`)
+                    //    shares `skill_map::resolve_name` with the skill
+                    //    side, so the buff-side entry carries a real name,
+                    //    not the empty string `unwrap_or_default` used to
+                    //    leave behind. Row ORDER (divergence 1, above)
+                    //    remains the only shape divergence here.
                     ho.insert(
                         "totalHealingDist".to_string(),
                         json!([ heal_dist_json(&d.by_skill, "totalHealing", true) ]),
@@ -2527,8 +2534,13 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
         }
         t
     });
-    // `buffMap` (M3 Task 5): a subset covering only the 12 tracked boons,
-    // keyed `"b<id>"` per real EI's convention (verified against
+    // `buffMap` (M3 Task 5): covers the 12 tracked boons plus any id a
+    // block references -- Task 2d's 14 conditions, `--timeseries`'s
+    // Stun/Daze pair (documented where they're added, below), and the
+    // indirect heal ids `blocks.healing` routes here per GW2EI's own
+    // `BuildHealingDist` (`support.rs:582-585`). It is not a fixed subset;
+    // it is whatever the reference-scoped catalog accumulates.
+    // Keyed `"b<id>"` per real EI's convention (verified against
     // axibridge's `test-fixtures/boon/20260117-181030.json`,
     // `buffMap.b740` etc). Only the two fields we actually compute/know:
     // `name` and `stacking` (`true` for the two Intensity-type boons —
