@@ -417,7 +417,9 @@ pub type SkillMap = BTreeMap<u32, SkillMapEntry>;
 /// 2. [`pseudo_name`], for the synthetic negative ids no log table can
 ///    ever name because no such game skill exists;
 /// 3. [`super::skill_icons::name`], the generated GW2 API catalog;
-/// 4. `"Skill <id>"`.
+/// 4. [`super::skill_name_overrides::name`], GW2EI's `OverridenSkillNames`
+///    table;
+/// 5. `"Skill <id>"`.
 ///
 /// # Why the API catalog ranks BELOW the log table
 ///
@@ -432,6 +434,25 @@ pub type SkillMap = BTreeMap<u32, SkillMapEntry>;
 ///
 /// It ranks below `pseudo_name` for a simpler reason: the two cannot
 /// collide. Pseudo ids are negative-as-`u32`, far past any API skill id.
+///
+/// # Why the override table ranks LAST, not first
+///
+/// GW2EI itself consults `OverridenSkillNames` before the API name
+/// (`SkillItem.cs`), which would argue for ranking it first here too. That
+/// was tried and MEASURED: on `fixtures/local/wvw-postrework.zevtc`,
+/// override-first renamed 17 ids that some other rung (almost always the
+/// log table) had already resolved -- e.g. id 9284's log name `"Flame
+/// Blast"` becoming `"Flame Blast (Minor/Major/Superior Sigil of Fire)"`
+/// -- against only 2 ids it actually fixed from the `"Skill <id>"`
+/// placeholder (1066 and 32410). 17 exceeds the 5-id budget this module
+/// is willing to spend on GW2EI's disambiguation preference (see "Why the
+/// API catalog ranks BELOW the log table" above -- the same call, made the
+/// same way, for the same reason), so the override table is demoted below
+/// the API catalog instead: last-resort, it can only ever displace the
+/// placeholder, by construction, the same guarantee the API catalog's
+/// third-place ranking already relies on. See
+/// `tests/name_override_precedence.rs`, which fails if a future GW2EI sync
+/// ever makes this table rename anything.
 ///
 /// # One chain, two callers
 ///
@@ -449,7 +470,7 @@ pub fn resolve_name(id: u32, raw_name: Option<&str>) -> String {
     if let Some(n) = pseudo_name(id) {
         return n.to_string();
     }
-    match super::skill_icons::name(id) {
+    match super::skill_icons::name(id).or_else(|| super::skill_name_overrides::name(id)) {
         Some(n) => n.to_string(),
         None => format!("Skill {id}"),
     }
@@ -866,5 +887,27 @@ mod tests {
         let raw = raw_with_skills(vec![]);
         let map = build(&raw, &[], &[]);
         assert_eq!(map.len(), super::super::buffs::BOON_IDS.len());
+    }
+
+    /// The MNAME report's headline id. arcdps writes the literal string
+    /// "1066" into the log's skill table for it -- a numeric placeholder,
+    /// which rung 1 rejects -- and /v2/skills has never listed the id, so
+    /// rung 3 misses too. Without the override table it renders as
+    /// "Skill 1066".
+    #[test]
+    fn resolve_name_uses_the_override_table_for_an_id_no_other_rung_knows() {
+        assert_eq!(resolve_name(1066, Some("1066")), "Resurrect");
+        assert_eq!(resolve_name(1066, None), "Resurrect");
+    }
+
+    /// The override table must never reinstate the placeholder shape it
+    /// exists to remove.
+    #[test]
+    fn resolve_name_never_returns_a_numeric_or_empty_name() {
+        for &(id, _) in super::super::skill_name_overrides::SKILL_NAME_OVERRIDES {
+            let resolved = resolve_name(id, Some("  "));
+            assert!(!resolved.trim().is_empty());
+            assert!(!resolved.chars().all(|c| c.is_ascii_digit()));
+        }
     }
 }
