@@ -267,3 +267,93 @@ Measure and record it, but no gate is anticipated.
 - `conversionBasedHealing` / `hybridHealing`, which genuinely need the
   external database.
 - Whether AxiBridge merges two rows that share a display name.
+
+---
+
+## Amendments — 2026-08-26, discovered during planning
+
+Four factual corrections found while reading the code to write the
+implementation plan. The design's intent survives all four; two of its
+stated mechanics do not. Recorded here rather than edited into the body
+above, so what was approved stays legible next to what changed.
+
+### A1. There IS a healing block, and it already registers its ids
+
+`blocks.healing` exists — `v1/blocks/support.rs::build_healing`, which takes
+`&mut CatalogBuilder` and calls `cats.reference_skill(e.skill_id)` for
+**every** heal-dist and barrier-dist row (`support.rs:567`), direct and
+indirect alike, with the comment "Every id this block joins on has to
+resolve in the catalog, or the row is a dangling reference".
+
+So the Root cause section's "There is no healing block ... registers
+nothing" is wrong, and change 2's direct half is already shipped. This
+correction *strengthens* the diagnosis rather than weakening it: the heal
+ids are already in `catalogs.skills`, which is exactly why the reporter sees
+the string `Skill 13721` in a rendered row rather than a row that is simply
+missing. The remaining defect is purely one of **name resolution**, not of
+registration.
+
+What is left of change 2: routing indirect rows to `reference_buff` as well,
+and giving `BuffEntry::name` a real chain.
+
+### A2. Change 1 cannot be threaded as written, and does not need to be
+
+`skill_map::build` is called from inside `analyze()`
+(`analysis/mod.rs:808`). `healing_detail::build` is called by each consumer
+*after* `analyze` returns, gated on `--skill-damage`/`--timeseries`
+(`axilog-api/src/lib.rs:128`, `axilog-cli/src/main.rs:423`,
+`axilog-node/src/lib.rs:237`, `axilog-py/src/lib.rs:133` and `:252`). **No
+call site holds both.** The spec's "threaded from the same call site that
+already computes it" describes a call site that does not exist.
+
+Threading it anyway would mean editing six consumers — the whack-a-mole
+shape this spec exists to avoid — and would make `Metrics::skill_map`
+gate-dependent, so the same log would name skills differently depending on
+which passes were requested.
+
+The replacement is smaller and strictly more systemic. `CatalogBuilder::
+finish` already unions `metrics.skill_map.keys()` into the skill catalog
+(`catalogs.rs:231`) and already falls back for ids the map never covered;
+its only real handicap is the one the comparison table in change 3 names —
+**it has no access to the log's own skill table.** So give it one:
+
+> `Metrics` gains `log_skill_names: BTreeMap<u32, String>`, populated in
+> `analyze` directly from `raw.skills` — ungated, cheap (hundreds of
+> entries), and a property of the log rather than of any flag. The collapsed
+> `skill_map::resolve_name(id, log_name)` of change 3 is then called by
+> `finish` with `metrics.log_skill_names.get(&id)`.
+
+This closes the gap for **every** block that references an id outside
+`skill_map`'s scope — present and future — instead of for healing alone.
+That is the anti-whack-a-mole property the report asked for, and the change-4
+leak test is what holds it.
+
+Change 1's remaining value was that a heal-only id would get real
+`can_crit`/`is_swap`/proc flags rather than `finish`'s defaults — notably
+`can_crit: true`, which is wrong for a heal skill. That is better served
+directly: `is_swap` and `hit_stats::can_crit` are pure functions of the id,
+so `finish` computes them for uncovered ids instead of defaulting. The proc
+and instant flags stay `false`, which is already what they mean there — no
+finder claimed the id.
+
+**Change 1 as specified is therefore dropped**, and its two effects are
+absorbed into the amended changes 3 and 2 respectively. `analyze`'s
+signature does not change and no consumer is touched.
+
+### A3. The buff-side placeholder is the empty string, not `Skill <id>`
+
+`BuffEntry::name` is `buffs::name(id).unwrap_or_default()`
+(`catalogs.rs:306`), so an id outside the boon, condition and control tables
+resolves to `""`, not to `Skill <id>`. The prose under change 2 predicted
+the wrong placeholder.
+
+The design is unaffected — a nameless row is no better than a placeholder
+one — but the change-4 leak test must treat an empty or whitespace name as a
+failure alongside the `Skill <id>` pattern, or the buff half of the
+invariant goes unenforced.
+
+### A4. `hit_stats::can_crit` is `pub(crate)`
+
+It has to become `pub` for `catalogs.rs` (a different crate) to call it
+under A2. A visibility widening on a pure id predicate, noted only so it is
+not mistaken for scope creep in review.
