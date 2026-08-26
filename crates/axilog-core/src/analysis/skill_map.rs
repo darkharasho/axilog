@@ -419,7 +419,10 @@ pub type SkillMap = BTreeMap<u32, SkillMapEntry>;
 /// 3. [`super::skill_icons::name`], the generated GW2 API catalog;
 /// 4. [`super::skill_name_overrides::name`], GW2EI's `OverridenSkillNames`
 ///    table;
-/// 5. `"Skill <id>"`.
+/// 5. [`super::skill_symbol_names::name`], GW2EI's `SkillIDs.cs` symbols,
+///    de-camel-cased -- the last-resort rung (see "Why a symbol is an
+///    acceptable name, but only here" below);
+/// 6. `"Skill <id>"`.
 ///
 /// # Why the API catalog ranks BELOW the log table
 ///
@@ -454,6 +457,28 @@ pub type SkillMap = BTreeMap<u32, SkillMapEntry>;
 /// `tests/name_override_precedence.rs`, which fails if a future GW2EI sync
 /// ever makes this table rename anything.
 ///
+/// # Why a symbol is an acceptable name, but only here
+///
+/// Rung 5 is the one rung whose source was never meant to be read by a
+/// player. `SkillIDs.cs` exists so GW2EI's own code can say
+/// `GladiatorsDefenseAnimation` instead of `76718`; de-camel-casing it
+/// yields `"Gladiators Defense Animation"`, which is clumsy where a real
+/// name would not be.
+///
+/// It earns its place on reach. Measured against a real ~4000-log WvW
+/// corpus after rung 4 landed, 22 distinct ids still rendered as the
+/// literal `"Skill <id>"` -- including the four Weaver dual-attunement
+/// ids this module had already ledgered as a known gap. A symbol covers
+/// 14 of them and 5568 ids in total, from one generated table, where the
+/// alternative was a hand-added row per id a player happened to report.
+///
+/// The trade only works at the bottom. Ranked anywhere above the API
+/// catalog or the log table it would replace real names with programmer
+/// jargon; ranked last it is additive by construction, exactly as rungs 3
+/// and 4 are -- the comparison is against `"Skill 23288"`, never against
+/// a name. The eight ids with no symbol keep the placeholder, which is
+/// the honest answer for an id nothing in either source can name.
+///
 /// # One chain, two callers
 ///
 /// `CatalogBuilder::finish` resolves names too, for ids this module's
@@ -470,7 +495,10 @@ pub fn resolve_name(id: u32, raw_name: Option<&str>) -> String {
     if let Some(n) = pseudo_name(id) {
         return n.to_string();
     }
-    match super::skill_icons::name(id).or_else(|| super::skill_name_overrides::name(id)) {
+    match super::skill_icons::name(id)
+        .or_else(|| super::skill_name_overrides::name(id))
+        .or_else(|| super::skill_symbol_names::name(id))
+    {
         Some(n) => n.to_string(),
         None => format!("Skill {id}"),
     }
@@ -916,6 +944,67 @@ mod tests {
             let resolved = resolve_name(id, Some("  "));
             assert!(!resolved.trim().is_empty());
             assert!(!resolved.chars().all(|c| c.is_ascii_digit()));
+        }
+    }
+
+    /// Same guarantee for the symbol table, which is far larger and
+    /// machine-derived: a symbol that de-camel-cased to digits or to
+    /// nothing would reintroduce exactly the shape rung 5 exists to
+    /// remove. The generator skips those; this fails if it ever stops.
+    #[test]
+    fn symbol_names_are_never_numeric_or_empty() {
+        for &(id, name) in super::super::skill_symbol_names::SKILL_SYMBOL_NAMES {
+            assert!(!name.trim().is_empty(), "id {id} has an empty symbol name");
+            assert!(
+                !name.chars().all(|c| c.is_ascii_digit()),
+                "id {id} de-camel-cased to the numeric name {name:?}"
+            );
+        }
+    }
+
+    /// Rung 5 must be ADDITIVE, exactly as rungs 3 and 4 are: it may only
+    /// displace the `"Skill <id>"` placeholder, never a name a
+    /// higher-authority rung produced. A symbol is programmer jargon, so
+    /// this is the property that makes it safe to consult at all -- if a
+    /// future GW2EI sync let it outrank the log table or the API catalog,
+    /// thousands of real names would silently become C# identifiers.
+    #[test]
+    fn symbol_rung_never_displaces_a_higher_rung() {
+        for &(id, symbol_name) in super::super::skill_symbol_names::SKILL_SYMBOL_NAMES {
+            // A real log name must always win.
+            assert_eq!(
+                resolve_name(id, Some("Real Log Name")),
+                "Real Log Name",
+                "id {id} let the symbol {symbol_name:?} displace the log table"
+            );
+            // So must the API catalog and the override table, whichever
+            // of them knows this id.
+            let higher = super::super::skill_icons::name(id)
+                .or_else(|| super::super::skill_name_overrides::name(id));
+            if let Some(expected) = higher {
+                assert_eq!(
+                    resolve_name(id, None),
+                    expected,
+                    "id {id} let the symbol {symbol_name:?} displace a higher rung"
+                );
+            }
+        }
+    }
+
+    /// The four Weaver dual-attunement ids were a ledgered known gap: no
+    /// log name, no pseudo name, no API entry and no override row, so they
+    /// rendered as `"Skill 41166"` and friends on real logs. The symbol
+    /// rung closes them without a hand-added row apiece.
+    #[test]
+    fn symbol_rung_closes_the_weaver_dual_attunement_ids() {
+        for (id, expected) in [
+            (41166u32, "Dual Water Attunement"),
+            (42264, "Dual Air Attunement"),
+            (43470, "Dual Fire Attunement"),
+            (44857, "Dual Earth Attunement"),
+        ] {
+            assert_eq!(resolve_name(id, None), expected);
+            assert_eq!(resolve_name(id, Some("")), expected);
         }
     }
 }
