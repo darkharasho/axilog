@@ -432,7 +432,15 @@ pub type SkillMap = BTreeMap<u32, SkillMapEntry>;
 ///
 /// It ranks below `pseudo_name` for a simpler reason: the two cannot
 /// collide. Pseudo ids are negative-as-`u32`, far past any API skill id.
-fn resolve_name(id: u32, raw_name: Option<&str>) -> String {
+///
+/// # One chain, two callers
+///
+/// `CatalogBuilder::finish` resolves names too, for ids this module's
+/// reference scope never covered, and used to do it with its own shorter
+/// chain -- no log table, no `pseudo_name`. Two chains that must agree and
+/// silently did not. This function is now the only one; `finish` calls it
+/// with `metrics.log_skill_names.get(&id)` as `raw_name`.
+pub fn resolve_name(id: u32, raw_name: Option<&str>) -> String {
     let trimmed = raw_name.map(str::trim).unwrap_or("");
     let numeric_or_empty = trimmed.is_empty() || trimmed.chars().all(|c| c.is_ascii_digit());
     if !numeric_or_empty {

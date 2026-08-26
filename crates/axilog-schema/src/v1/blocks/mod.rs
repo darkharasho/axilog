@@ -174,6 +174,7 @@ pub(crate) mod tests_support {
             instance_ids: Default::default(),
             enemy_damage_out: Default::default(),
             skill_map: Default::default(),
+            log_skill_names: Default::default(),
         };
         let report =
             crate::build_report(&enc, &metrics, "0.0.0-test", None, None, false, false, false, None);

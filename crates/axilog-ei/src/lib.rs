@@ -2998,7 +2998,7 @@ mod tests {
             // enemy 10 for being an NPC (not for being idle) -- the two
             // filters happen to agree on this fixture, but they are
             // independent; see `maps_core_ei_fields` below.
-            combat_participant_enemies: [9u64].into_iter().collect(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default()};
+            combat_participant_enemies: [9u64].into_iter().collect(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default(), log_skill_names: Default::default()};
         (enc, m)
     }
 
@@ -3175,6 +3175,7 @@ mod tests {
             healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
             skill_map: Default::default(),
+            log_skill_names: Default::default(),
         };
         (enc, m)
     }

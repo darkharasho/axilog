@@ -241,18 +241,18 @@ impl CatalogBuilder {
                         // table never named it -- a dangling reference would
                         // break the invariant the integrity test asserts.
                         //
-                        // The fallback chain mirrors `skill_map::resolve_name`
-                        // minus its first rung: there is no log-table name to
-                        // consult for an id the map never covered, so the GW2
-                        // API catalog is consulted directly and the
-                        // placeholder stays the last resort. Both halves of
-                        // this catalog must agree about what an id is called.
-                        name: entry
-                            .map(|e| e.name.clone())
-                            .or_else(|| {
-                                axilog_core::analysis::skill_icons::name(id).map(str::to_owned)
-                            })
-                            .unwrap_or_else(|| format!("Skill {id}")),
+                        // One chain, shared with `skill_map::resolve_name`
+                        // -- see its "One chain, two callers" section. An
+                        // id the map covered keeps the name that pass
+                        // already resolved; anything else goes through the
+                        // full chain from its first rung, the log's own
+                        // table, which is the rung this site used to lack.
+                        name: entry.map(|e| e.name.clone()).unwrap_or_else(|| {
+                            axilog_core::analysis::skill_map::resolve_name(
+                                id,
+                                metrics.log_skill_names.get(&id).map(String::as_str),
+                            )
+                        }),
                         icon: resolve_icon(id),
                         is_swap: entry.map(|e| e.is_swap).unwrap_or(false),
                         can_crit: entry.map(|e| e.can_crit).unwrap_or(true),
@@ -744,5 +744,42 @@ mod tests {
         let e = c.damage_mods.get(&999).expect("referenced id must resolve");
         assert_eq!(e.skill_based, Some(true), "skill-based axis must survive");
         assert_eq!(e.non_multiplier, Some(false), "multiplier axis must survive too");
+    }
+
+    /// The bug from the MNAME report, reduced: an id that `blocks.healing`
+    /// referenced but `skill_map`'s damage/rotation scope never covered.
+    /// Before this task `finish` had no way to reach the log's own name for
+    /// it and emitted the `Skill <id>` placeholder -- the literal string the
+    /// reporter saw rendered in AxiBridge's healing table.
+    #[test]
+    fn finish_names_a_referenced_id_from_the_logs_own_skill_table() {
+        let mut metrics = metrics_with_skills();
+        metrics.log_skill_names.insert(13721, "Restorative Mantras".to_string());
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_skill(13721);
+        let catalogs = cats.finish(&metrics, None);
+
+        assert_eq!(
+            catalogs.skills[&13721].name, "Restorative Mantras",
+            "an id outside skill_map's scope must still resolve through the log table"
+        );
+    }
+
+    /// The log table is rung ONE, not a fallback: an id `skill_map` did
+    /// cover keeps the name that pass already resolved, so this change can
+    /// never move a name that resolved before it.
+    #[test]
+    fn finish_prefers_the_skill_map_entry_over_the_log_table() {
+        let mut metrics = metrics_with_skills();
+        let covered = *metrics.skill_map.keys().next().expect("helper seeds at least one skill");
+        let expected = metrics.skill_map[&covered].name.clone();
+        metrics.log_skill_names.insert(covered, "SHOULD NOT WIN".to_string());
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_skill(covered);
+        let catalogs = cats.finish(&metrics, None);
+
+        assert_eq!(catalogs.skills[&covered].name, expected);
     }
 }
