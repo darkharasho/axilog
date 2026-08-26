@@ -254,8 +254,13 @@ impl CatalogBuilder {
                             )
                         }),
                         icon: resolve_icon(id),
-                        is_swap: entry.map(|e| e.is_swap).unwrap_or(false),
-                        can_crit: entry.map(|e| e.can_crit).unwrap_or(true),
+                        // Pure functions of the id -- the SAME two the skill
+                        // map itself calls, so a covered and an uncovered id
+                        // get the same answer. Defaulting them (`false` /
+                        // `true`) let an uncovered heal skill claim it could
+                        // crit.
+                        is_swap: axilog_core::analysis::skill_map::is_swap(id),
+                        can_crit: axilog_core::analysis::hit_stats::can_crit(id),
                         // The log never carries this; the generated GW2 API
                         // catalog is the only source. Kept as a fallback to
                         // whatever the pipeline resolved, which is `None`
@@ -781,5 +786,50 @@ mod tests {
         let catalogs = cats.finish(&metrics, None);
 
         assert_eq!(catalogs.skills[&covered].name, expected);
+    }
+
+    /// Weapon Swap (-2 as u32) is the clearest `is_swap` case: it is true
+    /// for it by definition, but an id outside `skill_map`'s scope used to
+    /// get `is_swap: false` -- wrong, and computable from the id with no
+    /// log at all. `can_crit` is asserted `true` here too, but only
+    /// because Weapon Swap happens not to be one of EI's 20
+    /// `NonCritableSkills` entries -- see the sibling test below for the
+    /// case that actually exercises the `can_crit` fix.
+    #[test]
+    fn finish_computes_is_swap_for_an_id_the_skill_map_never_covered() {
+        let metrics = metrics_with_skills();
+        let weapon_swap = (-2i32) as u32;
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_skill(weapon_swap);
+        let catalogs = cats.finish(&metrics, None);
+
+        let entry = &catalogs.skills[&weapon_swap];
+        assert!(entry.is_swap, "is_swap is a pure function of the id");
+        assert!(
+            entry.can_crit,
+            "Weapon Swap is not in hit_stats::NON_CRITABLE_SKILLS, so the \
+             pure function and an uncovered skill_map entry agree by \
+             construction -- true, not a default"
+        );
+    }
+
+    /// 9292 (`LightningStrike_SigilOfAir`) IS one of EI's 20
+    /// `NonCritableSkills` entries (`hit_stats::NON_CRITABLE_SKILLS`) and is
+    /// deliberately NOT seeded by `metrics_with_skills()` (which only seeds
+    /// 5491 and 9999), so this proves `finish` computes `can_crit` for an
+    /// id `skill_map` never covered, rather than defaulting it to `true`.
+    #[test]
+    fn finish_computes_can_crit_for_an_id_the_skill_map_never_covered() {
+        let metrics = metrics_with_skills();
+
+        let mut cats = CatalogBuilder::default();
+        cats.reference_skill(9292);
+        let catalogs = cats.finish(&metrics, None);
+
+        assert!(
+            !catalogs.skills[&9292].can_crit,
+            "9292 is in EI's NonCritableSkills table; finish used to default it to true"
+        );
     }
 }
