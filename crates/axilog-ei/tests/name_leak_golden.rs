@@ -38,23 +38,39 @@ use std::collections::{BTreeMap, BTreeSet};
 /// the question to answer first is why no catalog knows the id -- an entry
 /// here is a permanent admission, not a silencer.
 const UNNAMEABLE: &[(i64, &str)] = &[
-    // ---- Weaver dual attunements, the POSITIVE half ----
+    // ---- Weaver dual attunements: a DEFERRED rung, not an unnameable id ----
     //
-    // `skill_map::skill_name_overrides`'s "The one gap" section records
-    // that GW2EI names its Weaver dual-attunement ids from EI's BUFF table
-    // (`WeaverHelper.cs:307-322`, `new Buff("Dual Fire Attunement",
-    // DualFireAttunement, ...)`) rather than from `OverridenSkillNames`,
-    // and that this project does not read that subsystem. The doc frames
-    // the gap around the NEGATIVE pseudo ids `-5..-16`; these three are the
-    // same gap at real, positive game ids, reached through `rotation`
-    // rather than through a synthetic cast. arcdps writes the numeric
-    // string as the name, /v2/skills 404s on all three (checked live,
-    // 2026-08-26), and GW2EI's `SkillIDs.cs` is the only place the ids
-    // appear at all. Closing this properly means importing EI's BUFF
-    // table, which is a separate piece of work from MNAME.
-    (41166, "SkillIDs.DualWaterAttunement -- Weaver, named only by EI's BUFF table"),
-    (42264, "SkillIDs.DualAirAttunement -- Weaver, named only by EI's BUFF table"),
-    (44857, "SkillIDs.DualEarthAttunement -- Weaver, named only by EI's BUFF table"),
+    // These four are nameable. GW2EI names them from its Buff table
+    // (`WeaverHelper.cs:307-319`: `new Buff("Dual Fire Attunement",
+    // DualFireAttunement, ...)` and its three siblings), which is a
+    // subsystem `skill_map` does not read -- the same gap
+    // `skill_name_overrides`'s "The one gap" section already records for
+    // the NEGATIVE pseudo ids `-5..-16`, here at real positive game ids
+    // reached through `rotation`. arcdps writes the numeric string, and
+    // /v2/skills has no record (checked live, 2026-08-26).
+    //
+    // The id set is not even unknown to this project:
+    // `analysis::squad_buffs.rs:106` already carries
+    // `DUAL_ATTUNEMENT_IDS: [u32; 4] = [41166, 42264, 43470, 44857]`. What
+    // is missing is four name STRINGS -- a ~4-line table in exactly the
+    // `PSEUDO_SKILL_NAMES` idiom, which already hardcodes EI-sourced
+    // strings one literal per id for the negative half of this same
+    // family.
+    //
+    // Adding that rung is DELIBERATELY DEFERRED out of this task, by
+    // ruling: it is a production change, and `resolve_name`'s output feeds
+    // the CLI native-json digest golden, so it would take baseline churn on
+    // the plan's acceptance-test commit. These entries should be DELETED,
+    // not amended, when the rung lands.
+    //
+    // 43470 is listed although this fixture never emits it: it is absent
+    // only because no Elementalist here entered a fire-dual. Leaving it out
+    // would red this test on the next fixture or the next real WvW log, for
+    // a cause already ruled benign.
+    (41166, "SkillIDs.DualWaterAttunement -- named by GW2EI's Buff table (WeaverHelper.cs:307-319); ids already at squad_buffs.rs:106, naming rung deliberately deferred"),
+    (42264, "SkillIDs.DualAirAttunement -- same deferred rung"),
+    (43470, "SkillIDs.DualFireAttunement -- same deferred rung; not emitted by this fixture, listed so a fire-dual log does not red the test"),
+    (44857, "SkillIDs.DualEarthAttunement -- same deferred rung"),
     // ---- Unlisted internal ids: no source we carry OR could carry ----
     //
     // For each of these four, all three naming sources were checked and
@@ -89,6 +105,13 @@ fn placeholder(name: &str, id: i64) -> bool {
 /// Every id-bearing array in the emitted document, by the path a reader
 /// would use to find it. Extend this list when a new array ships -- an
 /// array not listed here is not guarded.
+///
+/// Adding a tenth array means touching THREE places, and the duplication is
+/// deliberate: this function (to reach the rows), [`WALKED_ARRAYS`] (to
+/// count and report them), and each test's own floor list (to require
+/// them). The floor is stated independently of the walker on purpose --
+/// deriving it from `collect_ids` would make a walker that reaches nothing
+/// agree with a floor that demands nothing.
 ///
 /// Ids stay `i64`, SIGNED. GW2EI's synthetic skills live at negative ids
 /// (`SkillIDs.WeaponSwap = -2`, plus the ~36 `instant_cast` finder ids) and
@@ -296,10 +319,16 @@ fn check_no_leaks(v: &serde_json::Value, label: &str, must_reach: &[&str]) {
     // regressing to its old `unwrap_or_default()` empty string would slip
     // past the check above with every test still green. This pass looks at
     // both entries for every referenced id.
+    //
+    // Deliberately NOT filtered by `UNNAMEABLE`. That allowlist excuses one
+    // thing only -- "no source can name this id" -- and never "this id's
+    // catalog entry may be blank". Skipping allowlisted ids here would make
+    // an empty entry doubly invisible: excused by the allowlist above and
+    // unexamined below. `checked` still dedupes, so this is O(distinct ids).
     let mut empty: Vec<String> = Vec::new();
     let mut checked = BTreeSet::new();
     for (_, id) in collect_ids(v) {
-        if allowed.contains(&id) || !checked.insert(id) {
+        if !checked.insert(id) {
             continue;
         }
         for (map, prefix, which) in [(&skills, 's', "skillMap"), (&buffs, 'b', "buffMap")] {
@@ -442,14 +471,18 @@ fn no_emitted_id_goes_unnamed_with_all_gates_on() {
     check_no_leaks(
         &v,
         "all gates on",
-        // Every array `collect_ids` walks EXCEPT `totalBarrierDist`: this
-        // fixture's heal-addon players generate healing but no barrier, so
-        // `extBarrierStats.totalBarrierDist` is legitimately an empty row
-        // set here. The walker still covers it -- a barrier-carrying log
-        // would be checked -- but this fixture cannot floor it.
+        // Every one of the nine arrays `collect_ids` walks. Each entry was
+        // derived from this test's own printed counts, not from a claim
+        // about the fixture: all nine carry ids under all gates, so all
+        // nine are floored. Walking an array without flooring it is the
+        // exact hole this guard exists to close -- an earlier draft left
+        // `totalBarrierDist` out on a false premise, and breaking the
+        // `extBarrierStats` path then deleted all 31 of its rows from the
+        // walk with both tests still green.
         &[
             "totalDamageDist",
             "totalHealingDist",
+            "totalBarrierDist",
             "totalDamageTaken",
             "targetDamageDist",
             "rotation",
