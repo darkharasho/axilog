@@ -1966,7 +1966,7 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
                     //    Stun/Daze precedent documents near `buffMap`'s own
                     //    construction below (:2573): a consumer only ever
                     //    looks up ids it already holds, so the extra entry
-                    //    is inert. `BuffEntry::name` (`catalogs.rs:306-325`)
+                    //    is inert. `BuffEntry::name` (`catalogs.rs:308-331`)
                     //    shares `skill_map::resolve_name` with the skill
                     //    side, so the buff-side entry carries a real name,
                     //    not the empty string `unwrap_or_default` used to

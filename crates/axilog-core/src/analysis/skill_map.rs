@@ -483,19 +483,21 @@ pub fn resolve_name(id: u32, raw_name: Option<&str>) -> String {
 ///
 /// # Why this module only carries the negative subset
 ///
-/// The full override table is 577 entries wide and mostly re-names ids the
-/// log's own skill table already names perfectly well (EI prefers its
-/// API-backed disambiguations, e.g. `"Flame Blast (Superior Sigil of
-/// Fire)"`). That positive half IS adopted -- as the generated sibling
-/// module `skill_name_overrides`, which `resolve_name` consults as rung 4,
-/// last, below the API catalog (see "Why the API catalog ranks BELOW the
-/// log table" and the MEASURED demotion above). This module keeps only the
-/// negative ids because they are hand-curated with no generated source to
-/// draw from: they have no `RawLog::skills` row to name them, since no such
-/// game skill exists, so there is nothing for a generator to read. The
-/// negative ids are different in kind from the positive ones for the same
-/// reason: for those the log table is not merely less specific, it is
-/// EMPTY, so the alternative is not a worse name but `"Skill
+/// The full override table is 332 entries as the generator counts it (293
+/// transcribed + 39 skipped, see `skill_name_overrides`'s accounting block)
+/// and mostly re-names ids the log's own skill table already names
+/// perfectly well (EI prefers its API-backed disambiguations, e.g.
+/// `"Flame Blast (Superior Sigil of Fire)"`). Those 293 positive entries
+/// ARE adopted -- as the generated sibling module `skill_name_overrides`,
+/// which `resolve_name` consults as rung 4, last, below the API catalog
+/// (see "Why the API catalog ranks BELOW the log table" and the MEASURED
+/// demotion above). The split is about ownership, not reach: the generator
+/// reads the negative entries too and deliberately skips all 39 of them;
+/// the 25 kept here are hand-transcribed instead, because two sources of
+/// truth for the same entries would be worse than one
+/// (`skill_name_overrides.rs` lines 15-17). The negative ids are still different in kind from the
+/// positive ones: for those the log table is not merely less specific, it
+/// is EMPTY, so the alternative is not a worse name but `"Skill
 /// 4294967294"`.
 ///
 /// Every one of these is reachable: the entries are `SkillIDs.WeaponSwap`

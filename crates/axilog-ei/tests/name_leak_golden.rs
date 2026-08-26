@@ -101,7 +101,7 @@ const UNNAMEABLE: &[(i64, &str)] = &[
 /// `resolve_name`'s own placeholder (`skill_map.rs`) formats `Skill {id}`
 /// with `id: u32` -- so a negative pseudo id (e.g. `-5`, one of the Weaver
 /// dual-attunement ids) is printed UNSIGNED, `"Skill 4294967291"`. This
-/// walker carries ids SIGNED (see `collect_ids`'s doc comment above), so
+/// walker carries ids SIGNED (see `collect_ids`'s doc comment below), so
 /// comparing only against `format!("Skill {id}")` with the signed `id`
 /// checks `"Skill -5"` -- a spelling `resolve_name` never emits. That made
 /// this guard blind on exactly the ids the branch's documented gap covers.
