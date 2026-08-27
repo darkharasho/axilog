@@ -479,6 +479,47 @@ pub type SkillMap = BTreeMap<u32, SkillMapEntry>;
 /// a name. The eight ids with no symbol keep the placeholder, which is
 /// the honest answer for an id nothing in either source can name.
 ///
+/// # Why the buff tables rank ABOVE the symbol rung
+///
+/// A boon, condition, sigil, relic, or food buff reaches a log through its
+/// skill table like anything else, so its id can arrive here with an empty
+/// or numeric log name and fall through every skill-shaped rung -- none of
+/// which is a buff table. `buffs::name` already composes the four this
+/// crate owns (the 12 boons, the 14 conditions, the 2 control effects, and
+/// GW2EI's 2,267-entry `BUFF_META`) for the native buff catalog, so the
+/// name was always in reach; this chain simply never asked for it.
+///
+/// MEASURED against the same ~4000-log WvW corpus the symbol rung was
+/// measured on: sampling 407 logs, 29 distinct ids still rendered as
+/// `"Skill <id>"`, and the buff tables name one of them -- id 873,
+/// **Resolution**, a core boon this parser tracks by name everywhere else.
+/// A boon rendering as `"Skill 873"` in a damage distribution while the
+/// same log's buff catalog calls it Resolution is the kind of
+/// self-inconsistency a rung this cheap should not leave standing.
+///
+/// The ranking is the more consequential half. `BUFF_META` and
+/// `SKILL_SYMBOL_NAMES` both cover 2,260 ids and disagree on 1,430 of
+/// them, and on those the buff table is the better answer every time,
+/// because it carries GW2's real display strings where the symbol rung
+/// carries de-camel-cased C# identifiers:
+///
+/// ```text
+///   57344  symbol "Clove And Veggie Flatbread"   buff "Clove and Veggie Flatbread"
+///   32795  symbol "Marked Keep Blue"             buff "Marked (Blue Keep)"
+///   57348  symbol "Plate Of Clove Spiced Coq Au Vin"
+///          buff   "Plate of Clove-Spiced Coq Au Vin"
+/// ```
+///
+/// So this rung is deliberately NOT additive-by-construction, unlike rungs
+/// 3, 4 and 5 -- it is placed where it CAN displace a symbol, and does so
+/// 1,430 times. That is the point: the symbol rung's own doc admits it
+/// ships programmer jargon and that "the trade only works at the bottom",
+/// so a real name arriving above it is the case it was always waiting for.
+/// What the rung still cannot do is touch a name from the log table,
+/// `pseudo_name`, the API catalog, or the override table -- all four rank
+/// above it, which is what keeps the guarantee that matters. Both halves
+/// are pinned by `tests/buff_name_rung.rs`.
+///
 /// # One chain, two callers
 ///
 /// `CatalogBuilder::finish` resolves names too, for ids this module's
@@ -497,6 +538,7 @@ pub fn resolve_name(id: u32, raw_name: Option<&str>) -> String {
     }
     match super::skill_icons::name(id)
         .or_else(|| super::skill_name_overrides::name(id))
+        .or_else(|| super::buffs::name(id))
         .or_else(|| super::skill_symbol_names::name(id))
     {
         Some(n) => n.to_string(),

@@ -10,6 +10,37 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## Unreleased
+
+### Fixed
+- **Buff names no longer render as `"Skill <id>"`.** `skill_map::resolve_name`
+  walked five rungs — the log's own skill table, `pseudo_name`, the GW2 API
+  catalog, GW2EI's name overrides, then its `SkillIDs.cs` symbols — and not
+  one of them is a buff table. A boon, condition, sigil, relic or food buff
+  whose name the capturing client had not cached therefore fell all the way
+  to the `"Skill <id>"` placeholder, even where this crate's own buff
+  catalog named it in the same document. Most visibly **Resolution**, which
+  a damage distribution could render as `"Skill 873"` while the buff catalog
+  beside it said Resolution.
+
+  `analysis::buffs::name` — which already composes the 12 boons, the 14
+  conditions, the 2 control effects and GW2EI's 2,267-entry `BUFF_META` for
+  the native buff catalog — is now a rung, placed above the symbol rung and
+  below everything that carries a real skill name. Measured over a 407-log
+  sample of a ~4,000-log WvW corpus: of the 29 ids still hitting the
+  placeholder, it names 873.
+
+  The ranking is the larger half. `BUFF_META` and `SKILL_SYMBOL_NAMES` both
+  cover 2,260 ids and disagree on 1,430, and on those the buff table carries
+  GW2's real display string where the symbol rung carries a de-camel-cased
+  C# identifier — `"Clove and Veggie Flatbread"` over
+  `"Clove And Veggie Flatbread"`, `"Marked (Blue Keep)"` over
+  `"Marked Keep Blue"`. This rung is therefore deliberately not
+  additive-by-construction, unlike its neighbours: it displaces a symbol
+  1,430 times and can still never touch a name from the log table,
+  `pseudo_name`, the API catalog or the override table. Both halves are
+  pinned by `crates/axilog-core/tests/buff_name_rung.rs`.
+
 ## v1.7.1 — 2026-08-26
 
 ### Added
