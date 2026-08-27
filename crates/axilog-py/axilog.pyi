@@ -443,7 +443,26 @@ class SupportOut(TypedDict):
     #: the in-game arcdps meter folds pets into their master and counts them,
     #: hence the ~3-4%% gap. Never folded into ``cleanses``.
     cleanses_minions: int
+    #: The in-game arcdps meter's OWN cleanse methodology -- an independent
+    #: count, NOT a correction to ``cleanses``/``cleanses_self``/
+    #: ``cleanses_minions`` and never to be summed with them. Transcribed
+    #: from the reference code arcdps' author published on 2026-08-26.
+    #: Three buckets because what the meter displays depends on that
+    #: window's "vs npcs"/"from npcs" toggles: this field alone is both-off,
+    #: add ``cleanses_arcdps_on_minion`` for "vs npcs" and
+    #: ``cleanses_arcdps_by_minion`` for "from npcs".
+    cleanses_arcdps: int
+    #: "from npcs" adjustment: the remover was this player's pet/minion.
+    cleanses_arcdps_by_minion: int
+    #: "vs npcs" adjustment: the condition came off a pet/minion.
+    cleanses_arcdps_on_minion: int
     strips: int
+    #: The strip twin of ``cleanses_arcdps``, same bucketing.
+    strips_arcdps: int
+    #: "from npcs" adjustment: stripped by this player's pet/minion.
+    strips_arcdps_by_minion: int
+    #: "vs npcs" adjustment: the boon came off an enemy pet/minion.
+    strips_arcdps_on_minion: int
     #: True total remaining duration (ms) of every boon counted by
     #: ``strips`` (MEIGAP Task 3e). NOT EI's own ``boonStripsTime``, whose
     #: accumulator is buggy -- see ``SupportMetrics::strips_duration_ms``.
@@ -1468,7 +1487,26 @@ class SupportEntity(TypedDict):
     #: the in-game arcdps meter folds pets into their master and counts them,
     #: hence the ~3-4%% gap. Never folded into ``cleanses``.
     cleanses_minions: int
+    #: The in-game arcdps meter's OWN cleanse methodology -- an independent
+    #: count, NOT a correction to ``cleanses``/``cleanses_self``/
+    #: ``cleanses_minions`` and never to be summed with them. Transcribed
+    #: from the reference code arcdps' author published on 2026-08-26.
+    #: Three buckets because what the meter displays depends on that
+    #: window's "vs npcs"/"from npcs" toggles: this field alone is both-off,
+    #: add ``cleanses_arcdps_on_minion`` for "vs npcs" and
+    #: ``cleanses_arcdps_by_minion`` for "from npcs".
+    cleanses_arcdps: int
+    #: "from npcs" adjustment: the remover was this player's pet/minion.
+    cleanses_arcdps_by_minion: int
+    #: "vs npcs" adjustment: the condition came off a pet/minion.
+    cleanses_arcdps_on_minion: int
     strips: int
+    #: The strip twin of ``cleanses_arcdps``, same bucketing.
+    strips_arcdps: int
+    #: "from npcs" adjustment: stripped by this player's pet/minion.
+    strips_arcdps_by_minion: int
+    #: "vs npcs" adjustment: the boon came off an enemy pet/minion.
+    strips_arcdps_on_minion: int
     strips_duration_ms: int
     resurrects: int
 

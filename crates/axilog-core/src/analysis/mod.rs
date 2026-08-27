@@ -2,6 +2,7 @@ pub mod damage;
 pub mod downs;
 pub mod cc;
 pub mod buffs;
+pub mod arcdps_parity;
 pub mod support;
 /// arcdps healing-extension stats (M10 Task 1) -- see `healing::apply`'s
 /// module doc for the wire format / aggregation writeup.
@@ -651,6 +652,11 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
     downs::apply_with_registry(&mut players, enc, raw, &registry, &squad, &enemies, &addr_to_rep);
     cc::apply_cc_with_registry(&mut players, raw, &registry, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep);
     support::apply_with_registry(&mut players, raw, enc, &enemies, &addr_to_rep, &registry);
+    // The in-game arcdps meter's own cleanse/strip methodology, as a pair of
+    // counters alongside (never folded into) `support`'s EI-calibrated ones
+    // -- see `arcdps_parity`'s module doc for the transcribed reference code
+    // and the EI-vs-arcdps divergence table.
+    arcdps_parity::apply(&mut players, raw, &addr_to_rep, &registry);
     // M11 Task 2: the arcdps-methodology contribution family
     // (downs_contribution/downed_by) -- see `contribution`'s module doc.
     contribution::apply_with_registry(&mut players, raw, &registry, enc, &squad, &enemies, &addr_to_rep, &enemy_addr_to_rep);

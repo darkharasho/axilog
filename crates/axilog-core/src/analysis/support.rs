@@ -102,6 +102,58 @@ pub struct SupportMetrics {
     ///
     /// [`cleanses`]: SupportMetrics::cleanses
     pub cleanses_minions: u32,
+    /// Cleanses as the IN-GAME ARCDPS METER counts them -- an independent
+    /// count, NOT a correction applied to [`cleanses`]/[`cleanses_self`]/
+    /// [`cleanses_minions`]. Computed by
+    /// [`crate::analysis::arcdps_parity::apply`], whose module doc carries
+    /// the full transcription of the reference code (from arcdps' author,
+    /// 2026-08-26) and a table of every point where it diverges from EI.
+    ///
+    /// The short version of the divergence: self-consumed blind and the
+    /// condition dump a player takes on going down are BOTH excluded here
+    /// and both included in `cleanses_self`; cleanses landed on non-squad
+    /// friendlies and on any pet are included here and excluded there; and
+    /// a pet's own removal folds into its master here rather than being
+    /// dropped.
+    ///
+    /// [`cleanses`]: SupportMetrics::cleanses
+    /// [`cleanses_self`]: SupportMetrics::cleanses_self
+    /// [`cleanses_minions`]: SupportMetrics::cleanses_minions
+    pub cleanses_arcdps: u32,
+    /// Cleanses the arcdps meter attributes to this player but which its
+    /// **"from npcs"** window toggle excludes: the remover was one of their
+    /// pets/minions, folded into them. Add to [`cleanses_arcdps`] only if
+    /// the meter you are comparing against has that toggle on.
+    ///
+    /// [`cleanses_arcdps`]: SupportMetrics::cleanses_arcdps
+    pub cleanses_arcdps_by_minion: u32,
+    /// Cleanses the arcdps meter attributes to this player but which its
+    /// **"vs npcs"** window toggle excludes: the condition came off a
+    /// pet/minion rather than off a player. Add to [`cleanses_arcdps`] only
+    /// if the meter you are comparing against has that toggle on.
+    ///
+    /// [`cleanses_arcdps`]: SupportMetrics::cleanses_arcdps
+    pub cleanses_arcdps_on_minion: u32,
+    /// Boon strips as the IN-GAME ARCDPS METER counts them -- the strip
+    /// twin of [`cleanses_arcdps`], and likewise independent of
+    /// [`strips`]. Two divergences from EI: a stability removal only counts
+    /// when more than one stack came off (a single-stack loss is stability
+    /// being consumed by a CC, not a strip), and "foe" is decided by the
+    /// row's own `iff` byte rather than by `enemies` set membership.
+    ///
+    /// [`cleanses_arcdps`]: SupportMetrics::cleanses_arcdps
+    /// [`strips`]: SupportMetrics::strips
+    pub strips_arcdps: u32,
+    /// The **"from npcs"** adjustment for [`strips_arcdps`]: the boon was
+    /// stripped by one of this player's pets/minions.
+    ///
+    /// [`strips_arcdps`]: SupportMetrics::strips_arcdps
+    pub strips_arcdps_by_minion: u32,
+    /// The **"vs npcs"** adjustment for [`strips_arcdps`]: the boon came off
+    /// an enemy pet/minion rather than off an enemy player.
+    ///
+    /// [`strips_arcdps`]: SupportMetrics::strips_arcdps
+    pub strips_arcdps_on_minion: u32,
     /// Boon removed from an enemy. Verified against `SupportStatistics.cs`:
     /// `BoonStripCount` sums `FoeRemovals` (recipient IFF == Foe) +
     /// `UnknownRemovals` (recipient IFF == Unknown) per boon --
