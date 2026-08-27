@@ -10,6 +10,69 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.7.0 — 2026-08-26
+
+### Added
+- **Cleanses and strips counted the way the in-game arcdps meter counts
+  them.** Six new `SupportMetrics` fields — `cleanses_arcdps`,
+  `strips_arcdps`, and a `_by_minion` / `_on_minion` bucket for each — filled
+  by a new `analysis::arcdps_parity` pass. It is a transcription of the
+  meter's own counting code, supplied by deltaconnected (arcdps' author), not
+  an adjustment layered on Elite Insights' number: it drops single-stack
+  stability removals, drops self-consumed blinds, folds pets into their
+  master on both the holder and remover side, and subtracts the self-removal
+  burst a player produces on going down. EI-shaped keys are
+  `condiCleanseArcdps*` / `boonStripsArcdps*`.
+
+  **Three buckets, not one, and that is the load-bearing design decision.**
+  There is no single "arcdps number" — the meter's displayed total depends on
+  that window's "vs npcs" / "from npcs" inclusion toggles, which the reader
+  sets. On `fixtures/wvw-small.anon.zevtc` the buckets are 900 / 46 / 157, so
+  the toggle choice moves the total by 26%; a hardcoded single number would
+  be wrong for most readers. Sum rule: base alone = both toggles off,
+  `+ _on_minion` = "vs npcs", `+ _by_minion` = "from npcs".
+
+  Three independent, untuned measurements corroborate the transcription. The
+  base bucket reads **900 against EI's 898** — the same population, 0.2%
+  apart, a prediction that could easily have failed. `_on_minion` = 46,
+  *exactly* what the independently-derived `cleanses_minions` counter finds
+  by a completely different route, which identifies the long-reported +3-4%
+  field gap as the "vs npcs" bucket. And the EI-minus-arcdps strip residue is
+  precisely 14, the stability single-stack population.
+
+  The pass is purely additive: it writes no existing field, and the
+  native-json leaf diff is 252 added, 0 removed, **0 changed**, so every
+  EI-calibrated golden is untouched.
+
+### Fixed
+- **The down-undo readback is a bounded chain walk, not a time window.**
+  Corrected against further detail from deltaconnected: step back from the
+  down over rows between the downed agent and itself, ending at the first
+  entry that is not a buff removal, walking *through* buff damage
+  (`statechange == CBTS_COMBAT && buff` — arcdps' chain locks around the
+  condi sim loop and a log does not, so ticks land between the server's
+  buffremove rows), any "determined" apply, and zero-source server rows.
+
+  Two adaptations are forced by reading a log rather than arcdps' live
+  buffer, and both were measured against all 25 downs in the fixture rather
+  than assumed. Statechange rows are skipped rather than treated as chain
+  entries — breaking on them truncated 4 of 25 bursts to nothing, every one
+  on an `sc == 62` row that is not a buff event at all. And the walk stays
+  bounded: arcdps' chain is a bounded live ring buffer, a log has no horizon,
+  so unbounded one burst reached 23 rows against a true 10. Bounded and
+  skipping statechanges, the chain agrees with the previous plain window on
+  all 25 downs, so the calibration and the native-json digest are unchanged.
+
+  Also: **"determined" is not one id.** The catalog carries three — 762, 785
+  and 788 — all sharing one wiki icon. The reference's
+  `SKILL_DETERMINED_PLAYER = 788` is correct for the training golem it was
+  read off; WvW player downs carry 762, and 788 appears there on a non-player
+  agent. All three are walked through.
+
+- Node and Python stubs told consumers to sum
+  `cleanses + cleanses_self + cleanses_minions` for arcdps parity. That is
+  not how arcdps counts; they now point at the `cleanses_arcdps` family.
+
 ## v1.6.2 — 2026-08-26
 
 ### Fixed
