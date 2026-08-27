@@ -394,10 +394,16 @@ blocks.support
 blocks.support.by_entity
 blocks.support.by_entity.<id>
 blocks.support.by_entity.<id>.cleanses
+blocks.support.by_entity.<id>.cleanses_arcdps
+blocks.support.by_entity.<id>.cleanses_arcdps_by_minion
+blocks.support.by_entity.<id>.cleanses_arcdps_on_minion
 blocks.support.by_entity.<id>.cleanses_minions
 blocks.support.by_entity.<id>.cleanses_self
 blocks.support.by_entity.<id>.resurrects
 blocks.support.by_entity.<id>.strips
+blocks.support.by_entity.<id>.strips_arcdps
+blocks.support.by_entity.<id>.strips_arcdps_by_minion
+blocks.support.by_entity.<id>.strips_arcdps_on_minion
 blocks.support.by_entity.<id>.strips_duration_ms
 catalogs
 catalogs.buffs

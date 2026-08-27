@@ -171,13 +171,30 @@ fn render_is_deterministic_for_the_real_fixture() {
 /// recovered 25,134 of that without losing anything the reference format
 /// carries. 300,000 keeps ~17.5KB of headroom, the same proportion the
 /// previous budget held.
+///
+/// **The arcdps-parity pass raised this to 320,000 (measured 300,863).**
+/// `blocks.support` gained six always-on counters (`cleanses_arcdps` and
+/// `strips_arcdps`, each with a `_by_minion`/`_on_minion` bucket -- see
+/// `axilog_core::analysis::arcdps_parity`). Growth is +18,375 bytes (+6.5%)
+/// over the 282,488 measured above, comfortably inside the ~30% guideline
+/// this budget's note cites for deciding whether a block needs an opt-in
+/// flag, so they stay always-on.
+///
+/// These deliberately do NOT get the omit-exact-zeros treatment the
+/// `wasted` trio above got, even though several of the buckets are zero on
+/// most rows. A missing key on this family already means "this log was not
+/// parsed by a build that computes it" -- the same degradation contract
+/// `condiCleanseMinions` documents -- and skipping zeros would make a
+/// genuine zero indistinguishable from an unavailable one, which is exactly
+/// the confusion that contract exists to prevent. 320,000 keeps ~19KB of
+/// headroom, the same proportion the previous two budgets held.
 #[test]
 fn total_report_size_stays_under_budget() {
     let report = fixture_report();
     let html = axilog_html::render(&report);
     assert!(
-        html.len() < 300_000,
-        "fixture report is {} bytes, must stay under the 300KB total-file budget",
+        html.len() < 320_000,
+        "fixture report is {} bytes, must stay under the 320KB total-file budget",
         html.len()
     );
 }

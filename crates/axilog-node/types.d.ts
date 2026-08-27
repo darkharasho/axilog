@@ -284,10 +284,37 @@ export interface SupportOut {
    * fight (measured: +3.85% squad-wide on a 49-player WvW log).
    *
    * Never folded into `cleanses`, so EI-parity consumers are unaffected.
-   * For arcdps parity sum `cleanses + cleanses_self + cleanses_minions`.
+   * Never folded into `cleanses`. For the in-game meter's number read the
+   * `cleanses_arcdps` family below instead of summing these.
    */
   cleanses_minions: number
+  /**
+   * The in-game arcdps meter's OWN cleanse methodology -- an independent
+   * count, NOT a correction to `cleanses`/`cleanses_self`/`cleanses_minions`
+   * and never to be summed with them. Transcribed from the reference code
+   * arcdps' author published on 2026-08-26: stability only counts when more
+   * than one stack came off, self-consumed blind never counts, the condition
+   * dump a player takes on going down is subtracted back out, pets fold into
+   * their master, and there is no squad/non-squad discrimination.
+   *
+   * Three buckets because the number the in-game meter displays depends on
+   * that window's "vs npcs"/"from npcs" toggles. Sum the ones your reader
+   * has enabled: `cleanses_arcdps` alone is both-off; add
+   * `cleanses_arcdps_on_minion` for "vs npcs", `cleanses_arcdps_by_minion`
+   * for "from npcs".
+   */
+  cleanses_arcdps: number
+  /** "from npcs" adjustment: the remover was this player's pet/minion. */
+  cleanses_arcdps_by_minion: number
+  /** "vs npcs" adjustment: the condition came off a pet/minion. */
+  cleanses_arcdps_on_minion: number
   strips: number
+  /** The strip twin of `cleanses_arcdps`, same bucketing. */
+  strips_arcdps: number
+  /** "from npcs" adjustment: the boon was stripped by this player's pet. */
+  strips_arcdps_by_minion: number
+  /** "vs npcs" adjustment: the boon came off an enemy pet/minion. */
+  strips_arcdps_on_minion: number
   /**
    * True total remaining duration (ms) of every boon counted by `strips`
    * (MEIGAP Task 3e). NOT the same number as EI's own
@@ -1714,10 +1741,37 @@ export interface SupportEntity {
    * fight (measured: +3.85% squad-wide on a 49-player WvW log).
    *
    * Never folded into `cleanses`, so EI-parity consumers are unaffected.
-   * For arcdps parity sum `cleanses + cleanses_self + cleanses_minions`.
+   * Never folded into `cleanses`. For the in-game meter's number read the
+   * `cleanses_arcdps` family below instead of summing these.
    */
   cleanses_minions: number
+  /**
+   * The in-game arcdps meter's OWN cleanse methodology -- an independent
+   * count, NOT a correction to `cleanses`/`cleanses_self`/`cleanses_minions`
+   * and never to be summed with them. Transcribed from the reference code
+   * arcdps' author published on 2026-08-26: stability only counts when more
+   * than one stack came off, self-consumed blind never counts, the condition
+   * dump a player takes on going down is subtracted back out, pets fold into
+   * their master, and there is no squad/non-squad discrimination.
+   *
+   * Three buckets because the number the in-game meter displays depends on
+   * that window's "vs npcs"/"from npcs" toggles. Sum the ones your reader
+   * has enabled: `cleanses_arcdps` alone is both-off; add
+   * `cleanses_arcdps_on_minion` for "vs npcs", `cleanses_arcdps_by_minion`
+   * for "from npcs".
+   */
+  cleanses_arcdps: number
+  /** "from npcs" adjustment: the remover was this player's pet/minion. */
+  cleanses_arcdps_by_minion: number
+  /** "vs npcs" adjustment: the condition came off a pet/minion. */
+  cleanses_arcdps_on_minion: number
   strips: number
+  /** The strip twin of `cleanses_arcdps`, same bucketing. */
+  strips_arcdps: number
+  /** "from npcs" adjustment: the boon was stripped by this player's pet. */
+  strips_arcdps_by_minion: number
+  /** "vs npcs" adjustment: the boon came off an enemy pet/minion. */
+  strips_arcdps_on_minion: number
   strips_duration_ms: number
   resurrects: number
 }

@@ -97,7 +97,17 @@ pub struct SupportEntity {
     /// arcdps-parity extra GW2EI's `PlayerList` loop omits entirely. See
     /// [`axilog_core::analysis::support::SupportMetrics::cleanses_minions`].
     pub cleanses_minions: u32,
+    /// The in-game arcdps meter's own cleanse methodology, in three
+    /// window-toggle buckets. See
+    /// [`axilog_core::analysis::arcdps_parity`] for which to sum.
+    pub cleanses_arcdps: u32,
+    pub cleanses_arcdps_by_minion: u32,
+    pub cleanses_arcdps_on_minion: u32,
     pub strips: u32,
+    /// The strip twin of `cleanses_arcdps`, same bucketing.
+    pub strips_arcdps: u32,
+    pub strips_arcdps_by_minion: u32,
+    pub strips_arcdps_on_minion: u32,
     pub strips_duration_ms: u64,
     pub resurrects: u32,
 }
@@ -431,7 +441,13 @@ pub fn build_support(report: &crate::Report, index: &EntityIndex) -> SupportBloc
                 cleanses: p.support.cleanses,
                 cleanses_self: p.support.cleanses_self,
                 cleanses_minions: p.support.cleanses_minions,
+                cleanses_arcdps: p.support.cleanses_arcdps,
+                cleanses_arcdps_by_minion: p.support.cleanses_arcdps_by_minion,
+                cleanses_arcdps_on_minion: p.support.cleanses_arcdps_on_minion,
                 strips: p.support.strips,
+                strips_arcdps: p.support.strips_arcdps,
+                strips_arcdps_by_minion: p.support.strips_arcdps_by_minion,
+                strips_arcdps_on_minion: p.support.strips_arcdps_on_minion,
                 strips_duration_ms: p.support.strips_duration_ms,
                 resurrects: p.support.resurrects,
             },
