@@ -1,6 +1,6 @@
 {
   "name": "@axiapps/axilog",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Node bindings (napi-rs) for axilog's Rust GW2 arcdps WvW parsing core",
   "main": "index.js",
   "types": "index.d.ts",
@@ -28,11 +28,11 @@
     "node": ">= 18"
   },
   "optionalDependencies": {
-    "@axiapps/axilog-linux-x64-gnu": "1.7.0",
-    "@axiapps/axilog-linux-arm64-gnu": "1.7.0",
-    "@axiapps/axilog-win32-x64-msvc": "1.7.0",
-    "@axiapps/axilog-darwin-x64": "1.7.0",
-    "@axiapps/axilog-darwin-arm64": "1.7.0"
+    "@axiapps/axilog-linux-x64-gnu": "1.7.1",
+    "@axiapps/axilog-linux-arm64-gnu": "1.7.1",
+    "@axiapps/axilog-win32-x64-msvc": "1.7.1",
+    "@axiapps/axilog-darwin-x64": "1.7.1",
+    "@axiapps/axilog-darwin-arm64": "1.7.1"
   },
   "scripts": {
     "build": "napi build --platform --release && node scripts/patch-dts.mjs",

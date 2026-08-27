@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "axilog"
-version = "1.7.0"
+version = "1.7.1"
 description = "Python bindings (PyO3) for axilog's Rust GW2 arcdps WvW parsing core"
 readme = "README.md"
 requires-python = ">=3.9"
