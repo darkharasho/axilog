@@ -261,6 +261,30 @@ never populates it, since damage-modifier attribution needs `--modifiers`.
 `skills`/`buffs` are always present, even when empty, since they are plain
 `BTreeMap` fields with no `skip_serializing_if`.
 
+`blocks.damage_mods` carries a second, non-entity-keyed field beside
+`by_entity`: `personal`, a map from SPEC name to the signed modifier ids
+that belong to that spec.
+
+```json
+"personal": { "Firebrand": [18, 107, 108, 109, 111, 313, 403], "Druid": [-132, 25, 334] }
+```
+
+The key is the same string an entity's `elite_spec` carries (its
+`profession`, for a core build), so it joins to the roster without a
+profession table of its own. Every id here is a key in
+`catalogs.damage_mods`, so the two partition the referenced id space
+between them. What is left over is the SHARED pool —
+relics, food, squad buffs — whose damage gain is credited to every player
+who benefited from it rather than to whoever provided it.
+
+This is the only field that draws that line, and the reading of an EMPTY
+map matters: it means the classification is UNAVAILABLE, never that
+nothing is personal. A consumer that filters on the latter reading hides
+every modifier there is, which is exactly what happened downstream while
+this field did not exist. It rides `catalogs.damage_mods`' own `--modifiers`
+gate, since a partition of a table the consumer cannot see would be no use
+on its own.
+
 A skill entry's five MPROC flags — `is_trait_proc`, `is_gear_proc`,
 `is_unconditional_proc`, `is_not_accurate`, `is_instant_cast` — are
 **omitted when `false`**, unlike their `is_swap`/`can_crit` neighbours.

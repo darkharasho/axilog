@@ -131,6 +131,7 @@ mod tests {
             missiles: None,
             skill_map: Default::default(),
             damage_mod_map: None,
+            personal_damage_mods: None,
         }
     }
 

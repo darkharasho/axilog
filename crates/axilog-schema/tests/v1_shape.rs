@@ -217,7 +217,18 @@ fn the_full_key_set_matches_the_committed_golden() {
                 for (k, val) in m {
                     // Entity/skill/buff ids are DATA, not schema -- collapse
                     // them so the golden tracks shape, not fixture content.
-                    let key = if k.chars().all(|c| c.is_ascii_digit() || c == '-') { "<id>" } else { k };
+                    // `blocks.damage_mods.personal` is keyed by SPEC name
+                    // ("Firebrand"), the one dynamic map in the container
+                    // whose keys are not ids -- collapse it the same way,
+                    // or the golden would pin whichever specs this fixture
+                    // happens to field.
+                    let key = if k.chars().all(|c| c.is_ascii_digit() || c == '-') {
+                        "<id>"
+                    } else if prefix == "blocks.damage_mods.personal" {
+                        "<spec>"
+                    } else {
+                        k
+                    };
                     let path = if prefix.is_empty() { key.to_string() } else { format!("{prefix}.{key}") };
                     if !out.contains(&path) {
                         out.push(path.clone());

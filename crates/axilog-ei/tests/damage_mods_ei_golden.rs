@@ -622,3 +622,195 @@ fn committed_fixture_damage_modifier_emission_is_correctly_shaped_and_gated() {
         "ei-json damage-modifier emission must be deterministic"
     );
 }
+
+/// `personalDamageMods` -- the spec -> ids partition of `damageModMap` that
+/// says which rows are a player's OWN modifiers and which are the shared
+/// pool (relics, food, squad buffs) every benefiting player is credited
+/// with.
+///
+/// Unlike the four numbers, this half of the surface CAN be compared
+/// exactly against the reference export even where the buff simulator
+/// carries a residual: it is a pure classification, so a row's value being
+/// slightly off does not move which side of the partition it lands on.
+///
+/// The comparison is scoped to the ids BOTH sides emit. The catalog is a
+/// documented subset of GW2EI's (see `catalog`'s module doc), so the export
+/// naming an id this engine never emits is a pre-existing coverage gap,
+/// not a classification defect -- and the assertions below separate the two
+/// rather than letting a coverage gap masquerade as parity or as failure.
+/// What must hold with zero tolerance is the other direction: never claim
+/// a modifier is personal that GW2EI calls shared, or vice versa.
+#[test]
+fn personal_damage_mods_classification_matches_the_reference_export_when_available() {
+    let zevtc = local_fixture("wvw-postrework.zevtc");
+    let ei_json = local_fixture("wvw-postrework.ei.json");
+    let Ok(bytes) = std::fs::read(&zevtc) else {
+        println!("skip: {zevtc} absent (personalDamageMods calibration)");
+        return;
+    };
+    let Ok(golden_s) = std::fs::read_to_string(&ei_json) else {
+        println!("skip: {ei_json} absent (personalDamageMods calibration)");
+        return;
+    };
+    let golden: Value = serde_json::from_str(&golden_s).expect("parse reference export");
+
+    let raw = decode_raw(&bytes).expect("decode postrework fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let activity = build_activity_intervals(&raw, &enc);
+    let registry = InstidRegistry::build(&raw);
+    let mods = evaluate_catalog_full(&raw, &registry, &enc, true);
+    let report = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, false, false, false, Some(&mods),
+    );
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &axilog_schema::v1::Passes { activity: Some(&activity), damage_mods: Some(&mods), ..Default::default() });
+    let ours = axilog_ei::to_ei_json(&report_v1, None);
+
+    let g_personal = personal_by_spec(&golden);
+    let o_personal = personal_by_spec(&ours);
+    assert!(!o_personal.is_empty(), "emitted personalDamageMods must not be empty");
+
+    // The spec roster is the same question on both sides -- a spec key
+    // exists iff one of its players emitted a personal modifier -- so it
+    // is comparable outright, coverage gap or not.
+    assert_eq!(
+        o_personal.keys().collect::<BTreeSet<_>>(),
+        g_personal.keys().collect::<BTreeSet<_>>(),
+        "personalDamageMods spec keys"
+    );
+
+    let o_map = map_ids(&ours["damageModMap"]);
+    let g_map = map_ids(&golden["damageModMap"]);
+    let common: BTreeSet<i32> = o_map.intersection(&g_map).copied().collect();
+
+    // The load-bearing assertion: on every id both engines emitted, the
+    // personal/shared verdict agrees, per spec. Stated as a set difference
+    // in BOTH directions so a false "personal" and a false "shared" fail
+    // equally loudly.
+    for spec in o_personal.keys() {
+        let ours_ids: BTreeSet<i32> =
+            o_personal[spec].intersection(&common).copied().collect();
+        let theirs_ids: BTreeSet<i32> =
+            g_personal[spec].intersection(&common).copied().collect();
+        assert_eq!(
+            ours_ids, theirs_ids,
+            "{spec}: personal/shared classification disagrees with the reference export on ids \
+             both engines emitted"
+        );
+    }
+
+    // Anything left over must be explained by coverage, not classification:
+    // an id the export calls personal that we never emitted at all.
+    for (spec, ids) in &g_personal {
+        for id in ids.difference(&o_personal[spec]) {
+            assert!(
+                !o_map.contains(id),
+                "{spec}: d{id} is in our damageModMap and the export calls it personal, but we \
+                 classified it as shared"
+            );
+        }
+    }
+}
+
+/// `{ spec -> signed ids }` from either side's `personalDamageMods`.
+fn personal_by_spec(doc: &Value) -> BTreeMap<String, BTreeSet<i32>> {
+    doc["personalDamageMods"]
+        .as_object()
+        .expect("personalDamageMods present")
+        .iter()
+        .map(|(spec, ids)| {
+            (
+                spec.clone(),
+                ids.as_array()
+                    .expect("id array")
+                    .iter()
+                    .map(|v| i32::try_from(v.as_i64().expect("integer id")).expect("i32 id"))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// The `"d<signed id>"` keys of a `damageModMap`, as plain signed ids.
+fn map_ids(map: &Value) -> BTreeSet<i32> {
+    map.as_object()
+        .expect("damageModMap")
+        .keys()
+        .map(|k| k[1..].parse().unwrap_or_else(|_| panic!("damageModMap key {k} is not d<i32>")))
+        .collect()
+}
+
+/// The committed fixture: `personalDamageMods` gating and shape.
+///
+/// Rides `damageModMap`'s gate exactly -- the two describe the same id
+/// space, so emitting one without the other would hand a consumer a
+/// partition of a table it cannot see (or a table it cannot partition,
+/// which is the defect that blanked AxiBridge's Damage Modifiers panel for
+/// every natively parsed log).
+#[test]
+fn committed_fixture_personal_damage_mods_are_shaped_and_gated() {
+    let bytes = std::fs::read(ANON_FIXTURE_PATH).expect("read committed fixture");
+    let raw = decode_raw(&bytes).expect("decode committed fixture");
+    let enc = resolve(&raw);
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let activity = build_activity_intervals(&raw, &enc);
+    let registry = InstidRegistry::build(&raw);
+
+    // -- gating: absent without the option, on BOTH surfaces --
+    let plain = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
+    );
+    let plain_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &plain, "0.0.0-test", None, &axilog_schema::v1::Passes { activity: Some(&activity), ..Default::default() });
+    let plain_ei = axilog_ei::to_ei_json(&plain_v1, None);
+    assert!(
+        plain_ei.get("personalDamageMods").is_none(),
+        "personalDamageMods must be omitted when modifiers were not requested"
+    );
+    let plain_native = serde_json::to_value(&plain).expect("serialize native report");
+    assert!(
+        plain_native.get("personal_damage_mods").is_none(),
+        "native personal_damage_mods must be omitted when modifiers were not requested"
+    );
+
+    // -- shape: present, and a real partition of the map, with the option --
+    let mods = evaluate_catalog_full(&raw, &registry, &enc, true);
+    let report = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, false, false, false, Some(&mods),
+    );
+    let report_v1 = axilog_schema::v1::build_report_v1(&enc, &metrics, &report, "0.0.0-test", None, &axilog_schema::v1::Passes { activity: Some(&activity), damage_mods: Some(&mods), ..Default::default() });
+    let ei = axilog_ei::to_ei_json(&report_v1, None);
+
+    let personal = personal_by_spec(&ei);
+    assert!(!personal.is_empty(), "the committed fixture triggers at least one personal modifier");
+
+    // Every id names a descriptor the consumer can actually look up.
+    let map = map_ids(&ei["damageModMap"]);
+    for (spec, ids) in &personal {
+        assert!(!ids.is_empty(), "{spec}: a spec key with no ids should not be emitted at all");
+        for id in ids {
+            assert!(map.contains(id), "{spec}: d{id} is not in damageModMap");
+        }
+    }
+
+    // Keys are `Spec.ToString()` -- the same string `players[].profession`
+    // carries, which is what lets a consumer join the two without a
+    // profession/elite-spec table of its own.
+    let specs: BTreeSet<String> = ei["players"]
+        .as_array()
+        .expect("players")
+        .iter()
+        .map(|p| p["profession"].as_str().expect("profession").to_string())
+        .collect();
+    for spec in personal.keys() {
+        assert!(specs.contains(spec), "personalDamageMods key {spec} is not any player's spec");
+    }
+
+    // The partition is proper: the shared pool is what is left over, and it
+    // is NOT empty -- a run where every emitted id came out personal would
+    // mean the classification silently degenerated.
+    let claimed: BTreeSet<i32> = personal.values().flatten().copied().collect();
+    assert!(
+        !map.difference(&claimed).collect::<BTreeSet<_>>().is_empty(),
+        "no shared modifiers at all -- the personal/shared split has degenerated"
+    );
+}

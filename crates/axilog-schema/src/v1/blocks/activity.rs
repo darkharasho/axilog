@@ -11,7 +11,7 @@ use crate::v1::catalogs::CatalogBuilder;
 use crate::v1::entities::EntityIndex;
 use crate::v1::series::SeriesOut;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct RotationBlock {
@@ -104,6 +104,18 @@ pub struct CastRow {
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct DamageModsBlock {
     pub by_entity: ByEntity<DamageModEntity>,
+    /// SPEC name -> the signed ids in [`crate::v1::catalogs::Catalogs::
+    /// damage_mods`] that belong to that spec rather than to the shared
+    /// pool -- EI's top-level `personalDamageMods`, which the ei-json
+    /// adapter renders straight from here.
+    ///
+    /// Filtered to ids this block actually referenced, so the "every id
+    /// here is a catalog key" invariant holds even when an entity fails to
+    /// join the roster index. Empty means UNCLASSIFIED -- see
+    /// `axilog_core::analysis::damage_mods::DamageModifierResults::
+    /// personal`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub personal: BTreeMap<String, Vec<i32>>,
 }
 
 impl DamageModsBlock {
@@ -1010,6 +1022,7 @@ pub fn build_damage_mods(
     per_target: Option<&axilog_core::analysis::damage_mods::DamageModifierResults>,
 ) -> DamageModsBlock {
     let mut by_entity = ByEntity::default();
+    let mut referenced: BTreeSet<i32> = BTreeSet::new();
     for p in &report.players {
         let Some(id) = index.by_agent_addr(p.agent_addr) else { continue };
         let Some(mods) = p.damage_mods.as_ref() else { continue };
@@ -1019,6 +1032,7 @@ pub fn build_damage_mods(
         // -- so both directions share one map without collision.
         for m in mods.outgoing.iter().chain(mods.incoming.iter()) {
             cats.reference_damage_mod(m.id);
+            referenced.insert(m.id);
             overall.insert(
                 m.id,
                 DamageModRow {
@@ -1043,6 +1057,7 @@ pub fn build_damage_mods(
             {
                 let Some(foe_id) = index.by_enemy_id(foe) else { continue };
                 cats.reference_damage_mod(mod_id);
+                referenced.insert(mod_id);
                 targets.entry(foe_id).or_default().insert(
                     mod_id,
                     DamageModRow {
@@ -1056,7 +1071,24 @@ pub fn build_damage_mods(
         }
         by_entity.insert(id, DamageModEntity { overall, per_target: targets });
     }
-    DamageModsBlock { by_entity }
+    // `personalDamageMods`, carried through from the engine on the legacy
+    // report -- see `DamageModsBlock::personal`. Narrowed to `referenced`
+    // rather than copied wholesale so it can never name an id the catalog
+    // above does not describe.
+    let personal = report
+        .personal_damage_mods
+        .as_ref()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(spec, ids)| {
+                    let kept: Vec<i32> =
+                        ids.iter().copied().filter(|id| referenced.contains(id)).collect();
+                    (!kept.is_empty()).then(|| (spec.clone(), kept))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    DamageModsBlock { by_entity, personal }
 }
 
 pub fn build_missiles(report: &crate::Report, index: &EntityIndex) -> MissilesBlock {
