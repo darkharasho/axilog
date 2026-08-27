@@ -2001,6 +2001,18 @@ export interface DamageModEntity {
 
 export interface DamageModsBlock {
   by_entity: ByEntity<DamageModEntity>
+  /**
+   * SPEC name (`"Firebrand"`, matching an entity's `elite_spec` or, for a
+   * core build, its `profession`) -> the signed modifier ids that belong
+   * to that spec rather than to the shared pool -- relics, food, squad
+   * buffs, whose gain every benefiting player is credited with. Elite
+   * Insights' top-level `personalDamageMods`.
+   *
+   * Omitted when the classification is unavailable. Read an absent or
+   * empty map as UNCLASSIFIED, never as "nothing is personal": filtering
+   * on the latter reading hides every modifier there is.
+   */
+  personal?: Record<string, number[]>
 }
 
 export interface MissilesSquad {

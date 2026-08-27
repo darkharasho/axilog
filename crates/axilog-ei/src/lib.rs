@@ -733,6 +733,7 @@ struct EiDoc<'a> {
     buff_map: BTreeMap<String, Value>,
     skill_map: BTreeMap<String, Value>,
     damage_mod_map: Option<BTreeMap<String, Value>>,
+    personal_damage_mods: Option<BTreeMap<String, Vec<i32>>>,
     combat_replay_meta: Option<Value>,
     used_extensions: Option<Value>,
     wvw_map_data: Value,
@@ -753,6 +754,9 @@ impl serde::Serialize for EiDoc<'_> {
         m.serialize_entry("durationMS", &self.duration_ms)?;
         m.serialize_entry("eliteInsightsVersion", &Value::Null)?;
         m.serialize_entry("fightName", &self.fight_name)?;
+        if let Some(pdm) = &self.personal_damage_mods {
+            m.serialize_entry("personalDamageMods", pdm)?;
+        }
         m.serialize_entry(
             "players",
             &LazySeq { len: self.player_count, rows: &self.player_json },
@@ -2762,6 +2766,18 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
             })
             .collect()
     });
+    // `personalDamageMods` (`JsonLogBuilder.cs:315`): the spec -> ids
+    // partition of `damageModMap` that tells a consumer which rows are a
+    // player's OWN modifiers and which are the shared pool every
+    // benefiting player is credited with. Same gate as the map itself, and
+    // rendered straight from the block rather than recomputed, so the two
+    // cannot disagree about which ids exist. Keys are `Spec.ToString()` --
+    // the same string `players[].profession` carries.
+    let personal_damage_mods: Option<BTreeMap<String, Vec<i32>>> = report
+        .blocks
+        .damage_mods
+        .as_ref()
+        .map(|b| b.personal.clone());
     // `combatReplayMetaData` (M15, Task 3): the arena image every
     // `combatReplayData.positions` pair is a pixel coordinate ON -- present
     // only when replay was requested AND the log's map is one GW2EI ships
@@ -2872,6 +2888,7 @@ fn ei_doc<'a>(report: &'a ReportV1, replay: EiReplayInput<'a>) -> EiDoc<'a> {
         buff_map,
         skill_map,
         damage_mod_map,
+        personal_damage_mods,
         combat_replay_meta,
         used_extensions,
         wvw_map_data,
@@ -3362,6 +3379,7 @@ mod tests {
             missiles: None,
             skill_map: Default::default(),
             damage_mod_map: None,
+            personal_damage_mods: None,
         };
         let v = to_ei_json(&shell_v1_for(&report), None);
         let healing = &v["players"][0]["extHealingStats"]["outgoingHealing"][0];
@@ -3500,6 +3518,7 @@ mod tests {
             missiles: None,
             skill_map: Default::default(),
             damage_mod_map: None,
+            personal_damage_mods: None,
         }
     }
 

@@ -10,6 +10,54 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## Unreleased
+
+### Added
+- **`personalDamageMods` — which damage modifiers are a player's OWN.** The
+  EI-shaped export gained Elite Insights' top-level `personalDamageMods`
+  (`JsonLogBuilder.cs:315`), and the native container its counterpart
+  `blocks.damage_mods.personal`: a map from spec name to the signed
+  modifier ids that belong to that spec rather than to the shared pool —
+  relics, food, squad buffs — whose damage gain is credited to every player
+  who benefited rather than to whoever provided it.
+
+  **The omission was not cosmetic.** This is the ONLY field that draws that
+  line, and a consumer holding an empty set has to choose between reading it
+  as "unclassified" and as "nothing is personal". AxiBridge read it the
+  second way and filtered every modifier out of its Damage Modifiers panel —
+  blank for every natively parsed log, reported 2026-08-26. The data was
+  fully computed the whole time; only the classification was missing. The
+  parity table's old entry called the field "a pure re-index of data
+  `damageModMap` and the per-player arrays already carry", which was wrong
+  on both counts, and the reason it gave for skipping it — that the spec
+  spelling was not reproducible here — was wrong too: `players[].profession`
+  has carried exactly GW2EI's `Spec.ToString()` all along.
+
+  GW2EI's rule is reproduced exactly, including the `SpecSpecificShared`
+  subtlety that a shallower reading would miss: EI tests the descriptor's
+  `Srcs`, not the source bucket `DamageModifiersContainer` filed the
+  modifier under, so a `.UsingSpecSpecificShared()` modifier is OFFERED to
+  everyone while counting as personal only for its own spec.
+
+  Calibrated against the reference export (`fixtures/local/
+  wvw-postrework.ei.json`, EI 3.27.0.0): the **same 14 spec keys**, and
+  across all **69 ids both engines emit, zero classification disagreements
+  in either direction**. Six ids the export calls personal are absent here
+  because this engine's catalog does not emit those modifiers at all — a
+  pre-existing coverage gap, asserted as such by the test rather than
+  tolerated as slack. Rides `damageModMap`'s existing `--modifiers` gate:
+  the two describe the same id space, so emitting one without the other
+  would hand a consumer a partition of a table it cannot see.
+
+### Fixed
+- The native-json baseline digest had been red on `main` since the v1.7.0
+  release, which bumped `axilog.version` without re-digesting. `"1.6.2"` and
+  `"1.7.0"` are the same byte length, so the guard reported the confusing
+  half of its failure — length matched, digest did not. Proven to be the
+  version string and nothing else before regenerating: the pre-change
+  capture contains exactly one occurrence of `"1.7.0"`, and substituting
+  `"1.6.2"` back for it reproduces the old digest byte for byte.
+
 ## v1.7.0 — 2026-08-26
 
 ### Added

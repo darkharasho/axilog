@@ -144,6 +144,8 @@ blocks.damage_mods.by_entity.<id>.overall.<id>.damage_gain
 blocks.damage_mods.by_entity.<id>.overall.<id>.hit_count
 blocks.damage_mods.by_entity.<id>.overall.<id>.total_damage
 blocks.damage_mods.by_entity.<id>.overall.<id>.total_hit_count
+blocks.damage_mods.personal
+blocks.damage_mods.personal.<spec>
 blocks.defenses
 blocks.defenses.by_entity
 blocks.defenses.by_entity.<id>

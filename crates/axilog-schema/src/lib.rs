@@ -145,6 +145,26 @@ pub struct Report {
     /// bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub damage_mod_map: Option<BTreeMap<i32, DamageModDescOut>>,
+    /// SPEC name -> the ids in [`Self::damage_mod_map`] that are that
+    /// spec's OWN modifiers -- the native counterpart of EI's top-level
+    /// `personalDamageMods`. Gated and present exactly like
+    /// [`Self::damage_mod_map`], which it is a partition of: every id here
+    /// is a key there, and the ids in NEITHER are the shared ones (relics,
+    /// food, squad buffs) whose gain is credited to every benefiting
+    /// player rather than to whoever provided them.
+    ///
+    /// Ids are signed and sorted ascending, matching
+    /// [`DamageModEntryOut::id`]. See
+    /// `axilog_core::analysis::damage_mods::DamageModifierResults::
+    /// personal` for the emission rule, the `SpecSpecificShared`
+    /// subtlety, and why an EMPTY map means "unclassified", never
+    /// "nothing is personal".
+    ///
+    /// Size on the committed fixture: 12 spec keys, 53 ids, 382 bytes
+    /// compact -- 0.14% of the `--modifiers` document, so it rides
+    /// `damage_mod_map`'s gate rather than earning one of its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personal_damage_mods: Option<BTreeMap<String, Vec<i32>>>,
 }
 /// One skill's best-effort entry (M14, Task 2) -- mirrors
 /// `axilog_core::analysis::skill_map::SkillMapEntry` field-for-field.
@@ -1753,6 +1773,11 @@ pub fn build_report(
                     })
                 })
                 .collect()
+        }),
+        // Same gate as `damage_mod_map` above, from the same emission pass
+        // -- see `Report::personal_damage_mods`.
+        personal_damage_mods: damage_mods.map(|d| {
+            d.personal.iter().map(|(spec, ids)| (spec.clone(), ids.iter().copied().collect())).collect()
         }),
     }
 }

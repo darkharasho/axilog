@@ -471,6 +471,39 @@ pub struct DamageModifierResults {
     /// `damageModMap` the same lazy way, from inside the per-player
     /// emission loop (`JsonDamageModifierDataBuilder.cs:47-51`).
     pub meta: BTreeMap<i32, DamageModifierMeta>,
+    /// SPEC name -> the signed ids in [`Self::meta`] that are that spec's
+    /// OWN modifiers -- GW2EI's top-level `personalDamageMods`
+    /// (`JsonLogBuilder.cs:315`), built in the same emission loop as
+    /// `damageModMap` (`JsonDamageModifierDataBuilder.cs:52-63`, and the
+    /// identical incoming twin at `:102-113`).
+    ///
+    /// The key is `Spec.ToString()` -- the elite spec when the player has
+    /// one, the base profession otherwise, exactly what this project's
+    /// ei-json `players[].profession` carries. A spec appears only if one
+    /// of its players actually EMITTED a personal modifier, so a squad
+    /// member who never landed a qualifying hit contributes no key.
+    ///
+    /// This is the ONLY signal that separates a player's own trait/skill
+    /// modifiers from the shared ones (relics, food, squad buffs) that
+    /// every benefiting player is credited with. A consumer reading an
+    /// EMPTY map must treat the whole set as UNCLASSIFIED rather than as
+    /// "nothing is personal": that conflation is what blanked AxiBridge's
+    /// Damage Modifiers panel for every natively parsed log, back when
+    /// this field did not exist.
+    ///
+    /// # `SpecSpecificShared` is personal, and only to its own spec
+    ///
+    /// GW2EI tests membership against the descriptor's `Srcs`
+    /// (`profEnums.Intersect(dMod.Srcs).Any()`), NOT against the source
+    /// bucket the container filed the modifier under. A
+    /// `.UsingSpecSpecificShared()` modifier is filed under `Common` so it
+    /// is OFFERED to everyone (`DamageModifiersContainer.cs:89-98`) while
+    /// still remembering its spec, so it lands here for that spec's
+    /// players and nowhere else. Hence the check below is
+    /// [`model::ModSource::applies_to`] and deliberately NOT
+    /// [`model::DamageModifierDef::applies_to_spec`], which short-circuits
+    /// to `true` on exactly those modifiers.
+    pub personal: BTreeMap<String, BTreeSet<i32>>,
 }
 
 /// Evaluate `defs` over `raw` for every squad player in `enc`.
@@ -706,7 +739,32 @@ pub fn evaluate_full(
         })
         .collect();
 
-    DamageModifierResults { overall, per_target: per_target_out, meta }
+    // `personalDamageMods` -- see `DamageModifierResults::personal`. Driven
+    // off `overall` alone: a `per_target` row only ever exists alongside
+    // the `overall` row for the same `(actor, definition)` (both counters
+    // are incremented in the same branch of the hit loop), so EI's second
+    // pass over the target-scoped arrays cannot contribute an id this pass
+    // has not already seen.
+    let spec_of: BTreeMap<u64, (&str, &str)> = enc
+        .players
+        .iter()
+        .map(|p| (p.agent_addr, (p.profession.as_str(), p.elite_spec.as_str())))
+        .collect();
+    let mut personal: BTreeMap<String, BTreeSet<i32>> = BTreeMap::new();
+    for &(actor, json_id) in overall.keys() {
+        let Some(&(profession, elite_spec)) = spec_of.get(&actor) else { continue };
+        let source = def_by_id(json_id).source;
+        if !matches!(source, model::ModSource::Spec(_)) {
+            continue;
+        }
+        if !source.applies_to(profession, elite_spec) {
+            continue;
+        }
+        let spec = if elite_spec.is_empty() { profession } else { elite_spec };
+        personal.entry(spec.to_string()).or_default().insert(json_id);
+    }
+
+    DamageModifierResults { overall, per_target: per_target_out, meta, personal }
 }
 
 /// Convenience entry point over [`catalog::CATALOG`].

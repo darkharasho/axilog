@@ -37,6 +37,9 @@ const EXEMPT: &[(&str, &str)] = &[
     // spells them as an index signature (`Dict[str, X]` / `Record<string,
     // X>`), so there is no literal name to look for.
     ("<id>", "an id-keyed map slot, not a field name"),
+    // Same reasoning, for the one dynamic map keyed by something other
+    // than an id: `blocks.damage_mods.personal` is keyed by SPEC name.
+    ("<spec>", "a spec-keyed map slot, not a field name"),
 ];
 
 /// Wire keys the key-set golden cannot see, because they are emitted only
