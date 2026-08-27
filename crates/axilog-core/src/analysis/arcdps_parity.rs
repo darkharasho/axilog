@@ -135,6 +135,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// wrong down.
 pub const DOWN_UNDO_WINDOW_MS: u64 = 100;
 
+/// Every "determined" buff id, which the down-undo chain walks through rather
+/// than breaking on. There is no single one: the catalog carries three, all
+/// sharing one wiki icon, and which is emitted depends on the context and the
+/// agent. The reference's `SKILL_DETERMINED_PLAYER = 788` was read off the
+/// training golem; player downs in the WvW fixture carry 762, and 788 shows up
+/// there on a non-player agent.
+const DETERMINED_IDS: [u32; 3] = [762, 785, 788];
+
 /// True for the era-appropriate `BUFFREMOVE_ALL` wire shape. Transcribed
 /// from [`crate::analysis::support`]'s two era loops, which carry the full
 /// GW2EI provenance for both predicates.
@@ -166,8 +174,11 @@ pub fn apply(
     addr_to_rep: &BTreeMap<u64, u64>,
     registry: &InstidRegistry,
 ) {
-    let idx: BTreeMap<u64, usize> =
-        players.iter().enumerate().map(|(i, p)| (p.agent_addr, i)).collect();
+    let idx: BTreeMap<u64, usize> = players
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.agent_addr, i))
+        .collect();
     let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
 
     let post_era = raw.header.is_post_buff_rework();
@@ -178,7 +189,10 @@ pub fn apply(
     // down-undo pass is allowed to take back. `(time, event index, player
     // index, by_minion)`; the last field says which bucket the credit went
     // into, so the take-back decrements the same one.
-    let mut self_rows: BTreeMap<u64, Vec<(u64, usize, usize, bool)>> = BTreeMap::new();
+    // Keyed by raw event index: `(holder, player index, by_minion)`. The
+    // down-undo walk looks rows up by the index it is standing on, so it needs
+    // no separate ordering.
+    let mut self_row_at: BTreeMap<usize, (u64, usize, bool)> = BTreeMap::new();
 
     for (k, e) in raw.events.iter().enumerate() {
         if !is_remove_all(e, post_era) {
@@ -218,13 +232,15 @@ pub fn apply(
                     } else {
                         s.cleanses_arcdps += 1;
                     }
-                    self_rows.entry(rep(holder)).or_default().push((e.time, k, i, by_minion));
+                    self_row_at.insert(k, (rep(holder), i, by_minion));
                 }
             }
             continue;
         }
         // Rule 5: the remover (pet folded into master) is credited.
-        let Some(&i) = idx.get(&rep(remover_actor)) else { continue };
+        let Some(&i) = idx.get(&rep(remover_actor)) else {
+            continue;
+        };
         let s = &mut players[i].support;
         if is_condition && e.iff == iff::FRIEND {
             if by_minion {
@@ -248,19 +264,84 @@ pub fn apply(
     // Rule 6: take back the self-removal burst each down produces. A row may
     // only be taken back once (the reference's `dst_agent = 0` dedupe, which
     // never reaches the log -- see `DOWN_UNDO_WINDOW_MS`).
+    //
+    // Walked as a chain, the way the reference does it: backwards from the
+    // down over the rows between the downed agent and itself, stopping at the
+    // first entry that is not a buff removal. Two adjustments are forced by
+    // the fact that we read a log rather than arcdps' live buffer, and both
+    // were verified against every down in `fixtures/wvw-small.anon.zevtc`:
+    //
+    // - **Statechange rows are skipped, not treated as chain entries.** The
+    //   reference walks arcdps' internal buff-event chain, which contains no
+    //   statechange rows; the log stream interleaves them. Breaking on them
+    //   truncated 4 of the 25 bursts to nothing, every one of them on a
+    //   `sc == 62` row that is not a buff event at all.
+    // - **The walk is bounded by `DOWN_UNDO_WINDOW_MS`.** arcdps' chain is a
+    //   bounded live ring buffer; a log has no such horizon, so an agent whose
+    //   previous buff event was minutes earlier accumulates removals all the
+    //   way back. Unbounded, one burst reached 23 rows against a true 10.
+    //
+    // Bounded and skipping statechanges, the chain walk agrees with a plain
+    // time window on all 25 downs, so this refinement costs nothing against
+    // the calibration and only guards logs where a non-removal buff event
+    // lands inside the window.
     let mut consumed: BTreeSet<usize> = BTreeSet::new();
-    for e in raw.events.iter().filter(|e| e.is_statechange == sc::CHANGE_DOWN) {
-        let holder = rep(e.src_agent);
-        let Some(rows) = self_rows.get(&holder) else { continue };
-        let floor = e.time.saturating_sub(DOWN_UNDO_WINDOW_MS);
-        for &(t, k, i, by_minion) in rows.iter().rev() {
-            if t > e.time {
-                continue;
-            }
-            if t < floor {
+    let downs: Vec<usize> = raw
+        .events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.is_statechange == sc::CHANGE_DOWN)
+        .map(|(i, _)| i)
+        .collect();
+    for di in downs {
+        let d = &raw.events[di];
+        let holder = rep(d.src_agent);
+        let floor = d.time.saturating_sub(DOWN_UNDO_WINDOW_MS);
+        for j in (0..di).rev() {
+            let e2 = &raw.events[j];
+            if e2.time < floor {
                 break;
             }
-            if !consumed.insert(k) {
+            let involves_self = rep(e2.src_agent) == holder && rep(e2.dst_agent) == holder;
+            let server_row = e2.src_agent == 0 && rep(e2.dst_agent) == holder;
+            if !involves_self && !server_row {
+                continue;
+            }
+            let any_buffremove = is_remove_all(e2, post_era) || e2.is_buffremove != 0;
+            if !any_buffremove {
+                // Not a removal. Three kinds of row pass through without
+                // breaking the chain; everything else ends it.
+                //
+                // deltaconnected: *"the chain i loop over is going to
+                // lock/unlock around the condi sim loop, evtc logs dont. so
+                // its possible youll see buff damage inbetween the server
+                // buffremove messages - you should do `skillid_readback ==
+                // SKILL_DETERMINED_PLAYER || (cur->statechange == CBTS_COMBAT
+                // && cur->buff)` to skip over buff damage without breaking
+                // out"*. So any buff row in a combat entry is skipped, which
+                // covers buff damage ticks and buff applies alike.
+                let buff_combat_row =
+                    e2.is_statechange == 0 && e2.is_activation == 0 && e2.buff != 0;
+                let determined = DETERMINED_IDS.contains(&e2.skillid);
+                // Anything the server applies with a zero source: flagged as
+                // almost guaranteed to sit between the down and its removals.
+                let server_row = e2.src_agent == 0;
+                if buff_combat_row || determined || server_row {
+                    continue;
+                }
+                // Statechange rows are not chain entries at all -- arcdps'
+                // chain holds buff events only, the log stream interleaves
+                // these. Skipping them is what keeps the burst intact.
+                if e2.is_statechange != 0 {
+                    continue;
+                }
+                break;
+            }
+            // Any buffremove keeps the chain alive; only REMOVE_ALL scored.
+            let Some(&(row_holder, i, by_minion)) = self_row_at.get(&j) else {
+                continue;
+            };
+            if row_holder != holder || !consumed.insert(j) {
                 continue;
             }
             let s = &mut players[i].support;
@@ -290,11 +371,30 @@ mod tests {
 
     fn ev() -> RawEvent {
         RawEvent {
-            time: 1_000, src_agent: 0, dst_agent: 0, value: 0, buff_dmg: 0, overstack: 0,
-            skillid: 0, src_instid: 0, dst_instid: 0, src_master_instid: 0,
-            dst_master_instid: 0, iff: iff::FRIEND, buff: 1, result: 0, is_activation: 0,
-            is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: 0,
-            is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
+            time: 1_000,
+            src_agent: 0,
+            dst_agent: 0,
+            value: 0,
+            buff_dmg: 0,
+            overstack: 0,
+            skillid: 0,
+            src_instid: 0,
+            dst_instid: 0,
+            src_master_instid: 0,
+            dst_master_instid: 0,
+            iff: iff::FRIEND,
+            buff: 1,
+            result: 0,
+            is_activation: 0,
+            is_buffremove: 0,
+            is_ninety: 0,
+            is_fifty: 0,
+            is_moving: 0,
+            is_statechange: 0,
+            is_flanking: 0,
+            is_shields: 0,
+            is_offcycle: 0,
+            pad: 0,
         }
     }
 
@@ -313,33 +413,56 @@ mod tests {
     /// Registers `PLAYER_A_INSTID -> PLAYER_A` so a pet row carrying
     /// `master_instid = PLAYER_A_INSTID` folds onto A.
     fn registration() -> RawEvent {
-        RawEvent { src_agent: PLAYER_A, src_instid: PLAYER_A_INSTID, time: 0, ..ev() }
+        RawEvent {
+            src_agent: PLAYER_A,
+            src_instid: PLAYER_A_INSTID,
+            time: 0,
+            ..ev()
+        }
     }
 
     fn run(mut events: Vec<RawEvent>) -> Vec<PlayerMetrics> {
         events.insert(0, registration());
         let raw = RawLog {
-            header: RawHeader { build: "20260114".into(), revision: 1, boss_id: 1 },
+            header: RawHeader {
+                build: "20260114".into(),
+                revision: 1,
+                boss_id: 1,
+            },
             agents: vec![],
             skills: vec![],
             events,
             guid_map: vec![],
         };
         let mut players = vec![
-            PlayerMetrics { agent_addr: PLAYER_A, ..Default::default() },
-            PlayerMetrics { agent_addr: PLAYER_B, ..Default::default() },
+            PlayerMetrics {
+                agent_addr: PLAYER_A,
+                ..Default::default()
+            },
+            PlayerMetrics {
+                agent_addr: PLAYER_B,
+                ..Default::default()
+            },
         ];
-        let addr_to_rep: BTreeMap<u64, u64> =
-            [(PLAYER_A, PLAYER_A), (PLAYER_B, PLAYER_B), (ENEMY, ENEMY), (PET_A, PET_A)]
-                .into_iter()
-                .collect();
+        let addr_to_rep: BTreeMap<u64, u64> = [
+            (PLAYER_A, PLAYER_A),
+            (PLAYER_B, PLAYER_B),
+            (ENEMY, ENEMY),
+            (PET_A, PET_A),
+        ]
+        .into_iter()
+        .collect();
         let registry = InstidRegistry::build(&raw);
         apply(&mut players, &raw, &addr_to_rep, &registry);
         players
     }
 
     fn a(players: &[PlayerMetrics]) -> crate::analysis::support::SupportMetrics {
-        players.iter().find(|p| p.agent_addr == PLAYER_A).unwrap().support
+        players
+            .iter()
+            .find(|p| p.agent_addr == PLAYER_A)
+            .unwrap()
+            .support
     }
 
     /// Rule 5: B strips a condition off A -- a cleanse credited to B.
@@ -384,7 +507,10 @@ mod tests {
         );
         let p = run(vec![removal(BLIND, PLAYER_A, PLAYER_B)]);
         let b = p.iter().find(|p| p.agent_addr == PLAYER_B).unwrap().support;
-        assert_eq!(b.cleanses_arcdps, 1, "blind cleansed by someone else does count");
+        assert_eq!(
+            b.cleanses_arcdps, 1,
+            "blind cleansed by someone else does count"
+        );
     }
 
     /// Rule 3: the reference's `if (dst_iid && src_iid)` -- a removal row
@@ -417,7 +543,11 @@ mod tests {
         e.dst_master_instid = PLAYER_A_INSTID;
         let p = run(vec![e]);
         assert_eq!(a(&p).cleanses_arcdps, 0);
-        assert_eq!(a(&p).cleanses_arcdps_by_minion, 1, "credited to the master, not the pet");
+        assert_eq!(
+            a(&p).cleanses_arcdps_by_minion,
+            1,
+            "credited to the master, not the pet"
+        );
     }
 
     /// Rule 5: the recipient side is decided by the row's own `iff` byte --
@@ -465,7 +595,11 @@ mod tests {
         let mut later = removal(WEAKNESS, PLAYER_A, PLAYER_A);
         later.time = 50_000;
         let p = run(vec![burst, down(5_001), down(5_002), later]);
-        assert_eq!(a(&p).cleanses_arcdps, 1, "burst taken back once; the later cleanse survives");
+        assert_eq!(
+            a(&p).cleanses_arcdps,
+            1,
+            "burst taken back once; the later cleanse survives"
+        );
     }
 
     /// Rule 6 is window-bounded: a self-cleanse well before the down is
@@ -481,6 +615,124 @@ mod tests {
             ..ev()
         };
         assert_eq!(a(&run(vec![earlier, down])).cleanses_arcdps, 1);
+    }
+
+    /// The chain walk must step over buff damage. deltaconnected: arcdps'
+    /// chain locks around the condi sim loop and a log does not, so buff
+    /// damage ticks land between the server's buffremove rows. Breaking on
+    /// one would truncate the burst.
+    #[test]
+    fn buff_damage_between_removals_does_not_break_the_chain() {
+        let mut first = removal(BLEEDING, PLAYER_A, PLAYER_A);
+        first.time = 5_000;
+        // A bleed tick on A: a combat row carrying `buff`, not a removal.
+        let tick = RawEvent {
+            skillid: BLEEDING,
+            src_agent: PLAYER_A,
+            dst_agent: PLAYER_A,
+            buff_dmg: 300,
+            time: 5_000,
+            ..ev()
+        };
+        let mut second = removal(WEAKNESS, PLAYER_A, PLAYER_A);
+        second.time = 5_000;
+        let down = RawEvent {
+            src_agent: PLAYER_A,
+            time: 5_001,
+            is_statechange: sc::CHANGE_DOWN,
+            ..ev()
+        };
+        let p = run(vec![first, tick, second, down]);
+        assert_eq!(
+            a(&p).cleanses_arcdps,
+            0,
+            "both removals taken back across the tick"
+        );
+    }
+
+    /// Statechange rows are not chain entries -- arcdps walks a buff-event
+    /// chain that never contains them, while the log stream interleaves them
+    /// freely. On the real fixture, breaking on `sc == 62` rows truncated 4 of
+    /// 25 bursts to nothing.
+    #[test]
+    fn statechange_rows_do_not_break_the_chain() {
+        let mut first = removal(BLEEDING, PLAYER_A, PLAYER_A);
+        first.time = 5_000;
+        let noise = RawEvent {
+            src_agent: PLAYER_A,
+            dst_agent: PLAYER_A,
+            time: 5_000,
+            is_statechange: 62,
+            buff: 0,
+            ..ev()
+        };
+        let mut second = removal(WEAKNESS, PLAYER_A, PLAYER_A);
+        second.time = 5_000;
+        let down = RawEvent {
+            src_agent: PLAYER_A,
+            time: 5_001,
+            is_statechange: sc::CHANGE_DOWN,
+            ..ev()
+        };
+        let p = run(vec![first, noise, second, down]);
+        assert_eq!(
+            a(&p).cleanses_arcdps,
+            0,
+            "both removals taken back across the statechange"
+        );
+    }
+
+    /// The chain still ends somewhere: a direct-damage row (a combat entry
+    /// with no `buff`) is what the reference breaks on.
+    #[test]
+    fn direct_damage_ends_the_chain() {
+        let mut earlier = removal(BLEEDING, PLAYER_A, PLAYER_A);
+        earlier.time = 5_000;
+        let hit = RawEvent {
+            src_agent: PLAYER_A,
+            dst_agent: PLAYER_A,
+            value: 500,
+            buff: 0,
+            time: 5_000,
+            ..ev()
+        };
+        let mut recent = removal(WEAKNESS, PLAYER_A, PLAYER_A);
+        recent.time = 5_000;
+        let down = RawEvent {
+            src_agent: PLAYER_A,
+            time: 5_001,
+            is_statechange: sc::CHANGE_DOWN,
+            ..ev()
+        };
+        // Walking back: `recent` is taken back, then the hit ends the chain
+        // and `earlier` survives as an ordinary self-cleanse.
+        let p = run(vec![earlier, hit, recent, down]);
+        assert_eq!(a(&p).cleanses_arcdps, 1);
+    }
+
+    /// Every "determined" id is walked through, not broken on -- 788 is the
+    /// golem's, 762 is what WvW player downs carry.
+    #[test]
+    fn any_determined_id_is_walked_through() {
+        for determined in DETERMINED_IDS {
+            let mut burst = removal(BLEEDING, PLAYER_A, PLAYER_A);
+            burst.time = 5_000;
+            let marker = RawEvent {
+                skillid: determined,
+                src_agent: PLAYER_A,
+                dst_agent: PLAYER_A,
+                time: 5_000,
+                ..ev()
+            };
+            let down = RawEvent {
+                src_agent: PLAYER_A,
+                time: 5_001,
+                is_statechange: sc::CHANGE_DOWN,
+                ..ev()
+            };
+            let p = run(vec![burst, marker, down]);
+            assert_eq!(a(&p).cleanses_arcdps, 0, "id {determined} broke the chain");
+        }
     }
 
     /// A down only takes back the DOWNED agent's own burst.
