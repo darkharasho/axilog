@@ -31,7 +31,7 @@ pub struct EntitySeriesDetail {
 impl EntitySeriesDetail {
     pub fn len(&self) -> usize { self.per_player.len() }
     pub fn is_empty(&self) -> bool { self.per_player.is_empty() }
-    pub fn get(&self, i: usize) -> &PlayerSeries { &self.per_player[i] }
+    pub fn at(&self, i: usize) -> &PlayerSeries { &self.per_player[i] }
 }
 
 /// The convenience form every real caller wants: derive the instid
@@ -121,6 +121,20 @@ pub fn build(
     // this backwards (or omitting it) produces buckets that are silently
     // all zero or wildly out of range -- see this module's test module for
     // the distinct-bucket assertion that would catch it.
+    //
+    // Deliberately DROPS events past `duration_ms` rather than clamping
+    // them into the last bucket: the scalars these lanes decompose
+    // (`cc::apply_cc`, `fold_outgoing_boon_strips`,
+    // `defenses::build_with_registry`) truncate nothing, so on a log with
+    // events past the encounter window the lane sum can read strictly
+    // below the scalar. Clamping would make the sums match again, but at
+    // the cost of folding an out-of-window event into the last bucket's
+    // count -- changing a value this branch has otherwise held
+    // byte-identical, and matching the pre-existing squad `cc_applied`
+    // lane's own truncation is worth more than an unconditional sum
+    // equality. See `EntitySeries::cc_applied`/`strips`/`strips_taken` in
+    // `axilog-schema` for the doc comments this trade-off is spelled out
+    // against ("within the encounter window", not unconditionally).
     let bucket = |time: u64| -> Option<usize> {
         let b = (time.saturating_sub(t0) / res) as usize;
         (b < buckets).then_some(b)
@@ -267,7 +281,7 @@ mod tests {
         let (enc, raw, registry, players, squad, enemies, addr_to_rep) = two_cc_fixture();
         let detail = build(&enc, &raw, &registry, &players, &squad, &enemies, &addr_to_rep);
         for (i, p) in players.iter().enumerate() {
-            let bucketed: u32 = detail.get(i).cc_applied.iter().sum();
+            let bucketed: u32 = detail.at(i).cc_applied.iter().sum();
             assert_eq!(bucketed, p.cc_applied, "player {i} CC buckets must sum to scalar");
         }
     }
@@ -278,7 +292,7 @@ mod tests {
     fn cc_events_separate_into_distinct_buckets() {
         let (enc, raw, registry, players, squad, enemies, addr_to_rep) = two_cc_fixture();
         let detail = build(&enc, &raw, &registry, &players, &squad, &enemies, &addr_to_rep);
-        let s = &detail.get(0).cc_applied;
+        let s = &detail.at(0).cc_applied;
         assert_eq!(s[1], 1, "first CC at t=1500ms lands in bucket 1");
         assert_eq!(s[7], 1, "second CC at t=7500ms lands in bucket 7");
         assert_eq!(s.iter().sum::<u32>(), 2);
@@ -372,12 +386,12 @@ mod tests {
         let detail = build(&enc, &raw, &registry, &players, &squad, &enemies, &addr_to_rep);
         for (i, p) in players.iter().enumerate() {
             assert_eq!(
-                detail.get(i).strips.iter().sum::<u32>(),
+                detail.at(i).strips.iter().sum::<u32>(),
                 p.support.strips,
                 "player {i} outgoing strip buckets must sum to the scalar",
             );
             assert_eq!(
-                detail.get(i).strips_taken.iter().sum::<u32>(),
+                detail.at(i).strips_taken.iter().sum::<u32>(),
                 p.defenses.boon_strips_taken,
                 "player {i} incoming strip buckets must sum to the scalar",
             );
@@ -438,12 +452,12 @@ mod tests {
         let detail = build(&enc, &raw, &registry, &players, &squad, &enemies, &addr_to_rep);
 
         // Player 0 (addr 100): their own CC at bucket 1, nothing at bucket 7.
-        assert_eq!(detail.get(0).cc_applied[1], 1, "player 0's own CC must land in player 0's slot at bucket 1");
-        assert_eq!(detail.get(0).cc_applied[7], 0, "player 0's slot must stay zero at player 1's bucket");
+        assert_eq!(detail.at(0).cc_applied[1], 1, "player 0's own CC must land in player 0's slot at bucket 1");
+        assert_eq!(detail.at(0).cc_applied[7], 0, "player 0's slot must stay zero at player 1's bucket");
 
         // Player 1 (addr 101): their own CC at bucket 7, nothing at bucket 1.
-        assert_eq!(detail.get(1).cc_applied[7], 1, "player 1's own CC must land in player 1's slot at bucket 7");
-        assert_eq!(detail.get(1).cc_applied[1], 0, "player 1's slot must stay zero at player 0's bucket");
+        assert_eq!(detail.at(1).cc_applied[7], 1, "player 1's own CC must land in player 1's slot at bucket 7");
+        assert_eq!(detail.at(1).cc_applied[1], 0, "player 1's slot must stay zero at player 0's bucket");
     }
 
     /// Two squad players (addr 100, addr 101) and one enemy (addr 200),
@@ -504,11 +518,85 @@ mod tests {
         let detail = build(&enc, &raw, &registry, &players, &squad, &enemies, &addr_to_rep);
 
         // Player 0 (addr 100): their own strip at bucket 2, nothing at bucket 8.
-        assert_eq!(detail.get(0).strips[2], 1, "player 0's own strip must land in player 0's slot at bucket 2");
-        assert_eq!(detail.get(0).strips[8], 0, "player 0's slot must stay zero at player 1's bucket");
+        assert_eq!(detail.at(0).strips[2], 1, "player 0's own strip must land in player 0's slot at bucket 2");
+        assert_eq!(detail.at(0).strips[8], 0, "player 0's slot must stay zero at player 1's bucket");
 
         // Player 1 (addr 101): their own strip at bucket 8, nothing at bucket 2.
-        assert_eq!(detail.get(1).strips[8], 1, "player 1's own strip must land in player 1's slot at bucket 8");
-        assert_eq!(detail.get(1).strips[2], 0, "player 1's slot must stay zero at player 0's bucket");
+        assert_eq!(detail.at(1).strips[8], 1, "player 1's own strip must land in player 1's slot at bucket 8");
+        assert_eq!(detail.at(1).strips[2], 0, "player 1's slot must stay zero at player 0's bucket");
+    }
+
+    /// Two squad players (addr 100, addr 101) and one enemy (addr 200),
+    /// each taking one INCOMING strip (the enemy strips a boon off them) at
+    /// a distinct time. `strips_taken` has no bucket-INDEX pin anywhere
+    /// else in the suite -- `entity_strip_lanes_align_bucket_for_bucket_
+    /// with_the_squad_lane` in `v1_entity_series_cc_strips.rs` covers
+    /// `strips` against the squad lane (there is no squad-level
+    /// `strips_taken` to align against), and `per_player_strip_buckets_sum_
+    /// to_scalars` above only checks the TOTAL. So today `strips_taken`'s
+    /// only protection against a uniform bucket shift is that it happens to
+    /// share the `bucket()` closure with `strips` and `cc_applied` -- this
+    /// fixture pins it directly, the same transposition-proofing shape as
+    /// `two_player_strip_fixture` above but for the incoming direction.
+    fn two_player_strip_taken_fixture() -> (Encounter, RawLog, InstidRegistry, Vec<PlayerMetrics>, BTreeSet<u64>, BTreeSet<u64>, BTreeMap<u64, u64>) {
+        let squad: BTreeSet<u64> = [100u64, 101u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [200u64].into_iter().collect();
+        let addr_to_rep: BTreeMap<u64, u64> = [(100u64, 100u64), (101u64, 101u64)].into_iter().collect();
+
+        let mut dummy = base_event();
+        dummy.time = 0;
+        dummy.src_agent = 999;
+        dummy.dst_agent = 999;
+
+        // Incoming: the enemy (200) strips a boon off each squad player, at
+        // distinct times so a transposed `idx` map cannot accidentally pass.
+        let mut taken_100 = base_event();
+        taken_100.time = 3000; // bucket 3
+        taken_100.is_buffremove = crate::evtc::buff_remove::ALL;
+        taken_100.skillid = crate::analysis::buffs::MIGHT;
+        taken_100.src_agent = 100;
+        taken_100.dst_agent = 200;
+        taken_100.value = 2500;
+
+        let mut taken_101 = base_event();
+        taken_101.time = 9000; // bucket 9
+        taken_101.is_buffremove = crate::evtc::buff_remove::ALL;
+        taken_101.skillid = crate::analysis::buffs::MIGHT;
+        taken_101.src_agent = 101;
+        taken_101.dst_agent = 200;
+        taken_101.value = 2500;
+
+        let events = vec![dummy, taken_100, taken_101];
+        let raw = RawLog {
+            header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
+            agents: vec![raw_agent(100), raw_agent(101), raw_agent(200)],
+            skills: vec![],
+            events,
+            guid_map: vec![],
+        };
+        assert_eq!(raw.log_start_ms(), 0, "fixture must have log_start_ms == 0");
+
+        let registry = InstidRegistry::build(&raw);
+        let enc = enc_from(10_000, vec![enc_player(100), enc_player(101)]);
+        let players = vec![
+            PlayerMetrics { agent_addr: 100, ..Default::default() },
+            PlayerMetrics { agent_addr: 101, ..Default::default() },
+        ];
+
+        (enc, raw, registry, players, squad, enemies, addr_to_rep)
+    }
+
+    #[test]
+    fn incoming_strips_taken_are_indexed_by_player_not_transposed() {
+        let (enc, raw, registry, players, squad, enemies, addr_to_rep) = two_player_strip_taken_fixture();
+        let detail = build(&enc, &raw, &registry, &players, &squad, &enemies, &addr_to_rep);
+
+        // Player 0 (addr 100): their own taken strip at bucket 3, nothing at bucket 9.
+        assert_eq!(detail.at(0).strips_taken[3], 1, "player 0's own taken strip must land in player 0's slot at bucket 3");
+        assert_eq!(detail.at(0).strips_taken[9], 0, "player 0's slot must stay zero at player 1's bucket");
+
+        // Player 1 (addr 101): their own taken strip at bucket 9, nothing at bucket 3.
+        assert_eq!(detail.at(1).strips_taken[9], 1, "player 1's own taken strip must land in player 1's slot at bucket 9");
+        assert_eq!(detail.at(1).strips_taken[3], 0, "player 1's slot must stay zero at player 0's bucket");
     }
 }

@@ -92,6 +92,15 @@ fn entity_cc_and_strip_lanes_sum_to_block_scalars() {
     let defenses = v1.blocks.defenses.as_ref().expect("defenses block present");
 
     let mut checked = 0usize;
+    // Running totals across every friendly row, so the non-vacuity guard
+    // below can pin the CC and strips-taken lanes the same way the strips
+    // lane is already pinned (against the squad total, in the next test):
+    // `cc_sum == applied_total` and `taken_sum == boon_strips_taken` both
+    // pass trivially at `0 == 0` on a fixture that never records friendly
+    // CC or incoming strips, which proves only that the fields exist, not
+    // that the decomposition is right.
+    let mut cc_total = 0u64;
+    let mut taken_total = 0u64;
     // Friendly rows only: `by_entity` also carries the enemy rows Task 8
     // added, and no pass measures these lanes for an enemy -- so `None`
     // there is the honest answer, not a regression. (The brief's sketch
@@ -108,6 +117,7 @@ fn entity_cc_and_strip_lanes_sum_to_block_scalars() {
             "entity {}: the CC lane must decompose `blocks.cc[].applied_total`",
             e.id
         );
+        cc_total += cc_sum;
 
         let strips_sum: u64 =
             entity.strips.as_ref().expect("strips lane present").decode_u64().iter().sum();
@@ -127,9 +137,20 @@ fn entity_cc_and_strip_lanes_sum_to_block_scalars() {
              `blocks.defenses[].boon_strips_taken`",
             e.id
         );
+        taken_total += taken_sum;
         checked += 1;
     }
     assert!(checked > 0, "no friendly series rows to check -- the fixture proved nothing");
+    assert!(
+        cc_total > 0,
+        "the fixture recorded no friendly CC at all -- the `cc_sum == applied_total` pin \
+         above would otherwise hold vacuously at 0 == 0"
+    );
+    assert!(
+        taken_total > 0,
+        "the fixture recorded no incoming strips at all -- the `taken_sum == \
+         boon_strips_taken` pin above would otherwise hold vacuously at 0 == 0"
+    );
 }
 
 /// The BUCKET-INDEX pin, and the reason this file exists rather than three

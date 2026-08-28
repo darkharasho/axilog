@@ -2166,16 +2166,22 @@ class EntitySeries(_EntitySeriesRequired, total=False):
     barrier_received_1s: SeriesOut
     #: Outgoing crowd control applied by this entity, per second. Present
     #: only with `timeseries=True`. Sums to
-    #: `blocks["cc"]["by_entity"][id]["applied_total"]`. PER-BUCKET, not
-    #: cumulative -- unlike the three healing lanes above.
+    #: `blocks["cc"]["by_entity"][id]["applied_total"]` WITHIN THE ENCOUNTER
+    #: WINDOW -- an event timestamped past the encounter's duration is
+    #: dropped from the lane rather than clamped into the last bucket, so
+    #: the sum can read strictly below the scalar on such a log.
+    #: PER-BUCKET, not cumulative -- unlike the three healing lanes above.
     cc_applied: SeriesOut
     #: Boons this entity removed from enemies, per second. Present only with
     #: `timeseries=True`. Sums to
-    #: `blocks["support"]["by_entity"][id]["strips"]`.
+    #: `blocks["support"]["by_entity"][id]["strips"]` WITHIN THE ENCOUNTER
+    #: WINDOW -- see `cc_applied` for the same out-of-window caveat.
     strips: SeriesOut
     #: Boons removed FROM this entity, per second. Present only with
     #: `timeseries=True`. Sums to
-    #: `blocks["defenses"]["by_entity"][id]["boon_strips_taken"]`.
+    #: `blocks["defenses"]["by_entity"][id]["boon_strips_taken"]` WITHIN THE
+    #: ENCOUNTER WINDOW -- see `cc_applied` for the same out-of-window
+    #: caveat.
     strips_taken: SeriesOut
 
 class SeriesBlock(TypedDict):

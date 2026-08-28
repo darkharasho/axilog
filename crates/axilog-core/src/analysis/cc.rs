@@ -110,6 +110,21 @@ pub fn timeline_with_registry(
     // EVERY remover the primitive returns, including enemy-on-enemy
     // removals and unknown/unrostered removers, and would only happen to
     // equal the squad total on fixtures that never exercise that case.
+    //
+    // EMPTY on purpose, unlike `entity_series::build`'s real `addr_to_rep`:
+    // `outgoing_boon_strips` keys its output map on `rep(e.dst_agent)`, and
+    // with an empty map `rep` is the identity, so the key is the RAW
+    // `dst_agent` address. The `squad.contains(&remover)` filter below is
+    // therefore checking raw-address membership, which is correct today
+    // only because `squad` here is built as the address UNION (every
+    // `agent_addrs` entry across all players, same as `entity_series`'s
+    // `squad`), not the set of representative addresses. If this filter
+    // ever moved to rep addresses (e.g. to fold a relogged account's raw
+    // addrs together before the membership check), passing an empty map
+    // here would silently break: a raw addr that is a relog alt would no
+    // longer resolve to its rep before the `contains` check, and the squad
+    // lane would undercount relative to `entity_series`'s per-player lanes
+    // and to the `support`/`defenses` scalars they all claim to agree with.
     let addr_to_rep: BTreeMap<u64, u64> = BTreeMap::new();
     for (remover, events) in
         crate::analysis::support::outgoing_boon_strips(raw, enemies, &addr_to_rep)

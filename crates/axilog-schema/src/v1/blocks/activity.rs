@@ -782,7 +782,12 @@ pub struct EntitySeries {
     pub barrier_received_1s: Option<SeriesOut>,
     /// Outgoing crowd control applied by this entity, per second. Gated on
     /// `timeseries` like the other per-entity lanes; sums to
-    /// `blocks.cc.by_entity[id].applied_total`.
+    /// `blocks.cc.by_entity[id].applied_total` WITHIN THE ENCOUNTER WINDOW
+    /// -- an event timestamped past `duration_ms` is dropped from the lane
+    /// rather than clamped into the last bucket, so a log with such events
+    /// can sum strictly below the scalar it decomposes. See the `bucket()`
+    /// closure in `axilog_core::analysis::entity_series::build` for why
+    /// that truncation is deliberate rather than a bug.
     ///
     /// PER-BUCKET, not cumulative -- unlike the three healing lanes above,
     /// which are GW2EI-shaped running totals. The squad-level
@@ -792,13 +797,16 @@ pub struct EntitySeries {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cc_applied: Option<SeriesOut>,
     /// Boons this entity removed from enemies, per second. Sums to
-    /// `blocks.support.by_entity[id].strips`. Per-bucket, same gate and
-    /// same grid as [`Self::cc_applied`].
+    /// `blocks.support.by_entity[id].strips` WITHIN THE ENCOUNTER WINDOW
+    /// -- see [`Self::cc_applied`] for the same out-of-window-events
+    /// caveat. Per-bucket, same gate and same grid as [`Self::cc_applied`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strips: Option<SeriesOut>,
     /// Boons removed FROM this entity, per second. Sums to
-    /// `blocks.defenses.by_entity[id].boon_strips_taken`. Per-bucket, same
-    /// gate and same grid as [`Self::cc_applied`].
+    /// `blocks.defenses.by_entity[id].boon_strips_taken` WITHIN THE
+    /// ENCOUNTER WINDOW -- see [`Self::cc_applied`] for the same
+    /// out-of-window-events caveat. Per-bucket, same gate and same grid as
+    /// [`Self::cc_applied`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strips_taken: Option<SeriesOut>,
 }
@@ -887,13 +895,13 @@ pub fn build_series(
         // damage), widened here because the envelope has one integer
         // encoder.
         let cc_applied = entity_series.map(|d| {
-            SeriesOut::encode_u64(res, &d.get(i).cc_applied.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
+            SeriesOut::encode_u64(res, &d.at(i).cc_applied.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
         });
         let strips = entity_series.map(|d| {
-            SeriesOut::encode_u64(res, &d.get(i).strips.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
+            SeriesOut::encode_u64(res, &d.at(i).strips.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
         });
         let strips_taken = entity_series.map(|d| {
-            SeriesOut::encode_u64(res, &d.get(i).strips_taken.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
+            SeriesOut::encode_u64(res, &d.at(i).strips_taken.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
         });
         // Keyed by the account's REPRESENTATIVE agent address, which is
         // what `PlayerOut::agent_addr` already is -- a relogged account is
