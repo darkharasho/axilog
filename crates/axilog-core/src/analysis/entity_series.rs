@@ -330,4 +330,132 @@ mod tests {
             );
         }
     }
+    /// Two squad players (addr 100, addr 101) and one enemy (addr 200),
+    /// 10s encounter, `log_start_ms() == 0`. Player 100's CC lands at
+    /// t=1500 (bucket 1), player 101's CC lands at t=7500 (bucket 7) --
+    /// deliberately DISTINCT buckets per player, so a transposed `idx` map
+    /// (player 100's events credited to slot 1, and vice versa) cannot
+    /// accidentally satisfy the assertions below the way a same-bucket or
+    /// single-player fixture could.
+    fn two_player_cc_fixture() -> (Encounter, RawLog, InstidRegistry, Vec<PlayerMetrics>, BTreeSet<u64>, BTreeSet<u64>, BTreeMap<u64, u64>) {
+        let squad: BTreeSet<u64> = [100u64, 101u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [200u64].into_iter().collect();
+        let addr_to_rep: BTreeMap<u64, u64> = [(100u64, 100u64), (101u64, 101u64)].into_iter().collect();
+
+        let mut dummy = base_event();
+        dummy.time = 0;
+        dummy.src_agent = 999;
+        dummy.dst_agent = 999;
+
+        let events = vec![
+            dummy,
+            cc_ev(1500, 100, 200, 500), // player 100's CC -> bucket 1
+            cc_ev(7500, 101, 200, 700), // player 101's CC -> bucket 7
+        ];
+        let raw = RawLog {
+            header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
+            agents: vec![],
+            skills: vec![],
+            events,
+            guid_map: vec![],
+        };
+        assert_eq!(raw.log_start_ms(), 0, "fixture must have log_start_ms == 0");
+
+        let registry = InstidRegistry::build(&raw);
+        let enc = enc_from(10_000, vec![enc_player(100), enc_player(101)]);
+        let players = vec![
+            PlayerMetrics { agent_addr: 100, ..Default::default() },
+            PlayerMetrics { agent_addr: 101, ..Default::default() },
+        ];
+
+        (enc, raw, registry, players, squad, enemies, addr_to_rep)
+    }
+
+    /// The positional contract `entity_series::build` is documented to
+    /// hold (indexing matches `players`, like `healing_detail`) -- the next
+    /// task (a downstream chart) joins on this being right. A wrong `idx`
+    /// map (e.g. built off insertion order instead of `agent_addr`, or with
+    /// the two players' slots swapped) would misattribute every lane while
+    /// every single-player and sum-invariant test in this module still
+    /// passes, since those only check TOTALS, never WHICH player's slot an
+    /// event landed in.
+    #[test]
+    fn cc_applied_is_indexed_by_player_not_transposed() {
+        let (enc, raw, registry, players, squad, enemies, addr_to_rep) = two_player_cc_fixture();
+        let detail = build(&enc, &raw, &registry, &players, &squad, &enemies, &addr_to_rep);
+
+        // Player 0 (addr 100): their own CC at bucket 1, nothing at bucket 7.
+        assert_eq!(detail.get(0).cc_applied[1], 1, "player 0's own CC must land in player 0's slot at bucket 1");
+        assert_eq!(detail.get(0).cc_applied[7], 0, "player 0's slot must stay zero at player 1's bucket");
+
+        // Player 1 (addr 101): their own CC at bucket 7, nothing at bucket 1.
+        assert_eq!(detail.get(1).cc_applied[7], 1, "player 1's own CC must land in player 1's slot at bucket 7");
+        assert_eq!(detail.get(1).cc_applied[1], 0, "player 1's slot must stay zero at player 0's bucket");
+    }
+
+    /// Two squad players (addr 100, addr 101) and one enemy (addr 200),
+    /// each landing one OUTGOING strip on the enemy at a distinct time --
+    /// same transposition-proofing rationale as `two_player_cc_fixture`,
+    /// for the strip primitives instead of the CC predicate.
+    fn two_player_strip_fixture() -> (Encounter, RawLog, InstidRegistry, Vec<PlayerMetrics>, BTreeSet<u64>, BTreeSet<u64>, BTreeMap<u64, u64>) {
+        let squad: BTreeSet<u64> = [100u64, 101u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [200u64].into_iter().collect();
+        let addr_to_rep: BTreeMap<u64, u64> = [(100u64, 100u64), (101u64, 101u64)].into_iter().collect();
+
+        let mut dummy = base_event();
+        dummy.time = 0;
+        dummy.src_agent = 999;
+        dummy.dst_agent = 999;
+
+        // Role inversion in `outgoing_boon_strips`: owner (src) = victim
+        // (the enemy), remover (dst) = the squad player getting credit.
+        let mut strip_100 = base_event();
+        strip_100.time = 2000; // bucket 2
+        strip_100.is_buffremove = crate::evtc::buff_remove::ALL;
+        strip_100.skillid = crate::analysis::buffs::MIGHT;
+        strip_100.src_agent = 200;
+        strip_100.dst_agent = 100;
+        strip_100.value = 3000;
+
+        let mut strip_101 = base_event();
+        strip_101.time = 8000; // bucket 8
+        strip_101.is_buffremove = crate::evtc::buff_remove::ALL;
+        strip_101.skillid = crate::analysis::buffs::MIGHT;
+        strip_101.src_agent = 200;
+        strip_101.dst_agent = 101;
+        strip_101.value = 2500;
+
+        let events = vec![dummy, strip_100, strip_101];
+        let raw = RawLog {
+            header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
+            agents: vec![raw_agent(100), raw_agent(101), raw_agent(200)],
+            skills: vec![],
+            events,
+            guid_map: vec![],
+        };
+        assert_eq!(raw.log_start_ms(), 0, "fixture must have log_start_ms == 0");
+
+        let registry = InstidRegistry::build(&raw);
+        let enc = enc_from(10_000, vec![enc_player(100), enc_player(101)]);
+        let players = vec![
+            PlayerMetrics { agent_addr: 100, ..Default::default() },
+            PlayerMetrics { agent_addr: 101, ..Default::default() },
+        ];
+
+        (enc, raw, registry, players, squad, enemies, addr_to_rep)
+    }
+
+    #[test]
+    fn outgoing_strips_are_indexed_by_player_not_transposed() {
+        let (enc, raw, registry, players, squad, enemies, addr_to_rep) = two_player_strip_fixture();
+        let detail = build(&enc, &raw, &registry, &players, &squad, &enemies, &addr_to_rep);
+
+        // Player 0 (addr 100): their own strip at bucket 2, nothing at bucket 8.
+        assert_eq!(detail.get(0).strips[2], 1, "player 0's own strip must land in player 0's slot at bucket 2");
+        assert_eq!(detail.get(0).strips[8], 0, "player 0's slot must stay zero at player 1's bucket");
+
+        // Player 1 (addr 101): their own strip at bucket 8, nothing at bucket 2.
+        assert_eq!(detail.get(1).strips[8], 1, "player 1's own strip must land in player 1's slot at bucket 8");
+        assert_eq!(detail.get(1).strips[2], 0, "player 1's slot must stay zero at player 0's bucket");
+    }
 }
