@@ -34,6 +34,59 @@ impl EntitySeriesDetail {
     pub fn get(&self, i: usize) -> &PlayerSeries { &self.per_player[i] }
 }
 
+/// The convenience form every real caller wants: derive the instid
+/// registry, the squad and enemy address sets and the relog fold from the
+/// resolved encounter, then call [`build`].
+///
+/// Those four derivations are `analyze()`'s own, kept private there, so
+/// before this existed each of the six build paths (`axilog-api`,
+/// `axilog-cli`, `axilog-node`, `axilog-py` twice, and the schema test
+/// harness) carried a byte-identical copy of them. They agreed today and
+/// would have agreed right up until the first signature change here, at
+/// which point one missed site is silent divergence rather than a compile
+/// error -- so the fold lives in one place instead.
+///
+/// NOT free, despite reading like bookkeeping: `InstidRegistry::build` is a
+/// full pass over `raw.events`, and [`build`] itself makes two more (the CC
+/// scan and `wvw::resolve_teams`) on top of the strip primitives' own. The
+/// three address folds ARE cheap -- they walk the resolved roster, not the
+/// log -- but the raw-log scans dominate, which is why this whole pass sits
+/// behind the `--timeseries` gate.
+///
+/// The GATE stays at the call site. This function has no opinion about
+/// whether it should run; a caller that has decided it should is the only
+/// one that can know.
+pub fn build_from(
+    enc: &Encounter,
+    raw: &RawLog,
+    metrics: &crate::analysis::Metrics,
+) -> EntitySeriesDetail {
+    // A friendly account can own several raw agent addrs (relog / build
+    // swap within one recording), so `squad` is the union of ALL of them
+    // while `addr_to_rep` folds each back onto the account's single
+    // representative -- the same pair `analyze()` builds, for the same
+    // reason. `enemy_addrs` is the enemy-side union; this pass needs only
+    // membership on that side, never the enemy representative.
+    let squad: BTreeSet<u64> =
+        enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
+    let addr_to_rep: BTreeMap<u64, u64> = enc
+        .players
+        .iter()
+        .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
+        .collect();
+    let enemy_addrs: BTreeSet<u64> =
+        enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+    build(
+        enc,
+        raw,
+        &InstidRegistry::build(raw),
+        &metrics.players,
+        &squad,
+        &enemy_addrs,
+        &addr_to_rep,
+    )
+}
+
 pub fn build(
     enc: &Encounter,
     raw: &RawLog,

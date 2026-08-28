@@ -62,27 +62,13 @@ fn build() -> (axilog_schema::Report, axilog_schema::v1::ReportV1) {
     // is the always-on half of that block.
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
     let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
-    // CC-strip-timelines Task 4: per-player 1s CC/strip lanes.
-    let entity_series = {
-        let squad: std::collections::BTreeSet<u64> =
-            enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
-        let addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
-            .players
-            .iter()
-            .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
-            .collect();
-        let enemy_addrs: std::collections::BTreeSet<u64> =
-            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
-        axilog_core::analysis::entity_series::build(
-            &enc,
-            &raw,
-            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
-            &metrics.players,
-            &squad,
-            &enemy_addrs,
-            &addr_to_rep,
-        )
-    };
+    // CC-strip-timelines Task 4: the per-player 1s CC/strip lanes on
+    // `blocks.series.by_entity`. Supplied unconditionally here, like every
+    // other pass in this all-gates-on harness; production gates it on
+    // `--timeseries` because it is NOT cheap (`build_from` derives an
+    // `InstidRegistry`, a full pass over `raw.events`, and the pass itself
+    // makes several more scans on top of that).
+    let entity_series = axilog_core::analysis::entity_series::build_from(&enc, &raw, &metrics);
     // Task 12: the two name-keyed passes, now keyed by source ADDRESS at
     // the source and by source ENTITY ID once native reprojects them.
     let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);

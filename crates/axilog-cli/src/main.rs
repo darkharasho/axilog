@@ -463,29 +463,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
             });
             // CC-strip-timelines Task 4: the per-player 1s CC/strip lanes on
-            // `blocks.series.by_entity`. Rides `--timeseries` alone, and rebuilds
-            // the squad/enemy addr sets `analyze()` keeps private (they are two
-            // cheap folds over the resolved roster, not a re-scan of the log).
-            let entity_series = timeseries.then(|| {
-                let squad: std::collections::BTreeSet<u64> =
-                    enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
-                let addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
-                    .players
-                    .iter()
-                    .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
-                    .collect();
-                let enemy_addrs: std::collections::BTreeSet<u64> =
-                    enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
-                axilog_core::analysis::entity_series::build(
-                    &enc,
-                    &raw,
-                    &axilog_core::analysis::damage::InstidRegistry::build(&raw),
-                    &metrics.players,
-                    &squad,
-                    &enemy_addrs,
-                    &addr_to_rep,
-                )
-            });
+            // `blocks.series.by_entity`. Gated on `--timeseries` because it is NOT
+            // cheap: `build_from` derives an `InstidRegistry` (a full pass over
+            // `raw.events`) and the pass itself makes several more scans on top of
+            // that. Only the three address folds it also does are cheap.
+            let entity_series = timeseries
+                .then(|| axilog_core::analysis::entity_series::build_from(&enc, &raw, &metrics));
             let report = axilog_schema::build_report(
                 &enc,
                 &metrics,
