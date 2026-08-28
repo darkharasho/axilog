@@ -198,6 +198,25 @@ pub(crate) fn pet_credit_cc_events(
     friendly_team: Option<u32>,
     agent_team: &std::collections::BTreeMap<u64, u32>,
 ) -> Vec<(u64, u64, u64)> {
+    pet_credit_cc_events_timed(raw, registry, squad, enemies, friendly_team, agent_team)
+        .into_iter()
+        .map(|(owner, dst, dur, _time)| (owner, dst, dur))
+        .collect()
+}
+
+/// [`pet_credit_cc_events`] with the source event's absolute time appended
+/// (CC-strip-timelines Task 2, `entity_series`'s per-second CC series needs
+/// the timestamp to bucket pet-credited CC same as direct CC). The untimed
+/// version above delegates here -- a single traversal definition, so a
+/// change to the credit rule cannot apply to one and not the other.
+pub(crate) fn pet_credit_cc_events_timed(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+    enemies: &BTreeSet<u64>,
+    friendly_team: Option<u32>,
+    agent_team: &std::collections::BTreeMap<u64, u32>,
+) -> Vec<(u64, u64, u64, u64)> {
     let post_era = raw.header.is_post_buff_rework();
     let mut out = Vec::new();
     for e in &raw.events {
@@ -210,7 +229,7 @@ pub(crate) fn pet_credit_cc_events(
             Some(addr) if squad.contains(&addr) => addr,
             _ => continue,
         };
-        out.push((owner, e.dst_agent, e.value.max(0) as u64));
+        out.push((owner, e.dst_agent, e.value.max(0) as u64, e.time));
     }
     out
 }

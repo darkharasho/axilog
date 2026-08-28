@@ -48,6 +48,11 @@ pub mod health;
 /// retired `downs::apply` 10s-window approximation. See `contribution`'s
 /// module doc for the full methodology writeup.
 pub mod contribution;
+/// Per-entity 1s series for CC and boon strips, both directions
+/// (CC-strip-timelines Task 2) -- standalone from [`analyze`], like
+/// `health`/`missiles`/`replay` above; see `entity_series::build`'s module
+/// doc.
+pub mod entity_series;
 pub mod control_catalog;
 /// Per-skill damage distribution (outgoing + taken, per-target) (M12 Task 1)
 /// -- unlike `health`/`replay`/`missiles` above, this IS wired into
