@@ -10,6 +10,35 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.8.0 — 2026-08-28
+
+### Added
+- **Per-second CC and boon-strip series.** `SquadSeries` gains a required
+  `strips` lane, and `EntitySeries` gains `cc_applied`, `strips` and
+  `strips_taken` — the last three gated on `timeseries: true` like the
+  existing healing lanes. Every lane is folded from the primitive that
+  already produces its scalar counterpart (`is_cc`,
+  `support::outgoing_boon_strips`, `defenses::incoming_boon_strips`), and
+  sum-invariant tests pin each series against that scalar. The equality
+  holds within the encounter window: buckets are sized from
+  `duration_ms`, so an event timestamped past the encounter end is dropped
+  from the lane while still counting toward the scalar. This matches the
+  pre-existing squad `cc_applied` lane, and the field docs on all three
+  surfaces say so.
+- `analysis::entity_series`, a new module building the per-entity lanes,
+  indexed positionally over the `players` slice in the same order as
+  `healing_detail`. `build_from(&enc, &raw, &metrics)` is the constructor
+  callers should use; `build` remains available for callers that already
+  hold the resolved roster.
+
+### Changed
+- `support::outgoing_boon_strips` and `defenses::incoming_boon_strips` now
+  return `(time_ms, skillid, duration_ms)` rather than `(skillid,
+  duration_ms)`. The added field is the **raw** event time, not
+  log-relative — consumers must subtract `RawLog::log_start_ms()`. Both
+  existing folds ignore it, so `strips`, `strips_duration_ms` and
+  `boon_strips_taken` are unchanged for every fixture.
+
 ## v1.7.2 — 2026-08-27
 
 ### Fixed
