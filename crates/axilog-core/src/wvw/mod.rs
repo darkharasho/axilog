@@ -281,12 +281,32 @@ fn team_color_with(team_id: u32, dynamic: Option<&DynamicWvwTeamIds>) -> String 
     team_color(team_id)
 }
 
+/// True if `team_id` names a real team -- one this log's own CBTS_WVWTEAMS
+/// event declares, or failing that one the static colour tables know.
+///
+/// Used by `resolve_teams` to tell a genuine team id apart from the
+/// transient stamps arcdps emits before an agent's real team lands (`0`,
+/// and `1875`; see the calibration note there). Deliberately phrased as
+/// "resolves to a colour" rather than a blacklist, so a future sentinel
+/// costs nothing and a future real team id -- one CBTS_WVWTEAMS names but
+/// the static table has not caught up with -- still counts as real.
+fn is_real_team(team_id: u32, dynamic: Option<&DynamicWvwTeamIds>) -> bool {
+    team_color_with(team_id, dynamic) != "unknown"
+}
+
 /// Parse per-agent WvW team ids and the POINT_OF_VIEW (recording) agent from
 /// raw combat events. Shared by `apply` (friend/foe partition, below) and by
 /// the analysis layer (pet/minion damage attribution in `analysis::damage`).
 pub fn resolve_teams(raw: &RawLog) -> (BTreeMap<u64, u32>, Option<u64>) {
     let mut agent_team: BTreeMap<u64, u32> = BTreeMap::new();
     let mut recorded_by: Option<u64> = None;
+    // The log's own red/blue/green ids, when arcdps emitted CBTS_WVWTEAMS.
+    // `apply` parses this again for colour naming; it is one `find` over
+    // the event list and keeping the two independent avoids threading a
+    // parameter through `resolve_teams`' other callers in `analysis`.
+    let dynamic = raw.events.iter()
+        .find(|e| e.is_statechange == sc::WVW_TEAMS)
+        .map(parse_wvw_teams_event);
     for e in &raw.events {
         if e.is_statechange == sc::TEAM_CHANGE {
             // The WvW team id is carried in the `value` field (i32 @ offset
@@ -320,14 +340,39 @@ pub fn resolve_teams(raw: &RawLog) -> (BTreeMap<u64, u32>, Option<u64>) {
             // 45/40 split on both logs, and leaves the 10 unaffected EotM
             // logs from the same session byte-identical.
             //
+            // ...but first-write-wins is only sound among ids that name a
+            // real team, and `0` is not the only value that doesn't.
+            //
             // Team `0` is not a team: it is carried by a disjoint set of
             // agents (45 of 243 in the log above) that are `0` on every
-            // event they ever emit, never mixed with a real id. Prefer any
-            // real id over it, but keep it when it is all an agent has.
+            // event they ever emit, never mixed with a real id.
+            //
+            // Neither is `1875` (2026-08-28). Across 801 real WvW captures,
+            // 146 squad members in 94 logs emit `1875` before their real
+            // `TEAM_CHANGE`. It is not any world's team id, and the same
+            // value appears in logs whose friendly team is 2767, 433 AND
+            // 707 -- so it is a transient "not assigned yet" stamp, not a
+            // team. First-write-wins latched it and the friend/foe
+            // partition below then threw those squad members onto the enemy
+            // roster with team `"unknown"`. Only `audit:conditions`
+            // downstream ever noticed, because it is the one check that
+            // pins the roster per-account.
+            //
+            // Rather than blacklist another magic number, generalize the
+            // rule the `0` case was already an instance of: prefer an id
+            // that RESOLVES to a real team -- named by this log's own
+            // CBTS_WVWTEAMS event, or failing that present in the static
+            // colour tables -- over one that doesn't. Among real ids
+            // first-write-wins still governs, which is what keeps the Edge
+            // of the Mists teardown above resolving to the team the squad
+            // actually fought on (`1282`, `433` and `2543` are all real).
+            // An agent whose every stamp is unresolvable keeps its first,
+            // exactly as a `0`-only agent keeps `0`: we have nothing better
+            // to say about it.
             agent_team
                 .entry(e.src_agent)
                 .and_modify(|existing| {
-                    if *existing == 0 && team != 0 {
+                    if !is_real_team(*existing, dynamic.as_ref()) && is_real_team(team, dynamic.as_ref()) {
                         *existing = team;
                     }
                 })
@@ -601,7 +646,7 @@ mod tests {
     /// Synthetic CBTS_WVWTEAMS event with all-zero shard ids. Most callers
     /// only care about team ids; see `wvw_teams_event_with_shards` for the
     /// full 6xu32 payload.
-    fn wvw_teams_event(red: u32, blue: u32, green: u32) -> RawEvent {
+    pub(in crate::wvw) fn wvw_teams_event(red: u32, blue: u32, green: u32) -> RawEvent {
         wvw_teams_event_with_shards(red, blue, green, 0, 0, 0)
     }
     /// Synthetic CBTS_WVWTEAMS event. Packs all six ids into the same
@@ -609,7 +654,7 @@ mod tests {
     /// `[red_shard, blue_shard, green_shard, red_team, blue_team,
     /// green_team]` spanning `src_agent`(2), `dst_agent`(2), `value`(1),
     /// `buff_dmg`(1).
-    fn wvw_teams_event_with_shards(
+    pub(in crate::wvw) fn wvw_teams_event_with_shards(
         red: u32, blue: u32, green: u32,
         red_shard: u32, blue_shard: u32, green_shard: u32,
     ) -> RawEvent {
@@ -1162,5 +1207,62 @@ mod eotm_teardown_tests {
         let (agent_team, _) = resolve_teams(&raw);
         assert_eq!(agent_team.get(&1).copied(), Some(1282));
         assert_eq!(agent_team.get(&2).copied(), Some(0));
+    }
+
+    /// `0` is not the only non-team value arcdps stamps before an agent's
+    /// real team lands. Calibrated against 801 real WvW captures: 146
+    /// squad members across 94 logs emit `1875` -- a value that is not any
+    /// world's team id, and that shows up alongside friendly teams 2767,
+    /// 433 AND 707 -- before their real `TEAM_CHANGE`. First-write-wins
+    /// latched the sentinel and threw them onto the enemy roster.
+    #[test]
+    fn unresolvable_team_id_never_shadows_a_real_one() {
+        let raw = crate::evtc::RawLog {
+            header: RawHeader { build: "20260101".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![],
+            events: vec![
+                // The real regression, reduced: agent 1 is squad member
+                // `Caedeus` in `20260117-180458`.
+                ev(1, sc::TEAM_CHANGE, 1875),
+                ev(1, sc::TEAM_CHANGE, 2767),
+                // An agent whose only id is the sentinel keeps it, exactly
+                // as team `0` does -- we have nothing better to say.
+                ev(2, sc::TEAM_CHANGE, 1875),
+                // First-write-wins still governs among REAL ids: this is
+                // the Edge of the Mists teardown the rule exists for, where
+                // the recorder zones out and re-stamps every tracked agent.
+                ev(3, sc::TEAM_CHANGE, 1282),
+                ev(3, sc::TEAM_CHANGE, 433),
+                ev(3, sc::TEAM_CHANGE, 2543),
+            ],
+            guid_map: vec![],
+        };
+        let (agent_team, _) = resolve_teams(&raw);
+        assert_eq!(agent_team.get(&1).copied(), Some(2767), "sentinel must not shadow a real team");
+        assert_eq!(agent_team.get(&2).copied(), Some(1875), "keep the sentinel when it is all we have");
+        assert_eq!(agent_team.get(&3).copied(), Some(1282), "first-write-wins still governs real ids");
+    }
+
+    /// The dynamic CBTS_WVWTEAMS event is the log's own source of truth for
+    /// which ids are real, so an id it names counts as real even when the
+    /// static colour table has never heard of it.
+    #[test]
+    fn dynamic_wvw_teams_ids_count_as_real() {
+        let raw = crate::evtc::RawLog {
+            header: RawHeader { build: "20260101".into(), revision: 1, boss_id: 1 },
+            agents: vec![], skills: vec![],
+            events: vec![
+                super::tests::wvw_teams_event(9001, 9002, 9003),
+                ev(1, sc::TEAM_CHANGE, 1875),
+                ev(1, sc::TEAM_CHANGE, 9002),
+                // ...and first-write-wins holds among ids it names.
+                ev(2, sc::TEAM_CHANGE, 9001),
+                ev(2, sc::TEAM_CHANGE, 9003),
+            ],
+            guid_map: vec![],
+        };
+        let (agent_team, _) = resolve_teams(&raw);
+        assert_eq!(agent_team.get(&1).copied(), Some(9002));
+        assert_eq!(agent_team.get(&2).copied(), Some(9001));
     }
 }

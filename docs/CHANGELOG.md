@@ -10,6 +10,37 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## Unreleased
+
+### Fixed
+- **Squad members exiled to the enemy roster by a sentinel team id.**
+  `wvw::resolve_teams` resolves each agent's WvW team first-write-wins, a
+  rule calibrated in v1.7.x against Edge of the Mists teardown, where the
+  recorder zones out and re-stamps every tracked agent with a team nobody
+  fought on. That rule already carved out team `0` as "not a team", but
+  `0` is not the only non-team value arcdps emits: across 801 real WvW
+  captures, 146 squad members in 94 logs emit `1875` before their real
+  `TEAM_CHANGE`. `1875` is not any world's team id — the same value turns
+  up in logs whose friendly team is 2767, 433 *and* 707 — so first-write-
+  wins latched it, the friend/foe partition then filed those players as
+  enemies with team `"unknown"`, and their damage, boons and conditions
+  vanished from every squad total.
+
+  Fixed by generalizing the rule the `0` carve-out was already an instance
+  of: prefer a team id that *resolves* to a real team — named by the log's
+  own `CBTS_WVWTEAMS` event, or present in the static colour tables — over
+  one that does not. First-write-wins still governs among real ids, so the
+  Edge of the Mists teardown keeps resolving to the team the squad
+  actually fought on, and an agent whose every stamp is unresolvable keeps
+  its first, exactly as a `0`-only agent keeps `0`.
+
+  Pinned by unit tests covering all three cases (sentinel shadowed,
+  sentinel-only, real-id teardown) plus `dynamic_wvw_teams_ids_count_as_real`,
+  and by `tests/sentinel_team_calibration.rs`, a real-capture hook that
+  uses the EVTC agent block's squad subgroup — an authority independent of
+  `TEAM_CHANGE` — as ground truth that no subgroup-tagged player is ever
+  filed as an enemy.
+
 ## v1.8.0 — 2026-08-28
 
 ### Added
