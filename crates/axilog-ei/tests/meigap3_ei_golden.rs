@@ -675,7 +675,7 @@ fn ei_json_support_boon_strips_time_reconstructs_the_reference() {
         }
         // Reconstruct EI's per-boon `Math.Max` accumulator.
         let mut per_boon: BTreeMap<u32, u64> = BTreeMap::new();
-        for &(boon, ms) in detail.get(&p.agent_addr).into_iter().flatten() {
+        for &(_, boon, ms) in detail.get(&p.agent_addr).into_iter().flatten() {
             let cur = per_boon.entry(boon).or_insert(0);
             *cur = (*cur + ms).max(log_ms);
         }

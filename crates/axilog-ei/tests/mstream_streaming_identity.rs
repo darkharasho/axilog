@@ -136,6 +136,7 @@ fn render_both(flags: Flags) -> (String, String) {
             target_conditions: target_conditions.as_ref(),
             self_effects: self_effects.as_ref(),
             squad_buffs: Some(&squad_buffs),
+            entity_series: None,
             minions: minion_rollups.as_ref(),
             health_percents: health_percents.as_ref(),
             enemy_dist: enemy_dist.as_ref(),

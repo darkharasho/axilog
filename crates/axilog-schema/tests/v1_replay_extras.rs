@@ -71,6 +71,7 @@ fn document(extras: &ReplayExtras) -> serde_json::Value {
             squad_damage: vec![0],
             cc_applied: vec![0],
             downs: vec![0],
+            strips: vec![0],
         },
         boons: Default::default(),
         boon_uptime: Default::default(),

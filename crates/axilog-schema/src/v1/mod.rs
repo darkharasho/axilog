@@ -364,6 +364,15 @@ pub struct Passes<'a> {
     /// a flag can claim a pass ran when it did not, a `&HealingDetail`
     /// cannot.
     pub healing_series: Option<&'a axilog_core::analysis::healing_detail::HealingDetail>,
+    /// CC-strip-timelines Task 2/4 `--timeseries`: per-player 1-second
+    /// lanes for outgoing CC and boon strips in both directions,
+    /// positionally joined to `enc.players` exactly like
+    /// [`Self::healing_series`]. Lands on
+    /// `blocks.series.by_entity[].cc_applied` / `.strips` / `.strips_taken`.
+    ///
+    /// One pass, one flag, unlike the healing pair above -- every family it
+    /// produces is a per-second array, so there is nothing to re-split.
+    pub entity_series: Option<&'a axilog_core::analysis::entity_series::EntitySeriesDetail>,
     /// M11 Task 3's activity pass, positionally joined to `enc.players`.
     /// Lands on `blocks.replay.by_entity` -- the ALWAYS-ON half of that
     /// block, which is why this field is unlike every other one here: the
@@ -489,6 +498,7 @@ pub fn build_report_v1(
         passes.health_percents,
         passes.enemy_series,
         passes.healing_series,
+        passes.entity_series,
     );
     coverage.set(BlockName::Series, computed(series.is_empty()));
 
@@ -814,6 +824,7 @@ mod tests {
                 squad_damage: vec![0],
                 cc_applied: vec![0],
                 downs: vec![0],
+                strips: vec![0],
             },
             boons: Default::default(),
             boon_uptime: Default::default(),
@@ -881,6 +892,7 @@ mod tests {
                 squad_damage: vec![0],
                 cc_applied: vec![0],
                 downs: vec![0],
+                strips: vec![0],
             },
             boons: Default::default(),
             boon_uptime: Default::default(),
@@ -949,6 +961,7 @@ mod tests {
                 squad_damage: vec![0],
                 cc_applied: vec![0],
                 downs: vec![0],
+                strips: vec![0],
             },
             boons: Default::default(),
             boon_uptime: Default::default(),

@@ -96,6 +96,13 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
     // Ungated for the same reason as `activity` -- supplied in BOTH modes.
     let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
 
+    // CC-strip-timelines Task 4: the per-player 1s CC/strip lanes on
+    // `blocks.series.by_entity`. Gated on `--timeseries` because it is NOT
+    // cheap: `build_from` derives an `InstidRegistry` (a full pass over
+    // `raw.events`) and the pass itself makes several more scans on top of
+    // that. Only the three address folds it also does are cheap.
+    let entity_series = all_gates
+        .then(|| axilog_core::analysis::entity_series::build_from(&enc, &raw, &metrics));
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -131,6 +138,7 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
             dist_outcomes: dist_outcomes.as_ref(),
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
+            entity_series: entity_series.as_ref(),
             activity: Some(&activity),
             replay_extras: Some(&replay_extras),
             boon_states: boon_states.as_ref(),

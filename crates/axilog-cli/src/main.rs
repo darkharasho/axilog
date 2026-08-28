@@ -462,6 +462,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     format == Format::EiJson,
                 )
             });
+            // CC-strip-timelines Task 4: the per-player 1s CC/strip lanes on
+            // `blocks.series.by_entity`. Gated on `--timeseries` because it is NOT
+            // cheap: `build_from` derives an `InstidRegistry` (a full pass over
+            // `raw.events`) and the pass itself makes several more scans on top of
+            // that. Only the three address folds it also does are cheap.
+            let entity_series = timeseries
+                .then(|| axilog_core::analysis::entity_series::build_from(&enc, &raw, &metrics));
             let report = axilog_schema::build_report(
                 &enc,
                 &metrics,
@@ -492,6 +499,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     dist_outcomes: dist_outcomes.as_ref(),
                     healing_detail: healing_detail.as_ref().filter(|_| skill_damage),
                     healing_series: healing_detail.as_ref().filter(|_| timeseries),
+                    entity_series: entity_series.as_ref(),
                     activity: Some(&activity),
                     replay_extras: Some(&replay_extras),
                     boon_states: boon_states.as_ref(),

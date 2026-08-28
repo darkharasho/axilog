@@ -236,6 +236,13 @@ fn build_report_and_ei_inputs_from_bytes(
     let healing_detail = (want_skill_damage || want_timeseries)
         .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
         .flatten();
+    // CC-strip-timelines Task 4: the per-player 1s CC/strip lanes on
+    // `blocks.series.by_entity`. Gated on `--timeseries` because it is NOT
+    // cheap: `build_from` derives an `InstidRegistry` (a full pass over
+    // `raw.events`) and the pass itself makes several more scans on top of
+    // that. Only the three address folds it also does are cheap.
+    let entity_series = want_timeseries
+        .then(|| axilog_core::analysis::entity_series::build_from(&enc, &raw, &metrics));
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
@@ -325,6 +332,7 @@ fn build_report_and_ei_inputs_from_bytes(
             dist_outcomes: dist_outcomes.as_ref(),
             healing_detail: healing_detail.as_ref().filter(|_| want_skill_damage),
             healing_series: healing_detail.as_ref().filter(|_| want_timeseries),
+            entity_series: entity_series.as_ref(),
             activity: Some(&activity),
             replay_extras: Some(&replay_extras),
             boon_states: boon_states.as_ref(),

@@ -66,6 +66,13 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
     // is the always-on half of that block.
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
     let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
+    // CC-strip-timelines Task 4: the per-player 1s CC/strip lanes on
+    // `blocks.series.by_entity`. Supplied unconditionally here, like every
+    // other pass in this all-gates-on harness; production gates it on
+    // `--timeseries` because it is NOT cheap (`build_from` derives an
+    // `InstidRegistry`, a full pass over `raw.events`, and the pass itself
+    // makes several more scans on top of that).
+    let entity_series = axilog_core::analysis::entity_series::build_from(&enc, &raw, &metrics);
     // Task 12: the two name-keyed passes, now keyed by source ADDRESS at
     // the source and by source ENTITY ID once native reprojects them.
     let boon_states = axilog_core::analysis::buffs::states::build(&raw, &enc, &metrics.boons);
@@ -98,6 +105,7 @@ fn build_with_encounter() -> (serde_json::Value, axilog_core::model::Encounter) 
             dist_outcomes: Some(&dist_outcomes),
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
+            entity_series: Some(&entity_series),
             activity: Some(&activity),
             replay_extras: Some(&replay_extras),
             boon_states: Some(&boon_states),

@@ -48,6 +48,11 @@ pub mod health;
 /// retired `downs::apply` 10s-window approximation. See `contribution`'s
 /// module doc for the full methodology writeup.
 pub mod contribution;
+/// Per-entity 1s series for CC and boon strips, both directions
+/// (CC-strip-timelines Task 2) -- standalone from [`analyze`], like
+/// `health`/`missiles`/`replay` above; see `entity_series::build`'s module
+/// doc.
+pub mod entity_series;
 pub mod control_catalog;
 /// Per-skill damage distribution (outgoing + taken, per-target) (M12 Task 1)
 /// -- unlike `health`/`replay`/`missiles` above, this IS wired into
@@ -280,7 +285,7 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     pub downs_contribution_per_skill: BTreeMap<u32, u64> }
 #[derive(Debug, Clone, Default)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
-    pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
+    pub cc_applied: Vec<u32>, pub downs: Vec<u32>, pub strips: Vec<u32> }
 /// Severity of a [`Warning`]. Mirrors `v1::envelope::Severity`'s three-way
 /// split -- kept as an independent enum here so `axilog-core` does not
 /// depend on `axilog-schema`.

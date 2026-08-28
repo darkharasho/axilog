@@ -2,7 +2,7 @@ use crate::analysis::damage::InstidRegistry;
 use crate::analysis::{PlayerMetrics, Timeline};
 use crate::evtc::RawLog;
 use crate::model::Encounter;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub fn timeline(
     enc: &Encounter,
@@ -30,6 +30,7 @@ pub fn timeline_with_registry(
     let mut squad_damage = vec![0u64; buckets];
     let mut cc_applied = vec![0u32; buckets];
     let mut downs = vec![0u32; buckets];
+    let mut strips = vec![0u32; buckets];
     let t0 = raw.log_start_ms();
     // M4 Task 2: era-gate `is_cc` (see its doc comment) -- post-rework logs
     // route genuine CC through `buff == 1` rows too, via the shared
@@ -102,7 +103,44 @@ pub fn timeline_with_registry(
             cc_applied[b] += 1;
         }
     }
-    Timeline { resolution_ms: res, squad_damage, cc_applied, downs }
+    // Squad boon strips, from the same primitive `support::strips` folds, so
+    // this lane and `entity_series`'s per-player lane count identically.
+    // Filtered to squad removers (mirroring `fold_outgoing_boon_strips`'s
+    // `idx.get(&rep_addr)` squad-membership check) -- otherwise this sums
+    // EVERY remover the primitive returns, including enemy-on-enemy
+    // removals and unknown/unrostered removers, and would only happen to
+    // equal the squad total on fixtures that never exercise that case.
+    //
+    // EMPTY on purpose, unlike `entity_series::build`'s real `addr_to_rep`:
+    // `outgoing_boon_strips` keys its output map on `rep(e.dst_agent)`, and
+    // with an empty map `rep` is the identity, so the key is the RAW
+    // `dst_agent` address. The `squad.contains(&remover)` filter below is
+    // therefore checking raw-address membership, which is correct today
+    // only because `squad` here is built as the address UNION (every
+    // `agent_addrs` entry across all players, same as `entity_series`'s
+    // `squad`), not the set of representative addresses. If this filter
+    // ever moved to rep addresses (e.g. to fold a relogged account's raw
+    // addrs together before the membership check), passing an empty map
+    // here would silently break: a raw addr that is a relog alt would no
+    // longer resolve to its rep before the `contains` check, and the squad
+    // lane would undercount relative to `entity_series`'s per-player lanes
+    // and to the `support`/`defenses` scalars they all claim to agree with.
+    let addr_to_rep: BTreeMap<u64, u64> = BTreeMap::new();
+    for (remover, events) in
+        crate::analysis::support::outgoing_boon_strips(raw, enemies, &addr_to_rep)
+    {
+        if !squad.contains(&remover) {
+            continue;
+        }
+        for &(time, _skillid, _ms) in &events {
+            let b = (time.saturating_sub(t0) / res) as usize;
+            if b < buckets {
+                strips[b] += 1;
+            }
+        }
+    }
+
+    Timeline { resolution_ms: res, squad_damage, cc_applied, downs, strips }
 }
 
 /// CC application predicate (Task 3, M2; era-gated M4 Task 2): a
@@ -198,6 +236,25 @@ pub(crate) fn pet_credit_cc_events(
     friendly_team: Option<u32>,
     agent_team: &std::collections::BTreeMap<u64, u32>,
 ) -> Vec<(u64, u64, u64)> {
+    pet_credit_cc_events_timed(raw, registry, squad, enemies, friendly_team, agent_team)
+        .into_iter()
+        .map(|(owner, dst, dur, _time)| (owner, dst, dur))
+        .collect()
+}
+
+/// [`pet_credit_cc_events`] with the source event's absolute time appended
+/// (CC-strip-timelines Task 2, `entity_series`'s per-second CC series needs
+/// the timestamp to bucket pet-credited CC same as direct CC). The untimed
+/// version above delegates here -- a single traversal definition, so a
+/// change to the credit rule cannot apply to one and not the other.
+pub(crate) fn pet_credit_cc_events_timed(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+    enemies: &BTreeSet<u64>,
+    friendly_team: Option<u32>,
+    agent_team: &std::collections::BTreeMap<u64, u32>,
+) -> Vec<(u64, u64, u64, u64)> {
     let post_era = raw.header.is_post_buff_rework();
     let mut out = Vec::new();
     for e in &raw.events {
@@ -210,7 +267,7 @@ pub(crate) fn pet_credit_cc_events(
             Some(addr) if squad.contains(&addr) => addr,
             _ => continue,
         };
-        out.push((owner, e.dst_agent, e.value.max(0) as u64));
+        out.push((owner, e.dst_agent, e.value.max(0) as u64, e.time));
     }
     out
 }
@@ -648,5 +705,74 @@ mod tests {
             "a relogged enemy's two addresses must fold into ONE row, not two"
         );
         assert_eq!(players[0].cc_per_target[&9], (2, 500));
+    }
+
+    /// A minimal `RawEvent` with every field zeroed, for tests that only
+    /// care about a handful of overridden fields (mirrors
+    /// `support::tests::base_event`).
+    fn base_event() -> RawEvent {
+        RawEvent {
+            time: 0, src_agent: 0, dst_agent: 0, value: 0, buff_dmg: 0, overstack: 0,
+            skillid: 0, src_instid: 0, dst_instid: 0, src_master_instid: 0,
+            dst_master_instid: 0, iff: 0, buff: 0, result: 0, is_activation: 0,
+            is_buffremove: 0, is_ninety: 0, is_fifty: 0, is_moving: 0, is_statechange: 0,
+            is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
+        }
+    }
+
+    /// Builds the `(Encounter, RawLog, InstidRegistry, squad, enemies)`
+    /// tuple `timeline_with_registry` needs, for a squad of `{100}` and
+    /// enemies of `{200}` over a 3000ms fight (4 one-second buckets) --
+    /// enough headroom for a t=2500ms event to land in bucket 2 with a
+    /// trailing bucket 3 to prove `sum == 1` isn't a fluke of truncation.
+    fn timeline_fixture_with(
+        events: Vec<RawEvent>,
+    ) -> (Encounter, RawLog, InstidRegistry, BTreeSet<u64>, BTreeSet<u64>) {
+        let enc = Encounter {
+            kind: "wvw".into(), pve: None, map: "".into(), duration_ms: 3000, build: "".into(),
+            revision: 1, recorded_by: None, teams: vec![], players: vec![], enemies: vec![],
+            markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(),
+            started_at_unix: None, log_start_ms: 0, map_id: None,
+        };
+        // `RawLog::log_start_ms` reads the FIRST event's raw `time`
+        // (`evtc/mod.rs`), so anchor it at a NON-ZERO sentinel (1000ms) --
+        // anchoring at 0 would make `time.saturating_sub(t0)` an identity
+        // and hide a missing `- t0` entirely (a test built that way stays
+        // green even if the subtraction is deleted). At 1000ms, dropping
+        // `- t0` shifts every bucket index by one, which the paired test
+        // below is written to catch.
+        let mut sentinel = base_event();
+        sentinel.time = 1000;
+        let mut all_events = vec![sentinel];
+        all_events.extend(events);
+        let raw = raw_from(all_events);
+        let registry = InstidRegistry::build(&raw);
+        let squad: BTreeSet<u64> = [100u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [200u64].into_iter().collect();
+        (enc, raw, registry, squad, enemies)
+    }
+
+    #[test]
+    fn timeline_buckets_squad_strips() {
+        // One boon strip by a squad player off an enemy at t=3500ms, with
+        // the fixture's log-start sentinel anchored at t=1000ms (see
+        // `timeline_fixture_with`). The correct, log-relative bucket is
+        // (3500 - 1000) / 1000 = 2. Without the `- t0` subtraction the
+        // event would land in bucket 3 (3500 / 1000) instead -- verified by
+        // temporarily deleting `saturating_sub(t0)` in
+        // `timeline_with_registry` and confirming this test goes red
+        // before restoring it.
+        let mut e = base_event();
+        e.time = 3500;
+        e.is_buffremove = crate::evtc::buff_remove::ALL;
+        e.skillid = 740; // Might
+        e.src_agent = 200; // victim (enemy) — role inversion
+        e.dst_agent = 100; // remover (squad)
+        e.value = 3000;
+
+        let (enc, raw, registry, squad, enemies) = timeline_fixture_with(vec![e]);
+        let tl = timeline_with_registry(&enc, &raw, &registry, &squad, &enemies);
+        assert_eq!(tl.strips[2], 1, "strip at 3500ms with log start 1000ms lands in bucket 2");
+        assert_eq!(tl.strips.iter().sum::<u32>(), 1);
     }
 }

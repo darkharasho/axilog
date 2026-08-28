@@ -188,6 +188,13 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
     // is the always-on half of that block.
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
     let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
+    // CC-strip-timelines Task 4: the per-player 1s CC/strip lanes on
+    // `blocks.series.by_entity`. Supplied unconditionally here, like every
+    // other pass in this all-gates-on harness; production gates it on
+    // `--timeseries` because it is NOT cheap (`build_from` derives an
+    // `InstidRegistry`, a full pass over `raw.events`, and the pass itself
+    // makes several more scans on top of that).
+    let entity_series = axilog_core::analysis::entity_series::build_from(&enc, &raw, &metrics);
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -221,6 +228,7 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
             dist_outcomes: Some(&dist_outcomes),
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
+            entity_series: Some(&entity_series),
             activity: Some(&activity),
             replay_extras: Some(&replay_extras),
             boon_states: Some(&boon_states),

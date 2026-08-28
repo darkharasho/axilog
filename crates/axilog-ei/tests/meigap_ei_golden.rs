@@ -305,7 +305,7 @@ fn ei_json_incoming_cc_and_strips_match_the_reference_export_when_available() {
     for (rep, strips) in &strip_detail {
         let Some(account) = account_of_rep.get(rep) else { continue };
         let mut per_boon: BTreeMap<u32, Vec<u64>> = BTreeMap::new();
-        for &(boon, ms) in strips {
+        for &(_, boon, ms) in strips {
             per_boon.entry(boon).or_default().push(ms);
         }
         // Per boon, in GW2EI's own loop order: `current = 0`, then

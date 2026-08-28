@@ -768,6 +768,8 @@ class PerSecondOut(TypedDict):
     squad_damage: List[int]
     cc_applied: List[int]
     downs: List[int]
+    #: Boons the squad stripped off enemies, per second (1s buckets, non-cumulative).
+    strips: List[int]
 
 class TimelineOut(TypedDict):
     resolution_ms: int
@@ -2110,6 +2112,10 @@ class SquadSeries(TypedDict):
     damage: SeriesOut
     cc_applied: SeriesOut
     downs: SeriesOut
+    #: Boons the squad removed from enemies, per second. Folded from the
+    #: same `support::outgoing_boon_strips` primitive as the `strips`
+    #: scalar, so this lane sums to the squad total by construction.
+    strips: SeriesOut
 
 class TargetSeries(TypedDict):
     """Mirrors the legacy `PlayerTargetSeriesOut`, minus `enemy_id` (that's
@@ -2158,6 +2164,25 @@ class EntitySeries(_EntitySeriesRequired, total=False):
     healing_1s: SeriesOut
     healing_received_1s: SeriesOut
     barrier_received_1s: SeriesOut
+    #: Outgoing crowd control applied by this entity, per second. Present
+    #: only with `timeseries=True`. Sums to
+    #: `blocks["cc"]["by_entity"][id]["applied_total"]` WITHIN THE ENCOUNTER
+    #: WINDOW -- an event timestamped past the encounter's duration is
+    #: dropped from the lane rather than clamped into the last bucket, so
+    #: the sum can read strictly below the scalar on such a log.
+    #: PER-BUCKET, not cumulative -- unlike the three healing lanes above.
+    cc_applied: SeriesOut
+    #: Boons this entity removed from enemies, per second. Present only with
+    #: `timeseries=True`. Sums to
+    #: `blocks["support"]["by_entity"][id]["strips"]` WITHIN THE ENCOUNTER
+    #: WINDOW -- see `cc_applied` for the same out-of-window caveat.
+    strips: SeriesOut
+    #: Boons removed FROM this entity, per second. Present only with
+    #: `timeseries=True`. Sums to
+    #: `blocks["defenses"]["by_entity"][id]["boon_strips_taken"]` WITHIN THE
+    #: ENCOUNTER WINDOW -- see `cc_applied` for the same out-of-window
+    #: caveat.
+    strips_taken: SeriesOut
 
 class SeriesBlock(TypedDict):
     """`squad` is REQUIRED (see `MissilesBlock`). The squad series is

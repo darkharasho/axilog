@@ -507,6 +507,9 @@ fn ei_json_for_fixture(all_gates: bool) -> Option<serde_json::Value> {
             dist_outcomes: dist_outcomes.as_ref(),
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
+            // These lanes are pure counts, so the ei-json name-leak surface
+            // this file guards is unaffected either way.
+            entity_series: None,
             activity: Some(&activity),
             replay_extras: Some(&replay_extras),
             boon_states: boon_states.as_ref(),
