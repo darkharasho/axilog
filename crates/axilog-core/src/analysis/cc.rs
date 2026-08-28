@@ -105,10 +105,18 @@ pub fn timeline_with_registry(
     }
     // Squad boon strips, from the same primitive `support::strips` folds, so
     // this lane and `entity_series`'s per-player lane count identically.
+    // Filtered to squad removers (mirroring `fold_outgoing_boon_strips`'s
+    // `idx.get(&rep_addr)` squad-membership check) -- otherwise this sums
+    // EVERY remover the primitive returns, including enemy-on-enemy
+    // removals and unknown/unrostered removers, and would only happen to
+    // equal the squad total on fixtures that never exercise that case.
     let addr_to_rep: BTreeMap<u64, u64> = BTreeMap::new();
-    for (_remover, events) in
+    for (remover, events) in
         crate::analysis::support::outgoing_boon_strips(raw, enemies, &addr_to_rep)
     {
+        if !squad.contains(&remover) {
+            continue;
+        }
         for &(time, _skillid, _ms) in &events {
             let b = (time.saturating_sub(t0) / res) as usize;
             if b < buckets {
@@ -712,12 +720,15 @@ mod tests {
             started_at_unix: None, log_start_ms: 0, map_id: None,
         };
         // `RawLog::log_start_ms` reads the FIRST event's raw `time`
-        // (`evtc/mod.rs`), so anchor it at 0 with a no-op sentinel event --
-        // otherwise a fixture with only a t=2500ms event would make
-        // `log_start_ms` itself 2500 and every bucket index relative to
-        // that, silently hiding the exact log-start-subtraction bug this
-        // fixture exists to catch.
-        let mut all_events = vec![base_event()];
+        // (`evtc/mod.rs`), so anchor it at a NON-ZERO sentinel (1000ms) --
+        // anchoring at 0 would make `time.saturating_sub(t0)` an identity
+        // and hide a missing `- t0` entirely (a test built that way stays
+        // green even if the subtraction is deleted). At 1000ms, dropping
+        // `- t0` shifts every bucket index by one, which the paired test
+        // below is written to catch.
+        let mut sentinel = base_event();
+        sentinel.time = 1000;
+        let mut all_events = vec![sentinel];
         all_events.extend(events);
         let raw = raw_from(all_events);
         let registry = InstidRegistry::build(&raw);
@@ -728,9 +739,16 @@ mod tests {
 
     #[test]
     fn timeline_buckets_squad_strips() {
-        // One boon strip by a squad player off an enemy at t=2500ms.
+        // One boon strip by a squad player off an enemy at t=3500ms, with
+        // the fixture's log-start sentinel anchored at t=1000ms (see
+        // `timeline_fixture_with`). The correct, log-relative bucket is
+        // (3500 - 1000) / 1000 = 2. Without the `- t0` subtraction the
+        // event would land in bucket 3 (3500 / 1000) instead -- verified by
+        // temporarily deleting `saturating_sub(t0)` in
+        // `timeline_with_registry` and confirming this test goes red
+        // before restoring it.
         let mut e = base_event();
-        e.time = 2500;
+        e.time = 3500;
         e.is_buffremove = crate::evtc::buff_remove::ALL;
         e.skillid = 740; // Might
         e.src_agent = 200; // victim (enemy) — role inversion
@@ -739,7 +757,7 @@ mod tests {
 
         let (enc, raw, registry, squad, enemies) = timeline_fixture_with(vec![e]);
         let tl = timeline_with_registry(&enc, &raw, &registry, &squad, &enemies);
-        assert_eq!(tl.strips[2], 1, "strip at 2500ms lands in bucket 2");
+        assert_eq!(tl.strips[2], 1, "strip at 3500ms with log start 1000ms lands in bucket 2");
         assert_eq!(tl.strips.iter().sum::<u32>(), 1);
     }
 }
