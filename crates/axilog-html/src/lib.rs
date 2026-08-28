@@ -124,7 +124,7 @@ mod tests {
             ei_targets: vec![],
             timeline: TimelineOut {
                 resolution_ms: 1000,
-                per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![] },
+                per_second: PerSecondOut { squad_damage: vec![], cc_applied: vec![], downs: vec![], strips: vec![] },
             },
             warnings: vec![],
             replay: None,

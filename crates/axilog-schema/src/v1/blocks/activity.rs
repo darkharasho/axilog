@@ -687,6 +687,10 @@ pub struct SquadSeries {
     pub damage: SeriesOut,
     pub cc_applied: SeriesOut,
     pub downs: SeriesOut,
+    /// Boons the squad removed from enemies, per second. Folded from the
+    /// same `support::outgoing_boon_strips` primitive as the `strips`
+    /// scalar, so this lane sums to the squad total by construction.
+    pub strips: SeriesOut,
 }
 
 /// Mirrors the real `PlayerPerSecondOut` field-for-field -- the brief's
@@ -826,6 +830,10 @@ pub fn build_series(
         downs: SeriesOut::encode_u64(
             res,
             &ps.downs.iter().map(|v| u64::from(*v)).collect::<Vec<_>>(),
+        ),
+        strips: SeriesOut::encode_u64(
+            res,
+            &ps.strips.iter().map(|v| u64::from(*v)).collect::<Vec<_>>(),
         ),
     };
 

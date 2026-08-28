@@ -664,6 +664,8 @@ export interface PerSecondOut {
   squad_damage: number[]
   cc_applied: number[]
   downs: number[]
+  /** Boons the squad stripped off enemies, per second (1s buckets, non-cumulative). */
+  strips: number[]
 }
 
 export interface TimelineOut {
@@ -2311,6 +2313,8 @@ export interface SquadSeries {
   damage: SeriesOut
   cc_applied: SeriesOut
   downs: SeriesOut
+  /** Boons the squad removed from enemies, per second. Folded from the same `support::outgoing_boon_strips` primitive as the `strips` scalar, so this lane sums to the squad total by construction. */
+  strips: SeriesOut
 }
 
 /** Mirrors the legacy `PlayerTargetSeriesOut`, minus `enemy_id` (that's the map key here, joined by entity id). */

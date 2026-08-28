@@ -285,7 +285,7 @@ pub struct PlayerMetrics { pub agent_addr: u64, pub damage_total: u64, pub dps: 
     pub downs_contribution_per_skill: BTreeMap<u32, u64> }
 #[derive(Debug, Clone, Default)]
 pub struct Timeline { pub resolution_ms: u64, pub squad_damage: Vec<u64>,
-    pub cc_applied: Vec<u32>, pub downs: Vec<u32> }
+    pub cc_applied: Vec<u32>, pub downs: Vec<u32>, pub strips: Vec<u32> }
 /// Severity of a [`Warning`]. Mirrors `v1::envelope::Severity`'s three-way
 /// split -- kept as an independent enum here so `axilog-core` does not
 /// depend on `axilog-schema`.

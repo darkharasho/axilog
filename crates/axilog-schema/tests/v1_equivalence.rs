@@ -904,6 +904,7 @@ fn a_log_without_the_healing_extension_reports_unsupported_not_empty() {
             squad_damage: vec![0],
             cc_applied: vec![0],
             downs: vec![0],
+            strips: vec![0],
         },
         // The whole point of the witness: no healing addon on this log.
         healing_extension: None,
@@ -975,6 +976,7 @@ fn a_computed_block_with_no_rows_still_reports_empty() {
             squad_damage: vec![0],
             cc_applied: vec![0],
             downs: vec![0],
+            strips: vec![0],
         },
         ..Default::default()
     };
