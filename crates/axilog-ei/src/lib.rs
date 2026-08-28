@@ -3663,6 +3663,9 @@ mod tests {
                         healing_1s: None,
                         healing_received_1s: None,
                         barrier_received_1s: None,
+                        cc_applied: None,
+                        strips: None,
+                        strips_taken: None,
                     },
                 );
             }

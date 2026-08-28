@@ -96,6 +96,30 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
     // Ungated for the same reason as `activity` -- supplied in BOTH modes.
     let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
 
+    // CC-strip-timelines Task 4: the per-player 1s CC/strip lanes on
+    // `blocks.series.by_entity`. Rides `--timeseries` alone, and rebuilds
+    // the squad/enemy addr sets `analyze()` keeps private (they are two
+    // cheap folds over the resolved roster, not a re-scan of the log).
+    let entity_series = all_gates.then(|| {
+        let squad: std::collections::BTreeSet<u64> =
+            enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
+        let addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
+            .players
+            .iter()
+            .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
+            .collect();
+        let enemy_addrs: std::collections::BTreeSet<u64> =
+            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+        axilog_core::analysis::entity_series::build(
+            &enc,
+            &raw,
+            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+            &metrics.players,
+            &squad,
+            &enemy_addrs,
+            &addr_to_rep,
+        )
+    });
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -131,6 +155,7 @@ fn build(all_gates: bool) -> (Encounter, Metrics, Report, ReportV1) {
             dist_outcomes: dist_outcomes.as_ref(),
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
+            entity_series: entity_series.as_ref(),
             activity: Some(&activity),
             replay_extras: Some(&replay_extras),
             boon_states: boon_states.as_ref(),

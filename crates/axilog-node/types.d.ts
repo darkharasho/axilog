@@ -2365,6 +2365,23 @@ export interface EntitySeries {
    * ally-attribution caveat as `healing_received_1s`.
    */
   barrier_received_1s?: SeriesOut
+  /**
+   * Outgoing crowd control applied by this entity, per second. Present only
+   * with `timeseries: true`. Sums to `blocks.cc.by_entity[id].applied_total`.
+   * PER-BUCKET, not cumulative -- unlike the three healing lanes above.
+   */
+  cc_applied?: SeriesOut
+  /**
+   * Boons this entity removed from enemies, per second. Present only with
+   * `timeseries: true`. Sums to `blocks.support.by_entity[id].strips`.
+   */
+  strips?: SeriesOut
+  /**
+   * Boons removed FROM this entity, per second. Present only with
+   * `timeseries: true`. Sums to
+   * `blocks.defenses.by_entity[id].boon_strips_taken`.
+   */
+  strips_taken?: SeriesOut
 }
 
 /**

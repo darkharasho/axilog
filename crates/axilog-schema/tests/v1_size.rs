@@ -188,6 +188,27 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
     // is the always-on half of that block.
     let activity = axilog_core::analysis::replay::build_activity_intervals(&raw, &enc);
     let replay_extras = axilog_core::analysis::replay_extras::build(&raw);
+    // CC-strip-timelines Task 4: per-player 1s CC/strip lanes.
+    let entity_series = {
+        let squad: std::collections::BTreeSet<u64> =
+            enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
+        let addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
+            .players
+            .iter()
+            .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
+            .collect();
+        let enemy_addrs: std::collections::BTreeSet<u64> =
+            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+        axilog_core::analysis::entity_series::build(
+            &enc,
+            &raw,
+            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+            &metrics.players,
+            &squad,
+            &enemy_addrs,
+            &addr_to_rep,
+        )
+    };
     let legacy = axilog_schema::build_report(
         &enc,
         &metrics,
@@ -221,6 +242,7 @@ fn per_block_sizes_are_reported_for_the_benchmarks_doc() {
             dist_outcomes: Some(&dist_outcomes),
             healing_detail: healing_detail.as_ref(),
             healing_series: healing_detail.as_ref(),
+            entity_series: Some(&entity_series),
             activity: Some(&activity),
             replay_extras: Some(&replay_extras),
             boon_states: Some(&boon_states),

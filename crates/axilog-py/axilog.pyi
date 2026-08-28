@@ -2164,6 +2164,19 @@ class EntitySeries(_EntitySeriesRequired, total=False):
     healing_1s: SeriesOut
     healing_received_1s: SeriesOut
     barrier_received_1s: SeriesOut
+    #: Outgoing crowd control applied by this entity, per second. Present
+    #: only with `timeseries=True`. Sums to
+    #: `blocks["cc"]["by_entity"][id]["applied_total"]`. PER-BUCKET, not
+    #: cumulative -- unlike the three healing lanes above.
+    cc_applied: SeriesOut
+    #: Boons this entity removed from enemies, per second. Present only with
+    #: `timeseries=True`. Sums to
+    #: `blocks["support"]["by_entity"][id]["strips"]`.
+    strips: SeriesOut
+    #: Boons removed FROM this entity, per second. Present only with
+    #: `timeseries=True`. Sums to
+    #: `blocks["defenses"]["by_entity"][id]["boon_strips_taken"]`.
+    strips_taken: SeriesOut
 
 class SeriesBlock(TypedDict):
     """`squad` is REQUIRED (see `MissilesBlock`). The squad series is

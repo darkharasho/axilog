@@ -780,6 +780,27 @@ pub struct EntitySeries {
     /// ally attribution as [`Self::healing_received_1s`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub barrier_received_1s: Option<SeriesOut>,
+    /// Outgoing crowd control applied by this entity, per second. Gated on
+    /// `timeseries` like the other per-entity lanes; sums to
+    /// `blocks.cc.by_entity[id].applied_total`.
+    ///
+    /// PER-BUCKET, not cumulative -- unlike the three healing lanes above,
+    /// which are GW2EI-shaped running totals. The squad-level
+    /// `SquadSeries::cc_applied` this decomposes is per-bucket too, so a
+    /// consumer summing a row and a column of the player x time grid gets
+    /// the same number either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cc_applied: Option<SeriesOut>,
+    /// Boons this entity removed from enemies, per second. Sums to
+    /// `blocks.support.by_entity[id].strips`. Per-bucket, same gate and
+    /// same grid as [`Self::cc_applied`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strips: Option<SeriesOut>,
+    /// Boons removed FROM this entity, per second. Sums to
+    /// `blocks.defenses.by_entity[id].boon_strips_taken`. Per-bucket, same
+    /// gate and same grid as [`Self::cc_applied`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strips_taken: Option<SeriesOut>,
 }
 
 /// Mirrors the real `PlayerTargetSeriesOut`, minus `enemy_id` (that's the
@@ -804,6 +825,9 @@ fn empty_series(res: u64) -> EntitySeries {
         healing_1s: None,
         healing_received_1s: None,
         barrier_received_1s: None,
+        cc_applied: None,
+        strips: None,
+        strips_taken: None,
     }
 }
 
@@ -815,10 +839,17 @@ pub fn build_series(
         &BTreeMap<u64, axilog_core::analysis::timeseries::EnemySeries>,
     >,
     healing_1s: Option<&axilog_core::analysis::healing_detail::HealingDetail>,
+    entity_series: Option<&axilog_core::analysis::entity_series::EntitySeriesDetail>,
 ) -> SeriesBlock {
     // Same positional-join guard `support::build_healing` applies to the
     // other half of this pass's output, and for the same reason.
     let healing_1s = healing_1s.filter(|d| d.len() == report.players.len());
+    // Same guard, same reason: `EntitySeriesDetail` is a `Vec` over
+    // `enc.players` with no addr in it, so a length that disagrees with
+    // this report's roster would misattribute every lane rather than fail.
+    // Dropping the whole pass is the honest answer -- absent means "not
+    // measured", which is exactly what a consumer needs to hear.
+    let entity_series = entity_series.filter(|d| d.len() == report.players.len());
     let res = report.timeline.resolution_ms;
     let ps = &report.timeline.per_second;
     let squad = SquadSeries {
@@ -851,6 +882,19 @@ pub fn build_series(
             healing_1s.map(|d| SeriesOut::encode_u64(res, &d[i].healing_received_1s));
         let barrier_received =
             healing_1s.map(|d| SeriesOut::encode_u64(res, &d[i].barrier_received_1s));
+        // The CC/strip lanes, on the same positional join and the same
+        // `--timeseries` gate. `u32` upstream (they are event COUNTS, not
+        // damage), widened here because the envelope has one integer
+        // encoder.
+        let cc_applied = entity_series.map(|d| {
+            SeriesOut::encode_u64(res, &d.get(i).cc_applied.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
+        });
+        let strips = entity_series.map(|d| {
+            SeriesOut::encode_u64(res, &d.get(i).strips.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
+        });
+        let strips_taken = entity_series.map(|d| {
+            SeriesOut::encode_u64(res, &d.get(i).strips_taken.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
+        });
         // Keyed by the account's REPRESENTATIVE agent address, which is
         // what `PlayerOut::agent_addr` already is -- a relogged account is
         // one player here and one folded series there. Looking the map up
@@ -876,6 +920,9 @@ pub fn build_series(
                         healing_1s: healing,
                         healing_received_1s: healing_received,
                         barrier_received_1s: barrier_received,
+                        cc_applied,
+                        strips,
+                        strips_taken,
                         ..empty_series(res)
                     },
                 );
@@ -909,6 +956,9 @@ pub fn build_series(
                 healing_1s: healing,
                 healing_received_1s: healing_received,
                 barrier_received_1s: barrier_received,
+                cc_applied,
+                strips,
+                strips_taken,
             },
         );
     }
@@ -1341,7 +1391,7 @@ mod tests {
     #[test]
     fn squad_series_use_the_shared_envelope_and_decode_to_the_legacy_arrays() {
         let (report, index) = fixture_report();
-        let block = build_series(&report, &index, None, None, None);
+        let block = build_series(&report, &index, None, None, None, None);
         let squad = &block.squad;
         assert_eq!(
             squad.damage.decode_u64(),

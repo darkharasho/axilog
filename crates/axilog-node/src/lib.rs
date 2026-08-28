@@ -236,6 +236,28 @@ fn build_report_and_ei_inputs_from_bytes(
     let healing_detail = (want_skill_damage || want_timeseries)
         .then(|| axilog_core::analysis::healing_detail::build(&raw, &enc))
         .flatten();
+    // CC-strip-timelines Task 4: the per-player 1s CC/strip lanes on
+    // `blocks.series.by_entity`. Rides `--timeseries` alone.
+    let entity_series = want_timeseries.then(|| {
+        let squad: std::collections::BTreeSet<u64> =
+            enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
+        let addr_to_rep: std::collections::BTreeMap<u64, u64> = enc
+            .players
+            .iter()
+            .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
+            .collect();
+        let enemy_addrs: std::collections::BTreeSet<u64> =
+            enc.enemies.iter().flat_map(|e| e.agent_addrs.iter().copied()).collect();
+        axilog_core::analysis::entity_series::build(
+            &enc,
+            &raw,
+            &axilog_core::analysis::damage::InstidRegistry::build(&raw),
+            &metrics.players,
+            &squad,
+            &enemy_addrs,
+            &addr_to_rep,
+        )
+    });
     let report = axilog_schema::build_report(
         &enc, &metrics, env!("CARGO_PKG_VERSION"), replay.as_ref(), missiles.as_ref(),
         want_skill_damage, want_timeseries, want_rotation, damage_mods.as_ref(),
@@ -325,6 +347,7 @@ fn build_report_and_ei_inputs_from_bytes(
             dist_outcomes: dist_outcomes.as_ref(),
             healing_detail: healing_detail.as_ref().filter(|_| want_skill_damage),
             healing_series: healing_detail.as_ref().filter(|_| want_timeseries),
+            entity_series: entity_series.as_ref(),
             activity: Some(&activity),
             replay_extras: Some(&replay_extras),
             boon_states: boon_states.as_ref(),
