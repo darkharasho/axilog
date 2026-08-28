@@ -622,7 +622,7 @@ fn ei_json_stats_all_hit_quality_and_defenses_match_the_golden() {
             {
                 let mut per_boon: std::collections::BTreeMap<u32, Vec<u64>> =
                     std::collections::BTreeMap::new();
-                for &(boon, ms) in
+                for &(_, boon, ms) in
                     strip_detail.get(&enc.players[player_idx].agent_addr).into_iter().flatten()
                 {
                     per_boon.entry(boon).or_default().push(ms);

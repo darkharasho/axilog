@@ -761,9 +761,13 @@ fn accumulate_dodges(raw: &RawLog, squad: &BTreeSet<u64>, post_era: bool, out: &
 /// Compute per-squad-player incoming-defense stats (M13 Task 2),
 /// account-folded via `addr_to_rep` (relog fold, same convention every
 /// other pass in this codebase uses).
-/// Every boon-strip this squad player SUFFERED, as `(boon id, removed
-/// duration ms)` in log order, keyed by the player's account-representative
-/// addr (MEIGAP Task 1c).
+/// Every boon-strip this squad player SUFFERED, as `(time_ms, boon id,
+/// removed duration ms)` in log order, keyed by the player's
+/// account-representative addr (MEIGAP Task 1c).
+///
+/// `time_ms` is the raw event time, NOT relative to log start -- callers
+/// subtract [`RawLog::log_start_ms`] themselves (CC-strip-timelines
+/// Task 1).
 ///
 /// The shared primitive behind [`DefenseStats::boon_strips_taken`] and
 /// [`DefenseStats::boon_strips_taken_duration_ms`] -- see those fields for
@@ -781,7 +785,7 @@ pub fn incoming_boon_strips(
     raw: &RawLog,
     squad: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
-) -> BTreeMap<u64, Vec<(u32, u64)>> {
+) -> BTreeMap<u64, Vec<(u64, u32, u64)>> {
     incoming_boon_strips_with_registry(
         raw,
         &crate::analysis::damage::InstidRegistry::build(raw),
@@ -799,7 +803,7 @@ pub fn incoming_boon_strips_with_registry(
     registry: &crate::analysis::damage::InstidRegistry,
     squad: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
-) -> BTreeMap<u64, Vec<(u32, u64)>> {
+) -> BTreeMap<u64, Vec<(u64, u32, u64)>> {
     let post_era = raw.header.is_post_buff_rework();
     let boon_ids: BTreeSet<u32> =
         crate::analysis::buffs::BOON_IDS.iter().map(|&(id, _, _)| id).collect();
@@ -811,7 +815,7 @@ pub fn incoming_boon_strips_with_registry(
     let known_agents: BTreeSet<u64> = raw.agents.iter().map(|a| a.addr).collect();
     let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
 
-    let mut out: BTreeMap<u64, Vec<(u32, u64)>> = BTreeMap::new();
+    let mut out: BTreeMap<u64, Vec<(u64, u32, u64)>> = BTreeMap::new();
     for e in &raw.events {
         // Era-dispatched removal predicate, identical to `support::apply`/
         // `support::apply_post_era`'s own (see that module's doc comment):
@@ -851,7 +855,7 @@ pub fn incoming_boon_strips_with_registry(
         if rep(credited) == rep(victim) {
             continue; // `excludeSelf` (`CreditedBy.Is(actor.AgentItem)`)
         }
-        out.entry(rep(victim)).or_default().push((e.skillid, e.value.max(0) as u64));
+        out.entry(rep(victim)).or_default().push((e.time, e.skillid, e.value.max(0) as u64));
     }
     out
 }
@@ -886,7 +890,8 @@ pub fn build_with_registry(
     for (rep, strips) in incoming_boon_strips_with_registry(raw, registry, squad, addr_to_rep) {
         let stats = by_rep.entry(rep).or_default();
         stats.boon_strips_taken += strips.len() as u32;
-        stats.boon_strips_taken_duration_ms += strips.iter().map(|&(_, ms)| ms).sum::<u64>();
+        stats.boon_strips_taken_duration_ms +=
+            strips.iter().map(|&(_, _, ms)| ms).sum::<u64>();
     }
     by_rep
 }
@@ -1133,6 +1138,29 @@ mod tests {
         let by_rep = build(&raw, &squad, &BTreeMap::new());
         assert_eq!(by_rep[&1].boon_strips_taken, 1);
         assert_eq!(by_rep[&1].boon_strips_taken_duration_ms, 2400);
+    }
+
+    /// `incoming_boon_strips`' returned tuple carries the raw event time as
+    /// its first element (CC-strip-timelines Task 1) -- widened from
+    /// `(skillid, duration_ms)` to `(time_ms, skillid, duration_ms)` so a
+    /// future per-second fold (Task 2) can bucket strips without a second
+    /// pass over `raw.events`.
+    #[test]
+    fn incoming_boon_strips_carries_event_time() {
+        let mut e = base(100, 200); // victim = src_agent (squad), remover = dst_agent (enemy)
+        e.time = 7700;
+        e.skillid = crate::analysis::buffs::MIGHT;
+        e.is_buffremove = crate::evtc::buff_remove::ALL;
+        e.value = 1500;
+        let mut raw = raw_from(vec![e]);
+        // `known_agents` membership is the `CreditedBy.IsUnknown` test --
+        // the remover must appear in the agent table or the row is dropped.
+        raw.agents = vec![agent(100), agent(200)];
+        let squad: BTreeSet<u64> = [100u64].into_iter().collect();
+        let addr_to_rep: BTreeMap<u64, u64> = BTreeMap::new();
+
+        let out = incoming_boon_strips(&raw, &squad, &addr_to_rep);
+        assert_eq!(out.get(&100).map(Vec::as_slice), Some(&[(7700u64, 740u32, 1500u64)][..]));
     }
 
     /// `CreditedBy = By.GetFinalMaster()`: a squad player's own MINION

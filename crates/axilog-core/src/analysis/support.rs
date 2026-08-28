@@ -607,9 +607,13 @@ fn apply_post_era(
     }
 }
 
-/// Every boon this squad player STRIPPED off an enemy, as `(boon id,
-/// removed duration ms)` in log order, keyed by the remover's
+/// Every boon this squad player STRIPPED off an enemy, as `(time_ms,
+/// skillid, duration_ms)` in log order, keyed by the remover's
 /// account-representative addr (MEIGAP Task 3e).
+///
+/// `time_ms` is the raw event time, NOT relative to log start -- callers
+/// subtract [`RawLog::log_start_ms`] themselves (CC-strip-timelines
+/// Task 1).
 ///
 /// The shared primitive behind both [`SupportMetrics::strips`] and
 /// [`SupportMetrics::strips_duration_ms`] -- the outgoing mirror of
@@ -638,12 +642,12 @@ pub fn outgoing_boon_strips(
     raw: &RawLog,
     enemies: &BTreeSet<u64>,
     addr_to_rep: &BTreeMap<u64, u64>,
-) -> BTreeMap<u64, Vec<(u32, u64)>> {
+) -> BTreeMap<u64, Vec<(u64, u32, u64)>> {
     let post_era = raw.header.is_post_buff_rework();
     let boon_id_set: BTreeSet<u32> = BOON_IDS.iter().map(|&(id, _, _)| id).collect();
     let rep = |addr: u64| addr_to_rep.get(&addr).copied().unwrap_or(addr);
 
-    let mut out: BTreeMap<u64, Vec<(u32, u64)>> = BTreeMap::new();
+    let mut out: BTreeMap<u64, Vec<(u64, u32, u64)>> = BTreeMap::new();
     for e in &raw.events {
         // Era-dispatched removal predicate, transcribed from `apply` /
         // `apply_post_era`'s own loop heads above.
@@ -662,7 +666,7 @@ pub fn outgoing_boon_strips(
         if !enemies.contains(&e.src_agent) {
             continue;
         }
-        out.entry(rep(e.dst_agent)).or_default().push((e.skillid, e.value.max(0) as u64));
+        out.entry(rep(e.dst_agent)).or_default().push((e.time, e.skillid, e.value.max(0) as u64));
     }
     out
 }
@@ -679,7 +683,8 @@ fn fold_outgoing_boon_strips(
     for (rep_addr, strips) in outgoing_boon_strips(raw, enemies, addr_to_rep) {
         let Some(&i) = idx.get(&rep_addr) else { continue };
         players[i].support.strips += strips.len() as u32;
-        players[i].support.strips_duration_ms += strips.iter().map(|&(_, ms)| ms).sum::<u64>();
+        players[i].support.strips_duration_ms +=
+            strips.iter().map(|&(_, _, ms)| ms).sum::<u64>();
     }
 }
 
@@ -858,6 +863,29 @@ mod tests {
         let addr_to_rep: BTreeMap<u64, u64> = [(1, 1), (2, 2)].into_iter().collect();
         apply(&mut players, &raw, &enc, &enemies, &addr_to_rep);
         assert_eq!(players[0].support.strips, 0);
+    }
+
+    /// `outgoing_boon_strips`' returned tuple carries the raw event time as
+    /// its first element (CC-strip-timelines Task 1) -- widened from
+    /// `(skillid, duration_ms)` to `(time_ms, skillid, duration_ms)` so a
+    /// future per-second fold (Task 2) can bucket strips without a second
+    /// pass over `raw.events`.
+    #[test]
+    fn outgoing_boon_strips_carries_event_time() {
+        let mut e = base_event();
+        e.time = 4200;
+        e.is_buffremove = buff_remove::ALL;
+        e.skillid = 740; // Might, a BOON_IDS member
+        e.src_agent = 200; // victim (enemy) -- role inversion
+        e.dst_agent = 100; // remover (squad player)
+        e.value = 3000;
+
+        let raw = raw_from(vec![e]);
+        let enemies: BTreeSet<u64> = [200u64].into_iter().collect();
+        let addr_to_rep: BTreeMap<u64, u64> = BTreeMap::new();
+
+        let out = outgoing_boon_strips(&raw, &enemies, &addr_to_rep);
+        assert_eq!(out.get(&100).map(Vec::as_slice), Some(&[(4200u64, 740u32, 3000u64)][..]));
     }
 
     /// `SINGLE` removals must NOT feed cleanse/strip credit -- only `ALL`
