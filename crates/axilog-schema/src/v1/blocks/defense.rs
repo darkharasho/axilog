@@ -1,5 +1,7 @@
 use super::ByEntity;
+use crate::v1::catalogs::CatalogBuilder;
 use crate::v1::entities::{EntityIndex, Role};
+use axilog_core::analysis::cc::CcTakenEvent;
 use serde::Serialize;
 
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
@@ -108,6 +110,22 @@ pub struct HitStatsEntity {
 pub struct CcBlock {
     pub squad: CcSquad,
     pub by_entity: ByEntity<CcEntity>,
+    /// Every incoming-CC application, attributed -- the detail behind
+    /// [`DefensesEntity::received_cc_count`], keyed by the entity that
+    /// TOOK it.
+    ///
+    /// ## Its own gate, inside an ungated block
+    ///
+    /// The rest of `CcBlock` is copied from the report and is always
+    /// computed, so `coverage.cc` speaks for it. This half runs only under
+    /// `--timeseries`, exactly like the `cc_taken` lane it decomposes, so
+    /// `coverage.cc` says nothing about it and the `Option` IS the gate
+    /// signal: `null` means "the pass did not run", an empty map means
+    /// "it ran and the squad ate no CC". The same two-gate shape
+    /// `blocks.boons` carries, for the same reason, and the reason
+    /// `blocks.self_effects`' doc explains it does NOT need one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub taken_events: Option<ByEntity<Vec<CcTakenRow>>>,
 }
 
 impl CcBlock {
@@ -214,6 +232,65 @@ pub fn build_hit_stats(report: &crate::Report, index: &EntityIndex) -> HitStatsB
     HitStatsBlock { by_entity }
 }
 
+/// One incoming crowd-control application. See
+/// [`axilog_core::analysis::cc::CcTakenEvent`] for what the log does and
+/// does not carry -- in particular, there is no CC *type* here, because
+/// the instantaneous control effects (Pull, Knockback, Launch, Knockdown,
+/// Float, Sink) produce no buff and so appear nowhere else in the log at
+/// all. [`Self::skill_id`] is the only handle on which one landed.
+#[derive(Serialize, Debug, Default, Clone, PartialEq, Eq)]
+pub struct CcTakenRow {
+    /// Milliseconds from fight start -- rebased off the raw clock, on the
+    /// same footing as the `series` buckets, so a consumer can line these
+    /// up with the `cc_taken` lane without knowing the log's epoch.
+    pub time_ms: u32,
+    /// Whoever applied it, resolved through the entity index. `null` when
+    /// the caster is not in the roster at all (a gadget, an environmental
+    /// source, an agent the log never declared) -- the same
+    /// skip-rather-than-fabricate rule every other join in this module
+    /// follows, except that here the ROW still matters, so it is kept with
+    /// an absent source rather than dropped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src: Option<u32>,
+    pub skill_id: u32,
+    pub duration_ms: u32,
+}
+
+/// Reproject the attributed incoming-CC pass onto entity ids.
+///
+/// A victim who resolves to no entity is DROPPED (the rule
+/// `build_self_effects` applies to the same join); an unresolvable
+/// *caster* is not, because the event still happened to a real player and
+/// "somebody CC'd you" is the answer the consumer came for.
+///
+/// Rows arrive chronological from the pass and are appended in order, so
+/// each entity's list stays sorted without a second sort.
+pub fn build_cc_taken_events(
+    events: &[CcTakenEvent],
+    index: &EntityIndex,
+    log_start_ms: u64,
+    cats: &mut CatalogBuilder,
+) -> ByEntity<Vec<CcTakenRow>> {
+    let mut by_entity: std::collections::BTreeMap<u32, Vec<CcTakenRow>> =
+        std::collections::BTreeMap::new();
+    for e in events {
+        let Some(victim) = index.by_agent_addr(e.dst_agent) else {
+            continue;
+        };
+        cats.reference_skill(e.skill_id);
+        by_entity.entry(victim).or_default().push(CcTakenRow {
+            // `saturating_sub`, not `-`: a row from before fight start
+            // would underflow u64 and land billions of milliseconds into
+            // the future instead of at the start where it belongs.
+            time_ms: e.time.saturating_sub(log_start_ms).min(u64::from(u32::MAX)) as u32,
+            src: index.by_agent_addr(e.src_agent),
+            skill_id: e.skill_id,
+            duration_ms: e.duration_ms,
+        });
+    }
+    ByEntity(by_entity)
+}
+
 pub fn build_cc(report: &crate::Report, index: &EntityIndex) -> CcBlock {
     let mut by_entity = ByEntity::default();
     let mut squad = CcSquad::default();
@@ -235,13 +312,126 @@ pub fn build_cc(report: &crate::Report, index: &EntityIndex) -> CcBlock {
             },
         );
     }
-    CcBlock { squad, by_entity }
+    // `taken_events` is filled in separately by the caller, which owns
+    // the `--timeseries` gate; `build_cc` sees only the report.
+    CcBlock { squad, by_entity, taken_events: None }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::v1::blocks::tests_support::fixture_report;
+
+    mod cc_taken_events_tests {
+        use super::*;
+        use axilog_core::analysis::cc::CcTakenEvent;
+
+        fn ev(time: u64, dst: u64, src: u64, skill: u32, dur: u32) -> CcTakenEvent {
+            CcTakenEvent {
+                time,
+                dst_agent: dst,
+                src_agent: src,
+                skill_id: skill,
+                duration_ms: dur,
+            }
+        }
+
+        #[test]
+        fn keys_rows_by_the_victim_entity_and_rebases_time_to_fight_start() {
+            let (report, index) = fixture_report();
+            let victim = report.players[0].agent_addr;
+            let id = index
+                .by_agent_addr(victim)
+                .expect("fixture player has an entity id");
+            let mut cats = CatalogBuilder::default();
+            let block = build_cc_taken_events(
+                &[ev(7_500, victim, 999, 30725, 2000)],
+                &index,
+                5_000,
+                &mut cats,
+            );
+            let rows = block.0.get(&id).expect("a row for the victim");
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].time_ms, 2_500, "raw clock minus log start");
+            assert_eq!(rows[0].skill_id, 30725);
+            assert_eq!(rows[0].duration_ms, 2000);
+        }
+
+        #[test]
+        fn references_the_skill_so_it_resolves_through_the_catalog() {
+            // Without this the consumer gets a bare id and no name, which
+            // is the whole reason attribution was worth emitting. Asserted
+            // on the FINISHED catalog rather than the builder's private
+            // set -- that is what a consumer actually reads.
+            let (report, index) = fixture_report();
+            let victim = report.players[0].agent_addr;
+            let mut cats = CatalogBuilder::default();
+            build_cc_taken_events(
+                &[ev(7_500, victim, 999, 30725, 2000)],
+                &index,
+                5_000,
+                &mut cats,
+            );
+            let catalogs = cats.finish(&axilog_core::analysis::Metrics::default(), None);
+            assert!(
+                catalogs.skills.contains_key(&30725),
+                "the pass must register its skill ids so the row's skill resolves to a name"
+            );
+        }
+
+        #[test]
+        fn resolves_a_known_caster_to_an_entity_id() {
+            let (report, index) = fixture_report();
+            let victim = report.players[0].agent_addr;
+            let caster = report.players[1].agent_addr;
+            let caster_id = index.by_agent_addr(caster);
+            let mut cats = CatalogBuilder::default();
+            let block =
+                build_cc_taken_events(&[ev(7_500, victim, caster, 1, 0)], &index, 5_000, &mut cats);
+            let id = index.by_agent_addr(victim).unwrap();
+            assert_eq!(block.0.get(&id).unwrap()[0].src, caster_id);
+        }
+
+        #[test]
+        fn leaves_an_unknown_caster_null_rather_than_inventing_an_id() {
+            // A gadget or an agent outside the roster has no entity. A
+            // fabricated id would point at somebody innocent.
+            let (report, index) = fixture_report();
+            let victim = report.players[0].agent_addr;
+            let mut cats = CatalogBuilder::default();
+            let block = build_cc_taken_events(
+                &[ev(7_500, victim, 0xDEAD_BEEF, 1, 0)],
+                &index,
+                5_000,
+                &mut cats,
+            );
+            let id = index.by_agent_addr(victim).unwrap();
+            assert_eq!(block.0.get(&id).unwrap()[0].src, None);
+        }
+
+        #[test]
+        fn drops_a_victim_with_no_entity_rather_than_fabricating_one() {
+            let (_report, index) = fixture_report();
+            let mut cats = CatalogBuilder::default();
+            let block =
+                build_cc_taken_events(&[ev(7_500, 0xDEAD_BEEF, 1, 1, 0)], &index, 5_000, &mut cats);
+            assert!(block.0.is_empty());
+        }
+
+        #[test]
+        fn clamps_an_event_from_before_fight_start_to_zero() {
+            // Pre-fight rows exist; a raw subtraction would underflow u64
+            // into an enormous timestamp far past the end of the replay.
+            let (report, index) = fixture_report();
+            let victim = report.players[0].agent_addr;
+            let mut cats = CatalogBuilder::default();
+            let block =
+                build_cc_taken_events(&[ev(1_000, victim, 1, 1, 0)], &index, 5_000, &mut cats);
+            let id = index.by_agent_addr(victim).unwrap();
+            assert_eq!(block.0.get(&id).unwrap()[0].time_ms, 0);
+        }
+    }
+
 
     #[test]
     fn every_squad_player_has_a_defenses_row_keyed_by_entity_id() {

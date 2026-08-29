@@ -205,6 +205,100 @@ pub(crate) fn is_cc(e: &crate::evtc::RawEvent, post_era: bool) -> bool {
         && e.result == crate::evtc::result::CROWD_CONTROL
 }
 
+/// One incoming crowd-control application, kept attributed.
+///
+/// `DefenseStats::received_cc_count` and the per-second `PlayerSeries::
+/// cc_taken` lane both count exactly these rows and then throw away
+/// everything except the tally: which skill landed it, who cast it, and
+/// the instant it hit. That discarded detail is the only thing that can
+/// answer "what CC'd us" -- and, for the instantaneous control effects
+/// (Knockdown, Launch, Pull, Knockback, Float, Sink), it is the ONLY
+/// evidence in the log at all. Those effects produce no buff apply/remove
+/// pair, so they appear nowhere in `analysis::self_effects` and have no
+/// entry in `analysis::control_catalog`; see that module's doc comment.
+/// A consumer that wants to distinguish a pull from a knockback must map
+/// `skill_id` itself, because the log does not carry the distinction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CcTakenEvent {
+    /// Raw event time, on the same clock as every other `RawEvent::time`
+    /// in the log -- NOT rebased to encounter start. Callers that need
+    /// fight-relative milliseconds subtract `RawLog::log_start_ms` exactly
+    /// as the bucketing in `timeline_with_registry` does.
+    pub time: u64,
+    /// The squad member who took it.
+    pub dst_agent: u64,
+    /// Whoever applied it. Deliberately unresolved: no pet/minion fold and
+    /// no enemy-set filter, because [`Self::dst_agent`]'s scalar applies
+    /// neither either (see `PlayerSeries::cc_taken`), and folding here
+    /// would make the event list stop decomposing the scalar it mirrors.
+    pub src_agent: u64,
+    pub skill_id: u32,
+    pub duration_ms: u32,
+}
+
+/// [`taken_events`] against a resolved [`Encounter`], with each victim
+/// folded onto the account's representative agent address.
+///
+/// The squad set is the union of every address an account owned (relogs
+/// and build swaps each get a fresh addr from arcdps), but downstream
+/// joins key on the single representative -- so an event recorded against
+/// an alternate address would resolve to no entity and vanish, losing
+/// every CC a player took after relogging. The same `squad`/`addr_to_rep`
+/// pair `entity_series::build_from` builds, for the same reason.
+pub fn taken_events_for(enc: &Encounter, raw: &RawLog) -> Vec<CcTakenEvent> {
+    let squad: BTreeSet<u64> = enc
+        .players
+        .iter()
+        .flat_map(|p| p.agent_addrs.iter().copied())
+        .collect();
+    let addr_to_rep: BTreeMap<u64, u64> = enc
+        .players
+        .iter()
+        .flat_map(|p| p.agent_addrs.iter().map(move |&a| (a, p.agent_addr)))
+        .collect();
+    let mut events = taken_events(raw, &squad);
+    for e in &mut events {
+        if let Some(&rep) = addr_to_rep.get(&e.dst_agent) {
+            e.dst_agent = rep;
+        }
+    }
+    events
+}
+
+/// Every incoming-CC row, attributed -- the detail behind
+/// `DefenseStats::received_cc_count`.
+///
+/// Selection is `is_cc` plus the `dst in squad` gate and NOTHING else,
+/// character for character the same pair `defenses::
+/// accumulate_breakbar_and_received_cc` applies. That is what makes the
+/// returned length equal to the summed scalar; the test module pins it.
+///
+/// Returned in chronological order. `raw.events` is already time-ordered
+/// in a well-formed log, but this sorts rather than trusting that: a
+/// consumer walking these against a replay playhead stops at the first
+/// event past the head, so a single out-of-order row would silently drop
+/// every event behind it.
+pub fn taken_events(raw: &RawLog, squad: &BTreeSet<u64>) -> Vec<CcTakenEvent> {
+    let post_era = raw.header.is_post_buff_rework();
+    let mut out: Vec<CcTakenEvent> = raw
+        .events
+        .iter()
+        .filter(|e| is_cc(e, post_era) && squad.contains(&e.dst_agent))
+        .map(|e| CcTakenEvent {
+            time: e.time,
+            dst_agent: e.dst_agent,
+            src_agent: e.src_agent,
+            skill_id: e.skillid,
+            // `max(0)` before the cast, matching the scalar's own
+            // `e.value.max(0) as u64` -- a negative would otherwise wrap
+            // to an enormous duration.
+            duration_ms: e.value.max(0) as u32,
+        })
+        .collect();
+    out.sort_by_key(|e| e.time);
+    out
+}
+
 /// Pet/minion-sourced CC application events credited to the owning squad
 /// player: `(owner, dst, duration_ms)`. Mirrors `damage::pet_credit_events`'s
 /// owner resolution (via `src_master_instid` looked up against the shared,
@@ -388,6 +482,163 @@ mod tests {
             is_flanking: 0, is_shields: 0, is_offcycle: 0, pad: 0,
         }
     }
+    /// The attributed incoming-CC pass. The scalar
+    /// `DefenseStats::received_cc_count` counts these same rows, so the
+    /// event list must decompose it exactly -- that is the pin that keeps
+    /// the two from drifting apart.
+    mod taken_events_tests {
+        use super::*;
+
+        fn cc_from(time: u64, src: u64, dst: u64, skill: u32, duration_ms: i32) -> RawEvent {
+            let mut e = cc_ev(time, src, dst, duration_ms);
+            e.skillid = skill;
+            e
+        }
+
+        fn raw_of(events: Vec<RawEvent>) -> RawLog {
+            RawLog {
+                header: RawHeader {
+                    build: "".into(),
+                    revision: 1,
+                    boss_id: 1,
+                },
+                agents: vec![],
+                skills: vec![],
+                events,
+                guid_map: vec![],
+            }
+        }
+
+        #[test]
+        fn attributes_an_incoming_cc_row_to_its_skill_source_and_instant() {
+            let raw = raw_of(vec![cc_from(4200, 9, 1, 30725, 2000)]);
+            let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+            let got = taken_events(&raw, &squad);
+            assert_eq!(
+                got,
+                vec![CcTakenEvent {
+                    time: 4200,
+                    dst_agent: 1,
+                    src_agent: 9,
+                    skill_id: 30725,
+                    duration_ms: 2000
+                }],
+                "the pass must carry the skill, the source and the instant the scalar throws away"
+            );
+        }
+
+        #[test]
+        fn ignores_cc_the_squad_applied_to_someone_else() {
+            // Outgoing CC is `cc_applied`'s business. Only `dst in squad`
+            // rows belong here -- the same gate the received scalar uses.
+            let raw = raw_of(vec![cc_from(1000, 1, 9, 5000, 500)]);
+            let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+            assert!(taken_events(&raw, &squad).is_empty());
+        }
+
+        #[test]
+        fn ignores_ordinary_damage_landing_on_the_squad() {
+            let raw = raw_of(vec![dmg(1000, 9, 1, 4000)]);
+            let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+            assert!(taken_events(&raw, &squad).is_empty());
+        }
+
+        #[test]
+        fn decomposes_the_received_cc_scalar_row_for_row() {
+            // The contract with `DefenseStats::received_cc_count`: one event
+            // per counted row, and the durations sum to the counted total.
+            // A future change to either predicate that breaks this pin is
+            // the drift this test exists to catch.
+            let raw = raw_of(vec![
+                cc_from(1000, 9, 1, 30725, 2000),
+                cc_from(1000, 8, 1, 5000, 300),
+                cc_from(9000, 9, 2, 30725, 1000),
+                cc_from(2000, 1, 9, 5000, 500),
+            ]);
+            let squad: BTreeSet<u64> = [1u64, 2u64].into_iter().collect();
+            let got = taken_events(&raw, &squad);
+            assert_eq!(got.len(), 3, "three rows landed on the squad");
+            assert_eq!(
+                got.iter().filter(|e| e.dst_agent == 1).count(),
+                2,
+                "player 1 took two of them"
+            );
+            assert_eq!(
+                got.iter().map(|e| u64::from(e.duration_ms)).sum::<u64>(),
+                3300
+            );
+        }
+
+        #[test]
+        fn returns_events_in_chronological_order() {
+            // Consumers stamp these onto a replay playhead and stop scanning
+            // once they pass it; out-of-order events would silently drop.
+            let raw = raw_of(vec![
+                cc_from(9000, 9, 1, 1, 100),
+                cc_from(1000, 9, 1, 1, 100),
+                cc_from(5000, 9, 1, 1, 100),
+            ]);
+            let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+            let times: Vec<u64> = taken_events(&raw, &squad).iter().map(|e| e.time).collect();
+            assert_eq!(times, vec![1000, 5000, 9000]);
+        }
+
+        #[test]
+        fn folds_a_relogged_victim_onto_their_representative_address() {
+            // A player who relogs mid-recording owns several agent addrs.
+            // The schema joins on the representative one, so an event
+            // recorded against an alternate would otherwise resolve to no
+            // entity and be dropped -- silently losing every CC taken after
+            // the relog.
+            use crate::model::{Encounter, Player};
+            let player = Player {
+                agent_addr: 1,
+                account: "a.1".into(),
+                character: "".into(),
+                profession: "".into(),
+                elite_spec: "".into(),
+                team: "".into(),
+                subgroup: 1,
+                in_squad: true,
+                commander: false,
+                marker: None,
+                commander_tag: None,
+                guild_id: None,
+                agent_addrs: vec![1, 77],
+            };
+            let enc = Encounter {
+                kind: "wvw".into(),
+                pve: None,
+                map: "".into(),
+                duration_ms: 10_000,
+                build: "".into(),
+                revision: 1,
+                recorded_by: None,
+                teams: vec![],
+                players: vec![player],
+                enemies: vec![],
+                markers: vec![],
+                ground_markers: vec![],
+                tick_rate: None,
+                objectives: Vec::new(),
+                started_at_unix: None,
+                log_start_ms: 0,
+                map_id: None,
+            };
+            let raw = raw_of(vec![cc_from(1000, 9, 77, 30725, 500)]);
+            let got = taken_events_for(&enc, &raw);
+            assert_eq!(got.len(), 1, "the alternate address is still in squad");
+            assert_eq!(got[0].dst_agent, 1, "folded onto the representative addr");
+        }
+
+        #[test]
+        fn clamps_a_negative_duration_to_zero_rather_than_wrapping() {
+            let raw = raw_of(vec![cc_from(1000, 9, 1, 1, -5)]);
+            let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+            assert_eq!(taken_events(&raw, &squad)[0].duration_ms, 0);
+        }
+    }
+
     #[test]
     fn buckets_squad_damage_per_second() {
         let enc = Encounter {

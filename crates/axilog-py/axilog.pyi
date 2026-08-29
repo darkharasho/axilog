@@ -1074,6 +1074,7 @@ class SkillEntry(_SkillEntryRequired, total=False):
 
     icon: str
     auto_attack: bool
+    control_kind: str
     is_trait_proc: bool
     is_gear_proc: bool
     is_unconditional_proc: bool
@@ -1434,9 +1435,32 @@ class CcEntity(TypedDict):
     stun_breaks: int
     removed_stun_duration_ms: int
 
-class CcBlock(TypedDict):
+class _CcTakenRowRequired(TypedDict):
+    time_ms: int
+    skill_id: int
+    duration_ms: int
+
+class CcTakenRow(_CcTakenRowRequired, total=False):
+    """One incoming crowd-control application, kept attributed -- the detail
+    behind `DefensesEntity.received_cc_count` and the `series.cc_taken` lane,
+    which both count exactly these rows and keep only the tally.
+
+    `time_ms` is milliseconds from fight start. `src` is the entity that
+    applied it, omitted when the caster is not in the roster at all (a
+    gadget, an environmental source); the row is still kept, because it
+    happened to a real player.
+
+    `skill_id` is ALMOST NEVER the skill that was cast -- arcdps substitutes
+    one of its own generic control ids, so it names the EFFECT and the cause
+    is lost. Resolve it through `catalogs.skills[skill_id]["control_kind"]`
+    rather than hardcoding ids."""
+
+    src: int
+
+class CcBlock(TypedDict, total=False):
     squad: CcSquad
     by_entity: Dict[str, CcEntity]
+    taken_events: Dict[str, List[CcTakenRow]]
 
 # --- boons / support / contribution / healing blocks (native 1.0) ----------
 

@@ -1126,6 +1126,18 @@ export interface SkillEntry {
   can_crit: boolean
   auto_attack?: boolean
   /**
+   * Which crowd-control effect this id stands for, for arcdps' generic
+   * control ids -- `"knockdown" | "knockback_or_pull" | "launch" | "float"
+   * | "sink" | "float_or_sink" | "fear" | "stagger" | "stun_or_daze"`.
+   * Omitted for every other skill, which is nearly all of them.
+   *
+   * Knockback and pull share ONE arcdps id and genuinely cannot be told
+   * apart from the log; `"knockback_or_pull"` says so rather than picking.
+   * Separating them means measuring the victim's displacement against the
+   * caster, which this format does not do for you.
+   */
+  control_kind?: string
+  /**
    * MPROC. All five are OMITTED when false -- a proc flag is rare, and
    * emitting ~370 x 5 literal `false`s cost 16% of the report. Absence
    * means false, not unknown. `is_instant_cast` is the strong one: a
@@ -1505,9 +1517,45 @@ export interface CcEntity {
   removed_stun_duration_ms: number
 }
 
+/**
+ * One incoming crowd-control application, kept attributed -- the detail
+ * behind `DefensesEntity.received_cc_count` and the `series.cc_taken` lane,
+ * both of which count exactly these rows and then keep only the tally.
+ */
+export interface CcTakenRow {
+  /** Milliseconds from fight start, on the same footing as the series buckets. */
+  time_ms: number
+  /**
+   * Entity id of whoever applied it. Omitted when the caster is not in the
+   * roster at all (a gadget, an environmental source) -- the row is still
+   * kept, because it happened to a real player.
+   */
+  src?: number
+  /**
+   * ALMOST NEVER the skill that was cast. arcdps substitutes one of its own
+   * generic control ids, so this names the EFFECT and the cause is lost.
+   * Resolve it through `catalogs.skills[skill_id].control_kind` rather than
+   * hardcoding ids. Measured on real 40-player WvW fights: every incoming-CC
+   * row carried a generic id, none carried a real skill.
+   */
+  skill_id: number
+  duration_ms: number
+}
+
 export interface CcBlock {
   squad: CcSquad
   by_entity: ByEntity<CcEntity>
+  /**
+   * Every incoming CC application, keyed by the entity that TOOK it.
+   *
+   * Gated on `timeseries`, like the `cc_taken` lane it decomposes, while
+   * the rest of this block is always computed -- so `coverage.cc` does NOT
+   * speak for it and this field's own absence is the gate signal:
+   * `undefined` means the pass never ran, an empty object means it ran and
+   * the squad took no CC. Rows are chronological within each entity, and
+   * each entity's row count equals its `received_cc_count`.
+   */
+  taken_events?: ByEntity<CcTakenRow[]>
 }
 
 /* --- boons / support / contribution / healing blocks --------------------- */

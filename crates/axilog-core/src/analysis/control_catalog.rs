@@ -37,6 +37,152 @@ pub const DAZE: u32 = 833;
 pub const CONTROL_EFFECTS: [(u32, &str, bool, u32); 2] =
     [(DAZE, "Daze", false, 1), (STUN, "Stun", false, 1)];
 
+/// What KIND of control a CC row applied.
+///
+/// ## Where this comes from, and why it is not a curated skill table
+///
+/// A CC row's `skill_id` is almost never the skill that was cast. arcdps
+/// substitutes one of its own generic control ids (the `23294..=23307`
+/// band in [`crate::analysis::skill_symbol_names`]), so the log names the
+/// EFFECT and discards the cause. Measured on real WvW logs: every one of
+/// the 674 and 908 incoming-CC rows in two 40-player fights carried a
+/// generic id and not one carried a real skill.
+///
+/// That is a loss and a gift at once. The cause is gone -- there is no
+/// "pulled by Spectral Grasp" to be had from these rows. But the kind is
+/// free, and it is the thing [`crate::analysis::self_effects`] cannot
+/// give: the instantaneous effects produce no buff apply/remove pair, so
+/// this band is the ONLY evidence in the log that a knockdown or a launch
+/// happened at all. See this module's header for why they are absent from
+/// [`CONTROL_EFFECTS`].
+///
+/// The table is arcdps' own, not a guess. Ids outside it -- including the
+/// non-control generics that sit either side of the band -- return `None`
+/// rather than being forced into a bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlKind {
+    Knockdown,
+    /// Knockback and pull share ONE arcdps id (23295), so they cannot be
+    /// told apart here. The distinction is real and visible -- a pull
+    /// moves the victim toward the caster, a knockback away -- but it
+    /// lives in position data, not in this row. A consumer that needs it
+    /// must measure displacement against the caster and treat this
+    /// variant as the confirmation that a displacement happened at all.
+    KnockbackOrPull,
+    Launch,
+    Float,
+    Sink,
+    /// arcdps' `Generic Water Float Sink` (23298) names both directions at
+    /// once, exactly as `KnockbackOrPull` does. Kept fused for the same
+    /// reason: the log does not say which.
+    FloatOrSink,
+    Fear,
+    /// arcdps' `Generic Stagger` (23300).
+    Stagger,
+    /// The duration half: [`STUN`] and [`DAZE`]. arcdps reports these
+    /// through two generics (`Generic CC Buff` and `Generic Lock Out`),
+    /// neither of which says which of the two it was -- unlike the
+    /// instantaneous kinds above, though, these DO leave a buff trail, so
+    /// `self_effects` can answer that question where this cannot.
+    StunOrDaze,
+}
+
+impl ControlKind {
+    /// The stable wire spelling, as `catalogs.skills[].control_kind`
+    /// carries it. Snake case to match every other key in the format; the
+    /// fused variants say so in the name rather than picking a side.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ControlKind::Knockdown => "knockdown",
+            ControlKind::KnockbackOrPull => "knockback_or_pull",
+            ControlKind::Launch => "launch",
+            ControlKind::Float => "float",
+            ControlKind::Sink => "sink",
+            ControlKind::FloatOrSink => "float_or_sink",
+            ControlKind::Fear => "fear",
+            ControlKind::Stagger => "stagger",
+            ControlKind::StunOrDaze => "stun_or_daze",
+        }
+    }
+}
+
+/// arcdps' generic control ids -> the effect they stand for.
+///
+/// Ordered by id. Deliberately a table and not a range test: the
+/// `23294..=23307` band interleaves control effects with `Generic Kill`,
+/// `Generic Evade`, `Generic Emote` and friends, which a range would
+/// wrongly classify as crowd control.
+const GENERIC_CONTROL_IDS: [(u32, ControlKind); 11] = [
+    (23294, ControlKind::Knockdown),
+    (23295, ControlKind::KnockbackOrPull),
+    (23296, ControlKind::Float),
+    (23297, ControlKind::Launch),
+    (23298, ControlKind::FloatOrSink),
+    (23299, ControlKind::StunOrDaze),
+    (23300, ControlKind::Stagger),
+    (23304, ControlKind::Float),
+    (23305, ControlKind::Sink),
+    (23306, ControlKind::StunOrDaze),
+    (23307, ControlKind::Fear),
+];
+
+/// Classify a CC row's `skill_id`. `None` for anything that is not one of
+/// arcdps' generic control ids -- including a genuine skill id, which
+/// carries no control-kind information of its own.
+pub fn control_kind(skill_id: u32) -> Option<ControlKind> {
+    GENERIC_CONTROL_IDS
+        .iter()
+        .find(|(id, _)| *id == skill_id)
+        .map(|(_, kind)| *kind)
+}
+
+#[cfg(test)]
+mod control_kind_tests {
+    use super::*;
+
+    #[test]
+    fn names_the_instantaneous_effects_arcdps_reports_generically() {
+        assert_eq!(control_kind(23294), Some(ControlKind::Knockdown));
+        assert_eq!(control_kind(23297), Some(ControlKind::Launch));
+        assert_eq!(control_kind(23307), Some(ControlKind::Fear));
+        assert_eq!(control_kind(23305), Some(ControlKind::Sink));
+    }
+
+    #[test]
+    fn keeps_knockback_and_pull_fused_because_arcdps_does_not_separate_them() {
+        // 23295 is arcdps' `Generic Knockback Pull` -- ONE id for both.
+        // Splitting it here would be inventing a distinction the log does
+        // not carry; a consumer that needs it must look at displacement.
+        assert_eq!(control_kind(23295), Some(ControlKind::KnockbackOrPull));
+    }
+
+    #[test]
+    fn maps_the_duration_effects_onto_the_buffs_this_module_already_knows() {
+        // The lock-out / cc-buff generics are the Stun and Daze family --
+        // the two ids `CONTROL_EFFECTS` carries.
+        assert_eq!(control_kind(23299), Some(ControlKind::StunOrDaze));
+        assert_eq!(control_kind(23306), Some(ControlKind::StunOrDaze));
+    }
+
+    #[test]
+    fn returns_none_for_a_real_skill_id() {
+        // A CC row carrying a genuine skill id (rather than a generic)
+        // classifies to nothing rather than being forced into a bucket.
+        assert_eq!(control_kind(5491), None);
+    }
+
+    #[test]
+    fn returns_none_for_the_neighbouring_non_control_generics() {
+        // The generic range is contiguous and mostly NOT control: a
+        // range check instead of a table would sweep these in.
+        for id in [
+            23288, 23289, 23290, 23291, 23292, 23293, 23301, 23302, 23303, 23308,
+        ] {
+            assert_eq!(control_kind(id), None, "id {id} is not a control effect");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

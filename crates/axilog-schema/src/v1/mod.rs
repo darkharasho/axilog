@@ -420,6 +420,15 @@ pub struct Passes<'a> {
     /// `not_computed` for exactly that case rather than an empty block a
     /// consumer would read as real zeros.
     pub squad_buffs: Option<&'a axilog_core::analysis::squad_buffs::SquadBuffs>,
+    /// The attributed incoming-CC pass -- `blocks.cc.taken_events`.
+    ///
+    /// Gated on `--timeseries`, like the `cc_taken` lane on
+    /// `blocks.series` it decomposes: both answer timeline questions and
+    /// neither is worth a scan for a caller that only wants totals. The
+    /// rest of `blocks.cc` is always-on, so `coverage.cc` cannot speak for
+    /// this half; see [`defense::CcBlock::taken_events`] for why the
+    /// `Option` on the wire is the gate signal instead.
+    pub cc_taken_events: Option<&'a [axilog_core::analysis::cc::CcTakenEvent]>,
 }
 
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
@@ -451,8 +460,14 @@ pub fn build_report_v1(
     coverage.set(BlockName::Defenses, computed(defenses.is_empty()));
     let hit_stats = defense::build_hit_stats(legacy, &index);
     coverage.set(BlockName::HitStats, computed(hit_stats.is_empty()));
-    let cc = defense::build_cc(legacy, &index);
+    let mut cc = defense::build_cc(legacy, &index);
+    // Set from the always-on half only: `coverage.cc` answers "were there
+    // CC rows", which stays true or false regardless of whether the gated
+    // `taken_events` pass ran. Its own `Option` carries that question.
     coverage.set(BlockName::Cc, computed(cc.is_empty()));
+    cc.taken_events = passes.cc_taken_events.map(|events| {
+        defense::build_cc_taken_events(events, &index, enc.log_start_ms, &mut cats)
+    });
     let boons = {
         let mut block = support::build_boons(legacy, &index, &mut cats);
         // `coverage.boons` is set from the UPTIME rows, before the gated

@@ -4004,6 +4004,7 @@ mod tests {
                 is_swap,
                 can_crit,
                 auto_attack: None,
+                control_kind: None,
                 is_trait_proc: false,
                 is_gear_proc: proc,
                 is_unconditional_proc: false,

@@ -151,6 +151,11 @@ pub fn parse_report_v1(
     // it would empty axibridge's Special Buffs and Sigil/Relic sections on
     // every default parse.
     let squad_buffs = axilog_core::analysis::squad_buffs::build(&raw, &enc);
+    // The attributed detail behind `received_cc_count` and the `cc_taken`
+    // lane -- which skill landed each incoming CC, from whom, and when.
+    // Gated with the lane it decomposes (see `Passes::cc_taken_events`).
+    let cc_taken_events =
+        want_timeseries.then(|| axilog_core::analysis::cc::taken_events_for(&enc, &raw));
     Ok(axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
@@ -173,6 +178,7 @@ pub fn parse_report_v1(
             target_conditions: target_conditions.as_ref(),
             self_effects: self_effects.as_ref(),
             squad_buffs: Some(&squad_buffs),
+            cc_taken_events: cc_taken_events.as_deref(),
         },
     ))
 }

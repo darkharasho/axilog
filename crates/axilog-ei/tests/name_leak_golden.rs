@@ -491,6 +491,8 @@ fn ei_json_for_fixture(all_gates: bool) -> Option<serde_json::Value> {
     let target_conditions =
         all_gates.then(|| axilog_core::analysis::target_conditions::build(&raw, &enc));
     let self_effects = all_gates.then(|| axilog_core::analysis::self_effects::build(&raw, &enc));
+    let cc_taken_events =
+        all_gates.then(|| axilog_core::analysis::cc::taken_events_for(&enc, &raw));
 
     let v1 = axilog_schema::v1::build_report_v1(
         &enc,
@@ -515,6 +517,7 @@ fn ei_json_for_fixture(all_gates: bool) -> Option<serde_json::Value> {
             boon_states: boon_states.as_ref(),
             target_conditions: target_conditions.as_ref(),
             self_effects: self_effects.as_ref(),
+            cc_taken_events: cc_taken_events.as_deref(),
             squad_buffs: Some(&squad_buffs),
         },
     );

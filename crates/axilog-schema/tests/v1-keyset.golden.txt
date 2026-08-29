@@ -30,6 +30,12 @@ blocks.cc.by_entity.<id>.stun_breaks
 blocks.cc.squad
 blocks.cc.squad.applied_duration_ms
 blocks.cc.squad.applied_total
+blocks.cc.taken_events
+blocks.cc.taken_events.<id>
+blocks.cc.taken_events.<id>[].duration_ms
+blocks.cc.taken_events.<id>[].skill_id
+blocks.cc.taken_events.<id>[].src
+blocks.cc.taken_events.<id>[].time_ms
 blocks.conditions
 blocks.conditions.by_entity
 blocks.conditions.by_entity.<id>
@@ -457,6 +463,7 @@ catalogs.skills
 catalogs.skills.<id>
 catalogs.skills.<id>.auto_attack
 catalogs.skills.<id>.can_crit
+catalogs.skills.<id>.control_kind
 catalogs.skills.<id>.icon
 catalogs.skills.<id>.is_gear_proc
 catalogs.skills.<id>.is_instant_cast

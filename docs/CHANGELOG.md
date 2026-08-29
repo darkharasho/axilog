@@ -10,6 +10,49 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.10.0 — 2026-08-29
+
+### Added
+- **`blocks.cc.taken_events` — incoming CC, kept attributed.** v1.9.0's
+  `cc_taken` lane charts how MUCH crowd control landed on the squad each
+  second; it cannot say what any of it was. Both that lane and the
+  `received_cc_count` scalar walk the same rows and keep only the tally,
+  discarding the instant, the caster and the effect. `taken_events` keeps
+  them: one row per incoming CC application, keyed by the entity that took
+  it, chronological, with each entity's row count equal to its
+  `received_cc_count` exactly (pinned by test). Gated on `timeseries` like
+  the lane it decomposes — inside a block that is otherwise always-on, so
+  its own absence is the gate signal rather than `coverage.cc`.
+
+  For the six instantaneous control effects — Knockdown, Launch, Pull,
+  Knockback, Float, Sink — this is the **only** evidence anywhere in the log
+  that they happened. They produce no buff apply/remove pair, which is why
+  `blocks.self_effects` and `analysis::control_catalog` deliberately carry
+  only Stun and Daze.
+
+- **`catalogs.skills[].control_kind` — what a CC row's id actually means.**
+  A CC row's `skill_id` is almost never the skill that was cast: arcdps
+  substitutes one of its own generic control ids, so the row names the
+  effect and the cause is discarded. Measured on two real 40-player WvW
+  fights — all 674 and all 908 incoming-CC rows carried a generic id, none
+  carried a real skill. `control_kind` classifies those ids from arcdps' own
+  table (`knockdown`, `knockback_or_pull`, `launch`, `float`, `sink`,
+  `float_or_sink`, `fear`, `stagger`, `stun_or_daze`), so consumers stop
+  hardcoding the `23294..=23307` band. A table and not a range test: that
+  band interleaves control effects with `Generic Kill`, `Generic Evade` and
+  `Generic Emote`, which a range would misclassify as crowd control. Omitted
+  for every other id.
+
+  **Knockback and pull share one arcdps id and are not separable from the
+  log.** `knockback_or_pull` says so rather than picking a side; telling
+  them apart means measuring the victim's displacement against the caster,
+  which this format does not do for consumers.
+
+Both additions are purely additive on the wire — verified before
+re-digesting by deep-diffing the whole native document against the 1.9.0
+build: nothing removed, no existing value changed. The key-set golden gained
+7 keys and the baseline digest moved by 5917 bytes on the committed fixture.
+
 ## v1.9.0 — 2026-08-29
 
 ### Added

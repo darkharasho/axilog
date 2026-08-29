@@ -671,7 +671,72 @@ crowd-control *events*, with no notion of stacks over time. The
 instantaneous control effects (Knockdown, Launch, Pull, Knockback, Float,
 Sink) are deliberately absent from `self_effects`: they produce no
 apply/remove pair, so no timeline exists to carry. `blocks.cc` counts those,
-which is the right shape for them.
+which is the right shape for them — and, since 1.10.0,
+`blocks.cc.taken_events` carries each one individually, which for those six
+effects is the only evidence anywhere in the log that they happened at all.
+
+### `blocks.cc.taken_events` — incoming CC, kept attributed
+
+`blocks.defenses.by_entity[].received_cc_count` and the `series.cc_taken`
+lane both count the same rows and keep only the tally. `taken_events` is
+those rows, keyed by the entity that TOOK the CC: when it landed
+(milliseconds from fight start, the same footing as the series buckets),
+who applied it, which effect it was, and for how long.
+
+```json
+{
+  "cc": {
+    "taken_events": {
+      "1": [
+        { "time_ms": 10065, "src": 85, "skill_id": 23299, "duration_ms": 1800 },
+        { "time_ms": 10859, "src": 55, "skill_id": 23294, "duration_ms": 2000 }
+      ]
+    }
+  }
+}
+```
+
+Each entity's row count equals its `received_cc_count` exactly, and rows are
+chronological. `src` is omitted when the caster is not in the roster at all
+(a gadget, an environmental source) — the row is still kept, because it
+happened to a real player.
+
+**Gated on `timeseries`, inside a block that is not.** The rest of
+`blocks.cc` is copied from the report on every parse, so `coverage.cc`
+cannot speak for this half; its own absence is the gate signal. `null`
+means the pass never ran, `{}` means it ran and the squad took no CC.
+
+**`skill_id` is almost never the skill that was cast.** arcdps substitutes
+one of its own generic control ids (the `23294..=23307` band), so the row
+names the *effect* and the cause is discarded. Measured on two real
+40-player WvW fights: all 674 and all 908 incoming-CC rows carried a generic
+id, and not one carried a real skill. Read the effect through
+`catalogs.skills[skill_id].control_kind` rather than hardcoding ids:
+
+| `control_kind` | arcdps generic ids |
+|---|---|
+| `knockdown` | 23294 |
+| `knockback_or_pull` | 23295 |
+| `float` | 23296, 23304 |
+| `launch` | 23297 |
+| `float_or_sink` | 23298 |
+| `stun_or_daze` | 23299, 23306 |
+| `stagger` | 23300 |
+| `sink` | 23305 |
+| `fear` | 23307 |
+
+The field is omitted for every other skill id, which is nearly all of them.
+It lives on the catalog entry rather than the row because it is a property
+of the id, and a busy fight repeats a handful of ids across hundreds of rows.
+
+**Knockback and pull cannot be told apart here.** They share one arcdps id,
+so `knockback_or_pull` says so rather than picking a side. The distinction
+is real and observable — a pull moves the victim toward the caster, a
+knockback away — but it lives in position data, not in this row. A consumer
+that needs it should treat the event as confirmation that a displacement
+happened at a known instant, and measure direction against `src` itself.
+Likewise `stun_or_daze`: those two DO leave a buff trail, so
+`blocks.self_effects` can separate them where this cannot.
 
 ```json
 {

@@ -484,6 +484,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // channel absorption, Task 3) so both the `ei-json` streaming
             // path and the `json` arm below share the one `ReportV1` build
             // instead of constructing it twice.
+            // The attributed detail behind `received_cc_count` and the
+            // `cc_taken` lane (see `Passes::cc_taken_events`).
+            let cc_taken_events =
+                timeseries.then(|| axilog_core::analysis::cc::taken_events_for(&enc, &raw));
             let report_v1 = axilog_schema::v1::build_report_v1(
                 &enc,
                 &metrics,
@@ -506,6 +510,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     target_conditions: target_conditions.as_ref(),
                     self_effects: self_effects.as_ref(),
                     squad_buffs: Some(&squad_buffs),
+                    cc_taken_events: cc_taken_events.as_deref(),
                 },
             );
             // Final-review fix wave: surface analysis warnings (e.g. a

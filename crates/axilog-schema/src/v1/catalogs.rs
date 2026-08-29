@@ -61,6 +61,19 @@ pub struct SkillEntry {
     pub can_crit: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_attack: Option<bool>,
+    /// Which crowd-control effect this id stands for, when it is one of
+    /// arcdps' generic control ids -- see
+    /// [`axilog_core::analysis::control_catalog::ControlKind`], which
+    /// explains why a CC row names the effect rather than the skill that
+    /// caused it, and why knockback and pull cannot be told apart.
+    ///
+    /// Here rather than on `blocks.cc.taken_events`' rows for the reason
+    /// the proc flags below are here: it is a property of the ID, and a
+    /// busy fight repeats a handful of ids across hundreds of rows.
+    ///
+    /// Omitted for everything else, which is nearly every skill in a log.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control_kind: Option<String>,
     /// MPROC -- see [`crate::SkillMapEntryOut`]'s fields of the same
     /// names. Carried on the catalog entry rather than on a block row
     /// because they are properties of the SKILL, not of any one player's
@@ -261,6 +274,10 @@ impl CatalogBuilder {
                         // crit.
                         is_swap: axilog_core::analysis::skill_map::is_swap(id),
                         can_crit: axilog_core::analysis::hit_stats::can_crit(id),
+                        // Another pure function of the id, from arcdps'
+                        // own generic-control table.
+                        control_kind: axilog_core::analysis::control_catalog::control_kind(id)
+                            .map(|k| k.as_str().to_owned()),
                         // The log never carries this; the generated GW2 API
                         // catalog is the only source. Kept as a fallback to
                         // whatever the pipeline resolved, which is `None`
@@ -393,6 +410,42 @@ impl CatalogBuilder {
 mod tests {
     use super::*;
     use axilog_core::analysis::Metrics;
+
+    #[test]
+    fn a_generic_control_id_carries_its_control_kind() {
+        // The consumer that draws "this player was knocked back or pulled"
+        // must not have to hardcode arcdps' generic ids; the catalog is
+        // where properties of a SKILL belong.
+        let mut cats = CatalogBuilder::default();
+        cats.reference_skill(23295);
+        let out = cats.finish(&Metrics::default(), None);
+        assert_eq!(
+            out.skills[&23295].control_kind.as_deref(),
+            Some("knockback_or_pull")
+        );
+    }
+
+    #[test]
+    fn an_ordinary_skill_carries_no_control_kind() {
+        let mut cats = CatalogBuilder::default();
+        cats.reference_skill(5491);
+        let out = cats.finish(&metrics_with_skills(), None);
+        assert_eq!(out.skills[&5491].control_kind, None);
+    }
+
+    #[test]
+    fn control_kind_is_omitted_from_json_when_absent() {
+        // Nearly every skill in a log is not a control generic; emitting a
+        // null for each would cost more than the field is worth.
+        let mut cats = CatalogBuilder::default();
+        cats.reference_skill(5491);
+        let out = cats.finish(&metrics_with_skills(), None);
+        let json = serde_json::to_string(&out.skills[&5491]).unwrap();
+        assert!(
+            !json.contains("control_kind"),
+            "absent kind must not serialize: {json}"
+        );
+    }
 
     fn metrics_with_skills() -> Metrics {
         let mut m = Metrics::default();
