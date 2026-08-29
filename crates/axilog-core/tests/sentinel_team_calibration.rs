@@ -54,3 +54,66 @@ fn sentinel_team_id_does_not_exile_a_squad_member() {
         exiled.join("\n  "),
     );
 }
+
+/// The other half of the sentinel problem, and the one `resolve_teams`
+/// cannot reach: an agent whose EVERY `TEAM_CHANGE` is `1875`. There is no
+/// real id to prefer, so the friend/foe partition falls back to the EVTC
+/// subgroup tag. Asserted at the partition (`wvw::apply`), not at
+/// `resolve_teams` -- the team map still reads `1875` for these agents by
+/// construction, and the roster is what the fix moves.
+///
+/// `wvw-sentinel-only-team.zevtc` is `20260824-175919`, where squad member
+/// `Aidan Von.6248` emits `1875` and nothing else. Sweeping all 4084 local
+/// captures found 73 such players across 70 logs, every one of them on
+/// `1875` with a resolvable friendly team.
+#[test]
+fn sentinel_only_team_id_falls_back_to_the_subgroup_tag() {
+    let path = common::local_fixture("wvw-sentinel-only-team.zevtc");
+    let Some(bytes) = common::read_bytes_or_skip(&path, "sentinel-only-team capture") else {
+        return;
+    };
+    let raw = decode_raw(&bytes).expect("decode capture");
+    let (agent_team, recorded_by) = axilog_core::wvw::resolve_teams(&raw);
+    let friendly = recorded_by
+        .and_then(|addr| agent_team.get(&addr).copied())
+        .expect("capture has a POINT_OF_VIEW agent with a team");
+
+    // Precondition: this capture really does contain the unreachable case,
+    // so the assertions below are testing the fallback and not a log that
+    // `resolve_teams` already handles on its own.
+    let sentinel_only: Vec<u64> = raw
+        .agents
+        .iter()
+        .filter(|a| a.is_player() && a.name_parts().2.unwrap_or(0) != 0)
+        .map(|a| a.addr)
+        .filter(|addr| agent_team.get(addr).copied().is_some_and(|t| t != friendly))
+        .collect();
+    assert!(
+        !sentinel_only.is_empty(),
+        "capture must contain a squad member whose team id never resolves",
+    );
+
+    let mut enc = axilog_core::model::resolve(&raw);
+    axilog_core::wvw::apply(&mut enc, &raw);
+
+    let squad: std::collections::BTreeSet<u64> =
+        enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
+    for addr in &sentinel_only {
+        assert!(
+            squad.contains(addr),
+            "subgroup-tagged agent {addr} (team {:?}) was filed as an enemy",
+            agent_team.get(addr),
+        );
+    }
+    let friendly_color = enc
+        .players
+        .iter()
+        .find(|p| Some(p.agent_addr) == recorded_by)
+        .map(|p| p.team.clone())
+        .expect("recorder is on the squad roster");
+    assert_ne!(friendly_color, "unknown");
+    for addr in &sentinel_only {
+        let p = enc.players.iter().find(|p| p.agent_addrs.contains(addr)).unwrap();
+        assert_eq!(p.team, friendly_color, "a rescued member takes the recorder's colour");
+    }
+}

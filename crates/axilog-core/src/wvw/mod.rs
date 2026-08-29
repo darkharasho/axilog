@@ -451,14 +451,48 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
 
     let mut friendly_players = Vec::new();
     let mut enemy_players: Vec<Player> = Vec::new();
+    // Agents the subgroup tag rescued from the enemy roster (below). Their
+    // WvW team id resolves to nothing, so the colour loop further down has
+    // nothing to say about them; it reads this set and adopts the
+    // recorder's colour instead.
+    let mut subgroup_rescued: std::collections::BTreeSet<u64> = Default::default();
     for p in enc.players.drain(..) {
-        let is_friendly = match agent_team.get(&p.agent_addr) {
-            Some(&t) => Some(t) == friendly_team,
-            // Unconstrained player agent (no observed team): not confirmed
-            // to be on the recorder's team, so default to enemy — safer
-            // than silently inflating the squad.
-            None => false,
-        };
+        let observed = agent_team.get(&p.agent_addr).copied();
+        // Unconstrained player agent (no observed team): not confirmed to
+        // be on the recorder's team, so default to enemy — safer than
+        // silently inflating the squad.
+        let mut is_friendly = observed.is_some() && observed == friendly_team;
+
+        // Subgroup override (2026-08-28). `resolve_teams` prefers an id
+        // that resolves to a real team over one that doesn't, which
+        // recovers every agent that emits a sentinel BEFORE its real
+        // `TEAM_CHANGE`. It cannot help an agent whose every stamp is
+        // unresolvable: across the same 801-capture calibration set, 14
+        // squad members in 13 logs emit `1875` and never anything else,
+        // so there is no better id to prefer and the partition filed them
+        // as enemies with team `"unknown"`.
+        //
+        // For those, `TEAM_CHANGE` is not the only authority. arcdps writes
+        // the squad subgroup into the EVTC agent name block (`character \0
+        // account \0 subgroup`) and fills it ONLY for the recorder's own
+        // squad — enemy players in WvW arrive with an empty account and no
+        // subgroup at all. `in_squad` (see `model::resolve`) is therefore
+        // independent evidence of squad membership, and it is evidence the
+        // team ids in these logs simply do not carry.
+        //
+        // Deliberately scoped to agents whose team says NOTHING. Where an
+        // id resolves, `TEAM_CHANGE` stays the authority: a subgroup-tagged
+        // agent sitting on some other real team is the Edge of the Mists
+        // teardown case, and first-write-wins already handles it. So this
+        // can only move agents the partition was going to mis-file anyway.
+        if !is_friendly
+            && p.in_squad
+            && !observed.is_some_and(|t| is_real_team(t, dynamic.as_ref()))
+        {
+            subgroup_rescued.insert(p.agent_addr);
+            is_friendly = true;
+        }
+
         if is_friendly {
             friendly_players.push(p);
         } else {
@@ -554,7 +588,21 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         }
     });
 
+    // The colour the recorder's own team resolves to, when it resolves at
+    // all -- what a subgroup-rescued squad member inherits below.
+    let friendly_color = friendly_team
+        .map(|t| team_color_with(t, dynamic.as_ref()))
+        .filter(|c| c != "unknown");
     for p in &mut enc.players {
+        // A subgroup-rescued member is on the recorder's team by the same
+        // evidence that rescued it (arcdps only tags the recorder's own
+        // squad), so it takes the recorder's colour. Its own team id
+        // resolves to "unknown" by construction -- leaving that in place
+        // would put a squad member on no team at all, which every consumer
+        // that groups or colours by team reads as an enemy again.
+        if subgroup_rescued.contains(&p.agent_addr) {
+            if let Some(color) = friendly_color.as_ref() { p.team = color.clone(); continue; }
+        }
         if let Some(&t) = agent_team.get(&p.agent_addr) { p.team = team_color_with(t, dynamic.as_ref()); }
     }
     for en in &mut enc.enemies {
@@ -1241,6 +1289,109 @@ mod eotm_teardown_tests {
         assert_eq!(agent_team.get(&1).copied(), Some(2767), "sentinel must not shadow a real team");
         assert_eq!(agent_team.get(&2).copied(), Some(1875), "keep the sentinel when it is all we have");
         assert_eq!(agent_team.get(&3).copied(), Some(1282), "first-write-wins still governs real ids");
+    }
+
+    fn player_sub(addr: u64, subgroup: u8) -> Player {
+        Player { subgroup, in_squad: subgroup != 0, ..player(addr) }
+    }
+
+    fn wvw_encounter(players: Vec<Player>) -> Encounter {
+        Encounter { kind: "wvw".into(), pve: None, map: "".into(),
+            duration_ms: 0, build: "".into(), revision: 1, recorded_by: None,
+            teams: vec![], enemies: vec![], markers: vec![], ground_markers: vec![],
+            tick_rate: None, objectives: Vec::new(), started_at_unix: None,
+            log_start_ms: 0, map_id: None, players }
+    }
+
+    fn player_agents(addrs: &[u64]) -> Vec<RawAgent> {
+        addrs.iter().map(|&addr| RawAgent {
+            addr, prof: 5, is_elite: 1, toughness: 0, concentration: 0,
+            healing: 0, hitbox_width: 0, condition: 0, hitbox_height: 0,
+            name_raw: b"C\0A\0".to_vec(),
+        }).collect()
+    }
+
+    /// `resolve_teams`' prefer-a-real-id rule can only help an agent that
+    /// emits a real id at some point. Across the 801-capture calibration
+    /// set, 14 squad members in 13 logs emit `1875` and NOTHING else, so
+    /// there is nothing to prefer -- and the friend/foe partition filed
+    /// them onto the enemy roster with team `"unknown"`.
+    ///
+    /// The EVTC agent name block carries the squad subgroup, and arcdps
+    /// fills it only for the recorder's own squad. That is independent
+    /// evidence of membership, so the partition falls back to it when the
+    /// team id says nothing at all.
+    #[test]
+    fn subgroup_tag_rescues_a_member_whose_only_team_id_is_unresolvable() {
+        const SQUAD: u32 = 2767;
+        const ENEMY: u32 = 886;
+        let recorder = 1u64;
+        let addrs = [recorder, 2, 101, 102];
+
+        let raw = crate::evtc::RawLog {
+            header: RawHeader { build: "20260101".into(), revision: 1, boss_id: 1 },
+            agents: player_agents(&addrs), skills: vec![],
+            events: vec![
+                ev(recorder, sc::POINT_OF_VIEW, 0),
+                ev(recorder, sc::TEAM_CHANGE, SQUAD as i32),
+                // The regression: a squad member whose only stamp is the
+                // sentinel.
+                ev(2, sc::TEAM_CHANGE, 1875),
+                ev(101, sc::TEAM_CHANGE, ENEMY as i32),
+                // Same unresolvable id, but NO subgroup -- an enemy or a
+                // non-squad ally. Nothing vouches for it, so it stays off
+                // the squad roster.
+                ev(102, sc::TEAM_CHANGE, 1875),
+            ],
+            guid_map: vec![],
+        };
+
+        let mut enc = wvw_encounter(vec![
+            player_sub(recorder, 1), player_sub(2, 3),
+            player_sub(101, 0), player_sub(102, 0),
+        ]);
+        apply(&mut enc, &raw);
+
+        let squad_addrs: Vec<u64> = enc.players.iter().map(|p| p.agent_addr).collect();
+        assert_eq!(squad_addrs, vec![recorder, 2], "the subgroup tag must rescue agent 2");
+        let enemy_addrs: Vec<u64> = enc.enemies.iter().map(|e| e.id).collect();
+        assert_eq!(enemy_addrs, vec![101, 102], "an untagged sentinel agent stays an enemy");
+
+        let recorder_color = enc.players[0].team.clone();
+        assert_ne!(recorder_color, "unknown");
+        assert_eq!(
+            enc.players[1].team, recorder_color,
+            "a rescued member is on the recorder's team by the same evidence that rescued it",
+        );
+    }
+
+    /// The override is scoped to agents whose team id resolves to nothing.
+    /// Where an id DOES resolve, `TEAM_CHANGE` stays the authority -- a
+    /// subgroup-tagged agent that first-write-wins put on another real team
+    /// is the Edge of the Mists teardown case, which already has a rule.
+    #[test]
+    fn subgroup_tag_does_not_override_a_resolvable_team_id() {
+        let recorder = 1u64;
+        let addrs = [recorder, 2];
+        let raw = crate::evtc::RawLog {
+            header: RawHeader { build: "20260101".into(), revision: 1, boss_id: 1 },
+            agents: player_agents(&addrs), skills: vec![],
+            events: vec![
+                ev(recorder, sc::POINT_OF_VIEW, 0),
+                ev(recorder, sc::TEAM_CHANGE, 2767),
+                // Sentinel first, then a real id: `resolve_teams` prefers
+                // the real one, so the override never sees this agent.
+                ev(2, sc::TEAM_CHANGE, 1875),
+                ev(2, sc::TEAM_CHANGE, 886),
+            ],
+            guid_map: vec![],
+        };
+
+        let mut enc = wvw_encounter(vec![player_sub(recorder, 1), player_sub(2, 3)]);
+        apply(&mut enc, &raw);
+
+        assert_eq!(enc.players.len(), 1, "a resolvable team id still decides the partition");
+        assert_eq!(enc.enemies.iter().map(|e| e.id).collect::<Vec<_>>(), vec![2]);
     }
 
     /// The dynamic CBTS_WVWTEAMS event is the log's own source of truth for

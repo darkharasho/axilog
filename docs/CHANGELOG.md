@@ -10,6 +10,53 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## Unreleased
+
+### Fixed
+- **Squad members whose team id *never* resolves.** v1.8.1's prefer-a-real-id
+  rule can only help an agent that emits a real team id at some point. It
+  cannot help one whose every `TEAM_CHANGE` is the `1875` sentinel: there is
+  nothing better to prefer, so the friend/foe partition still filed those
+  players onto the enemy roster with team `"unknown"`. A sweep of 4,084 local
+  WvW captures found 73 such players across 70 logs.
+
+  For those agents `TEAM_CHANGE` is not the only authority. arcdps writes the
+  squad subgroup into the EVTC agent name block (`character \0 account \0
+  subgroup`) and fills it *only* for the recorder's own squad — the same test
+  GW2EI uses for `_nonSquadFriendlies` — so `Player::in_squad` is evidence of
+  membership independent of any team id. `wvw::apply` now falls back to it
+  when, and only when, the agent's team id resolves to no team at all, and a
+  rescued member inherits the recorder's team colour rather than being left
+  on `"unknown"`, which every consumer that groups by team reads as an enemy
+  again.
+
+  Deliberately scoped to agents whose team says *nothing*. Where an id
+  resolves, `TEAM_CHANGE` stays the authority — a subgroup-tagged agent
+  sitting on some other real team is the Edge of the Mists teardown case,
+  which first-write-wins already governs — so the fallback can only move
+  agents the partition was going to mis-file anyway.
+
+  The same sweep surfaced a **separate, still-open** residual it does not
+  address: in five Edge of the Mists captures from one session, 40
+  subgroup-tagged players resolve to a real id (`2543`/`433`) that differs
+  from the recorder's (`1282`) and are still filed as enemies. That is a
+  first-write-wins outcome among real ids, not a sentinel, and closing it
+  needs its own calibration of which of the two ids the fight actually
+  happened on.
+
+  Pinned by two unit tests in `wvw::eotm_teardown_tests` (rescue, and
+  non-override of a resolvable id) and by
+  `sentinel_only_team_id_falls_back_to_the_subgroup_tag`, a real-capture hook
+  against `20260824-175919`.
+
+- **Stale native-json baseline digest.** The v1.8.1 release did not re-digest
+  `native-json-baseline.sha256.json`, and `1.8.0`/`1.8.1` are the same byte
+  length, so `facade_identity` was left red on main reporting the confusing
+  "length matched but the digest did not" half — the same way v1.7.0 shipped
+  one. Re-digested, after proving the drift is the version string and nothing
+  else: substituting `1.8.0` back into the new capture reproduces the
+  committed digest byte for byte.
+
 ## v1.8.1 — 2026-08-28
 
 ### Fixed
