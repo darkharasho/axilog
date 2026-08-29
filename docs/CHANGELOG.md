@@ -10,11 +10,7 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
-## Unreleased
-
-<!-- Rename this heading to `## vX.Y.Z — <date>` when the release is cut:
-     `scripts/release-notes.sh` matches the section by tag and the Release
-     job fails (after npm-publish) if it finds none. -->
+## v1.9.0 — 2026-08-29
 
 ### Added
 - **A `cc_taken` per-entity lane — the incoming half of the CC picture.**
