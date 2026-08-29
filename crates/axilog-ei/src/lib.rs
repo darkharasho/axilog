@@ -3665,6 +3665,7 @@ mod tests {
                         barrier_received_1s: None,
                         cc_applied: None,
                         strips: None,
+                        cc_taken: None,
                         strips_taken: None,
                     },
                 );

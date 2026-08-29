@@ -2172,6 +2172,18 @@ class EntitySeries(_EntitySeriesRequired, total=False):
     #: the sum can read strictly below the scalar on such a log.
     #: PER-BUCKET, not cumulative -- unlike the three healing lanes above.
     cc_applied: SeriesOut
+    #: Crowd control landed ON this entity, per second. Present only with
+    #: `timeseries=True`. Sums to
+    #: `blocks["defenses"]["by_entity"][id]["received_cc_count"]` WITHIN THE
+    #: ENCOUNTER WINDOW -- see `cc_applied` for the same out-of-window
+    #: caveat.
+    #:
+    #: NOT the mirror image of `cc_applied`: the incoming scalar applies no
+    #: source filter and no pet/minion fold, so friendly-sourced CC on a
+    #: squad player counts here while `cc_applied` counts only CC onto
+    #: enemies and folds in the actor's minions. Summing this lane across
+    #: the squad does not equal summing `cc_applied` across it.
+    cc_taken: SeriesOut
     #: Boons this entity removed from enemies, per second. Present only with
     #: `timeseries=True`. Sums to
     #: `blocks["support"]["by_entity"][id]["strips"]` WITHIN THE ENCOUNTER
