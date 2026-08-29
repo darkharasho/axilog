@@ -384,6 +384,124 @@ pub fn resolve_teams(raw: &RawLog) -> (BTreeMap<u64, u32>, Option<u64>) {
     (agent_team, recorded_by)
 }
 
+/// Friend/foe colouring derived from arcdps's own per-event `iff` flag.
+///
+/// `iff` is the game's own affinity byte, and it is *pairwise*: on a combat
+/// event it states whether `src` and `dst` are on opposite sides
+/// (`IFF_FOE`, 1) or the same one (`IFF_FRIEND`, 0). It is NOT a per-agent
+/// label -- a squad member hitting an enemy emits `iff == 1` just as the
+/// enemy hitting back does, so counting `iff` bytes per agent classifies
+/// every fighter on both sides as a foe. Read as a relation, though, it
+/// induces a graph whose 2-colouring from a known-side vertex partitions
+/// the whole roster: the recorder (`POINT_OF_VIEW`) is friendly by
+/// definition, an `iff == 0` edge preserves colour, an `iff == 1` edge
+/// flips it.
+///
+/// This is the same "`iff` beats a static team lookup" precedent
+/// `analysis::damage::accumulate_pet_credit` and the hostile-NPC retain in
+/// `apply` already rest on, generalized from a single edge to the
+/// transitive closure.
+///
+/// Why it is needed (2026-08-28): `TEAM_CHANGE` alone cannot resolve a
+/// squad on Edge of the Mists. Across 4084 real WvW captures, 40 squad
+/// members in 7 logs stamp a *real* team id that is not the recorder's
+/// before stamping their true one -- `2543` and `433` against a recorder on
+/// `1282` -- so `is_real_team` cannot filter it the way it filters `0` and
+/// `1875`, and first-write-wins latches the wrong one. One agent
+/// (`:billkamm.9201`, `20260822-194516`) stamps `433`, `2543`, `886` and
+/// `2543` again inside a single log; there is no ordering rule over team
+/// ids that recovers the truth there. `iff` does: in `20260822-194714` the
+/// squad's actual opponents sit on team `886`, an id no squad member ever
+/// carries, and every exile trades friendly-flagged events with the squad.
+///
+/// Returns `addr -> true` for the recorder's side, `false` for the
+/// opposing side. Agents that never trade a classifiable event with the
+/// coloured component are absent from the map -- callers must fall back
+/// for those; see `apply`.
+///
+/// Weighted majority, not first-touch. A single stray edge is enough to
+/// mis-colour a vertex under plain BFS (calibration: `:Fibbs.1623` in
+/// `20260822-194714` has one foe-flagged edge against dozens of friendly
+/// ones and BFS filed a known squad member as an enemy). Each round scores
+/// every uncoloured vertex against the colours fixed in PREVIOUS rounds
+/// only -- so the result cannot depend on iteration order -- and takes the
+/// strict majority; ties stay uncoloured and may resolve in a later round
+/// as more of their neighbourhood settles.
+fn affinity_partition(
+    raw: &RawLog,
+    recorded_by: Option<u64>,
+    player_addrs: &std::collections::BTreeSet<u64>,
+) -> BTreeMap<u64, bool> {
+    let mut color: BTreeMap<u64, bool> = BTreeMap::new();
+    let Some(recorder) = recorded_by else { return color };
+
+    // Undirected weighted edges: `a -> b -> (same_side_events,
+    // opposite_side_events)`. Stored both ways so a round can score any
+    // vertex from its own adjacency alone.
+    let mut edges: BTreeMap<u64, BTreeMap<u64, (u64, u64)>> = BTreeMap::new();
+    for e in &raw.events {
+        // Statechange rows reuse these fields for unrelated payloads, and
+        // activation/buff-removal rows carry no affinity we want to trust.
+        if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
+            continue;
+        }
+        // 2 is IFF_UNKNOWN -- arcdps telling us it does not know, which is
+        // not evidence in either direction.
+        if e.iff > 1 {
+            continue;
+        }
+        // Skip rows that landed nothing (no damage, no buff duration):
+        // they are overwhelmingly bookkeeping and carry a stale `iff`.
+        if e.value == 0 && e.buff_dmg == 0 {
+            continue;
+        }
+        let (src, dst) = (e.src_agent, e.dst_agent);
+        // Player-to-player only. NPCs, pets and siege have their own
+        // hostility rules (the `iff_confirmed_hostile_npcs` retain in
+        // `apply`), and minions would otherwise drag their owner's colour
+        // onto whatever they happen to stand next to.
+        if src == dst || !player_addrs.contains(&src) || !player_addrs.contains(&dst) {
+            continue;
+        }
+        let same = e.iff == 0;
+        for (a, b) in [(src, dst), (dst, src)] {
+            let slot = edges.entry(a).or_default().entry(b).or_insert((0, 0));
+            if same { slot.0 += 1 } else { slot.1 += 1 }
+        }
+    }
+
+    color.insert(recorder, true);
+    loop {
+        let mut settled: Vec<(u64, bool)> = Vec::new();
+        for (addr, neighbours) in &edges {
+            if color.contains_key(addr) {
+                continue;
+            }
+            let (mut friend, mut foe) = (0u64, 0u64);
+            for (other, &(same, opp)) in neighbours {
+                match color.get(other) {
+                    // Same-side edge to a friend, or opposite-side edge to
+                    // an enemy, both argue "friendly"; the mirror pair
+                    // argues "enemy".
+                    Some(true) => { friend += same; foe += opp }
+                    Some(false) => { friend += opp; foe += same }
+                    None => {}
+                }
+            }
+            if friend > foe {
+                settled.push((*addr, true));
+            } else if foe > friend {
+                settled.push((*addr, false));
+            }
+        }
+        if settled.is_empty() {
+            break;
+        }
+        color.extend(settled);
+    }
+    color
+}
+
 pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     let (agent_team, recorded_by) = resolve_teams(raw);
 
@@ -449,19 +567,42 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     // guards on our own team) out of `enc.enemies`.
     let friendly_team = recorded_by.and_then(|addr| agent_team.get(&addr).copied());
 
+    // Every player agent arrives in `enc.players` -- squad AND enemy alike
+    // (`model::resolve` cannot tell them apart) -- so this set is the whole
+    // roster, which is exactly the vertex set the affinity graph needs.
+    let roster_addrs: std::collections::BTreeSet<u64> =
+        enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
+    let affinity = affinity_partition(raw, recorded_by, &roster_addrs);
+
     let mut friendly_players = Vec::new();
     let mut enemy_players: Vec<Player> = Vec::new();
-    // Agents the subgroup tag rescued from the enemy roster (below). Their
-    // WvW team id resolves to nothing, so the colour loop further down has
-    // nothing to say about them; it reads this set and adopts the
-    // recorder's colour instead.
-    let mut subgroup_rescued: std::collections::BTreeSet<u64> = Default::default();
+    // Squad members whose own team id disagrees with the recorder's (or
+    // resolves to nothing at all). The colour loop further down reads this
+    // set and gives them the recorder's colour -- leaving their observed id
+    // in place would paint a squad member with the enemy's colour, which is
+    // how the Edge of the Mists misfiling stayed visible even once the
+    // partition itself was right.
+    let mut colour_from_recorder: std::collections::BTreeSet<u64> = Default::default();
     for p in enc.players.drain(..) {
         let observed = agent_team.get(&p.agent_addr).copied();
         // Unconstrained player agent (no observed team): not confirmed to
         // be on the recorder's team, so default to enemy — safer than
         // silently inflating the squad.
         let mut is_friendly = observed.is_some() && observed == friendly_team;
+
+        // arcdps's own `iff` flag outranks the team id where it has an
+        // opinion (see `affinity_partition`). It is per-event evidence from
+        // the fight itself, whereas a `TEAM_CHANGE` id is a single stamp
+        // that Edge of the Mists demonstrably emits before the agent's real
+        // team lands. This both rescues squad members stamped onto a
+        // hostile-but-real id and, in the other direction, keeps genuine
+        // enemies who carry an account and a subgroup off the squad --
+        // three of them in `20260726-194109`, tagged exactly like
+        // squadmates yet trading 824 foe-flagged events with the squad.
+        let affinity_says = p.agent_addrs.iter().find_map(|a| affinity.get(a).copied());
+        if let Some(friendly) = affinity_says {
+            is_friendly = friendly;
+        }
 
         // Subgroup override (2026-08-28). `resolve_teams` prefers an id
         // that resolves to a real team over one that doesn't, which
@@ -474,26 +615,49 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         //
         // For those, `TEAM_CHANGE` is not the only authority. arcdps writes
         // the squad subgroup into the EVTC agent name block (`character \0
-        // account \0 subgroup`) and fills it ONLY for the recorder's own
-        // squad — enemy players in WvW arrive with an empty account and no
-        // subgroup at all. `in_squad` (see `model::resolve`) is therefore
-        // independent evidence of squad membership, and it is evidence the
-        // team ids in these logs simply do not carry.
+        // account \0 subgroup`), and it is usually the recorder's own squad
+        // that carries it, so `in_squad` (see `model::resolve`) is evidence
+        // the team ids in these logs do not carry.
         //
-        // Deliberately scoped to agents whose team says NOTHING. Where an
-        // id resolves, `TEAM_CHANGE` stays the authority: a subgroup-tagged
-        // agent sitting on some other real team is the Edge of the Mists
-        // teardown case, and first-write-wins already handles it. So this
-        // can only move agents the partition was going to mis-file anyway.
-        if !is_friendly
-            && p.in_squad
-            && !observed.is_some_and(|t| is_real_team(t, dynamic.as_ref()))
-        {
-            subgroup_rescued.insert(p.agent_addr);
+        // It is NOT proof, and this comment used to claim it was ("filled
+        // ONLY for the recorder's own squad"). Calibration disproved that
+        // (2026-08-28): in `20260726-194109` three agents carry an account
+        // AND a subgroup and are unambiguously enemies -- rank-title
+        // character names ("Bronze Invader", "Diamond Soldier", "Platinum
+        // Colonel") and 824 foe-flagged combat events against the squad.
+        // One of them, `:IronOre.7826`, was a genuine squadmate in twelve
+        // logs recorded earlier the same day; the tag is stale roster state
+        // that survives the recorder changing worlds, not a live squad
+        // assertion. So the tag can only ever be a fallback, never an
+        // authority.
+        //
+        // Scoped to agents the affinity graph could not reach -- an agent
+        // that never landed or received a single classifiable event, so
+        // there is no `iff` evidence about it in either direction. Where
+        // `iff` HAS spoken it outranks the tag unconditionally, which is
+        // what keeps the `20260726-194109` enemies off the squad roster.
+        //
+        // Widened (2026-08-28) from "no team id resolves" to "no affinity
+        // evidence"; the graph is what makes that safe. Of the 40 Edge of
+        // the Mists exiles, 9 have graph degree 0 -- present for the fight
+        // but never in it -- and every one is a real squad member sitting
+        // on a real-but-wrong id (`2543`/`433`/`886` against a recorder on
+        // `1282`), which the old scoping could not touch because the id
+        // resolved. The residual risk is the mirror case: a genuine enemy
+        // that is subgroup-tagged AND never trades an event with anyone.
+        // Across 4084 captures the only tagged enemies observed are the
+        // `20260726-194109` three, and they trade 824 events, so the graph
+        // catches them. An idle tagged enemy would be mis-filed -- a
+        // deliberate trade for the 9 squad members recovered, since a
+        // no-combat agent contributes nothing to either side's totals.
+        if !is_friendly && p.in_squad && affinity_says.is_none() {
             is_friendly = true;
         }
 
         if is_friendly {
+            if observed != friendly_team {
+                colour_from_recorder.insert(p.agent_addr);
+            }
             friendly_players.push(p);
         } else {
             enemy_players.push(p);
@@ -600,7 +764,7 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
         // resolves to "unknown" by construction -- leaving that in place
         // would put a squad member on no team at all, which every consumer
         // that groups or colours by team reads as an enemy again.
-        if subgroup_rescued.contains(&p.agent_addr) {
+        if colour_from_recorder.contains(&p.agent_addr) {
             if let Some(color) = friendly_color.as_ref() { p.team = color.clone(); continue; }
         }
         if let Some(&t) = agent_team.get(&p.agent_addr) { p.team = team_color_with(t, dynamic.as_ref()); }
@@ -896,7 +1060,10 @@ mod tests {
             header: RawHeader { build: "20260701".into(), revision: 1, boss_id: 1 },
             agents: vec![
                 agent(1, 27, b"Alice\x00:Alice.1234\x005\x00"),
-                agent(2, 27, b"Bob\x00:Bob.5678\x005\x00"),
+                // An enemy player carries no squad subgroup. These fixtures
+                // have no combat events, so the affinity graph is silent and
+                // the tag decides -- tagging Bob would make him a squadmate.
+                agent(2, 27, b"Bob\x00:Bob.5678\x00\x00"),
             ],
             skills: vec![],
             events: vec![
@@ -1082,7 +1249,10 @@ mod tests {
             header: RawHeader { build: "20260701".into(), revision: 1, boss_id: 1 },
             agents: vec![
                 agent(1, 27, b"Alice\x00:Alice.1234\x005\x00"),
-                agent(2, 27, b"Bob\x00:Bob.5678\x005\x00"),
+                // An enemy player carries no squad subgroup. These fixtures
+                // have no combat events, so the affinity graph is silent and
+                // the tag decides -- tagging Bob would make him a squadmate.
+                agent(2, 27, b"Bob\x00:Bob.5678\x00\x00"),
             ],
             skills: vec![],
             events: vec![
@@ -1227,7 +1397,13 @@ mod eotm_teardown_tests {
             teams: vec![], enemies: vec![], markers: vec![], ground_markers: vec![],
             tick_rate: None, objectives: Vec::new(), started_at_unix: None,
             log_start_ms: 0, map_id: None,
-            players: squad.iter().chain(enemies.iter()).map(|&a| player(a)).collect() };
+            // Enemy players carry no squad subgroup (`in_squad: false`).
+            // This log has no combat events, so the affinity graph is
+            // silent and the subgroup tag is the deciding evidence for any
+            // agent the team ids would file as an enemy.
+            players: squad.iter().map(|&a| player(a))
+                .chain(enemies.iter().map(|&a| Player { in_squad: false, subgroup: 0, ..player(a) }))
+                .collect() };
         apply(&mut enc, &raw);
 
         assert_eq!(enc.players.len(), squad.len(), "whole squad must stay friendly");
@@ -1289,6 +1465,18 @@ mod eotm_teardown_tests {
         assert_eq!(agent_team.get(&1).copied(), Some(2767), "sentinel must not shadow a real team");
         assert_eq!(agent_team.get(&2).copied(), Some(1875), "keep the sentinel when it is all we have");
         assert_eq!(agent_team.get(&3).copied(), Some(1282), "first-write-wins still governs real ids");
+    }
+
+    /// A combat row carrying arcdps's affinity byte: `iff == 0` says `src`
+    /// and `dst` are on the same side, `1` says opposite sides. `value`
+    /// must be non-zero for `affinity_partition` to count the row.
+    fn iff_event(src: u64, dst: u64, iff: u8) -> RawEvent {
+        RawEvent { time: 0, src_agent: src, dst_agent: dst, value: 100, buff_dmg: 0,
+            overstack: 0, skillid: 1, src_instid: 0, dst_instid: 0,
+            src_master_instid: 0, dst_master_instid: 0, iff, buff: 0, result: 0,
+            is_activation: 0, is_buffremove: 0, is_ninety: 0, is_fifty: 0,
+            is_moving: 0, is_statechange: 0, is_flanking: 0, is_shields: 0,
+            is_offcycle: 0, pad: 0 }
     }
 
     fn player_sub(addr: u64, subgroup: u8) -> Player {
@@ -1365,33 +1553,146 @@ mod eotm_teardown_tests {
         );
     }
 
-    /// The override is scoped to agents whose team id resolves to nothing.
-    /// Where an id DOES resolve, `TEAM_CHANGE` stays the authority -- a
-    /// subgroup-tagged agent that first-write-wins put on another real team
-    /// is the Edge of the Mists teardown case, which already has a rule.
+    /// `iff` outranks the subgroup tag (2026-08-28).
+    ///
+    /// The tag used to be treated as proof of squad membership, on the
+    /// premise that arcdps fills it only for the recorder's own squad.
+    /// `20260726-194109` disproves that: three agents carry an account AND
+    /// a subgroup and are unambiguously enemies -- rank-title character
+    /// names and hundreds of foe-flagged combat events against the squad.
+    /// One had been a genuine squadmate in logs recorded earlier the same
+    /// day, so the tag is stale roster state, not a live assertion.
+    ///
+    /// So where the affinity graph reaches an agent, it decides, and the
+    /// tag does not get a vote.
     #[test]
-    fn subgroup_tag_does_not_override_a_resolvable_team_id() {
+    fn foe_flagged_events_outrank_a_stale_subgroup_tag() {
+        const SQUAD: u32 = 2767;
         let recorder = 1u64;
-        let addrs = [recorder, 2];
+        let addrs = [recorder, 2, 3];
+        let mut events = vec![
+            ev(recorder, sc::POINT_OF_VIEW, 0),
+            ev(recorder, sc::TEAM_CHANGE, SQUAD as i32),
+            ev(2, sc::TEAM_CHANGE, SQUAD as i32),
+            // The stale tag: agent 3 is subgroup-tagged and stamps a real
+            // team id that is not the recorder's -- exactly the shape the
+            // old rule filed as a teardown artefact.
+            ev(3, sc::TEAM_CHANGE, 433),
+        ];
+        // ...but the squad fights it, and arcdps flags every hit FOE.
+        for _ in 0..8 {
+            events.push(iff_event(recorder, 3, 1));
+            events.push(iff_event(2, 3, 1));
+        }
+        // Agent 2 is a squadmate, and its events with the recorder say so.
+        for _ in 0..4 {
+            events.push(iff_event(recorder, 2, 0));
+        }
+
+        let raw = crate::evtc::RawLog {
+            header: RawHeader { build: "20260101".into(), revision: 1, boss_id: 1 },
+            agents: player_agents(&addrs), skills: vec![], events, guid_map: vec![],
+        };
+        let mut enc = wvw_encounter(vec![
+            player_sub(recorder, 1), player_sub(2, 2), player_sub(3, 4),
+        ]);
+        apply(&mut enc, &raw);
+
+        assert_eq!(
+            enc.players.iter().map(|p| p.agent_addr).collect::<Vec<_>>(),
+            vec![recorder, 2],
+            "a subgroup-tagged agent the squad fights is an enemy, tag or not",
+        );
+        assert_eq!(enc.enemies.iter().map(|e| e.id).collect::<Vec<_>>(), vec![3]);
+    }
+
+    /// The Edge of the Mists residual (2026-08-28): a squad member whose
+    /// FIRST `TEAM_CHANGE` is a real-but-wrong id.
+    ///
+    /// `is_real_team` cannot filter this the way it filters `0` and `1875`
+    /// -- `2543` names an actual team -- so first-write-wins latches it and
+    /// the id-equality partition threw 40 squad members across 7 captures
+    /// onto the enemy roster. Worse, `2543` is RED while the recorder's
+    /// `1282` is blue, so they were painted with the enemy's colour too.
+    /// `iff` recovers them: they trade friend-flagged events with the squad
+    /// throughout.
+    #[test]
+    fn friendly_iff_rescues_a_member_stamped_onto_a_real_but_wrong_team() {
+        const SQUAD: u32 = 1282; // blue
+        const SPAWN_IN: u32 = 2543; // red, and NOT the team anyone fought
+        const ENEMY: u32 = 886; // red, the real opposition
+        let recorder = 1u64;
+        let addrs = [recorder, 2, 101];
+        let mut events = vec![
+            ev(recorder, sc::POINT_OF_VIEW, 0),
+            ev(recorder, sc::TEAM_CHANGE, SQUAD as i32),
+            ev(2, sc::TEAM_CHANGE, SPAWN_IN as i32),
+            ev(2, sc::TEAM_CHANGE, SQUAD as i32),
+            ev(101, sc::TEAM_CHANGE, ENEMY as i32),
+        ];
+        for _ in 0..6 {
+            events.push(iff_event(recorder, 2, 0));
+            events.push(iff_event(recorder, 101, 1));
+            events.push(iff_event(2, 101, 1));
+        }
+
+        let raw = crate::evtc::RawLog {
+            header: RawHeader { build: "20260101".into(), revision: 1, boss_id: 1 },
+            agents: player_agents(&addrs), skills: vec![], events, guid_map: vec![],
+        };
+        let mut enc = wvw_encounter(vec![
+            player_sub(recorder, 1), player_sub(2, 3), player_sub(101, 0),
+        ]);
+        apply(&mut enc, &raw);
+
+        assert_eq!(
+            enc.players.iter().map(|p| p.agent_addr).collect::<Vec<_>>(),
+            vec![recorder, 2],
+            "the spawn-in stamp must not exile a squad member",
+        );
+        assert_eq!(enc.enemies.iter().map(|e| e.id).collect::<Vec<_>>(), vec![101]);
+        let recorder_color = enc.players[0].team.clone();
+        assert_eq!(recorder_color, "blue");
+        assert_eq!(
+            enc.players[1].team, recorder_color,
+            "a rescued member takes the recorder's colour, not the red its stray id resolves to",
+        );
+    }
+
+    /// A squad member the affinity graph cannot reach -- present for the
+    /// fight, never in it (graph degree 0; 9 of the 40 exiles). No `iff`
+    /// evidence exists in either direction, so the subgroup tag is all
+    /// there is, and it gets the vote it does not get above.
+    #[test]
+    fn subgroup_tag_rescues_a_member_with_no_combat_evidence() {
+        const SQUAD: u32 = 1282;
+        const SPAWN_IN: u32 = 2543;
+        let recorder = 1u64;
+        let addrs = [recorder, 2, 101];
         let raw = crate::evtc::RawLog {
             header: RawHeader { build: "20260101".into(), revision: 1, boss_id: 1 },
             agents: player_agents(&addrs), skills: vec![],
             events: vec![
                 ev(recorder, sc::POINT_OF_VIEW, 0),
-                ev(recorder, sc::TEAM_CHANGE, 2767),
-                // Sentinel first, then a real id: `resolve_teams` prefers
-                // the real one, so the override never sees this agent.
-                ev(2, sc::TEAM_CHANGE, 1875),
-                ev(2, sc::TEAM_CHANGE, 886),
+                ev(recorder, sc::TEAM_CHANGE, SQUAD as i32),
+                // Tagged, stamped onto a real-but-wrong id, and it never
+                // fights: nothing but the tag can save it.
+                ev(2, sc::TEAM_CHANGE, SPAWN_IN as i32),
+                // Untagged and equally idle: nothing vouches for it.
+                ev(101, sc::TEAM_CHANGE, SPAWN_IN as i32),
             ],
             guid_map: vec![],
         };
-
-        let mut enc = wvw_encounter(vec![player_sub(recorder, 1), player_sub(2, 3)]);
+        let mut enc = wvw_encounter(vec![
+            player_sub(recorder, 1), player_sub(2, 3), player_sub(101, 0),
+        ]);
         apply(&mut enc, &raw);
 
-        assert_eq!(enc.players.len(), 1, "a resolvable team id still decides the partition");
-        assert_eq!(enc.enemies.iter().map(|e| e.id).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(
+            enc.players.iter().map(|p| p.agent_addr).collect::<Vec<_>>(),
+            vec![recorder, 2],
+        );
+        assert_eq!(enc.enemies.iter().map(|e| e.id).collect::<Vec<_>>(), vec![101]);
     }
 
     /// The dynamic CBTS_WVWTEAMS event is the log's own source of truth for

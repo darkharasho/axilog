@@ -10,6 +10,64 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## Unreleased
+
+### Fixed
+- **Squad members stamped onto a real-but-wrong team id.** v1.8.2 closed the
+  sentinel case and named its own residual: in Edge of the Mists captures, 40
+  subgroup-tagged players resolve to a *real* id that differs from the
+  recorder's and were still filed onto the enemy roster. A full sweep of the
+  4,084 local captures put it at 40 players across 7 logs — 37 on Edge of the
+  Mists (5 logs, three sessions, not one) and 3 on Red Desert Borderland.
+
+  The mechanism is a transient spawn-in stamp. In `20260822-194714` the real
+  opposition sits on team `886`, an id no squad member ever carries; the
+  exiles stamp `2543` at t=14–50s and only then the recorder's `1282` at
+  t=67–95s. `2543` is structurally the `1875` case — a stamp that precedes the
+  agent's real team — but it is a *real* id, so `is_real_team` cannot filter
+  it and first-write-wins keeps it. Two things amplify it: `2543` and `886`
+  are both in `RED_TEAM_IDS`, and `wvw::apply` partitions on team *ids* rather
+  than colours, so even an exile on `433` — the same blue as the recorder's
+  `1282` — misfiles.
+
+  Team ids are therefore not the strongest signal available. arcdps stamps
+  every damage event with `iff`, its own friend/foe verdict, which is
+  independent of `TEAM_CHANGE` and is written at the moment of the hit rather
+  than at spawn-in. It is *pairwise* — it describes the src↔dst relation, not
+  either agent — so it cannot be read as a per-agent label; it has to be
+  solved as a graph. `affinity_partition` builds that graph over player agents
+  only, seeds the recorder as friendly, and relaxes a majority-weighted
+  2-colouring outward until no vertex changes. Weighted majority rather than
+  first-touch BFS because a single stray foe-flagged edge would otherwise
+  exile a player carrying dozens of friendly ones.
+
+  The authority order is now `iff` → team id → subgroup tag. A player the
+  graph never reaches — no classifiable event in either direction — falls
+  through to the v1.8.2 subgroup rule unchanged. Any player classified
+  friendly whose observed id differs from the recorder's now inherits the
+  recorder's colour, which the previous narrow rule did not need: leaving
+  `2543` in place would paint a squad member with the enemy's colour.
+
+  All 37 genuine exiles are recovered. The remaining 3, in `20260726-194109`,
+  are correctly *not* — and they falsify a premise v1.8.2 stated. Its note
+  that arcdps fills the subgroup only for the recorder's own squad does not
+  hold: those three carry both a subgroup and an account name yet are real
+  enemies, with rank-title character names and, for one, 513 inbound and 311
+  outbound foe-flagged events. That player was a genuine squadmate in twelve
+  logs earlier the same day, so the tag is stale roster state that survives a
+  world change. `iff` overrules it; the narrow v1.8.2 fallback happened to be
+  safe here only because these ids resolve.
+
+  Measured against the full corpus rather than the affected logs alone: a
+  300-log A/B leaves 299 byte-identical and changes only one already-known
+  log, with no player moved onto the enemy roster in either direction. Parse
+  cost is unchanged (5.99s vs 6.17s on a 47 MB capture). Pinned by three unit
+  tests in `wvw::eotm_teardown_tests` — foe-flagged events outranking a stale
+  tag, a friendly rescue off a real-but-wrong id including the colour it
+  inherits, and the degree-zero fall-through to the tag. The v1.8.2 test
+  asserting that a tag never overrides a resolvable id is removed: it encoded
+  the rule this supersedes.
+
 ## v1.8.2 — 2026-08-28
 
 ### Fixed
