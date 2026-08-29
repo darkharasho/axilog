@@ -10,7 +10,7 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
-## Unreleased
+## v1.8.2 — 2026-08-28
 
 ### Fixed
 - **Squad members whose team id *never* resolves.** v1.8.1's prefer-a-real-id
