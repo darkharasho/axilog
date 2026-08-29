@@ -10,6 +10,45 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## Unreleased
+
+<!-- Rename this heading to `## vX.Y.Z — <date>` when the release is cut:
+     `scripts/release-notes.sh` matches the section by tag and the Release
+     job fails (after npm-publish) if it finds none. -->
+
+### Added
+- **A `cc_taken` per-entity lane — the incoming half of the CC picture.**
+  v1.8.0 gave `EntitySeries` lanes for outgoing CC and both boon-strip
+  directions, but incoming CC stayed a whole-fight scalar
+  (`blocks.defenses.by_entity[].received_cc_count`), so it was the one
+  direction that could not be charted over time. `EntitySeries.cc_taken`
+  decomposes that scalar per second, on the same grid, behind the same
+  `timeseries: true` gate as its three neighbours, and a sum-invariant
+  test pins it against the scalar with the same within-the-encounter-window
+  caveat the other lanes carry.
+
+  **It is not the mirror image of `cc_applied`, and that is GW2EI's
+  asymmetry rather than ours.** The incoming scalar applies no source
+  filter (`SingleActor.GetIncomingCrowdControlData` has no `ToFriendly`
+  predicate, unlike the outgoing initializer) and no pet/minion fold, so
+  friendly-sourced CC on a squad player counts here while `cc_applied`
+  counts only CC onto enemies and folds in the actor's minions. Summing
+  `cc_taken` across the squad therefore does not equal summing
+  `cc_applied` across it. Reproducing `cc_applied`'s guards instead would
+  have made the lane disagree with the scalar it decomposes; the
+  friendly-sourced case has its own test so that stays true.
+
+  Populated inside the existing CC event scan rather than as another full
+  pass — `is_cc` is the expensive part on a large log and both directions
+  classify identically before diverging on their guards, the same trade
+  `defenses::accumulate_breakbar_and_received_cc` already makes.
+
+  Purely additive on the wire: the golden key set gains five `cc_taken`
+  keys and loses none, and a recursive diff of the native `--format json`
+  output before and after reported 41 added `cc_taken` keys and zero other
+  differences, which is what the re-digested
+  `native-json-baseline.sha256.json` records.
+
 ## v1.8.3 — 2026-08-28
 
 ### Fixed

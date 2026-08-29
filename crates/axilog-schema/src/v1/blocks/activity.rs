@@ -796,6 +796,21 @@ pub struct EntitySeries {
     /// the same number either way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cc_applied: Option<SeriesOut>,
+    /// Crowd control landed ON this entity, per second. Sums to
+    /// `blocks.defenses.by_entity[id].received_cc_count` WITHIN THE
+    /// ENCOUNTER WINDOW -- see [`Self::cc_applied`] for the same
+    /// out-of-window-events caveat. Per-bucket, same gate and same grid as
+    /// [`Self::cc_applied`].
+    ///
+    /// NOT the mirror image of [`Self::cc_applied`], and the difference is
+    /// GW2EI's, not ours: the incoming scalar applies no source filter and
+    /// no pet/minion fold, so friendly-sourced CC on a squad player counts
+    /// here while the outgoing lane counts only CC onto enemies and folds
+    /// in the actor's minions. Summing this lane across the squad
+    /// therefore does not equal summing [`Self::cc_applied`] across it.
+    /// See `DefenseStats::received_cc_count` for the GW2EI source lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cc_taken: Option<SeriesOut>,
     /// Boons this entity removed from enemies, per second. Sums to
     /// `blocks.support.by_entity[id].strips` WITHIN THE ENCOUNTER WINDOW
     /// -- see [`Self::cc_applied`] for the same out-of-window-events
@@ -834,6 +849,7 @@ fn empty_series(res: u64) -> EntitySeries {
         healing_received_1s: None,
         barrier_received_1s: None,
         cc_applied: None,
+        cc_taken: None,
         strips: None,
         strips_taken: None,
     }
@@ -897,6 +913,9 @@ pub fn build_series(
         let cc_applied = entity_series.map(|d| {
             SeriesOut::encode_u64(res, &d.at(i).cc_applied.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
         });
+        let cc_taken = entity_series.map(|d| {
+            SeriesOut::encode_u64(res, &d.at(i).cc_taken.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
+        });
         let strips = entity_series.map(|d| {
             SeriesOut::encode_u64(res, &d.at(i).strips.iter().map(|v| u64::from(*v)).collect::<Vec<_>>())
         });
@@ -929,6 +948,7 @@ pub fn build_series(
                         healing_received_1s: healing_received,
                         barrier_received_1s: barrier_received,
                         cc_applied,
+                        cc_taken,
                         strips,
                         strips_taken,
                         ..empty_series(res)
@@ -965,6 +985,7 @@ pub fn build_series(
                 healing_received_1s: healing_received,
                 barrier_received_1s: barrier_received,
                 cc_applied,
+                cc_taken,
                 strips,
                 strips_taken,
             },

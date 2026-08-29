@@ -100,6 +100,7 @@ fn entity_cc_and_strip_lanes_sum_to_block_scalars() {
     // CC or incoming strips, which proves only that the fields exist, not
     // that the decomposition is right.
     let mut cc_total = 0u64;
+    let mut cc_taken_total = 0u64;
     let mut taken_total = 0u64;
     // Friendly rows only: `by_entity` also carries the enemy rows Task 8
     // added, and no pass measures these lanes for an enemy -- so `None`
@@ -118,6 +119,16 @@ fn entity_cc_and_strip_lanes_sum_to_block_scalars() {
             e.id
         );
         cc_total += cc_sum;
+
+        let cc_taken_sum: u64 =
+            entity.cc_taken.as_ref().expect("cc-taken lane present").decode_u64().iter().sum();
+        assert_eq!(
+            cc_taken_sum,
+            u64::from(defenses.by_entity.get(e.id).expect("defenses row").received_cc_count),
+            "entity {}: the CC-taken lane must decompose `blocks.defenses[].received_cc_count`",
+            e.id
+        );
+        cc_taken_total += cc_taken_sum;
 
         let strips_sum: u64 =
             entity.strips.as_ref().expect("strips lane present").decode_u64().iter().sum();
@@ -145,6 +156,11 @@ fn entity_cc_and_strip_lanes_sum_to_block_scalars() {
         cc_total > 0,
         "the fixture recorded no friendly CC at all -- the `cc_sum == applied_total` pin \
          above would otherwise hold vacuously at 0 == 0"
+    );
+    assert!(
+        cc_taken_total > 0,
+        "the fixture recorded no incoming CC at all -- the `cc_taken_sum == \
+         received_cc_count` pin above would otherwise hold vacuously at 0 == 0"
     );
     assert!(
         taken_total > 0,
@@ -220,6 +236,7 @@ fn entity_cc_and_strip_lanes_absent_without_timeseries() {
     let mut rows = 0usize;
     for (id, entity) in block.by_entity.iter() {
         assert!(entity.cc_applied.is_none(), "entity {id}: CC lane emitted with the gate off");
+        assert!(entity.cc_taken.is_none(), "entity {id}: CC-taken lane emitted with the gate off");
         assert!(entity.strips.is_none(), "entity {id}: strip lane emitted with the gate off");
         assert!(
             entity.strips_taken.is_none(),
@@ -235,7 +252,10 @@ fn entity_cc_and_strip_lanes_absent_without_timeseries() {
     let series = v1.blocks.series.as_ref().expect("series block is always emitted");
     for (id, entity) in series.by_entity.iter() {
         assert!(
-            entity.cc_applied.is_none() && entity.strips.is_none() && entity.strips_taken.is_none(),
+            entity.cc_applied.is_none()
+                && entity.cc_taken.is_none()
+                && entity.strips.is_none()
+                && entity.strips_taken.is_none(),
             "entity {id}: lane emitted on the no-gates document"
         );
     }
@@ -265,7 +285,10 @@ fn a_length_mismatched_detail_is_dropped_rather_than_misattributed() {
     let mut rows = 0usize;
     for (id, entity) in block.by_entity.iter() {
         assert!(
-            entity.cc_applied.is_none() && entity.strips.is_none() && entity.strips_taken.is_none(),
+            entity.cc_applied.is_none()
+                && entity.cc_taken.is_none()
+                && entity.strips.is_none()
+                && entity.strips_taken.is_none(),
             "entity {id}: a length-mismatched detail was joined anyway"
         );
         rows += 1;

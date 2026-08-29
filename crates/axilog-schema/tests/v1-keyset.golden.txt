@@ -332,6 +332,11 @@ blocks.series.by_entity.<id>.cc_applied.data
 blocks.series.by_entity.<id>.cc_applied.enc
 blocks.series.by_entity.<id>.cc_applied.interval_ms
 blocks.series.by_entity.<id>.cc_applied.len
+blocks.series.by_entity.<id>.cc_taken
+blocks.series.by_entity.<id>.cc_taken.data
+blocks.series.by_entity.<id>.cc_taken.enc
+blocks.series.by_entity.<id>.cc_taken.interval_ms
+blocks.series.by_entity.<id>.cc_taken.len
 blocks.series.by_entity.<id>.damage
 blocks.series.by_entity.<id>.damage.data
 blocks.series.by_entity.<id>.damage.enc

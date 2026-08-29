@@ -1,4 +1,5 @@
-//! Per-entity 1s series for outgoing CC and boon strips (both directions).
+//! Per-entity 1s series for crowd control (both directions) and boon
+//! strips (both directions).
 //!
 //! Deliberately a separate pass rather than an extension of `cc::apply` or
 //! `timeline_with_registry`: `apply` has no `Encounter` (so it cannot size
@@ -19,6 +20,14 @@ use crate::model::Encounter;
 #[derive(Debug, Clone, Default)]
 pub struct PlayerSeries {
     pub cc_applied: Vec<u32>,
+    /// Crowd control landed ON this player, per bucket. Decomposes
+    /// `DefenseStats::received_cc_count`, and inherits that scalar's two
+    /// deliberate asymmetries against `cc_applied`: no source filter (EI
+    /// counts friendly- and unknown-sourced CC on a squad player) and no
+    /// pet/minion fold (the incoming side keys purely on the event's own
+    /// destination). Mirroring `cc_applied`'s guards here instead would
+    /// make the lane disagree with the scalar it decomposes.
+    pub cc_taken: Vec<u32>,
     pub strips: Vec<u32>,
     pub strips_taken: Vec<u32>,
 }
@@ -108,6 +117,7 @@ pub fn build(
     let mut per_player = vec![
         PlayerSeries {
             cc_applied: vec![0u32; buckets],
+            cc_taken: vec![0u32; buckets],
             strips: vec![0u32; buckets],
             strips_taken: vec![0u32; buckets],
         };
@@ -140,12 +150,32 @@ pub fn build(
         (b < buckets).then_some(b)
     };
 
-    // Direct player-sourced CC — same predicate and same guards as
-    // `cc::apply_cc`'s first loop, which is why the sums match.
+    // Both CC directions off ONE scan. `is_cc` is the expensive part on a
+    // real log (hundreds of thousands of events), and the two directions
+    // classify identically before they diverge on their guards -- the same
+    // trade `defenses::accumulate_breakbar_and_received_cc` already makes
+    // for breakbar vs. received CC.
     for e in &raw.events {
-        if is_cc(e, post_era) && squad.contains(&e.src_agent) && enemies.contains(&e.dst_agent) {
+        if !is_cc(e, post_era) {
+            continue;
+        }
+        // Outgoing: same predicate and same guards as `cc::apply_cc`'s
+        // first loop, which is why the sums match.
+        if squad.contains(&e.src_agent) && enemies.contains(&e.dst_agent) {
             if let (Some(&i), Some(b)) = (idx.get(&rep(e.src_agent)), bucket(e.time)) {
                 per_player[i].cc_applied[b] += 1;
+            }
+        }
+        // Incoming: the dst-in-squad gate of
+        // `defenses::accumulate_breakbar_and_received_cc`, and NOTHING
+        // else. No source filter and no pet fold -- see `PlayerSeries::
+        // cc_taken` for why those two asymmetries are load-bearing rather
+        // than an oversight. A squad player CCing another squad player
+        // therefore increments both lanes off this one event, as it does
+        // in the two scalars.
+        if squad.contains(&e.dst_agent) {
+            if let (Some(&i), Some(b)) = (idx.get(&rep(e.dst_agent)), bucket(e.time)) {
+                per_player[i].cc_taken[b] += 1;
             }
         }
     }
@@ -598,5 +628,140 @@ mod tests {
         // Player 1 (addr 101): their own taken strip at bucket 9, nothing at bucket 3.
         assert_eq!(detail.at(1).strips_taken[9], 1, "player 1's own taken strip must land in player 1's slot at bucket 9");
         assert_eq!(detail.at(1).strips_taken[3], 0, "player 1's slot must stay zero at player 0's bucket");
+    }
+
+    /// Two squad players (addr 100, addr 101) and one enemy (addr 200),
+    /// 10s encounter. The enemy CCs player 100 at t=1500 (bucket 1) and
+    /// player 101 at t=7500 (bucket 7) -- distinct buckets per player, so
+    /// a transposed `idx` map cannot accidentally pass, same shape as the
+    /// outgoing fixtures above. `defenses::build_with_registry` is run so
+    /// the `received_cc_count` scalar this fixture pins against is
+    /// populated exactly as production computes it.
+    fn cc_taken_fixture() -> (Encounter, RawLog, InstidRegistry, Vec<PlayerMetrics>, BTreeSet<u64>, BTreeSet<u64>, BTreeMap<u64, u64>) {
+        let squad: BTreeSet<u64> = [100u64, 101u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [200u64].into_iter().collect();
+        let addr_to_rep: BTreeMap<u64, u64> = [(100u64, 100u64), (101u64, 101u64)].into_iter().collect();
+
+        let mut dummy = base_event();
+        dummy.time = 0;
+        dummy.src_agent = 999;
+        dummy.dst_agent = 999;
+
+        let events = vec![
+            dummy,
+            cc_ev(1500, 200, 100, 500), // enemy CCs player 100 -> bucket 1
+            cc_ev(7500, 200, 101, 700), // enemy CCs player 101 -> bucket 7
+        ];
+        let raw = RawLog {
+            header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
+            agents: vec![raw_agent(100), raw_agent(101), raw_agent(200)],
+            skills: vec![],
+            events,
+            guid_map: vec![],
+        };
+        assert_eq!(raw.log_start_ms(), 0, "fixture must have log_start_ms == 0");
+
+        let registry = InstidRegistry::build(&raw);
+        let enc = enc_from(10_000, vec![enc_player(100), enc_player(101)]);
+        let mut players = vec![
+            PlayerMetrics { agent_addr: 100, ..Default::default() },
+            PlayerMetrics { agent_addr: 101, ..Default::default() },
+        ];
+        let defenses_by_rep = defenses::build_with_registry(&raw, &registry, &squad, &addr_to_rep);
+        for p in players.iter_mut() {
+            if let Some(d) = defenses_by_rep.get(&p.agent_addr) {
+                p.defenses = d.clone();
+            }
+        }
+
+        // Guard against a vacuous pass: both scalars must be genuinely
+        // nonzero, or the sum invariant below would hold trivially at
+        // 0 == 0 without proving anything about the bucketing.
+        assert_eq!(players[0].defenses.received_cc_count, 1, "fixture must land one CC on player 100");
+        assert_eq!(players[1].defenses.received_cc_count, 1, "fixture must land one CC on player 101");
+
+        (enc, raw, registry, players, squad, enemies, addr_to_rep)
+    }
+
+    /// The lane's defining invariant: bucketed incoming CC must sum to the
+    /// `received_cc_count` scalar `defenses` already produces, because both
+    /// walk the same events through the same `is_cc` predicate and the same
+    /// dst-in-squad gate.
+    #[test]
+    fn per_player_cc_taken_buckets_sum_to_scalar() {
+        let (enc, raw, registry, players, squad, enemies, addr_to_rep) = cc_taken_fixture();
+        let detail = build(&enc, &raw, &registry, &players, &squad, &enemies, &addr_to_rep);
+        for (i, p) in players.iter().enumerate() {
+            assert_eq!(
+                detail.at(i).cc_taken.iter().sum::<u32>(),
+                p.defenses.received_cc_count,
+                "player {i} incoming CC buckets must sum to the scalar",
+            );
+        }
+    }
+
+    #[test]
+    fn cc_taken_is_indexed_by_player_not_transposed() {
+        let (enc, raw, registry, players, squad, enemies, addr_to_rep) = cc_taken_fixture();
+        let detail = build(&enc, &raw, &registry, &players, &squad, &enemies, &addr_to_rep);
+
+        // Player 0 (addr 100): CC taken at bucket 1, nothing at bucket 7.
+        assert_eq!(detail.at(0).cc_taken[1], 1, "player 0's own incoming CC must land in player 0's slot at bucket 1");
+        assert_eq!(detail.at(0).cc_taken[7], 0, "player 0's slot must stay zero at player 1's bucket");
+
+        // Player 1 (addr 101): CC taken at bucket 7, nothing at bucket 1.
+        assert_eq!(detail.at(1).cc_taken[7], 1, "player 1's own incoming CC must land in player 1's slot at bucket 7");
+        assert_eq!(detail.at(1).cc_taken[1], 0, "player 1's slot must stay zero at player 0's bucket");
+    }
+
+    /// The asymmetry that a copy-paste of `cc_applied`'s guards would
+    /// silently break. `received_cc_count` applies NO source filter --
+    /// EI's `SingleActor.GetIncomingCrowdControlData` has no `ToFriendly`
+    /// predicate, unlike its outgoing counterpart -- so CC from one squad
+    /// player onto another still counts, and the lane must agree. An
+    /// `enemies.contains(&e.src_agent)` guard here would leave this at 0
+    /// while the scalar reads 1, and every other test in this module would
+    /// still pass.
+    #[test]
+    fn cc_taken_counts_friendly_sourced_cc_like_the_scalar() {
+        let squad: BTreeSet<u64> = [100u64, 101u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [200u64].into_iter().collect();
+        let addr_to_rep: BTreeMap<u64, u64> = [(100u64, 100u64), (101u64, 101u64)].into_iter().collect();
+
+        let mut dummy = base_event();
+        dummy.time = 0;
+        dummy.src_agent = 999;
+        dummy.dst_agent = 999;
+
+        // Squad player 101 CCs squad player 100 at t=4500 (bucket 4).
+        let events = vec![dummy, cc_ev(4500, 101, 100, 500)];
+        let raw = RawLog {
+            header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
+            agents: vec![raw_agent(100), raw_agent(101), raw_agent(200)],
+            skills: vec![],
+            events,
+            guid_map: vec![],
+        };
+
+        let registry = InstidRegistry::build(&raw);
+        let enc = enc_from(10_000, vec![enc_player(100), enc_player(101)]);
+        let mut players = vec![
+            PlayerMetrics { agent_addr: 100, ..Default::default() },
+            PlayerMetrics { agent_addr: 101, ..Default::default() },
+        ];
+        let defenses_by_rep = defenses::build_with_registry(&raw, &registry, &squad, &addr_to_rep);
+        for p in players.iter_mut() {
+            if let Some(d) = defenses_by_rep.get(&p.agent_addr) {
+                p.defenses = d.clone();
+            }
+        }
+        assert_eq!(
+            players[0].defenses.received_cc_count, 1,
+            "the scalar counts friendly-sourced CC -- if this ever changes upstream, the lane must change with it",
+        );
+
+        let detail = build(&enc, &raw, &registry, &players, &squad, &enemies, &addr_to_rep);
+        assert_eq!(detail.at(0).cc_taken[4], 1, "friendly-sourced CC must land in the victim's lane");
+        assert_eq!(detail.at(0).cc_taken.iter().sum::<u32>(), players[0].defenses.received_cc_count);
     }
 }
