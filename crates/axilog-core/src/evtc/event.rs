@@ -502,6 +502,38 @@ pub mod sc {
     /// comment above aren't independently corroborated anywhere we could
     /// find in GW2EI).
     pub const TICK: u8 = 84;
+    /// Agent position changed by a TELEPORT (blink, portal, waypoint-style
+    /// relocation) rather than by normal movement. Verified against the
+    /// live arcdps EVTC reference (`curl
+    /// https://www.deltaconnected.com/arcdps/evtc/README.txt`, 2026-08-30)
+    /// by hand-counting `enum cbtstatechange` from `CBTS_COMBAT = 0`:
+    /// `CBTS_TELEPORT` is the entry immediately after `CBTS_TICK` (84) and
+    /// immediately before `CBTS_JUMP`, i.e. index 85. GW2EI does not model
+    /// this statechange at all (no `ArcDPSEnums.StateChange` member for
+    /// it), so there is no second implementation to cross-check against --
+    /// the ordinal rests on the hand-count plus this project's already
+    /// independently-verified `TICK = 84` neighbour.
+    ///
+    /// Payload, per the arcdps EVTC reference:
+    /// ```text
+    /// CBTS_TELEPORT, // agent position changed (teleport)
+    /// // src_agent: relates to agent
+    /// // dst_agent: (float*)&dst_agent is float[3], x/y/z of teleport target
+    /// ```
+    /// That is verbatim the wording `CBTS_POSITION` uses for its own
+    /// payload, so the packed layout is identical and
+    /// `analysis::replay::decode_position` decodes both: x/y as two packed
+    /// little-endian f32s inside `dst_agent`, z bit-reinterpreted out of
+    /// `value`. Confirmed on real logs -- see
+    /// `crate::analysis::replay`'s module doc for the decode probe.
+    ///
+    /// Per arcdps's author (deltaconnected, 2026-08-30): a `CBTS_POSITION`
+    /// event is always emitted immediately BEFORE the teleport, so a
+    /// teleport is fully bracketed -- origin from the position event,
+    /// destination from this event's own payload. `analysis::replay` relies
+    /// on that to render the relocation as one instantaneous grid step
+    /// instead of smearing it across the intervening polls.
+    pub const TELEPORT: u8 = 85;
     /// Pre-existing-stack buff application, for stacks that were already on
     /// an agent at the moment the log started recording (M3, Task 1).
     /// Verified against the arcdps EVTC reference by hand-counting `enum

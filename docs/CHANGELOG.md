@@ -10,6 +10,74 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.10.1 — 2026-08-30
+
+### Fixed
+- **`blocks.replay` no longer interpolates across gaps arcdps never
+  claimed.** `analysis::replay` lerped between whichever two
+  `CBTS_POSITION` events bracketed a grid point, with no bound. But arcdps
+  polls position every 300ms and **emits nothing when the value is
+  unchanged** (confirmed by its author, deltaconnected, 2026-08-30), so a
+  gap proves the agent was *stationary* and that the move happened inside
+  the last poll window before the event that reported it — the exact
+  opposite of a drift. The naive lerp was therefore wrong for every gap,
+  and catastrophic for the long ones: arcdps stops reporting entirely
+  while a player is dead / loading / waypointing and resumes at the
+  respawn point, so the track fabricated a smooth march across the map at
+  impossible speed. On `20260830-180925.zevtc` one player was interpolated
+  **56,668 inches while dead**, at 23x run speed, dragging their death
+  circle ~19,000 inches off the death spot — which is how this surfaced,
+  reported downstream as "the downed/dead circles seem delayed".
+
+  `hold_until_change_window` now inserts a synthetic sample carrying the
+  earlier position at `b.t - 300` for any wider gap: the agent holds still
+  for the part arcdps proved it was still, then covers the move across the
+  window it could have happened in. Deliberately a held line rather than a
+  teleport-and-vanish — arcdps's author asked for the relocation to stay
+  visible ("perhaps theres a way to keep the line for it while doing so,
+  so its not a vanishing act").
+
+  Measured against GW2EI's own exported `combatReplayData`, the calibration
+  gate (`tests/replay_golden.rs`) moved from **99.77% → 99.97%** of samples
+  within 1 map-pixel on the secondary fixture (100.00% on the primary). An
+  independent implementation agreeing *more* after the change is the
+  evidence that this is closer to truth and not merely different; GW2EI has
+  the same bug in weaker form, holding only when the gap exceeds
+  `300 + rate` **and** velocity is ≈0.
+
+  Note this changes replay sample values, and with them the `dist_to_com` /
+  `stack_dist` scalars reduced from the tracks. The
+  `native-json-baseline.sha256.json` digest was re-taken accordingly, after
+  a full structural diff against a worktree build of the previous commit
+  proved that nothing outside `blocks.replay` moved.
+
+### Added
+- **`sc::TELEPORT` (85) is decoded, and a teleport target is treated as a
+  position fact.** Its payload uses `CBTS_POSITION`'s exact packed layout
+  and carries the relocation's *destination*, so it folds straight into the
+  same position list. Because a teleport timestamps the move exactly, it
+  also **collapses the poll window to an instant** — spending 300ms of
+  ignorance on a move whose time is known would place a fabricated mid-air
+  sample on any grid point inside it.
+
+  This is a no-op on today's logs (arcdps emits an ordinary position event
+  immediately before every teleport, so blinks and portals already arrive
+  fully bracketed within one poll). It matters for the sequence arcdps's
+  author says future builds will emit for a death respawn — `unalive ->
+  alive -> teleport` — where nothing reported position while dead and the
+  preceding fact is seconds stale. Today that case is already handled to
+  within one poll by the window rule above; the event will silently sharpen
+  it to exact, with no further change needed here.
+
+  Hand-counted from the arcdps `evtc/README.txt` statechange enum (between
+  `TICK` 84 and `JUMP` 86). GW2EI models this statechange nowhere, so there
+  is no cross-implementation check for the ordinal.
+
+### Unchanged
+- `analysis::ei_replay` deliberately keeps GW2EI's weaker `gap > 300 + rate
+  && vel ≈ 0` rule. That module exists for EI parity, not for correctness;
+  making it more accurate would make it less parity-faithful.
+
 ## v1.10.0 — 2026-08-29
 
 ### Added

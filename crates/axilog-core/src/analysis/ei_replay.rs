@@ -281,7 +281,7 @@
 //!   **50999/50999 (100.00%) bit-exact** once both sides are narrowed to
 //!   the `f32` GW2EI serializes -- worst residual `3.2e-5 px`, which is
 //!   purely `serde_json` widening GW2EI's decimal text back to `f64`. (M9's
-//!   native `replay` module manages 99.77% within 1px on the same data; the
+//!   native `replay` module manages 99.97% within 1px on the same data; the
 //!   difference is entirely the two `HandlePosition` subtleties documented
 //!   on [`handle_position`] -- interpolating from the previous POLLED point
 //!   and the velocity-gated hold branch.)

@@ -75,7 +75,7 @@
 //! SECONDARY fixture (`fixtures/local/wvw-postrework.zevtc` +
 //! `.ei.json`, Blue Alpine Borderlands, real build-20260718 capture, local
 //! only): 44 full tracks (up to ~1159 samples each, ~5m48s fight),
-//! 50737/50855 (99.77%) of all checked samples within 1.0px (a handful of
+//! 50841/50855 (99.97%) of all checked samples within 1.0px (a handful of
 //! samples land just over the line during the fastest movement bursts --
 //! this project's linear interpolation vs. GW2EI's own velocity-aware
 //! hold/interpolate branch in `HandlePosition`, not a systematic offset).
@@ -293,7 +293,7 @@ fn replay_calibrated_against_ei_combat_replay_data() {
 /// M15 Task 3: resolved through `common::local_fixture`, so
 /// `AXILOG_LOCAL_FIXTURES` points it at the primary checkout's captures
 /// (this file used to hard-code the in-tree relative path, which silently
-/// `skip:`ped -- i.e. dropped this 99.77% gate -- for any work done in a
+/// `skip:`ped -- i.e. dropped this 99.97% gate -- for any work done in a
 /// `git worktree`, whose `fixtures/local/` is empty because the captures
 /// are PII and are never copied).
 #[test]

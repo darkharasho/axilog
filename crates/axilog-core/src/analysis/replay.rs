@@ -69,9 +69,24 @@
 //! end, later trimmed per-actor); this project only ever emits samples
 //! backed by real bracketing position data, which is what the M9 Task 1
 //! calibration gate checks against GW2EI's exported per-sample positions on
-//! the overlapping window. Calibrated to ≥95% of samples within 1.0
+//! the overlapping window.
+//!
+//! ## Gaps, relocations, and what a missing position event means
+//!
+//! arcdps polls position every 300ms and emits NOTHING when the value is
+//! unchanged, so a gap between two `CBTS_POSITION` events means the agent
+//! stood still and then moved inside the last poll window -- not that it
+//! drifted across the gap. Interpolation is bounded to that window
+//! accordingly; see [`hold_until_change_window`] for the rule, its source,
+//! and the death-circle bug that motivated it. `CBTS_TELEPORT` (85) events
+//! are folded into the same position list on the way in: their payload is
+//! the teleport DESTINATION in `CBTS_POSITION`'s exact packed layout, and
+//! arcdps emits an ordinary position event immediately before each one, so
+//! a blink or portal arrives fully bracketed.
+//!
+//! Calibrated to ≥95% of samples within 1.0
 //! map-pixel per tracked player on both golden fixtures
-//! (`crates/axilog-core/tests/replay_golden.rs`) -- in practice 99.77-100%
+//! (`crates/axilog-core/tests/replay_golden.rs`) -- in practice 99.97-100%
 //! (see that test file's module doc for the full numbers).
 
 use crate::evtc::{sc, RawEvent, RawLog};
@@ -230,7 +245,23 @@ fn build_track(raw: &RawLog, t0: u64, poll_ms: u64, roster: RosterEntry<'_>) -> 
         .filter(|e| e.is_statechange == sc::POSITION && addr_set.contains(&e.src_agent))
         .map(|e| decode_position(e, t0))
         .collect();
+    // `CBTS_TELEPORT` carries the DESTINATION of a relocation in exactly
+    // the same packed layout as `CBTS_POSITION` (see `sc::TELEPORT`), so a
+    // teleport target is simply another known-position fact about this
+    // agent and folds straight into the same list. Appended AFTER the
+    // position events so that the stable sort below keeps a position and a
+    // teleport sharing one timestamp in emission order (arcdps emits the
+    // pre-teleport position first).
+    let teleports: Vec<(u64, f32, f32, f32)> = raw
+        .events
+        .iter()
+        .filter(|e| e.is_statechange == sc::TELEPORT && addr_set.contains(&e.src_agent))
+        .map(|e| decode_position(e, t0))
+        .collect();
+    let teleport_times: BTreeSet<u64> = teleports.iter().map(|p| p.0).collect();
+    positions.extend(teleports);
     positions.sort_by_key(|p| p.0);
+    let positions = hold_until_change_window(positions, &teleport_times);
 
     // The polling grid is anchored to this agent's "first aware" time --
     // the earliest event of ANY kind (not just `CBTS_POSITION`) where
@@ -272,8 +303,10 @@ fn build_track(raw: &RawLog, t0: u64, poll_ms: u64, roster: RosterEntry<'_>) -> 
     }
 }
 
-/// Decode a `CBTS_POSITION` event's packed payload (see this module's doc
-/// comment / `sc::POSITION`'s doc comment for the byte-layout citation):
+/// Decode a `CBTS_POSITION` (or `CBTS_TELEPORT`, whose payload the arcdps
+/// reference describes with the identical wording -- see `sc::TELEPORT`)
+/// event's packed payload (see this module's doc comment /
+/// `sc::POSITION`'s doc comment for the byte-layout citation):
 /// `x`/`y` are two little-endian f32s packed into `dst_agent`'s 8 bytes
 /// (low half = x, high half = y); `z` is `value`'s bits reinterpreted as an
 /// f32 (NOT a numeric `i32 -> f32` conversion).
@@ -283,6 +316,88 @@ fn decode_position(e: &RawEvent, t0: u64) -> (u64, f32, f32, f32) {
     let y = f32::from_le_bytes(dst[4..8].try_into().unwrap());
     let z = f32::from_bits(e.value as u32);
     (e.time.saturating_sub(t0), x, y, z)
+}
+
+/// arcdps's own position polling interval. Per its author
+/// (deltaconnected, 2026-08-30): "i dont create pos/vel/facing events if
+/// the values are unchanged, polled every 300ms, so at most the
+/// interpolation should be capped at that -- ie if you get an event at
+/// t=200ms, and then again at t=1500ms, then the change wouldve happened
+/// between 1200 and 1500ms". Same constant, same source, as
+/// [`crate::analysis::ei_replay::ARCDPS_POLL_MS`].
+const ARCDPS_POLL_MS: u64 = 300;
+
+/// Bound each position change to the window it actually happened in.
+///
+/// A gap between two consecutive `CBTS_POSITION` events does NOT mean the
+/// agent was drifting from one to the other the whole time -- arcdps polls
+/// every [`ARCDPS_POLL_MS`] and emits nothing when the value is unchanged,
+/// so a gap means the agent was STATIONARY, and the move happened somewhere
+/// inside the last poll window before the event that reported it.
+///
+/// `interp_at` alone lerps between whichever two events bracket a grid
+/// point with no such bound, which is wrong for every gap and catastrophic
+/// for the long ones: arcdps stops reporting entirely while a player is
+/// dead / loading / waypointing and resumes at the respawn point, so the
+/// naive lerp fabricates a smooth march across the whole map at impossible
+/// speed. Everything drawn off the track inherits that -- icons, trails,
+/// and (the symptom this was reported as) the down/death circles, which
+/// then land thousands of inches from where the player actually fell and
+/// read as "delayed". On `20260830-180925.zevtc` one player was
+/// interpolated 56,668 inches while dead, at 23x run speed, putting their
+/// death circle ~19,000 inches off the death spot.
+///
+/// So for any gap wider than the window, a synthetic sample carrying the
+/// EARLIER position is inserted at the window's start: the agent holds
+/// still for the part arcdps proved it was still, then covers the move
+/// across the window in which it could have happened. The relocation
+/// therefore still renders as a real straight segment rather than a hidden
+/// jump -- arcdps's author asked for exactly that ("perhaps theres a way to
+/// keep the line for it while doing so, so its not a vanishing act").
+///
+/// ## Why the window narrows to nothing at a teleport
+///
+/// `ARCDPS_POLL_MS` is the width of our IGNORANCE about when the move
+/// happened, not a property of the move. A `CBTS_TELEPORT` removes that
+/// ignorance: it timestamps the relocation exactly. Applying the poll
+/// window to one anyway would place a fabricated mid-air sample on any grid
+/// point falling inside it -- a blink at t=5450 with grid points at 5400
+/// and 5700 would put the agent 83% of the way across at 5400, in the air,
+/// having left before it teleported. So `teleport_times` collapses the
+/// window to a single millisecond, which still yields the same one-grid-step
+/// line (adjacent grid points are `poll_ms` apart regardless) without
+/// inventing anything in between.
+///
+/// This matters more than today's blink-sized teleports suggest. Per
+/// arcdps's author (2026-08-30), death-to-waypoint currently emits no
+/// teleport at all -- "at least golem dead -> respawn at checkpoint doesnt
+/// register as a teleport" -- but future builds will emit the sequence
+/// unalive -> alive -> teleport. That needs no change here: the respawn is
+/// handled today by the poll-window branch (to within one poll) and will
+/// silently sharpen to exact once the event shows up.
+///
+/// `positions` must already be ascending by time, and must already include
+/// the teleport targets themselves -- a `CBTS_TELEPORT` payload IS a
+/// position fact (`sc::TELEPORT`), and `teleport_times` marks which entries
+/// came from one.
+fn hold_until_change_window(
+    positions: Vec<(u64, f32, f32, f32)>,
+    teleport_times: &BTreeSet<u64>,
+) -> Vec<(u64, f32, f32, f32)> {
+    if positions.len() < 2 {
+        return positions;
+    }
+    let mut out = Vec::with_capacity(positions.len());
+    out.push(positions[0]);
+    for pair in positions.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let window = if teleport_times.contains(&b.0) { 1 } else { ARCDPS_POLL_MS };
+        if b.0.saturating_sub(a.0) > window {
+            out.push((b.0 - window, a.1, a.2, a.3));
+        }
+        out.push(b);
+    }
+    out
 }
 
 /// Downsample raw (already time-sorted) position events onto a `poll_ms`
@@ -582,6 +697,13 @@ mod tests {
             is_shields: 0,
             is_offcycle: 0, pad: 0,
         }
+    }
+
+    /// `CBTS_TELEPORT` carries its destination in `CBTS_POSITION`'s exact
+    /// packed layout (`sc::TELEPORT`), so this is `pos_event` with a
+    /// different statechange byte.
+    fn teleport_event(time: u64, src: u64, x: f32, y: f32, z: f32) -> RawEvent {
+        RawEvent { is_statechange: sc::TELEPORT, ..pos_event(time, src, x, y, z) }
     }
 
     fn state_event(time: u64, src: u64, statechange: u8) -> RawEvent {
@@ -1088,5 +1210,112 @@ mod tests {
         assert_eq!(activity[0].start_ms, 0);
         assert_eq!(activity[0].end_ms, 0);
         assert_eq!(activity[0].active_ms(), 0);
+    }
+
+    #[test]
+    fn teleport_target_is_a_position_fact_and_lands_on_the_grid() {
+        // arcdps emits a `CBTS_POSITION` immediately before the teleport
+        // (per its author), so origin and destination are both known and
+        // the relocation should occupy exactly one grid step.
+        let enc = Encounter { players: vec![player(1)], ..empty_enc() };
+        let raw = raw_from(vec![
+            pos_event(0, 1, 0.0, 0.0, 0.0),
+            pos_event(590, 1, 0.0, 0.0, 0.0),
+            teleport_event(600, 1, 5000.0, 0.0, 0.0),
+            pos_event(900, 1, 5000.0, 0.0, 0.0),
+        ]);
+        let replay = build_replay(&raw, &enc, 300);
+        let xs: Vec<f32> = replay.tracks[0].samples.iter().map(|s| s.x).collect();
+        // Grid 0/300/600/900: still at the origin through 300, at the
+        // destination from 600. No half-way sample in between.
+        assert_eq!(xs, vec![0.0, 0.0, 5000.0, 5000.0]);
+    }
+
+    #[test]
+    fn death_gap_holds_the_last_known_position_instead_of_gliding_to_the_waypoint() {
+        // The reported bug: arcdps stops emitting positions while a player
+        // is dead and resumes at the waypoint. Interpolating that gap
+        // marched the agent across the map at 23x run speed and dragged
+        // the death circle thousands of inches off the death spot.
+        let enc = Encounter { players: vec![player(1)], ..empty_enc() };
+        let raw = raw_from(vec![
+            pos_event(0, 1, 100.0, 100.0, 0.0),
+            state_event(300, 1, sc::CHANGE_DEAD),
+            // 9s of silence, then a respawn 45,000 inches away.
+            pos_event(9000, 1, 45100.0, 100.0, 0.0),
+            state_event(9000, 1, sc::CHANGE_UP),
+        ]);
+        let replay = build_replay(&raw, &enc, 300);
+        let track = &replay.tracks[0];
+        for s in track.samples.iter().filter(|s| s.t_ms <= 8700) {
+            assert_eq!(
+                (s.x, s.y),
+                (100.0, 100.0),
+                "sample at t={} should hold the death spot, not glide",
+                s.t_ms
+            );
+        }
+        let last = track.samples.last().unwrap();
+        assert_eq!((last.t_ms, last.x), (9000, 45100.0), "snaps to the waypoint at its own time");
+    }
+
+    #[test]
+    fn a_bounded_gap_still_renders_as_one_line_not_a_vanishing_act() {
+        // Deliberately NOT a hidden jump: origin and destination stay
+        // adjacent samples on the track one poll window apart, so a
+        // consumer drawing a polyline through them shows where the agent
+        // went.
+        let positions = vec![(0u64, 0.0f32, 0.0f32, 0.0f32), (9000, 45000.0, 0.0, 0.0)];
+        let broken = hold_until_change_window(positions, &BTreeSet::new());
+        assert_eq!(broken.len(), 3);
+        assert_eq!(broken[1], (8700, 0.0, 0.0, 0.0), "hold sample carries the ORIGIN position");
+        assert_eq!(broken[2], (9000, 45000.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_teleport_pins_the_move_to_its_own_instant_not_a_poll_window() {
+        // Models the sequence arcdps's author says future builds will emit
+        // for a death respawn: unalive -> alive -> teleport. Nothing
+        // reports position while dead, so unlike an ordinary blink (which
+        // arcdps brackets with a position event immediately before it) the
+        // preceding position here is seconds stale and the poll-window
+        // branch is live.
+        //
+        // The teleport lands at t=9050, off the 300ms grid. Under the poll
+        // window the hold would start at 8750 and grid point 9000 would sit
+        // 83% of the way across -- the agent in mid-air, having left before
+        // it teleported. The teleport timestamps the move exactly, so the
+        // window collapses and 9000 still reads the death spot.
+        let enc = Encounter { players: vec![player(1)], ..empty_enc() };
+        let raw = raw_from(vec![
+            pos_event(0, 1, 0.0, 0.0, 0.0),
+            state_event(300, 1, sc::CHANGE_DEAD),
+            state_event(9050, 1, sc::CHANGE_UP),
+            teleport_event(9050, 1, 3000.0, 0.0, 0.0),
+        ]);
+        let replay = build_replay(&raw, &enc, 300);
+        let at = |t: u64| replay.tracks[0].samples.iter().find(|s| s.t_ms == t).unwrap().x;
+        assert_eq!(at(9000), 0.0, "still at the death spot the poll before the respawn");
+        assert_eq!(at(9300), 3000.0, "at the checkpoint the poll after");
+    }
+
+    #[test]
+    fn a_gap_within_one_poll_is_left_exactly_alone() {
+        // arcdps polls every 300ms, so a <=300ms gap carries no hidden
+        // stationary time to reconstruct -- however far the agent moved.
+        let positions = vec![(0u64, 0.0f32, 0.0f32, 0.0f32), (300, 3000.0, 0.0, 0.0)];
+        assert_eq!(hold_until_change_window(positions.clone(), &BTreeSet::new()), positions);
+    }
+
+    #[test]
+    fn an_ordinary_walking_gap_is_bounded_to_its_last_poll_window_too() {
+        // The rule is about what a MISSING event proves, not about speed:
+        // 600 inches over 3s is an unremarkable walk, but arcdps still
+        // proved the agent was stationary until t=2700.
+        let broken = hold_until_change_window(
+            vec![(0u64, 0.0f32, 0.0f32, 0.0f32), (3000, 600.0, 0.0, 0.0)],
+            &BTreeSet::new(),
+        );
+        assert_eq!(broken[1], (2700, 0.0, 0.0, 0.0));
     }
 }
