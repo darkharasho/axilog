@@ -13,19 +13,75 @@ pub mod maps;
 pub mod objectives;
 pub mod guilds;
 
-/// Collapse relog/build-swap duplicates: one Player per account (fallback character).
-pub fn dedupe_players(players: &mut Vec<Player>) {
-    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+/// Collapse relog/build-swap duplicates: one Player per PERSON.
+///
+/// ## Key order, and why `character` is no longer a fallback
+///
+/// `enc.players` is the FRIENDLY roster -- the recorder's squad *and*
+/// every non-squad friendly player on the map. Those two populations
+/// anonymise differently, and the original "account, else `character`"
+/// rule only held for the first:
+///
+/// * A squad member always reveals their own account, so `account` is an
+///   exact person key and collapses the several agent rows a relog or
+///   build swap produces.
+/// * A non-squad friendly is anonymised by arcdps exactly like an enemy:
+///   BLANK account, with `character` substituted by the profession/
+///   elite-spec label ("Druid", "Scrapper"). Falling back to `character`
+///   there merged every pug sharing a spec into one person, silently
+///   capping the ally roster at "distinct specs present". On the
+///   reference captures that is 38 non-squad players collapsing to 17 on
+///   one log and 15 to 10 on another -- and exact on the six where no two
+///   pugs happened to share a spec, which is why no fixture caught it.
+///
+/// So: key on `account` where it is known, and where it is not fall back
+/// to INSTID -- GW2EI's non-squad `GroupBy(x => x.InstID)` regroup, the
+/// same rule [`dedupe_enemy_players`] already applies to the foe side
+/// (see its docs for the EI reference and for the instid-reuse hazard
+/// that rule carries, which applies identically here). A blank-account
+/// row whose instid cannot be resolved at all stays distinct.
+/// `character` is never a key.
+///
+/// Account is tried FIRST here where the enemy side tries instid first,
+/// because this roster contains squad members: a known account is
+/// authoritative for the relog case this function exists to handle, and
+/// the two agent rows of one relogged squadmate need not share an instid.
+/// The order cannot cost anything on the pug side, whose accounts are
+/// blank by construction.
+pub fn dedupe_players(players: &mut Vec<Player>, registry: &InstidRegistry) {
+    /// Merge key: a known account (the squad/relog rule), else the instid
+    /// (GW2EI's non-squad rule), else nothing -- the row stays distinct.
+    enum Key { Account(String), Instid(u16) }
+
+    let mut by_account: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_instid: BTreeMap<u16, usize> = BTreeMap::new();
     let mut out: Vec<Player> = Vec::new();
     for p in players.drain(..) {
-        let key = if p.account.is_empty() { p.character.clone() } else { p.account.clone() };
-        match seen.get(&key) {
-            Some(&i) => {
+        let key = if !p.account.is_empty() {
+            Key::Account(p.account.clone())
+        } else {
+            match registry.instid_of(p.agent_addr) {
+                Some(instid) => Key::Instid(instid),
+                None => { out.push(p); continue; }
+            }
+        };
+        let slot = match &key {
+            Key::Account(a) => by_account.get(a).copied(),
+            Key::Instid(i) => by_instid.get(i).copied(),
+        };
+        match slot {
+            Some(i) => {
                 out[i].in_squad |= p.in_squad;
                 out[i].commander |= p.commander;
                 out[i].agent_addrs.extend(p.agent_addrs);
             }
-            None => { seen.insert(key, out.len()); out.push(p); }
+            None => {
+                match key {
+                    Key::Account(a) => { by_account.insert(a, out.len()); }
+                    Key::Instid(i) => { by_instid.insert(i, out.len()); }
+                }
+                out.push(p);
+            }
         }
     }
     *players = out;
@@ -671,7 +727,10 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     // `GroupBy(x => x.InstID)` regroup. See `dedupe_enemy_players` for the
     // key order (instid, then a known account as fallback, never
     // `character`) and the instid-reuse hazard EI's rule carries.
-    dedupe_enemy_players(&mut enemy_players, &InstidRegistry::build(raw));
+    // One registry serves both dedupes (each is a full event scan plus a
+    // 64k-slot allocation, so it is built once and shared).
+    let instids = InstidRegistry::build(raw);
+    dedupe_enemy_players(&mut enemy_players, &instids);
     for p in enemy_players {
         let team = agent_team.get(&p.agent_addr).map(|&t| team_color_with(t, dynamic.as_ref())).unwrap_or_default();
         enc.enemies.push(Enemy {
@@ -777,7 +836,10 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
             enc.recorded_by = Some(p.account.clone());
         }
     }
-    dedupe_players(&mut enc.players);
+    // Friendly-roster dedupe. Keyed on account where known, else instid --
+    // NOT `character`, which for the non-squad friendlies in this same
+    // vector is a shared elite-spec label. See `dedupe_players`.
+    dedupe_players(&mut enc.players, &instids);
 
     // CBTS_MARKER (sc=37) / CBTS_TICK (sc=84): Task 7, M2. Runs last, after
     // dedupe, so `agent_addrs` on each final Player/Enemy already covers
@@ -898,7 +960,7 @@ mod tests {
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1"), player(3, ":B.2")],
             enemies: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None };
-        dedupe_players(&mut enc.players);
+        dedupe_players(&mut enc.players, &InstidRegistry::build(&empty_log()));
         assert_eq!(enc.players.len(), 2);
     }
     #[test]
@@ -910,7 +972,7 @@ mod tests {
             build:"".into(), revision:1, recorded_by:None, teams:vec![],
             players: vec![player(1, ":A.1"), player(2, ":A.1")],
             enemies: vec![], markers: vec![], ground_markers: vec![], tick_rate: None, objectives: Vec::new(), started_at_unix: None, log_start_ms: 0, map_id: None };
-        dedupe_players(&mut enc.players);
+        dedupe_players(&mut enc.players, &InstidRegistry::build(&empty_log()));
         assert_eq!(enc.players.len(), 1);
         assert_eq!(enc.players[0].agent_addr, 1);
         let mut addrs = enc.players[0].agent_addrs.clone();
@@ -1171,6 +1233,80 @@ mod tests {
         };
         let enc = crate::model::resolve(&raw);
         assert_eq!(enc.players[0].team, "unknown");
+    }
+
+    /// The friendly roster carries non-squad players too, and arcdps
+    /// anonymises those exactly like enemies: blank account, `character`
+    /// replaced by the elite-spec label. Two different pugs playing Druid
+    /// are two people -- the old `character` fallback merged them, which
+    /// capped the whole ally count at "distinct specs present".
+    #[test]
+    fn dedupe_players_does_not_merge_blank_account_pugs_by_spec_label() {
+        let mut a = player(9, "");
+        a.character = "Druid".into();
+        a.in_squad = false;
+        let mut b = player(10, "");
+        b.character = "Druid".into();
+        b.in_squad = false;
+        let mut players = vec![a, b];
+        dedupe_players(&mut players, &InstidRegistry::build(&empty_log()));
+        assert_eq!(players.len(), 2, "same-spec pugs are distinct people");
+    }
+
+    /// The other half of the rule: a blank-account friendly whose agent
+    /// rows DO share an instid is one person (a respawn/instance under the
+    /// same instid), and collapses -- GW2EI's non-squad
+    /// `GroupBy(x => x.InstID)` regroup, the union of its parts.
+    #[test]
+    fn dedupe_players_merges_blank_account_pugs_sharing_an_instid() {
+        let mut a = player(9, "");
+        a.character = "Druid".into();
+        a.in_squad = false;
+        let mut b = player(10, "");
+        b.character = "Druid".into();
+        b.in_squad = false;
+        let mut c = player(11, "");
+        c.character = "Druid".into();
+        c.in_squad = false;
+        let mut raw = empty_log();
+        raw.events = vec![damage_event(9, 7), damage_event(10, 7), damage_event(11, 8)];
+        let mut players = vec![a, b, c];
+        dedupe_players(&mut players, &InstidRegistry::build(&raw));
+        assert_eq!(players.len(), 2, "same-instid rows are one person");
+        assert_eq!(players[0].agent_addr, 9, "representative is the first agent row");
+        let mut addrs = players[0].agent_addrs.clone();
+        addrs.sort_unstable();
+        assert_eq!(addrs, vec![9, 10], "merged row is the union of its parts");
+        assert_eq!(players[1].agent_addrs, vec![11]);
+    }
+
+    /// Account stays the primary key, and it outranks instid: a squad
+    /// member who relogs gets a fresh agent addr that need not carry the
+    /// same instid, and must still collapse to one Player.
+    #[test]
+    fn dedupe_players_merges_relog_across_differing_instids() {
+        let mut raw = empty_log();
+        raw.events = vec![damage_event(1, 7), damage_event(2, 8)];
+        let mut players = vec![player(1, ":A.1"), player(2, ":A.1")];
+        dedupe_players(&mut players, &InstidRegistry::build(&raw));
+        assert_eq!(players.len(), 1, "one account is one person regardless of instid");
+        let mut addrs = players[0].agent_addrs.clone();
+        addrs.sort_unstable();
+        assert_eq!(addrs, vec![1, 2]);
+    }
+
+    /// A blank-account row whose addr never registered under any instid
+    /// has no usable key at all, and stays distinct rather than falling
+    /// back to the spec label.
+    #[test]
+    fn dedupe_players_keeps_unresolvable_blank_account_rows_distinct() {
+        let mut a = player(9, "");
+        a.character = "Scrapper".into();
+        let mut b = player(10, "");
+        b.character = "Scrapper".into();
+        let mut players = vec![a, b];
+        dedupe_players(&mut players, &InstidRegistry::build(&empty_log()));
+        assert_eq!(players.len(), 2);
     }
 
     /// Task 4 (M2): two enemy-player entries sharing the same known account
