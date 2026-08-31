@@ -10,6 +10,37 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.10.2 — 2026-08-31
+
+### Fixed
+- **Non-squad friendly players no longer collapse by elite spec.**
+  `wvw::dedupe_players` keyed on `account`, falling back to `character`,
+  and it runs on `enc.players` — which is the whole *friendly* roster, the
+  recorder's squad and every non-squad friendly on the map. Squad members
+  always reveal an account so they were unaffected, but arcdps anonymises
+  non-squad friendlies exactly like enemies: blank account, with
+  `character` substituted by the profession/elite-spec label ("Druid",
+  "Scrapper"). The fallback therefore merged every pug sharing a spec into
+  one person, silently capping the ally roster at *distinct specs present*.
+
+  The enemy side already had the fix — `dedupe_enemy_players` regroups on
+  instid, mirroring GW2EI's non-squad `GroupBy(x => x.InstID)`, and its own
+  doc comment describes this exact hazard — the rule was just never routed
+  over the friendly non-squad agents.
+
+  `dedupe_players` now keys on `account` where known (still the primary
+  key, so a relogged squadmate collapses regardless of instid) and falls
+  back to **instid** where it is blank, never to `character`. A
+  blank-account row with no resolvable instid stays distinct. Both dedupes
+  now share one `InstidRegistry` instead of building two.
+
+  Verified against a GW2EI 3.21 CLI oracle over all 8 reference captures:
+  the non-squad friendly count now matches EI's non-squad player count on
+  8/8. It was 38 → 17 on `20260117-175120` and 15 → 10 on
+  `20260128-190427`; the other six were already exact only because no two
+  pugs there happened to share a spec, which is why no fixture caught
+  this. Squad and enemy counts are unchanged on all 8.
+
 ## v1.10.1 — 2026-08-30
 
 ### Fixed
