@@ -15,6 +15,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Version single-source check (M8 Task 2): the workspace Cargo.toml version
+  # and every place it is duplicated by hand (Node SDK package.json, its
+  # napi-rs platform package dirs, the optionalDependencies pins,
+  # package-lock.json, the Python SDK's pyproject.toml, and index.js's
+  # generated version literals) must agree. See scripts/check-versions.sh.
+  #
+  # This is a STANDALONE JOB rather than a step inside build-test, and that
+  # is the entire point of it being here. It used to be the ubuntu leg's
+  # first step, on the reasoning that it should "fail fast, before any build
+  # minutes are spent". But on `main` it fails BY DESIGN for the whole window
+  # between `chore: bump version to X` and release.yml's post-publish
+  # lockfile-refresh job: package-lock.json cannot name @axiapps platform
+  # packages that npm has not published yet. As the leg's first step, that
+  # expected-red gate skipped every step behind it on every release commit --
+  # including the Node SDK's byte-identity guards, which is how the
+  # parseFileEi baseline (crates/axilog-node/__test__/fixtures/) rotted
+  # unnoticed from v1.8.0 through v1.10.2.
+  #
+  # A gate that is expected to be red must not sit in front of guards that
+  # are expected to be green. Splitting it out keeps the check exactly as
+  # strict, keeps its red X visible on its own, and stops it from deciding
+  # whether anything else runs.
+  #
+  # ubuntu-only: the check is pure text parsing with no compiled artifacts,
+  # so running it per-OS would just repeat the same file reads.
+  version-sync:
+    name: version sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # check-versions.sh parses package.json/package-lock.json with `node`.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: scripts/check-versions.sh
+
   build-test:
     name: build+test (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -120,16 +156,9 @@ jobs:
           cache: pip
           cache-dependency-path: crates/axilog-py/pyproject.toml
 
-      # Version single-source check (M8 Task 2): fails fast, before any
-      # build minutes are spent, if the workspace Cargo.toml version and its
-      # hand-duplicated copies (Node SDK package.json + its napi-rs platform
-      # package dirs, Python SDK pyproject.toml) have drifted apart.
-      # ubuntu-only: the check is platform-agnostic (pure text parsing, no
-      # compiled artifacts), so running it on every OS in the matrix would
-      # just repeat the same file reads three times over.
-      - name: Check version sync (ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        run: scripts/check-versions.sh
+      # (The version single-source check used to live here, as this leg's
+      # first step. It is now the standalone `version-sync` job above -- see
+      # that job's comment for why it must not gate anything.)
 
       - name: Build workspace
         run: cargo build --workspace --target ${{ matrix.target }}
@@ -141,28 +170,6 @@ jobs:
       # optionally re-check against it print a skip message in that case.
       - name: Test workspace
         run: cargo test --workspace
-
-      # MPERF Task 1: criterion bench harness (crates/axilog-cli/benches/
-      # pipeline.rs) over the committed fixture -- see docs/BENCHMARKS.md
-      # for the baseline numbers and methodology. ubuntu-only, same
-      # reasoning as the version-sync check above: the harness itself has
-      # no OS-specific branches, so building/smoke-running it three times
-      # would just repeat the same work. Two steps, deliberately not one
-      # hard-timing pass/fail gate (CI runner timing is too noisy for
-      # that): (1) `--no-run` builds every bench target, catching bench-code
-      # rot (e.g. a `build_report` signature change breaking the harness)
-      # as a compile error; (2) `-- --test` is criterion's built-in "run
-      # once, skip statistical sampling" mode -- it exercises the harness
-      # end to end (including the env-gated `AXILOG_BENCH_LOG` real-log arm,
-      # which skips cleanly since that env var is never set here) without
-      # spending CI minutes on full sampling.
-      - name: Build benches (ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo bench -p axilog-cli --no-run
-
-      - name: Bench smoke - fixture, single pass (ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo bench -p axilog-cli --bench pipeline -- --test
 
       - uses: actions/setup-node@v4
         with:
@@ -185,9 +192,54 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo build -p axilog-cli
 
+      # `npm ci` is the strict path and stays the default: it refuses to
+      # install unless package.json and package-lock.json agree, which is
+      # exactly the guard we want on ordinary commits.
+      #
+      # It is ALSO the second gate that is red by design on release commits,
+      # for the same reason the version-sync job is. A bump rewrites
+      # package.json's optionalDependencies to pin @axiapps platform packages
+      # at the new version; the lock still names the previous one, because
+      # the new one is not on the registry until npm-publish runs. `npm ci`
+      # reports `Invalid: lock file's @axiapps/axilog-darwin-arm64@X-1 does
+      # not satisfy @axiapps/axilog-darwin-arm64@X` and exits, taking the
+      # addon build, the index.d.ts regen check and `npm test` with it. So
+      # splitting out the version-sync job alone would not have made the Node
+      # guards run -- this step would just have become the new blocker.
+      #
+      # `--omit=optional` does NOT help: npm validates the lock against every
+      # declared dependency, optional ones included, before it decides what
+      # to reify.
+      #
+      # The fallback is deliberately narrow. It fires only when
+      # package-lock.json's own root version differs from package.json's --
+      # i.e. only inside the bump-to-publish window. If the two versions
+      # agree and `npm ci` still fails, that is a genuine lockfile problem
+      # and this step fails, as before. `npm install --no-save
+      # --omit=optional` then installs the one devDependency the SDK build
+      # needs (@napi-rs/cli, exact-pinned), skips the unpublishable platform
+      # packages, and leaves package-lock.json untouched -- so it cannot
+      # launder a bad lock into a green run, and cannot produce the empty
+      # `{"optional": true}` stubs that check-versions.sh exists to catch.
+      #
+      # The platform packages are not needed to test anyway: the addon is
+      # built from source below, and index.js prefers the local
+      # `axilog.<platform>.node` over the @axiapps package.
       - name: Node SDK - install
         working-directory: crates/axilog-node
-        run: npm ci
+        shell: bash
+        run: |
+          if npm ci; then
+            exit 0
+          fi
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          LOCK_VERSION="$(node -p "require('./package-lock.json').version")"
+          if [ "$PKG_VERSION" = "$LOCK_VERSION" ]; then
+            echo "::error::npm ci failed with package.json and package-lock.json both at $PKG_VERSION. That is a real lockfile problem, not the pre-publish version window -- not falling back."
+            exit 1
+          fi
+          echo "::warning::package.json is at $PKG_VERSION but package-lock.json is at $LOCK_VERSION (the window between a version bump and npm-publish). Falling back to 'npm install --no-save --omit=optional' so the Node SDK guards still run; release.yml's lockfile-refresh job resyncs the lock after publish."
+          npm install --no-save --omit=optional
 
       - name: Node SDK - build addon
         working-directory: crates/axilog-node
@@ -251,6 +303,34 @@ jobs:
         run: |
           python -m pip install --upgrade pip maturin
           maturin build --release
+
+      # Benches run LAST, after the SDK suites. They used to sit between
+      # `cargo test --workspace` and the Node SDK steps, which made a
+      # bench-harness compile error -- something unrelated to any guard --
+      # enough to skip the Node and Python SDK tests entirely. Nothing
+      # below depends on them, so they belong at the end.
+      #
+      # MPERF Task 1: criterion bench harness (crates/axilog-cli/benches/
+      # pipeline.rs) over the committed fixture -- see docs/BENCHMARKS.md
+      # for the baseline numbers and methodology. ubuntu-only, same
+      # reasoning as the SDK test steps above: the harness itself has
+      # no OS-specific branches, so building/smoke-running it three times
+      # would just repeat the same work. Two steps, deliberately not one
+      # hard-timing pass/fail gate (CI runner timing is too noisy for
+      # that): (1) `--no-run` builds every bench target, catching bench-code
+      # rot (e.g. a `build_report` signature change breaking the harness)
+      # as a compile error; (2) `-- --test` is criterion's built-in "run
+      # once, skip statistical sampling" mode -- it exercises the harness
+      # end to end (including the env-gated `AXILOG_BENCH_LOG` real-log arm,
+      # which skips cleanly since that env var is never set here) without
+      # spending CI minutes on full sampling.
+      - name: Build benches (ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo bench -p axilog-cli --no-run
+
+      - name: Bench smoke - fixture, single pass (ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo bench -p axilog-cli --bench pipeline -- --test
 
   # aarch64-unknown-linux-gnu is a build-only cross-target follow-up: there
   # is no hosted GitHub Actions runner for that target today, so it is not
