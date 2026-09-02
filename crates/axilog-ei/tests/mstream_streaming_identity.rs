@@ -126,6 +126,7 @@ fn render_both(flags: Flags) -> (String, String) {
     let self_effects =
         flags.timeseries.then(|| axilog_core::analysis::self_effects::build(&raw, &enc));
     let squad_buffs = axilog_core::analysis::squad_buffs::build(&raw, &enc);
+    let focus = axilog_core::analysis::focus::build(&enc, &raw);
     // The attributed detail behind `received_cc_count` and the `cc_taken`
     // lane -- which skill landed each incoming CC, from whom, and when.
     // Gated with the lane it decomposes (see `Passes::cc_taken_events`).
@@ -141,6 +142,7 @@ fn render_both(flags: Flags) -> (String, String) {
             target_conditions: target_conditions.as_ref(),
             self_effects: self_effects.as_ref(),
             squad_buffs: Some(&squad_buffs),
+            focus: Some(&focus),
             cc_taken_events: cc_taken_events.as_deref(),
             entity_series: None,
             minions: minion_rollups.as_ref(),

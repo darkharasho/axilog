@@ -7,6 +7,7 @@ pub mod activity;
 pub mod conditions;
 pub mod damage;
 pub mod defense;
+pub mod focus;
 pub mod minions;
 pub mod self_effects;
 pub mod squad_buffs;

@@ -156,6 +156,9 @@ pub fn parse_report_v1(
     // Gated with the lane it decomposes (see `Passes::cc_taken_events`).
     let cc_taken_events =
         want_timeseries.then(|| axilog_core::analysis::cc::taken_events_for(&enc, &raw));
+    // Always-on, like `activity`/`squad_buffs` above: one linear scan of
+    // `raw.events` with no per-event allocation.
+    let focus = axilog_core::analysis::focus::build(&enc, &raw);
     Ok(axilog_schema::v1::build_report_v1(
         &enc,
         &metrics,
@@ -179,6 +182,7 @@ pub fn parse_report_v1(
             self_effects: self_effects.as_ref(),
             squad_buffs: Some(&squad_buffs),
             cc_taken_events: cc_taken_events.as_deref(),
+            focus: Some(&focus),
         },
     ))
 }

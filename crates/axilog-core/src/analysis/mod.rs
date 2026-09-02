@@ -54,6 +54,13 @@ pub mod contribution;
 /// doc.
 pub mod entity_series;
 pub mod control_catalog;
+/// Enemy attention per squad player, from the enemy cast-start census
+/// arcdps's enemy-event filter leaves in the log -- standalone from
+/// [`analyze`], like `entity_series`/`missiles`/`replay` above. See
+/// `focus`'s module doc for why the filter makes this measurable, for the
+/// ~1,400-log holdout behind `focus_index`, and for the damage-weighted
+/// variant that was built and then rejected on that holdout.
+pub mod focus;
 /// Per-skill damage distribution (outgoing + taken, per-target) (M12 Task 1)
 /// -- unlike `health`/`replay`/`missiles` above, this IS wired into
 /// [`analyze`] below (`PlayerMetrics::skill_damage`), computed unconditionally

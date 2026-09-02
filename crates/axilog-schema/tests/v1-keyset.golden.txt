@@ -179,6 +179,17 @@ blocks.defenses.by_entity.<id>.received_cc_count
 blocks.defenses.by_entity.<id>.received_cc_duration_ms
 blocks.defenses.by_entity.<id>.strike_count
 blocks.defenses.by_entity.<id>.strike_damage
+blocks.focus
+blocks.focus.by_entity
+blocks.focus.by_entity.<id>
+blocks.focus.by_entity.<id>.casts_drawn
+blocks.focus.by_entity.<id>.downs
+blocks.focus.by_entity.<id>.focus_index
+blocks.focus.by_entity.<id>.pre_down_casts
+blocks.focus.mean_strike_damage
+blocks.focus.pre_down_window_ms
+blocks.focus.squad_size
+blocks.focus.total_casts
 blocks.healing
 blocks.healing.by_entity
 blocks.healing.by_entity.<id>
@@ -480,6 +491,7 @@ coverage.contribution
 coverage.damage
 coverage.damage_mods
 coverage.defenses
+coverage.focus
 coverage.healing
 coverage.hit_stats
 coverage.minions

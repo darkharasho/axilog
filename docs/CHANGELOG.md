@@ -10,6 +10,51 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## Unreleased
+
+### Added
+- **`blocks.focus` — enemy attention per squad player.** arcdps's enemy-event
+  filter is DST-driven for `CBTS_ANIMATIONSTART`: an enemy cast-start row
+  survives into the log exactly when its `dst_agent` is a squad member. The
+  surviving rows are therefore a *census* of enemy activity aimed at the
+  squad, not a sample of it, and this block reports it.
+
+  `focus_index` is a player's share of those aimed casts divided by an even
+  `1/squad_size` share — `1.0` is exactly average attention, `3.0` is three
+  times what an evenly-targeted squad member draws. Also per player:
+  `casts_drawn`, `downs`, and `pre_down_casts` (casts aimed at them in the
+  3s before a down, the window carried on the wire as `pre_down_window_ms`).
+  `skills[]` carries per-skill `casts_at_squad` / `hits` / `damage_total`
+  against a whole-log `mean_strike_damage`.
+
+  Validated on ~1,400 real WvW logs held out from the corpus the pass was
+  developed on, across three disjoint slices: the commander reads 1.92× /
+  1.86× / 1.47× against a median other squad member's 0.56× / 0.53× /
+  0.64× — roughly 3× the attention, consistently. Pre-down lift 1.58× /
+  1.52× / 1.37×.
+
+  A damage-weighted variant (per-skill empirical weights, empirical-Bayes
+  shrinkage toward a 60-skill corpus prior) was built and then **rejected**:
+  on the same holdout it never beat plain cast counting (1.87 vs 1.92, 1.86
+  vs 1.86, 1.40 vs 1.47). `analysis::focus`' module doc records the full
+  table so it is not re-derived. The reason it could not work is worth
+  carrying: the median enemy skill connects **three times** in one WvW log,
+  which is why `skills[]` ships `(hits, damage_total)` pairs — poolable
+  across logs — rather than a per-log mean.
+
+  Always-on (one linear scan of the event list, like `squad_buffs`), so no
+  flag gates it. Counts casts from enemy **players** only — an NPC does not
+  choose a target the way a player does — so on a PvE log every row is zero
+  and `coverage.focus` reads `empty`.
+
+  Two limits are structural, both from the same filter: no enemy
+  `CBTS_ANIMATIONSTOP` row survives (no durations, no interrupts), and an
+  untargeted ground AoE emits no row at all.
+
+  Additive under the 1.x rules. The native-JSON baseline was re-digested
+  after a recursive leaf diff against the previous build showed exactly two
+  added subtrees and zero other changes.
+
 ## v1.10.2 — 2026-08-31
 
 ### Fixed

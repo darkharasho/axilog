@@ -165,6 +165,7 @@ fn build_report_v1_from_bytes(
     // it would empty axibridge's Special Buffs and Sigil/Relic sections on
     // every default parse.
     let squad_buffs = axilog_core::analysis::squad_buffs::build(&raw, &enc);
+    let focus = axilog_core::analysis::focus::build(&enc, &raw);
     // The attributed detail behind `received_cc_count` and the `cc_taken`
     // lane -- which skill landed each incoming CC, from whom, and when.
     // Gated with the lane it decomposes (see `Passes::cc_taken_events`).
@@ -192,6 +193,7 @@ fn build_report_v1_from_bytes(
             target_conditions: target_conditions.as_ref(),
             self_effects: self_effects.as_ref(),
             squad_buffs: Some(&squad_buffs),
+            focus: Some(&focus),
             cc_taken_events: cc_taken_events.as_deref(),
         },
     ))
@@ -350,6 +352,7 @@ fn build_report_and_ei_inputs_from_bytes(
     // it would empty axibridge's Special Buffs and Sigil/Relic sections on
     // every default parse.
     let squad_buffs = axilog_core::analysis::squad_buffs::build(&raw, &enc);
+    let focus = axilog_core::analysis::focus::build(&enc, &raw);
     // The attributed detail behind `received_cc_count` and the `cc_taken`
     // lane -- which skill landed each incoming CC, from whom, and when.
     // Gated with the lane it decomposes (see `Passes::cc_taken_events`).
@@ -373,6 +376,7 @@ fn build_report_and_ei_inputs_from_bytes(
             target_conditions: target_conditions.as_ref(),
             self_effects: self_effects.as_ref(),
             squad_buffs: Some(&squad_buffs),
+            focus: Some(&focus),
             cc_taken_events: cc_taken_events.as_deref(),
         },
     );

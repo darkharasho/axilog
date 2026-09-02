@@ -60,8 +60,27 @@ const EXEMPT: &[(&str, &str)] = &[
 const PVE_ONLY_WIRE_FIELDS: &[&str] =
     &["encounter_name", "trigger_id", "sub_category", "success"];
 
+/// Wire keys the key-set golden cannot see for the OPPOSITE reason to
+/// [`PVE_ONLY_WIRE_FIELDS`]: they are WvW-only, and the committed WvW
+/// fixture still cannot produce them.
+///
+/// All of them hang off `blocks.focus.skills[]`, which is populated from
+/// `CBTS_ANIMATIONSTART` rows -- and `fixtures/wvw-small.anon.zevtc`
+/// contains none at all (32 enemy players, 0 cast-start rows; the
+/// unanonymized original is identical, so this is how the log was
+/// recorded). `skills` is `skip_serializing_if = "Vec::is_empty"`, so on
+/// that fixture the array and every field inside it are absent from the
+/// golden by construction, and without this list both stubs could stay
+/// silent about the block's only nested shape.
+///
+/// `tests/v1_focus.rs` synthesizes an encounter that does emit these and
+/// asserts their values; this list is what keeps the STUBS honest about
+/// them. Drop it if a WvW fixture with cast-start rows is ever committed.
+const FOCUS_SKILL_WIRE_FIELDS: &[&str] = &["skills", "casts_at_squad", "damage_total"];
+
 /// Every distinct leaf field name the 1.0 container can emit, from the
-/// committed key-set golden plus [`PVE_ONLY_WIRE_FIELDS`].
+/// committed key-set golden plus [`PVE_ONLY_WIRE_FIELDS`] and
+/// [`FOCUS_SKILL_WIRE_FIELDS`].
 fn wire_field_names() -> Vec<String> {
     let mut names: Vec<String> = GOLDEN
         .lines()
@@ -72,6 +91,7 @@ fn wire_field_names() -> Vec<String> {
         .filter(|seg| !seg.is_empty())
         .filter(|seg| !EXEMPT.iter().any(|(name, _)| name == seg))
         .chain(PVE_ONLY_WIRE_FIELDS.iter().map(|s| s.to_string()))
+        .chain(FOCUS_SKILL_WIRE_FIELDS.iter().map(|s| s.to_string()))
         .collect();
     names.sort();
     names.dedup();
