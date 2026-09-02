@@ -3,3 +3,12 @@
 # this, a Windows checkout rewrites them to CRLF and the comparison fails
 # over line endings alone (see crates/axilog-schema/tests/v1_shape.rs).
 *.golden.txt text eol=lf
+
+# The HTML report embeds these assets verbatim via include_str!, and
+# golden_html.rs gates the rendered report against a 600KB budget with only
+# ~400 bytes of headroom. A CRLF checkout adds one byte per line (2,009 lines
+# across report.css/report.js/skeleton.html), pushing the render to 601,617
+# bytes and failing the budget on Windows only -- and making the shipped
+# report differ byte-for-byte by build platform, which the crate's own
+# determinism tests otherwise promise it does not.
+crates/axilog-html/assets/** text eol=lf
