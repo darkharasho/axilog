@@ -10,7 +10,7 @@ pub mod order;
 pub mod series;
 
 use crate::v1::blocks::{
-    activity, conditions, damage, defense, minions, self_effects, squad_buffs, support,
+    activity, conditions, damage, defense, focus, minions, self_effects, squad_buffs, support,
 };
 use crate::v1::catalogs::{CatalogBuilder, Catalogs};
 use crate::v1::entities::build_entities;
@@ -257,6 +257,8 @@ pub struct Blocks {
     pub self_effects: Option<self_effects::SelfEffectsBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub squad_buffs: Option<squad_buffs::SquadBuffsBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus: Option<focus::FocusBlock>,
 }
 
 /// The coverage state for a block that DID run: [`CoverageState::Empty`]
@@ -429,6 +431,14 @@ pub struct Passes<'a> {
     /// this half; see [`defense::CcBlock::taken_events`] for why the
     /// `Option` on the wire is the gate signal instead.
     pub cc_taken_events: Option<&'a [axilog_core::analysis::cc::CcTakenEvent]>,
+    /// Enemy attention drawn per squad player. Lands on `blocks.focus`.
+    ///
+    /// ALWAYS-ON, like [`Self::activity`] and [`Self::squad_buffs`]: the
+    /// pass is one linear scan of the raw event list, so no flag gates it.
+    /// `None` here means a caller with no log to scan -- [`Passes::default`],
+    /// or a reprojection driven from a `Report` alone -- and
+    /// `coverage.focus` reports `not_computed` for exactly that case.
+    pub focus: Option<&'a axilog_core::analysis::focus::FocusDetail>,
 }
 
 /// Assemble the 1.0 [`ReportV1`] alongside the already-built legacy
@@ -507,6 +517,14 @@ pub fn build_report_v1(
             CoverageState::Unsupported
         },
     );
+    // Always-on, but only when the caller had a raw log to scan -- see
+    // `Passes::focus`. `None` stays `not_computed` (the `Coverage::new`
+    // default), which is why there is no `else` arm here.
+    let focus_block = passes.focus.map(|detail| {
+        let block = focus::build_focus(detail, legacy, &index, &mut cats);
+        coverage.set(BlockName::Focus, computed(block.is_empty()));
+        block
+    });
     let series = activity::build_series(
         legacy,
         &index,
@@ -769,6 +787,7 @@ pub fn build_report_v1(
             rotation,
             damage_mods: damage_mods_block,
             missiles,
+            focus: focus_block,
             replay,
             series: Some(series),
             minions: minions_block,

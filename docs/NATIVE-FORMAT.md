@@ -332,9 +332,11 @@ table still resolves — with an honest placeholder (`"Skill 424242"` /
 Every block is an aggregate slot plus a `by_entity` map keyed by entity id
 (as a decimal string, since JSON object keys are always strings).
 
-Four blocks carry a squad-level aggregate — `damage`, `cc`, `missiles`, and
-`series`. All four `squad` slots are **required**: when the block is
-present, so is its `squad`. There is no case where a missing aggregate would
+Four blocks carry a squad-level aggregate in a `squad` slot — `damage`,
+`cc`, `missiles`, and `series`. All four `squad` slots are **required**:
+when the block is present, so is its `squad`. (`focus` also carries
+squad-level scalars, but flat on the block rather than in a `squad` slot,
+because they are a denominator and a scale rather than a sum over the rows.) There is no case where a missing aggregate would
 mean anything a zero aggregate doesn't, so a consumer never has to branch on
 whether one exists.
 
@@ -499,12 +501,19 @@ Real example (default flags — no `--replay`/`--rotation`/`--modifiers`):
 {
   "boons": "present", "cc": "present", "conditions": "not_computed",
   "contribution": "present", "damage": "present", "damage_mods": "not_computed",
-  "defenses": "present", "healing": "present", "hit_stats": "present",
-  "minions": "not_computed", "missiles": "not_computed", "replay": "present",
-  "rotation": "not_computed", "self_effects": "not_computed", "series": "present",
-  "squad_buffs": "present", "support": "present"
+  "defenses": "present", "focus": "empty", "healing": "present",
+  "hit_stats": "present", "minions": "not_computed", "missiles": "not_computed",
+  "replay": "present", "rotation": "empty", "self_effects": "not_computed",
+  "series": "present", "squad_buffs": "present", "support": "present"
 }
 ```
+
+Both `empty` values above are real properties of this fixture, and worth
+reading as the illustration they are. `rotation` is always built (see its
+own note below) and this log records no casts for it. `focus` is `empty`
+because this log contains no `CBTS_ANIMATIONSTART` events at all despite
+having 32 enemy players — that is how it was recorded. Neither is a missing
+flag, which is exactly the distinction `empty` exists to make.
 
 | Value | Meaning | What a consumer should do |
 |---|---|---|
@@ -854,7 +863,81 @@ Three things worth knowing:
   `[0, 0]`, so `[]` is unambiguous, and `states` being present at all is
   the honest signal that `--timeseries` was on.
 
+## `focus` — who the enemy was actually shooting at
+
+`blocks.focus` reports how much of the enemy's attention each squad player
+drew. It is measurable because of a quirk of arcdps's enemy-event filter:
+that filter is **dst-driven** for `CBTS_ANIMATIONSTART`, so an enemy
+cast-start row survives into the log exactly when its `dst_agent` is a squad
+member. The surviving rows are therefore a *census* of enemy activity aimed
+at the squad, not a sample of it.
+
+Always-on, like `squad_buffs` — one linear scan of the event list, no flag.
+
+Real excerpt (a 44-player WvW fight; entity `39` is the most-focused
+player):
+
+```json
+{
+  "focus": {
+    "squad_size": 44,
+    "total_casts": 549,
+    "pre_down_window_ms": 3000,
+    "mean_strike_damage": 815.765838011227,
+    "skills": [
+      { "skill": 10219, "casts_at_squad": 95, "hits": 189, "damage_total": 70927 },
+      { "skill": 73088, "casts_at_squad": 62, "hits": 19, "damage_total": 34675 }
+    ],
+    "by_entity": {
+      "39": { "casts_drawn": 59, "focus_index": 4.728597449908925, "downs": 1, "pre_down_casts": 6 }
+    }
+  }
+}
+```
+
+- **`focus_index`** is the headline: this player's share of `total_casts`
+  divided by an even `1 / squad_size` share. `1.0` is exactly average
+  attention; entity `39`'s `4.73` means it drew nearly five times what an
+  evenly-targeted squad member would. On ~1,400 real WvW logs the commander
+  reads about **3× a median squad member**.
+- **`by_entity` is squad-only**, matching `squad_size`. A non-squad friendly
+  gets no row at all rather than a zeroed one — it was never in the
+  denominator, and a zero row would read as "was in the squad and drew no
+  attention".
+- **`pre_down_casts`** counts casts aimed at this player within
+  `pre_down_window_ms` of one of their downs. Read the window from the
+  document rather than hardcoding it. Windows around successive downs may
+  **overlap**, and a cast inside two of them counts twice — deliberately, so
+  a player downed twice under sustained fire reads high rather than being
+  averaged down.
+- **`skills[]` counts casts and damage on different event streams**, and
+  neither bounds the other. `10219` (Spatial Surge) shows 95 casts and 189
+  hits — a channel that connects several times per cast. A skill can equally
+  have casts and no hits (missed, blocked, target moved) or hits and no
+  casts (an instant, which emits no animation row).
+- **Pool `skills[]` across logs before drawing conclusions.** The median
+  enemy skill connects **three times** in one WvW log, which is not a sample
+  you can take a mean of. That is why each row carries `hits` and
+  `damage_total` rather than a mean: two logs' pairs add, their means do
+  not. `mean_strike_damage` is the whole-log scale to read the totals
+  against.
+
+Two limits are structural, both from the same filter:
+
+- **No durations, no interrupts.** Zero enemy `CBTS_ANIMATIONSTOP` rows
+  survive the filter, so a cast's length and whether it was interrupted are
+  not recoverable.
+- **Untargeted ground AoE is invisible here.** It emits no cast row with a
+  squad member as `dst_agent`, so it contributes to `mean_strike_damage`
+  (via its damage) but never to `casts_at_squad`.
+
+Only casts from enemy **players** count. An NPC does not choose a target the
+way a player does, and folding boss casts in would make the index measure
+encounter scripting rather than enemy intent — so on a PvE log every row is
+zero and `coverage.focus` reads `"empty"`.
+
 ## Combat replay — two halves, two gates
+
 
 `blocks.replay` is the other block whose halves are gated differently. Along
 with `boons` above, it is where `coverage` does not settle the whole

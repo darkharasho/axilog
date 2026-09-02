@@ -488,6 +488,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // `cc_taken` lane (see `Passes::cc_taken_events`).
             let cc_taken_events =
                 timeseries.then(|| axilog_core::analysis::cc::taken_events_for(&enc, &raw));
+            // Always-on, like `activity`/`squad_buffs`: one linear scan.
+            let focus = axilog_core::analysis::focus::build(&enc, &raw);
             let report_v1 = axilog_schema::v1::build_report_v1(
                 &enc,
                 &metrics,
@@ -511,6 +513,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     self_effects: self_effects.as_ref(),
                     squad_buffs: Some(&squad_buffs),
                     cc_taken_events: cc_taken_events.as_deref(),
+                    focus: Some(&focus),
                 },
             );
             // Final-review fix wave: surface analysis warnings (e.g. a

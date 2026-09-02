@@ -1729,6 +1729,73 @@ class SquadBuffsBlock(TypedDict):
 
     by_entity: Dict[str, Dict[str, SquadBuffRow]]
 
+class FocusEntityRow(TypedDict):
+    """One squad player's share of the enemy's attention."""
+
+    #: Enemy cast-starts whose target was this player.
+    casts_drawn: int
+    #: This player's share of `FocusBlock["total_casts"]` over an even
+    #: `1 / squad_size` share. `1.0` is exactly average attention, `3.0` is
+    #: three times what an evenly-targeted squad member would draw. Zero for
+    #: everyone when `total_casts` is zero.
+    focus_index: float
+    downs: int
+    #: Casts aimed at this player within `pre_down_window_ms` of one of
+    #: their downs. Windows around successive downs may overlap and a cast
+    #: inside two of them counts twice -- deliberately, so a player downed
+    #: twice under sustained fire reads high rather than being deduplicated
+    #: to average.
+    pre_down_casts: int
+
+class FocusSkillRow(TypedDict):
+    """One enemy skill's activity against the squad.
+
+    The two halves come from DIFFERENT event streams and neither bounds the
+    other: a skill can have casts and no hits (missed, blocked, or the
+    target moved) or hits and no casts (an instant, which emits no
+    animation row)."""
+
+    #: Resolves through `catalogs["skills"]`.
+    skill: int
+    casts_at_squad: int
+    hits: int
+    damage_total: int
+
+class FocusBlock(TypedDict, total=False):
+    """How much of the enemy's attention each squad player drew, from the
+    enemy cast-start census arcdps's enemy-event filter leaves in the log.
+
+    A cast-start row survives that filter exactly when its target is a squad
+    member, which makes the surviving rows a CENSUS of enemy activity aimed
+    at the squad rather than a sample of it.
+
+    Always-on, like `SquadBuffsBlock` -- one linear scan of the event list.
+
+    Counts casts from enemy PLAYERS only, so on a PvE log every row is zero
+    and `coverage["focus"]` reads `"empty"`: an NPC does not choose a target
+    the way a player does.
+
+    `skills` is the only optional key -- it is omitted when empty."""
+
+    #: Squad players in the `focus_index` denominator.
+    squad_size: int
+    #: Enemy cast-starts aimed at any squad member.
+    total_casts: int
+    #: The window before a down that `FocusEntityRow["pre_down_casts"]`
+    #: counts in. Read it from here rather than hardcoding it.
+    pre_down_window_ms: int
+    #: Mean damage of one connecting enemy strike on a squad member in this
+    #: log -- the scale `FocusSkillRow["damage_total"]` is read against.
+    #: Strike damage only: condition ticks and the defiance-bar results are
+    #: excluded.
+    mean_strike_damage: float
+    #: Per-skill diagnostics, ascending by skill id. POOL THESE ACROSS LOGS:
+    #: the median enemy skill connects three times in a single WvW log,
+    #: which is why each row carries `hits` and `damage_total` rather than a
+    #: mean. Two logs' pairs add; their means do not.
+    skills: List[FocusSkillRow]
+    by_entity: Dict[str, FocusEntityRow]
+
 class MinionSkillTakenRow(TypedDict):
     """One minion group's damage-TAKEN row for one skill.
 
@@ -2250,6 +2317,7 @@ class Blocks(TypedDict, total=False):
     self_effects: SelfEffectsBlock
     squad_buffs: SquadBuffsBlock
     minions: MinionsBlock
+    focus: FocusBlock
 
 class _ReportV1Required(TypedDict):
     axilog: AxilogMeta

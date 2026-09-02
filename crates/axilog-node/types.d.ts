@@ -1238,7 +1238,7 @@ export type CoverageState = 'present' | 'not_computed' | 'empty' | 'unsupported'
  * `"contribution"`, `"healing"`, `"rotation"`, `"damage_mods"`,
  * `"missiles"`, `"replay"`, `"series"`, `"conditions"`, `"self_effects"`,
  * `"squad_buffs"`,
- * `"minions"`).
+ * `"minions"`, `"focus"`).
  * Always names every known block, including ones a given parse did not
  * compute -- those read `"not_computed"`.
  *
@@ -1728,6 +1728,79 @@ export interface SquadBuffRow {
  */
 export interface SquadBuffsBlock {
   by_entity: ByEntity<Record<string, SquadBuffRow>>
+}
+
+/**
+ * How much of the enemy's attention each squad player drew, from the enemy
+ * cast-start census arcdps's enemy-event filter leaves in the log: a
+ * cast-start row survives the filter exactly when its target is a squad
+ * member, which makes the surviving rows a census of enemy activity aimed
+ * at the squad rather than a sample of it.
+ *
+ * Always-on, like `SquadBuffsBlock` -- one linear scan of the event list.
+ *
+ * Counts casts from enemy PLAYERS only, so on a PvE log every row is zero
+ * and `coverage.focus` reads `"empty"`: an NPC does not choose a target the
+ * way a player does.
+ */
+export interface FocusBlock {
+  /** Squad players in the `focus_index` denominator. */
+  squad_size: number
+  /** Enemy cast-starts aimed at any squad member. */
+  total_casts: number
+  /**
+   * The window before a down that `FocusEntityRow.pre_down_casts` counts
+   * in. Read it from here rather than hardcoding it.
+   */
+  pre_down_window_ms: number
+  /**
+   * Mean damage of one connecting enemy strike on a squad member in this
+   * log. The scale `FocusSkillRow.damage_total` is read against. Strike
+   * damage only -- condition ticks and defiance-bar results excluded.
+   */
+  mean_strike_damage: number
+  /**
+   * Per-skill diagnostics, ascending by skill id. POOL THESE ACROSS LOGS:
+   * the median enemy skill connects three times in one WvW log, which is
+   * why each row carries `hits` and `damage_total` rather than a mean.
+   */
+  skills?: FocusSkillRow[]
+  by_entity: ByEntity<FocusEntityRow>
+}
+
+/** One squad player's share of the enemy's attention. */
+export interface FocusEntityRow {
+  /** Enemy cast-starts whose target was this player. */
+  casts_drawn: number
+  /**
+   * This player's share of `FocusBlock.total_casts` over an even
+   * `1 / squad_size` share. `1` is exactly average, `3` is three times what
+   * an evenly-targeted squad member would draw. Zero for everyone when
+   * `total_casts` is zero.
+   */
+  focus_index: number
+  downs: number
+  /**
+   * Casts aimed at this player within `pre_down_window_ms` of one of their
+   * downs. Windows around successive downs may overlap and a cast inside
+   * two of them counts twice -- deliberately, so a player downed twice
+   * under sustained fire reads high.
+   */
+  pre_down_casts: number
+}
+
+/**
+ * One enemy skill's activity against the squad. The two halves come from
+ * DIFFERENT event streams and neither bounds the other: a skill can have
+ * casts and no hits (missed, blocked, target moved) or hits and no casts
+ * (an instant, which emits no animation row).
+ */
+export interface FocusSkillRow {
+  /** Resolves through `Catalogs.skills`. */
+  skill: number
+  casts_at_squad: number
+  hits: number
+  damage_total: number
 }
 
 /**
@@ -2483,6 +2556,7 @@ export interface Blocks {
   self_effects?: SelfEffectsBlock
   squad_buffs?: SquadBuffsBlock
   minions?: MinionsBlock
+  focus?: FocusBlock
 }
 
 /**
