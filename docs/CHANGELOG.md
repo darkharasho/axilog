@@ -10,7 +10,7 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
-## Unreleased
+## v1.11.0 — 2026-09-01
 
 ### Added
 - **`blocks.focus` — enemy attention per squad player.** arcdps's enemy-event
@@ -54,6 +54,27 @@ output, all suites passing).
   Additive under the 1.x rules. The native-JSON baseline was re-digested
   after a recursive leaf diff against the previous build showed exactly two
   added subtrees and zero other changes.
+
+### Fixed
+- **The HTML report's embedded assets are pinned to LF.** `report.css`,
+  `report.js` and `skeleton.html` are baked into the report verbatim with
+  `include_str!`, so a Windows checkout converting them to CRLF added one
+  byte per line — 2,009 lines — and pushed the replay-enabled fixture render
+  from 599,608 to 601,617 bytes, past `golden_html.rs`' 600KB gate. That gate
+  had been the Windows job's failure for four consecutive releases. The
+  budget was never the problem and is unchanged; the checkout was. A
+  `.gitattributes` rule now holds the whole asset directory at LF, which also
+  restores the cross-platform byte-identity the crate's determinism tests
+  otherwise imply.
+- **The `parseFileEi` byte-identity baseline is current again.** It had gone
+  stale for the third time, by +736 code units. Attributed by leaf-diffing a
+  worktree build at the recorded anchor against HEAD: exactly four keys
+  added, zero removed, zero changed — the `skillMap` entries for arcdps's
+  generic control effect ids (23294/23295/23296/23299) that v1.10.0's CC
+  attribution lane began naming. Nothing axibridge already reads moved. It
+  stayed hidden by the same mechanism as last time: main's Linux job died at
+  the version-sync gate on every release from v1.8.0 through v1.10.2 and
+  never reached the Node SDK tests.
 
 ## v1.10.2 — 2026-08-31
 
