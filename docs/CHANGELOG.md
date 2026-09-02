@@ -10,6 +10,48 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+## v1.12.0 — 2026-09-02
+
+### Changed
+- **`blocks.focus` is now `unsupported` (and omitted) on pre-2026-05 logs,
+  instead of `empty` with a zeroed roster.** The enemy cast-start census
+  only exists in the post-rework `CBTS_ANIMATIONSTART` statechange encoding.
+  Measured over 4,143 real WvW logs: the 2,334 pre-rework ones carry **zero**
+  enemy cast rows in either era's encoding, while carrying 7.34M enemy→squad
+  strike rows in the same files — so there is nothing an older decoding path
+  could recover. Until now those logs shipped a full zeroed `by_entity`
+  roster under `coverage.focus: "empty"`, which a consumer reads as "the
+  squad drew no enemy attention" when the truth is "this log cannot answer
+  the question". That was 56% of the corpus, and it included this repo's own
+  `wvw-small.anon.zevtc` fixture (build `20260114`) — so every schema test of
+  this block was asserting on a structurally empty one.
+
+  `coverage.focus` now reads `"unsupported"` and the block is omitted, the
+  same rule `blocks.healing` already follows for a log recorded without the
+  healing extension. **Consumers must treat a missing `blocks.focus` as "not
+  measurable here", never as "nobody was targeted".**
+
+### Added
+- **`total_minion_casts` / `casts_drawn_minions` on `blocks.focus`.** Enemy
+  casts aimed at squad pets, clones, phantasms, spirit weapons, turrets and
+  gyros survive the same dst-driven filter and carry their owner's instid in
+  `dst_master_instid`. They are 8.3% of the census on the 4,143-log corpus
+  and were previously discarded, which quietly undercounted pet professions.
+
+  They are attributed to the owner on their own axis and deliberately kept
+  out of `casts_drawn`, `total_casts`, `focus_index` and `pre_down_casts`:
+  folding them into the index measurably *weakens* its commander separation
+  on every holdout slice (2.70→2.36, 2.82→2.45, 2.81→2.48 across three
+  disjoint slices). A cast aimed at your pet is enemy effort spent on your
+  account, but it is not the enemy shooting *you*.
+- **`examples/enemy_cast_census.rs`** — the probe behind the numbers above.
+  Separates enemy-filtered casters from agents arcdps tracked at full
+  fidelity (via `CBTS_BUFFINITIAL`, which the filter never emits), which is
+  what makes the "exactly zero `ANIMATIONSTOP`" and "zero null `dst`" results
+  exact rather than approximate.
+- **`docs/enemy-cast-census.md`** — the write-up of the filter's behaviour,
+  intended for the arcdps author.
+
 ## v1.11.0 — 2026-09-01
 
 ### Added

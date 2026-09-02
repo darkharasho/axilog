@@ -501,19 +501,22 @@ Real example (default flags — no `--replay`/`--rotation`/`--modifiers`):
 {
   "boons": "present", "cc": "present", "conditions": "not_computed",
   "contribution": "present", "damage": "present", "damage_mods": "not_computed",
-  "defenses": "present", "focus": "empty", "healing": "present",
+  "defenses": "present", "focus": "unsupported", "healing": "present",
   "hit_stats": "present", "minions": "not_computed", "missiles": "not_computed",
   "replay": "present", "rotation": "empty", "self_effects": "not_computed",
   "series": "present", "squad_buffs": "present", "support": "present"
 }
 ```
 
-Both `empty` values above are real properties of this fixture, and worth
-reading as the illustration they are. `rotation` is always built (see its
-own note below) and this log records no casts for it. `focus` is `empty`
-because this log contains no `CBTS_ANIMATIONSTART` events at all despite
-having 32 enemy players — that is how it was recorded. Neither is a missing
-flag, which is exactly the distinction `empty` exists to make.
+The `empty` and `unsupported` values above are real properties of this
+fixture, and worth reading as the illustrations they are. `rotation` is
+always built (see its own note below) and this log records no casts for it —
+that is `empty`: the pass could have found something and did not. `focus` is
+`unsupported`, one step further out: this fixture is arcdps build
+`20260114`, which predates the enemy cast-start census entirely, so no flag
+and no future pass can ever fill it in and the block is omitted rather than
+emitted zeroed. Neither is a missing flag, which is exactly the distinction
+these two states exist to make against `not_computed`.
 
 | Value | Meaning | What a consumer should do |
 |---|---|---|
@@ -868,11 +871,19 @@ Three things worth knowing:
 `blocks.focus` reports how much of the enemy's attention each squad player
 drew. It is measurable because of a quirk of arcdps's enemy-event filter:
 that filter is **dst-driven** for `CBTS_ANIMATIONSTART`, so an enemy
-cast-start row survives into the log exactly when its `dst_agent` is a squad
-member. The surviving rows are therefore a *census* of enemy activity aimed
-at the squad, not a sample of it.
+cast-start row survives into the log exactly when its `dst_agent` is
+squad-side. The surviving rows are therefore a *census* of enemy activity
+aimed at the squad, not a sample of it.
 
 Always-on, like `squad_buffs` — one linear scan of the event list, no flag.
+
+> **The block is absent on a pre-2026-05 log.** That era emits no enemy
+> cast-start rows at all — measured across 4,143 real WvW logs, in which the
+> 2,334 pre-rework ones carry **zero**, while carrying 7.34M enemy→squad
+> strike rows in the same files. `coverage.focus` reads `"unsupported"` and
+> `blocks.focus` is omitted. Treat a missing block as *"this log cannot
+> answer the question"*, never as *"nobody was targeted"* — on that corpus
+> it is 56% of logs.
 
 Real excerpt (a 44-player WvW fight; entity `39` is the most-focused
 player):
@@ -882,6 +893,7 @@ player):
   "focus": {
     "squad_size": 44,
     "total_casts": 549,
+    "total_minion_casts": 47,
     "pre_down_window_ms": 3000,
     "mean_strike_damage": 815.765838011227,
     "skills": [
@@ -889,7 +901,10 @@ player):
       { "skill": 73088, "casts_at_squad": 62, "hits": 19, "damage_total": 34675 }
     ],
     "by_entity": {
-      "39": { "casts_drawn": 59, "focus_index": 4.728597449908925, "downs": 1, "pre_down_casts": 6 }
+      "39": {
+        "casts_drawn": 59, "casts_drawn_minions": 0,
+        "focus_index": 4.728597449908925, "downs": 1, "pre_down_casts": 6
+      }
     }
   }
 }
@@ -900,6 +915,15 @@ player):
   attention; entity `39`'s `4.73` means it drew nearly five times what an
   evenly-targeted squad member would. On ~1,400 real WvW logs the commander
   reads about **3× a median squad member**.
+- **`casts_drawn_minions` is a separate axis, not part of the index.** A
+  cast aimed at a pet, clone, phantasm, spirit weapon, turret or gyro
+  survives the same filter and is attributed to its owner — 8.3% of the
+  census on the 4,143-log corpus, so dropping those rows would quietly
+  undercount pet professions. They are kept out of `casts_drawn`,
+  `total_casts`, `focus_index` and `pre_down_casts` because folding them in
+  measurably *weakens* commander separation on every holdout slice (2.70→2.36,
+  2.82→2.45, 2.81→2.48 on three disjoint slices). Enemy effort spent on your
+  pet is real, but it is not the enemy shooting you.
 - **`by_entity` is squad-only**, matching `squad_size`. A non-squad friendly
   gets no row at all rather than a zeroed one — it was never in the
   denominator, and a zero row would read as "was in the squad and drew no
@@ -924,9 +948,9 @@ player):
 
 Two limits are structural, both from the same filter:
 
-- **No durations, no interrupts.** Zero enemy `CBTS_ANIMATIONSTOP` rows
-  survive the filter, so a cast's length and whether it was interrupted are
-  not recoverable.
+- **No durations, no interrupts.** Exactly zero enemy `CBTS_ANIMATIONSTOP`
+  rows survive the filter — measured, not estimated — so a cast's length and
+  whether it was interrupted are not recoverable.
 - **Untargeted ground AoE is invisible here.** It emits no cast row with a
   squad member as `dst_agent`, so it contributes to `mean_strike_damage`
   (via its damage) but never to `casts_at_squad`.

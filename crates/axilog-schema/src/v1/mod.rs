@@ -520,10 +520,19 @@ pub fn build_report_v1(
     // Always-on, but only when the caller had a raw log to scan -- see
     // `Passes::focus`. `None` stays `not_computed` (the `Coverage::new`
     // default), which is why there is no `else` arm here.
-    let focus_block = passes.focus.map(|detail| {
+    let focus_block = passes.focus.and_then(|detail| {
+        // A pre-rework log carries no enemy cast rows for any pass to read,
+        // so this is `Unsupported` for the same reason `healing` is on a log
+        // without the extension -- and, like `healing`, the block is then
+        // omitted rather than emitted zeroed. `Empty` would report that the
+        // squad drew no enemy attention, which is not what was measured.
+        if !detail.census_available {
+            coverage.set(BlockName::Focus, CoverageState::Unsupported);
+            return None;
+        }
         let block = focus::build_focus(detail, legacy, &index, &mut cats);
         coverage.set(BlockName::Focus, computed(block.is_empty()));
-        block
+        Some(block)
     });
     let series = activity::build_series(
         legacy,

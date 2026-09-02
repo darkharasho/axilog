@@ -17,6 +17,20 @@
 //! exactly that case rather than an empty block a consumer would read as
 //! "nobody was targeted".
 //!
+//! ## Absent entirely on a pre-rework log
+//!
+//! The enemy cast census only exists on arcdps builds from 2026-05
+//! onwards -- 56% of a 4,143-log WvW corpus predates it and carries no such
+//! row at all, while carrying millions of enemy->squad strike rows in the
+//! same file. There is nothing for any flag or future pass to recover, so
+//! this block is OMITTED and `coverage.focus` reads `unsupported`, the same
+//! answer `healing` gives for a log recorded without the healing extension.
+//! `empty` is reserved for a log that COULD have carried the census and did
+//! not -- a genuinely quiet fight.
+//!
+//! A consumer must therefore treat a missing `blocks.focus` as "not
+//! measurable here", never as "nobody was targeted".
+//!
 //! ## Why the block is near-empty on a PvE log
 //!
 //! [`axilog_core::analysis::focus`] counts casts from enemy **players**
@@ -40,6 +54,12 @@ pub struct FocusBlock {
     /// Enemy cast-starts aimed at any squad member, the total
     /// [`FocusEntity::casts_drawn`] is a share of.
     pub total_casts: u64,
+    /// Enemy cast-starts aimed at squad MINIONS -- pets, clones, phantasms,
+    /// spirit weapons, turrets, gyros. 8.3% of the census on a 4,143-log WvW
+    /// corpus. Not part of [`Self::total_casts`] and not scored into
+    /// [`FocusEntity::focus_index`]; see the core module doc for the holdout
+    /// that decided that.
+    pub total_minion_casts: u64,
     /// The window, in ms before a down, that [`FocusEntity::pre_down_casts`]
     /// counts casts in. Carried so a consumer reporting "casts in the N
     /// seconds before going down" reads N from the document rather than
@@ -81,6 +101,10 @@ impl FocusBlock {
 pub struct FocusEntity {
     /// Enemy cast-starts whose target was this player.
     pub casts_drawn: u64,
+    /// Enemy cast-starts whose target was one of this player's minions,
+    /// attributed through the row's `dst_master_instid`. A separate axis
+    /// from [`Self::casts_drawn`], never summed into it.
+    pub casts_drawn_minions: u64,
     /// This player's share of [`FocusBlock::total_casts`], divided by an
     /// even `1/squad_size` share. `1.0` is exactly average attention, `3.0`
     /// is three times what an evenly-targeted squad member would draw.
@@ -153,6 +177,7 @@ pub fn build_focus(
             id,
             FocusEntity {
                 casts_drawn: f.casts_drawn,
+                casts_drawn_minions: f.casts_drawn_minions,
                 focus_index: f.focus_index,
                 downs: f.downs,
                 pre_down_casts: f.pre_down_casts,
@@ -175,6 +200,7 @@ pub fn build_focus(
     FocusBlock {
         squad_size: detail.squad_size as u32,
         total_casts: detail.total_casts,
+        total_minion_casts: detail.total_minion_casts,
         pre_down_window_ms: axilog_core::analysis::focus::PRE_DOWN_WINDOW_MS,
         mean_strike_damage: detail.mean_strike_damage,
         skills,

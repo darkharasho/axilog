@@ -89,7 +89,9 @@ fn fixture() -> (Encounter, RawLog) {
     ];
     events.sort_by_key(|e| e.time);
     let raw = RawLog {
-        header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
+        // Post-rework: the `sc::ANIMATION_START` census only exists on these
+        // builds, and the era gate correctly zeroes the pass on any other.
+        header: RawHeader { build: "20260601".into(), revision: 1, boss_id: 1 },
         agents: vec![], skills: vec![], events, guid_map: Default::default(),
     };
     (enc, raw)
@@ -229,4 +231,96 @@ fn no_pass_is_not_computed_and_omits_the_block() {
     let doc = serde_json::to_value(&v1).expect("serializable");
     assert_eq!(doc["coverage"]["focus"], "not_computed");
     assert!(doc["blocks"].get("focus").is_none());
+}
+
+/// A pre-rework log cannot carry the census at all, so it must read
+/// `unsupported` -- `empty` would tell a consumer the squad drew no enemy
+/// attention, which is not what was measured. Same distinction `healing`
+/// makes for a log recorded without the extension.
+#[test]
+fn a_pre_rework_log_is_unsupported_not_empty() {
+    let (enc, mut raw) = fixture();
+    raw.header.build = "20260114".into();
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let focus = axilog_core::analysis::focus::build(&enc, &raw);
+    let legacy = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
+    );
+    let v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &legacy, "0.0.0-test", None,
+        &axilog_schema::v1::Passes { focus: Some(&focus), ..Default::default() },
+    );
+    let doc = serde_json::to_value(&v1).expect("serializable");
+    assert_eq!(doc["coverage"]["focus"], "unsupported");
+    assert!(
+        doc["blocks"].get("focus").is_none(),
+        "an unsupported block must be omitted, not emitted zeroed"
+    );
+}
+
+/// Casts aimed at a squad member's minion reach the wire on their own axis
+/// and stay out of the census totals the index is computed from.
+#[test]
+fn minion_casts_reach_the_wire_without_touching_the_index() {
+    let (enc, mut raw) = fixture();
+    // P100's own row establishes instid 10; 900 is their minion.
+    let mut own = cast(100, 100, 0, 1);
+    own.src_instid = 10;
+    let mut pet = cast(3_000, 200, 900, 9);
+    pet.dst_master_instid = 10;
+    raw.events.push(own);
+    raw.events.push(pet);
+    raw.events.sort_by_key(|e| e.time);
+
+    let metrics = axilog_core::analysis::analyze(&enc, &raw);
+    let focus = axilog_core::analysis::focus::build(&enc, &raw);
+    let legacy = axilog_schema::build_report(
+        &enc, &metrics, "0.0.0-test", None, None, false, false, false, None,
+    );
+    let v1 = axilog_schema::v1::build_report_v1(
+        &enc, &metrics, &legacy, "0.0.0-test", None,
+        &axilog_schema::v1::Passes { focus: Some(&focus), ..Default::default() },
+    );
+    let doc = serde_json::to_value(&v1).expect("serializable");
+    let block = &doc["blocks"]["focus"];
+    assert_eq!(block["total_minion_casts"], 1);
+    // The fixture's four squad-aimed casts are unchanged by the minion row
+    // (its other two are aimed at the non-squad friendly, never counted).
+    assert_eq!(block["total_casts"], 4);
+    let row = block["by_entity"].as_object().unwrap().values()
+        .find(|r| r["casts_drawn_minions"] != 0).expect("a minion row");
+    assert_eq!(row["casts_drawn_minions"], 1);
+    assert_eq!(row["casts_drawn"], 3, "the owner's own aimed casts are untouched");
+}
+
+/// The block's full key surface, pinned here because the shared fixture is
+/// pre-rework and therefore drops the block out of `v1-keyset.golden.txt`
+/// altogether. Adding a key is additive; removing or renaming one is a
+/// breaking change.
+#[test]
+fn the_focus_block_key_surface_is_pinned() {
+    let doc = build();
+    let block = doc["blocks"]["focus"].as_object().expect("focus block");
+    let mut top: Vec<&str> = block.keys().map(String::as_str).collect();
+    top.sort_unstable();
+    assert_eq!(
+        top,
+        [
+            "by_entity", "mean_strike_damage", "pre_down_window_ms", "skills",
+            "squad_size", "total_casts", "total_minion_casts",
+        ]
+    );
+
+    let row = block["by_entity"].as_object().unwrap().values().next().expect("a row");
+    let mut row_keys: Vec<&str> = row.as_object().unwrap().keys().map(String::as_str).collect();
+    row_keys.sort_unstable();
+    assert_eq!(
+        row_keys,
+        ["casts_drawn", "casts_drawn_minions", "downs", "focus_index", "pre_down_casts"]
+    );
+
+    let skill = block["skills"][0].as_object().expect("a skill row");
+    let mut skill_keys: Vec<&str> = skill.keys().map(String::as_str).collect();
+    skill_keys.sort_unstable();
+    assert_eq!(skill_keys, ["casts_at_squad", "damage_total", "hits", "skill"]);
 }

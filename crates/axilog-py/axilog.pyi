@@ -1734,6 +1734,10 @@ class FocusEntityRow(TypedDict):
 
     #: Enemy cast-starts whose target was this player.
     casts_drawn: int
+    #: Enemy cast-starts whose target was one of this player's minions,
+    #: attributed through the row's owner instid. A separate axis from
+    #: `casts_drawn`, never summed into it.
+    casts_drawn_minions: int
     #: This player's share of `FocusBlock["total_casts"]` over an even
     #: `1 / squad_size` share. `1.0` is exactly average attention, `3.0` is
     #: three times what an evenly-targeted squad member would draw. Zero for
@@ -1765,11 +1769,18 @@ class FocusBlock(TypedDict, total=False):
     """How much of the enemy's attention each squad player drew, from the
     enemy cast-start census arcdps's enemy-event filter leaves in the log.
 
-    A cast-start row survives that filter exactly when its target is a squad
-    member, which makes the surviving rows a CENSUS of enemy activity aimed
-    at the squad rather than a sample of it.
+    A cast-start row survives that filter exactly when its target is
+    squad-side, which makes the surviving rows a CENSUS of enemy activity
+    aimed at the squad rather than a sample of it.
 
     Always-on, like `SquadBuffsBlock` -- one linear scan of the event list.
+
+    ABSENT ENTIRELY on a log from an arcdps build before 2026-05: that era
+    emits no enemy cast-start rows at all (measured across 4,143 real WvW
+    logs), so no flag and no future pass can fill this in. `coverage["focus"]`
+    then reads `"unsupported"` and this block is omitted -- treat that as
+    "not measurable here", NEVER as "nobody was targeted". `"empty"` is
+    reserved for a log that could have carried the census and did not.
 
     Counts casts from enemy PLAYERS only, so on a PvE log every row is zero
     and `coverage["focus"]` reads `"empty"`: an NPC does not choose a target
@@ -1781,6 +1792,13 @@ class FocusBlock(TypedDict, total=False):
     squad_size: int
     #: Enemy cast-starts aimed at any squad member.
     total_casts: int
+    #: Enemy cast-starts aimed at squad MINIONS -- pets, clones, phantasms,
+    #: spirit weapons, turrets, gyros -- 8.3% of the census on a 4,143-log
+    #: WvW corpus. NOT part of `total_casts` and not scored into
+    #: `focus_index`: folding them in measurably weakens the index's
+    #: commander separation on every holdout slice, because a cast aimed at
+    #: your pet is not the enemy shooting you.
+    total_minion_casts: int
     #: The window before a down that `FocusEntityRow["pre_down_casts"]`
     #: counts in. Read it from here rather than hardcoding it.
     pre_down_window_ms: int

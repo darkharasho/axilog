@@ -6,26 +6,82 @@
 //! arcdps's enemy-event filter records a non-squad agent's events only when
 //! that agent interacts with the recording squad. For `CBTS_ANIMATIONSTART`
 //! that filter is DST-DRIVEN: an enemy cast-start row survives into the log
-//! exactly when its `dst_agent` is a squad member. So the surviving rows are
-//! not a sample of enemy activity -- they are a census of enemy activity
+//! exactly when its `dst_agent` is squad-side. So the surviving rows are not
+//! a sample of enemy activity -- they are a census of enemy activity
 //! *pointed at us*, with the target attached. That is the whole signal here.
 //!
-//! Two consequences of the same filter, both load-bearing:
+//! Measured over 4,143 real WvW logs (`examples/enemy_cast_census.rs`), the
+//! rows that survive the filter are:
 //!
-//! - There is no matching `CBTS_ANIMATIONSTOP` census. Those rows carry the
-//!   caster as `src` and nothing squad-side as `dst`, so the filter drops
-//!   them. No cast durations, no interrupt detection, no channel tracking --
-//!   only starts.
+//! | `dst` | rows | share |
+//! |---|---|---|
+//! | a squad player | 1,087,485 | 91.7% |
+//! | a squad player's minion | 97,978 | 8.3% |
+//! | anything else | 2 | ~0% |
+//! | absent (`0`) | 0 | 0% |
+//! | any enemy `CBTS_ANIMATIONSTOP` | 0 | 0% |
+//!
+//! Three consequences of the same filter, all load-bearing:
+//!
+//! - There is no matching `CBTS_ANIMATIONSTOP` census -- exactly zero rows,
+//!   not approximately. Those rows carry the caster as `src` and nothing
+//!   squad-side as `dst`, so the filter drops them. No cast durations, no
+//!   interrupt detection, no channel tracking -- only starts.
 //! - Untargeted enemy casts are invisible. A ground-targeted AoE dropped on
 //!   the squad's position emits no row here. This pass measures *aimed*
 //!   attention specifically, not incoming pressure in general;
 //!   [`crate::analysis::defenses`] already covers what actually landed.
+//! - 8.3% of what survives is aimed at squad MINIONS rather than squad
+//!   players. See the minion section below.
+//!
+//! # The census exists only post-rework
+//!
+//! [`FocusDetail::census_available`] is not a formality. Across the same
+//! corpus, the 2,334 PRE-rework logs carry **zero** enemy cast rows in
+//! either era's encoding -- while the very same logs carry 7.35M squad cast
+//! rows and 7.34M enemy->squad strike rows, so the enemies are plainly
+//! present and swinging. The dst-driven survival arrived with the dedicated
+//! `sc::ANIMATION_START`/`ANIMATION_STOP` statechanges; it is not a property
+//! of cast rows in general, and there is nothing to recover from an older
+//! log by decoding the `is_activation` shape instead.
+//!
+//! Pre-rework builds are a closed set -- no new log will ever be one -- so
+//! this pass does not decode that shape at all. It reports the census as
+//! unavailable and leaves the roster zeroed. A consumer MUST distinguish
+//! that from a quiet fight before rendering "nobody was focused": on the
+//! corpus above it is 56% of logs.
+//!
+//! # Why minion-aimed casts are counted, but on their own axis
+//!
+//! A cast whose `dst` is a pet, clone, phantasm, spirit weapon, turret or
+//! gyro survives the filter the same way, and carries the owner's instid in
+//! `dst_master_instid`. Dropping those rows would silently discard 8.3% of
+//! the census and undercount pet professions specifically, so they are
+//! attributed to the owner as [`PlayerFocus::casts_drawn_minions`].
+//!
+//! They are NOT folded into [`PlayerFocus::focus_index`], because folding
+//! them in measurably WEAKENS the thing the index is for. Same
+//! commander-separation test as below, on three disjoint slices:
+//!
+//! | slice | logs | players-only sep | +minions sep |
+//! |---|---|---|---|
+//! | 0 | 588 | **2.70x** | 2.36x |
+//! | 1 | 592 | **2.82x** | 2.45x |
+//! | 2 | 594 | **2.81x** | 2.48x |
+//!
+//! Consistent in direction and size on every slice: a cast aimed at your pet
+//! is enemy effort spent on your account, but it is not the enemy shooting
+//! *you*, and a commander is not the one drawing it. So the minion count
+//! ships as its own diagnostic and the index stays defined on player-aimed
+//! casts. For the same reason minion casts do not enter the pre-down windows.
 //!
 //! # What was measured
 //!
 //! Against ~1,400 real WvW logs (2026-09-01), using the commander as the
 //! known-focused player and [`PlayerFocus::focus_index`] as the yardstick,
-//! across three disjoint slices:
+//! across three disjoint slices. (The minion table further down partitions a
+//! larger corpus differently and so reports different medians -- compare
+//! within a table, not across them; the ratio is what carries over.)
 //!
 //! | slice | logs | commander | median other |
 //! |---|---|---|---|
@@ -118,6 +174,16 @@ pub struct SkillThreat {
 pub struct PlayerFocus {
     /// Enemy cast-starts naming this player as target.
     pub casts_drawn: u64,
+    /// Enemy cast-starts naming one of this player's MINIONS as target --
+    /// pets, clones, phantasms, spirit weapons, turrets, gyros. Attached to
+    /// the owner via the row's `dst_master_instid`.
+    ///
+    /// Deliberately NOT folded into [`Self::casts_drawn`] or scored into
+    /// [`Self::focus_index`]: see the module doc's minion section for the
+    /// holdout that decided that. A cast aimed at your pet is real enemy
+    /// effort spent on your account, but it is not the enemy shooting *you*,
+    /// and the two do not separate a commander equally well.
+    pub casts_drawn_minions: u64,
     /// This player's share of squad-wide [`Self::casts_drawn`], as a multiple
     /// of an even 1/N split. `1.0` is a fair share; `2.0` is twice the
     /// attention a uniformly-targeted squad would put on one player.
@@ -144,6 +210,17 @@ pub struct FocusDetail {
     pub squad_size: usize,
     /// Enemy cast-starts aimed at any squad member, across the whole log.
     pub total_casts: u64,
+    /// Enemy cast-starts aimed at any squad member's MINION, across the
+    /// whole log. The total [`PlayerFocus::casts_drawn_minions`] sums to;
+    /// not part of [`Self::total_casts`].
+    pub total_minion_casts: u64,
+    /// Whether this log's era carries an enemy cast census AT ALL.
+    ///
+    /// `false` means every count in this pass is structurally zero because
+    /// the rows do not exist, NOT that the enemy was idle -- see the module
+    /// doc's era section. A consumer that renders focus must check this
+    /// before reporting "nobody was focused".
+    pub census_available: bool,
     /// Mean enemy->squad direct strike damage. Diagnostic context for
     /// [`SkillThreat::mean_damage`] -- roughly 900 in the study corpus.
     pub mean_strike_damage: f64,
@@ -194,9 +271,25 @@ pub fn build(enc: &Encounter, raw: &RawLog) -> FocusDetail {
     let mut out = FocusDetail {
         per_player: vec![PlayerFocus::default(); enc.players.len()],
         squad_size,
+        census_available: raw.header.is_post_buff_rework(),
         ..Default::default()
     };
     if squad.is_empty() || enemy.is_empty() { return out }
+
+    // Minions are attached to their owner by INSTID, and no roster carries
+    // one -- `RawAgent` has no instid field -- so it has to come off the
+    // events. A squad member's own rows give it: any event they are the
+    // `src` of names their instid. Collected in its own pass because a
+    // minion's cast row can precede its owner's first event.
+    let mut instid_to_idx: BTreeMap<u16, usize> = BTreeMap::new();
+    if out.census_available {
+        for e in &raw.events {
+            if e.src_instid == 0 { continue }
+            if let Some(&i) = addr_to_idx.get(&e.src_agent) {
+                instid_to_idx.insert(e.src_instid, i);
+            }
+        }
+    }
 
     // (time, target addr) for every enemy cast aimed at us, in event order --
     // retained because the pre-down pass needs to look backwards from each
@@ -207,21 +300,35 @@ pub fn build(enc: &Encounter, raw: &RawLog) -> FocusDetail {
     let mut dmg_total: u64 = 0;
 
     for e in &raw.events {
-        if e.is_statechange == sc::ANIMATION_START
+        if out.census_available
+            && e.is_statechange == sc::ANIMATION_START
             && enemy.contains(&e.src_agent)
-            && squad.contains(&e.dst_agent)
         {
-            casts.push((e.time, e.dst_agent));
-            if let Some(&i) = addr_to_idx.get(&e.dst_agent) {
-                out.per_player[i].casts_drawn += 1;
+            // Aimed at the player themself: the census proper.
+            if squad.contains(&e.dst_agent) {
+                casts.push((e.time, e.dst_agent));
+                if let Some(&i) = addr_to_idx.get(&e.dst_agent) {
+                    out.per_player[i].casts_drawn += 1;
+                }
+                out.skills
+                    .entry(e.skillid)
+                    .or_insert(SkillThreat {
+                        skill_id: e.skillid, casts_at_squad: 0, hits: 0, damage_total: 0,
+                        mean_damage: 0.0,
+                    })
+                    .casts_at_squad += 1;
+                continue;
             }
-            out.skills
-                .entry(e.skillid)
-                .or_insert(SkillThreat {
-                    skill_id: e.skillid, casts_at_squad: 0, hits: 0, damage_total: 0,
-                    mean_damage: 0.0,
-                })
-                .casts_at_squad += 1;
+            // Aimed at something the squad OWNS. Counted on its own axis, and
+            // deliberately kept out of `casts.push` so it reaches neither
+            // `focus_index` nor the pre-down windows.
+            if e.dst_master_instid != 0 {
+                if let Some(&i) = instid_to_idx.get(&e.dst_master_instid) {
+                    out.per_player[i].casts_drawn_minions += 1;
+                    out.total_minion_casts += 1;
+                    continue;
+                }
+            }
             continue;
         }
         // Direct strike damage, enemy player -> squad member. Excludes buff
@@ -349,10 +456,17 @@ mod tests {
         }
     }
 
-    fn log_of(mut events: Vec<RawEvent>) -> RawLog {
+    /// Every test here exercises the `sc::ANIMATION_START` census, which only
+    /// exists on post-rework builds -- so the fixture header must be one, or
+    /// the era gate correctly zeroes the whole pass.
+    fn log_of(events: Vec<RawEvent>) -> RawLog {
+        log_of_build("20260601", events)
+    }
+
+    fn log_of_build(build: &str, mut events: Vec<RawEvent>) -> RawLog {
         events.sort_by_key(|e| e.time);
         RawLog {
-            header: RawHeader { build: "".into(), revision: 1, boss_id: 1 },
+            header: RawHeader { build: build.into(), revision: 1, boss_id: 1 },
             agents: vec![], skills: vec![], events, guid_map: Default::default(),
         }
     }
@@ -502,4 +616,73 @@ mod tests {
         assert_eq!(d.at(0).casts_drawn, 2);
         assert_eq!(d.at(0).downs, 1);
     }
+    /// A minion cast row names the PET as `dst` and its owner's instid as
+    /// `dst_master_instid`. It must land on the owner's minion axis and stay
+    /// out of `casts_drawn`, `focus_index` and the pre-down windows.
+    #[test]
+    fn minion_casts_attach_to_the_owner_on_their_own_axis() {
+        let enc = enc_of(vec![player(100, true), player(101, true)], vec![enemy(200)]);
+        // P100's own row establishes instid 10 as theirs; 900 is their pet.
+        let mut own = cast(500, 100, 0, 1);
+        own.src_instid = 10;
+        let mut pet = cast(1000, 200, 900, 9);
+        pet.dst_master_instid = 10;
+        let mut pet2 = cast(1500, 200, 900, 9);
+        pet2.dst_master_instid = 10;
+        let raw = log_of(vec![own, pet, pet2, cast(2000, 200, 101, 9), down(3000, 100)]);
+        let d = build(&enc, &raw);
+        assert_eq!(d.at(0).casts_drawn_minions, 2);
+        assert_eq!(d.at(0).casts_drawn, 0);
+        assert_eq!(d.total_minion_casts, 2);
+        // The census total, and therefore the index, ignore them entirely:
+        // P101 drew the only aimed cast.
+        assert_eq!(d.total_casts, 1);
+        assert!((d.at(1).focus_index - 2.0).abs() < 1e-9, "{}", d.at(1).focus_index);
+        assert!((d.at(0).focus_index - 0.0).abs() < 1e-9);
+        assert_eq!(d.at(0).pre_down_casts, 0, "minion casts must not enter the pre-down window");
+    }
+
+    /// A cast at an agent that is neither a squad member nor owned by one
+    /// (an enemy shooting another enemy's minion, a stray NPC) is dropped.
+    #[test]
+    fn unowned_target_is_not_attributed() {
+        let enc = enc_of(vec![player(100, true)], vec![enemy(200)]);
+        let mut stray = cast(1000, 200, 900, 9);
+        stray.dst_master_instid = 77; // nobody in the squad
+        let d = build(&enc, &log_of(vec![stray]));
+        assert_eq!(d.total_casts, 0);
+        assert_eq!(d.total_minion_casts, 0);
+        assert_eq!(d.at(0).casts_drawn_minions, 0);
+    }
+
+    /// Pre-rework logs carry no enemy cast census at all (measured: zero rows
+    /// across 2,334 real WvW logs). The pass must SAY so rather than emit a
+    /// zeroed roster a consumer would read as "nobody was focused".
+    #[test]
+    fn pre_rework_log_reports_the_census_as_unavailable() {
+        let enc = enc_of(vec![player(100, true), player(101, true)], vec![enemy(200)]);
+        let events = vec![cast(1000, 200, 100, 9), hit(1100, 200, 100, 9, 500)];
+        let post = build(&enc, &log_of_build("20260601", events.clone()));
+        assert!(post.census_available);
+        assert_eq!(post.total_casts, 1);
+
+        let pre = build(&enc, &log_of_build("20260114", events));
+        assert!(!pre.census_available);
+        assert_eq!(pre.total_casts, 0);
+        assert!((pre.at(0).focus_index - 0.0).abs() < 1e-9);
+        // Damage diagnostics do NOT depend on the era gate -- strike rows are
+        // the same shape in both -- so they must survive it.
+        assert!((pre.mean_strike_damage - 500.0).abs() < 1e-9);
+    }
+
+    /// A malformed build string is treated as pre-rework everywhere else in
+    /// the decoder; the census must not claim availability on one.
+    #[test]
+    fn malformed_build_is_not_claimed_as_measurable() {
+        let enc = enc_of(vec![player(100, true)], vec![enemy(200)]);
+        let d = build(&enc, &log_of_build("", vec![cast(1000, 200, 100, 9)]));
+        assert!(!d.census_available);
+        assert_eq!(d.total_casts, 0);
+    }
+
 }

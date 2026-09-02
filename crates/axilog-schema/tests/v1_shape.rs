@@ -269,6 +269,18 @@ fn the_full_key_set_matches_the_committed_golden() {
     walk(&v, "", &mut keys);
     keys.sort();
 
+    // `blocks.focus` is deliberately ABSENT from this golden. The shared
+    // fixture is arcdps build `20260114`, which predates the enemy cast
+    // census entirely, so the block is `unsupported` and omitted rather
+    // than emitted zeroed -- see `v1::blocks::focus`. Its key surface is
+    // pinned in `v1_focus::the_focus_block_key_surface_is_pinned` instead,
+    // against a synthetic post-rework log. Replace the fixture with a
+    // post-rework capture and these keys come back here.
+    assert!(
+        !keys.iter().any(|k| k.starts_with("blocks.focus")),
+        "the fixture is now post-rework: fold blocks.focus back into this golden"
+    );
+
     let golden_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/v1-keyset.golden.txt");
     let actual = keys.join("\n") + "\n";
     if std::env::var("UPDATE_GOLDEN").is_ok() {
