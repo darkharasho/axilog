@@ -1305,6 +1305,19 @@ export interface SkillRow {
   crit_hits: number
   flank_hits: number
   /**
+   * Of `total`, the portion dealt by a player or a player's minion -- siege,
+   * guards, NPCs and rows whose source could not be named are the
+   * remainder. Lets a consumer present incoming damage the way the arcdps
+   * in-game filters do, without a second distribution.
+   *
+   * Present on every `by_skill_taken` row and ABSENT everywhere else:
+   * outgoing and per-target rows are player-sourced by construction, and
+   * enemy rows come from a pass that does not classify sources. Absent
+   * therefore means "not measured for this grouping", never "no player
+   * damage". `player_total <= total` always.
+   */
+  player_total?: number
+  /**
    * Present on PLAYER rows when `skillDamage` is on, absent on enemy rows.
    * Absent means "this pass did not measure this row", never "every
    * attempt connected".

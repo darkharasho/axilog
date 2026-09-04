@@ -97,6 +97,7 @@ blocks.damage.by_entity.<id>.by_skill_taken.<id>.outcomes.indirect
 blocks.damage.by_entity.<id>.by_skill_taken.<id>.outcomes.interrupted
 blocks.damage.by_entity.<id>.by_skill_taken.<id>.outcomes.invulned
 blocks.damage.by_entity.<id>.by_skill_taken.<id>.outcomes.missed
+blocks.damage.by_entity.<id>.by_skill_taken.<id>.player_total
 blocks.damage.by_entity.<id>.by_skill_taken.<id>.total
 blocks.damage.by_entity.<id>.downs_dealt
 blocks.damage.by_entity.<id>.dps

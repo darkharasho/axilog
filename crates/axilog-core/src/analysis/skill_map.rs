@@ -700,7 +700,7 @@ mod tests {
     use crate::evtc::RawSkill;
 
     fn skill_entry(skill_id: u32) -> SkillEntry {
-        SkillEntry { skill_id, total: 1, hits: 1, min: 1, max: 1, crit_hits: 0, flank_hits: 0 }
+        SkillEntry { skill_id, total: 1, hits: 1, min: 1, max: 1, crit_hits: 0, flank_hits: 0, player_total: None }
     }
 
     fn cast(cast_time_ms: i64) -> Cast {

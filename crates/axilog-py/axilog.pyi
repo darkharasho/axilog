@@ -1266,10 +1266,19 @@ class SkillRow(_SkillRowRequired, total=False):
 
     `outcomes` is present on PLAYER rows when `skill_damage=True` and
     absent on enemy rows -- absent means "this pass did not measure this
-    row", never "every attempt connected"."""
+    row", never "every attempt connected".
+
+    `player_total` is the portion of `total` dealt by a player or a
+    player's minion; siege, guards, NPCs and unnameable sources are the
+    remainder. It is present on every `by_skill_taken` row and absent
+    everywhere else -- outgoing rows are player-sourced by construction and
+    enemy rows come from a pass that does not classify sources -- so absent
+    means "not measured for this grouping", never "no player damage".
+    `player_total <= total` always."""
 
     hits: int
     connected_hits: int
+    player_total: int
     outcomes: SkillOutcomeCols
 
 class PerTargetDetail(TypedDict):

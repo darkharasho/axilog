@@ -246,6 +246,24 @@ pub struct SkillRow {
     /// `crate::SkillEntryOut::flank_hits`. Same fix-round-2 correction as
     /// `crit_hits` above.
     pub flank_hits: u32,
+    /// Of `total`, the portion dealt by a player or a player's minion --
+    /// siege, guards, NPCs and unattributable rows are the remainder. Lets
+    /// a consumer show incoming damage the way the arcdps in-game filters
+    /// do, without a second distribution.
+    ///
+    /// Present on `by_skill_taken` PLAYER rows only: that is the one
+    /// grouping where the question is meaningful and the one pass that
+    /// classifies sources. On `by_skill`/`per_target` it is absent because
+    /// those rows are squad-player-sourced by construction, and on enemy
+    /// rows because that pass does not measure it -- absent is "not
+    /// measured", never "no player damage", the same convention as `hits`
+    /// and `connected_hits` above.
+    ///
+    /// `player_total <= total` holds per row by construction; the split is
+    /// a refinement of `total`, not a filter on it, so
+    /// `sum(by_skill_taken[*].total) == taken` is unaffected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub player_total: Option<u64>,
     /// The hit-OUTCOME breakdown for this row, from
     /// `axilog_core::analysis::dist_outcomes` (side-channel absorption
     /// Task 9). See [`SkillOutcomeCols`] for why these eight live in a
@@ -318,6 +336,7 @@ fn skill_row(e: &crate::SkillEntryOut) -> SkillRow {
         max: e.max,
         crit_hits: e.crit_hits,
         flank_hits: e.flank_hits,
+        player_total: e.player_total,
         // Task 9's `merge_outcomes` fills this in a second pass over the
         // assembled map, because its row set is a superset of this one's.
         outcomes: None,
@@ -339,6 +358,9 @@ fn enemy_skill_row(e: &axilog_core::analysis::skill_damage::SkillEntry) -> Skill
         max: e.max,
         crit_hits: e.crit_hits,
         flank_hits: e.flank_hits,
+        // Enemy OUTGOING rows: the source is the enemy, so the split would
+        // be a tautology even if this pass classified sources (it does not).
+        player_total: None,
         // The outcome pass runs over the friendly side only.
         outcomes: None,
     }
@@ -363,16 +385,29 @@ fn enemy_skill_row(e: &axilog_core::analysis::skill_damage::SkillEntry) -> Skill
 /// `skill_damage` is a measurement (zero contributing events), not a gap.
 /// That is Task 8's rule -- zero-fill where the number is genuinely known,
 /// omit only where the pass never looked.
+///
+/// `player_split` applies that same rule to [`SkillRow::player_total`]: a
+/// row materialized here has `total: 0` (every attempt was blocked, evaded
+/// or missed, so no damage was dealt at all), which makes its player-sourced
+/// portion genuinely known to be 0 rather than unmeasured -- even though the
+/// classifying pass never saw the row. Zero-filling it keeps "present on
+/// every `by_skill_taken` row" a flat invariant, so a consumer can feature-
+/// detect the split from any row instead of having to find one that happens
+/// to carry damage. Only the taken side passes `true`; on `by_skill` the
+/// field stays absent for the reason given on [`SkillRow::player_total`].
 fn merge_outcomes(
     rows: &mut BTreeMap<u32, SkillRow>,
     outcomes: &[axilog_core::analysis::dist_outcomes::SkillOutcomes],
     cats: &mut CatalogBuilder,
+    player_split: bool,
 ) {
     for o in outcomes {
         cats.reference_skill(o.skill_id);
-        let row = rows
-            .entry(o.skill_id)
-            .or_insert_with(|| SkillRow { hits: Some(0), ..SkillRow::default() });
+        let row = rows.entry(o.skill_id).or_insert_with(|| SkillRow {
+            hits: Some(0),
+            player_total: player_split.then_some(0),
+            ..SkillRow::default()
+        });
         row.connected_hits = Some(o.connected_hits);
         row.outcomes = Some(SkillOutcomeCols {
             attempt_hits: o.hits,
@@ -491,8 +526,8 @@ pub fn build_damage(
             // exactly two distributions, whole-fight outgoing and taken,
             // with no per-target split to join to.
             if let Some(o) = dist_outcomes.and_then(|m| m.get(&p.agent_addr)) {
-                merge_outcomes(by_skill, &o.outgoing, cats);
-                merge_outcomes(by_skill_taken, &o.taken, cats);
+                merge_outcomes(by_skill, &o.outgoing, cats, false);
+                merge_outcomes(by_skill_taken, &o.taken, cats, true);
             }
         }
 

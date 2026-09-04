@@ -128,8 +128,35 @@ fn the_one_point_oh_document_is_not_larger_than_the_legacy_one() {
     // catalog entries. Bound moved 0.85 -> 0.88 to restore ~1.4 points of
     // headroom above the new 0.867 measurement, per this comment's own
     // "re-measure and re-justify" instruction rather than a reflexive nudge.
+    //
+    // TRIPPED AGAIN by the incoming-damage source split, which added
+    // `player_total` to every `blocks.damage[].by_skill_taken` row: 0.879 ->
+    // 0.889 (legacy unchanged at 2,036,392 bytes; 1.0 1,790,544 ->
+    // 1,809,522). This is the case the paragraph above predicts outright --
+    // an absorbed quantity with NO legacy counterpart, landing on an
+    // always-on block, so it cannot be excluded from the comparison the way
+    // a `Passes`-gated pass can. Confirmed absorbed-data growth rather than
+    // an encoding regression by two independent measurements: a structural
+    // diff of the full native document against the previous baseline showed
+    // 0 removed keys, 0 changed values, and 1,391 added keys, ALL of them
+    // this one field; and the legacy document is byte-identical across the
+    // change (the field is `#[serde(skip)]` on `SkillEntryOut`, so only the
+    // 1.0 side carries it). 18,978 bytes for 1,391 rows is ~13.6 bytes a
+    // row, which is the key name plus a small integer -- i.e. the field
+    // itself, with no dedup left on the table (a per-(player, skill)
+    // counter is high-entropy; catalogs dedup NAMES, and this row's name is
+    // already interned).
+    //
+    // Bound moved 0.88 -> 0.90 to restore ~1.1 points of headroom above the
+    // new 0.889, matching the sizing rationale of the previous move rather
+    // than shaving to the measurement. The standing warning is now overdue:
+    // this ratio has been re-justified upward three times for the same
+    // structural reason, and a test comparing 1.0 against a legacy document
+    // that no longer describes the same quantities is measuring less each
+    // time. The next trip should replace it with a like-for-like encoding
+    // comparison, not a fourth nudge.
     assert!(
-        v1.len() <= legacy.len() * 88 / 100,
+        v1.len() <= legacy.len() * 90 / 100,
         "1.0 is {} bytes vs legacy {} (ratio {:.3}) -- expected the 1.0 document to be meaningfully \
          smaller via catalog dedup + RLE; see docs/BENCHMARKS.md",
         v1.len(),

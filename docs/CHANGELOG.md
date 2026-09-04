@@ -10,6 +10,59 @@ isolated worktree → adversarial review per task → whole-branch review → me
 kept the cross-cutting invariants green (existing calibration exact, no PII committed, deterministic
 output, all suites passing).
 
+<!-- RELEASE GATE: `scripts/release-notes.sh` looks for a literal `## <tag> — <date>`
+     heading and fails the Release job (AFTER npm publish) if it finds none. Rename this
+     heading to `## vX.Y.Z — YYYY-MM-DD` before tagging. -->
+## Unreleased
+
+### Added
+- **`player_total` on every `blocks.damage.by_entity[].by_skill_taken[]` row.**
+  The portion of that skill's incoming damage dealt by a player or a player's
+  minion; siege, guards, NPCs and unattributable rows are the remainder. This
+  lets a consumer present incoming damage the way the arcdps in-game filters
+  do — separating what other players did to you from what the environment
+  did — without shipping a second distribution.
+
+  Present on `by_skill_taken` rows only. On `by_skill`/`per_target` it is
+  absent because those rows are player-sourced by construction, and on enemy
+  rows because that pass does not classify sources. **Absent means "not
+  measured for this grouping", never "no player damage."** `player_total <=
+  total` holds per row, and the split is a refinement of `total` rather than
+  a filter on it, so `sum(by_skill_taken[*].total) == taken` is unchanged.
+
+  Strictly additive, verified as such: a structural diff of the full native
+  document against the previous baseline showed 0 removed keys, 0 changed
+  values and 1,391 added keys, all of them this field. The legacy document is
+  byte-identical — the field is `#[serde(skip)]` on `SkillEntryOut`, which
+  carries it only to reach the 1.0 block builder.
+
+### Fixed
+- **`InstidRegistry::build` no longer registers agent addr `0`, which could
+  shadow an instid's real owner.** arcdps emits damage rows with a real
+  `src_instid` but `src_agent == 0` when the source is outside the POV
+  client's update bubble and the target is a squad member near its edge: the
+  client is told which instid hit but holds no agent record to name it.
+  Registering that null as an ownership change made `resolve_at` answer
+  `Some(0)` — an addr in no agent table — for the rest of the window.
+
+  Measured over 400 real WvW captures: 222,892 null registrations, shadowing
+  1,827 of 11,480,017 master-instid lookups across 398 of the 400 logs.
+  **Squad-facing impact was nonetheless exactly zero** (0 rows, 0 damage, 0
+  healing), and structurally so — null registrations only arise from
+  out-of-bubble agents, which are never squad members, and every consumer
+  already drops non-squad resolutions. No shipped metric changes, and the
+  native/legacy documents are unmoved apart from the additive field above.
+
+  It is fixed here because it is a precondition for the source split, which
+  is the first consumer that wants those out-of-bubble agents. Resolving
+  their `src_instid` — time-windowed, since ~16% of the affected rows use an
+  instid bound to more than one agent in the same log — recovers 94.2% of
+  that damage to a player and 3.0% to a non-player, dropping the residual
+  unattributable share of incoming direct damage from 3.60% to 0.10%.
+  Confirmed with arcdps upstream that no arcdps-side change is coming or
+  needed: it streams, and would have to buffer the orphaned rows and
+  retro-patch them, whereas a completed log can simply look the binding up.
+
 ## v1.12.0 — 2026-09-02
 
 ### Changed

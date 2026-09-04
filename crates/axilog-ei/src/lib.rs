@@ -3715,10 +3715,10 @@ mod tests {
     fn total_damage_dist_shape_and_known_value_when_skill_damage_present() {
         use axilog_schema::{EnemyOut, PerTargetSkillsOut, SkillDamageOut, SkillEntryOut};
         fn entry() -> SkillEntryOut {
-            SkillEntryOut { skill_id: 42009, total: 32503, hits: 5, min: 100, max: 20000, crit_hits: 2, flank_hits: 1 }
+            SkillEntryOut { skill_id: 42009, total: 32503, hits: 5, min: 100, max: 20000, crit_hits: 2, flank_hits: 1, player_total: None }
         }
         fn taken_entry() -> SkillEntryOut {
-            SkillEntryOut { skill_id: 700, total: 275, hits: 2, min: 75, max: 200, crit_hits: 0, flank_hits: 0 }
+            SkillEntryOut { skill_id: 700, total: 275, hits: 2, min: 75, max: 200, crit_hits: 0, flank_hits: 0, player_total: Some(200) }
         }
         let sd = SkillDamageOut {
             outgoing: vec![entry()],
@@ -3746,7 +3746,7 @@ mod tests {
         let native_row = |e: &SkillEntryOut| SkillRow {
             total: e.total, hits: Some(e.hits), connected_hits: None,
             min: e.min, max: e.max, crit_hits: e.crit_hits, flank_hits: e.flank_hits,
-            outcomes: None,
+            player_total: e.player_total, outcomes: None,
         };
         let ent = |id: u32, role: Role, addr: u64| EntityOut {
             id, role, account: None, character: None, name: None, profession: None,

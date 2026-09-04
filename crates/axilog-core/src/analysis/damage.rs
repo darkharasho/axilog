@@ -105,16 +105,41 @@ impl InstidRegistry {
     /// for every registry consumer (`pet_credit_events`, `cc::
     /// pet_credit_cc_events`, and the new `analysis::healing`), not just the
     /// new one.
+    ///
+    /// **Also excludes** registrations whose agent addr is `0`. arcdps emits
+    /// damage rows with a nonzero `src_instid` but `src_agent == 0` when the
+    /// source is outside the POV client's update bubble and the destination
+    /// is a squad member near its edge: the client is told which instid hit,
+    /// but holds no agent record to name it (confirmed by arcdps upstream,
+    /// which streams and would have to buffer these orphaned rows and
+    /// retro-patch them -- post-processing has the whole log and can simply
+    /// look the binding up). Addr `0` is not a real agent; it appears in no
+    /// agent table. Registering it SHADOWED the instid's real binding for
+    /// the rest of that window, so `resolve_at` returned `Some(0)` -- a
+    /// value no consumer can use, and one that silently defeats the
+    /// `unwrap_or(addr)` fallbacks at several call sites.
+    ///
+    /// Measured over 400 real WvW captures: 222,892 such null registrations,
+    /// shadowing 1,827 of 11,480,017 master-instid lookups across 398 of the
+    /// 400 logs. Squad-facing impact was nonetheless exactly ZERO (0 rows, 0
+    /// damage, 0 healing), and structurally so -- null registrations only
+    /// arise from out-of-bubble agents, which are by definition never squad
+    /// members, and every consumer already drops non-squad resolutions. This
+    /// is therefore not a fix for a visible defect; it is a precondition for
+    /// attributing that out-of-bubble population at all, which
+    /// [`super::skill_damage`]'s incoming-source classification is the first
+    /// consumer to want. Skipping the registration is a strict improvement
+    /// regardless: `Some(0)` was never a usable answer.
     pub fn build(raw: &RawLog) -> Self {
         let mut by_instid: Vec<Vec<(u64, u64)>> = vec![Vec::new(); INSTID_SPACE];
         for e in &raw.events {
             if e.is_statechange == sc::EXTENSION || e.is_statechange == sc::EXTENSION_COMBAT {
                 continue;
             }
-            if e.src_instid != 0 {
+            if e.src_instid != 0 && e.src_agent != 0 {
                 Self::register(&mut by_instid, e.src_instid, e.time, e.src_agent);
             }
-            if e.dst_instid != 0 {
+            if e.dst_instid != 0 && e.dst_agent != 0 {
                 Self::register(&mut by_instid, e.dst_instid, e.time, e.dst_agent);
             }
         }
@@ -124,6 +149,9 @@ impl InstidRegistry {
         for (instid, entries) in by_instid.iter().enumerate() {
             let instid = instid as u16;
             for &(time, addr) in entries {
+                // Unreachable since `build` stopped registering addr 0 above;
+                // kept as the local statement of the invariant this fold
+                // relies on (addr is a key here, and 0 is not an agent).
                 if addr == 0 {
                     continue;
                 }
@@ -419,7 +447,7 @@ pub fn accumulate_damage_taken(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::evtc::RawEvent;
+    use crate::evtc::{RawEvent, RawHeader};
     fn strike(src: u64, dst: u64, dmg: i32) -> RawEvent {
         RawEvent { time:0, src_agent:src, dst_agent:dst, value:dmg, buff_dmg:0,
             overstack:0, skillid:1, src_instid:0, dst_instid:0,
@@ -459,6 +487,53 @@ mod tests {
         brk_in.result = result::BREAKBAR_DAMAGE;
         let taken = accumulate_damage_taken(&[strike(9, 1, 70), brk_in], &squad);
         assert_eq!(taken.get(&1).copied().unwrap_or(0), 70);
+    }
+
+    /// A damage row whose source is outside the POV update bubble carries a
+    /// real `src_instid` but `src_agent == 0`. Before the fix, `build`
+    /// registered that null as an ownership CHANGE, so every later
+    /// `resolve_at` in the window answered `Some(0)` -- an addr belonging to
+    /// no agent -- instead of the instid's true owner. The sandwich below is
+    /// the minimal shape: real owner, null row, query after the null.
+    ///
+    /// Pinned as a unit test rather than left to fixtures because the defect
+    /// is invisible in every squad-facing output (out-of-bubble agents are
+    /// never squad members, and consumers drop non-squad resolutions), so no
+    /// golden can catch a regression here -- see `build`'s doc comment.
+    #[test]
+    fn null_src_agent_rows_do_not_shadow_a_real_instid_binding() {
+        fn row(time: u64, src: u64, src_instid: u16) -> RawEvent {
+            let mut e = strike(src, 77, 10);
+            e.time = time;
+            e.src_instid = src_instid;
+            e
+        }
+        fn log(events: Vec<RawEvent>) -> RawLog {
+            RawLog {
+                header: RawHeader { build: String::new(), revision: 1, boss_id: 1 },
+                agents: vec![], skills: vec![], events, guid_map: vec![],
+            }
+        }
+        let raw = log(vec![
+            row(100, 500, 42), // real owner registers instid 42
+            row(200, 0, 42),   // out-of-bubble row: instid known, agent not
+            row(300, 500, 42), // same owner, still hitting
+        ]);
+        let reg = InstidRegistry::build(&raw);
+
+        assert_eq!(reg.resolve_at(42, 250), Some(500), "null row must not shadow the binding");
+        assert_eq!(reg.resolve_at(42, 300), Some(500));
+        assert_eq!(reg.resolve_at(42, 100), Some(500));
+        // Before the first real registration there is still no answer, and a
+        // null row alone must never manufacture one.
+        assert_eq!(reg.resolve_at(42, 50), None);
+        let only_null = log(vec![row(100, 0, 43)]);
+        assert_eq!(InstidRegistry::build(&only_null).resolve_at(43, 200), None);
+        // `Some(0)` is not a value any consumer can use; it must be
+        // unreachable for every instid, at every time.
+        for t in [0u64, 50, 100, 150, 200, 250, 300, 400] {
+            assert_ne!(reg.resolve_at(42, t), Some(0), "resolve_at must never return addr 0 (t={t})");
+        }
     }
 
     #[test]

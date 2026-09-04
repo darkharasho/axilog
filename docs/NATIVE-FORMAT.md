@@ -423,8 +423,8 @@ trimmed — this target was picked because it has only two skill rows):
   },
   "by_skill":       { "...": "outgoing, keyed by skill id" },
   "by_skill_taken": {
-    "723": { "total": 1,    "hits": 1, "min": 1, "max": 1,   "crit_hits": 0, "flank_hits": 0 },
-    "737": { "total": 1045, "hits": 7, "min": 5, "max": 290, "crit_hits": 0, "flank_hits": 3 }
+    "723": { "total": 1,    "hits": 1, "min": 1, "max": 1,   "crit_hits": 0, "flank_hits": 0, "player_total": 0 },
+    "737": { "total": 1045, "hits": 7, "min": 5, "max": 290, "crit_hits": 0, "flank_hits": 3, "player_total": 1045 }
   }
 }
 ```
@@ -450,6 +450,23 @@ trimmed — this target was picked because it has only two skill rows):
 - Every `SkillRow` (all three families) carries `crit_hits`/`flank_hits` hit
   counts alongside `total`/`hits`/`min`/`max`. Every skill id emitted here
   resolves in `catalogs.skills`.
+- `by_skill_taken` rows additionally carry **`player_total`**: the portion of
+  `total` dealt by a player or a player's minion, with siege, guards, NPCs
+  and unattributable rows as the remainder. It is what you filter on to show
+  incoming damage the way the arcdps in-game filters do. `player_total <=
+  total`, and it is a refinement of `total` rather than a filter on it, so
+  the `sum(by_skill_taken[*].total) == taken` identity above is unaffected.
+
+  It appears on `by_skill_taken` rows **only** — `by_skill`/`per_target` rows
+  are player-sourced by construction, and enemy rows come from a pass that
+  does not classify sources. **Absent means "not measured for this
+  grouping", never "no player damage."**
+
+  Sources arcdps could not name are counted as non-player. That is 0.10% of
+  incoming direct damage, measured over 400 real WvW captures: arcdps emits
+  a real `src_instid` with `src_agent == 0` when the attacker is outside the
+  POV client's update bubble (3.60% of incoming direct damage), and
+  time-windowed instid resolution recovers 94.2% of it.
 
 ### `defenses` and `rotation` — the always-present extras
 

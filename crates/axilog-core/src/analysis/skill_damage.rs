@@ -42,7 +42,7 @@
 //! anywhere else in this schema either).
 
 use super::damage::InstidRegistry;
-use crate::evtc::{result, RawEvent, RawLog};
+use crate::evtc::{result, RawAgent, RawEvent, RawLog};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One skill's aggregated stats within some grouping (whole-player outgoing,
@@ -55,6 +55,14 @@ pub struct SkillStats {
     pub max: u64,
     pub crit_hits: u32,
     pub flank_hits: u32,
+    /// Of `total`, the portion dealt by a PLAYER or a player's minion --
+    /// see [`IncomingSource`]. Populated by `accumulate_taken` only; left
+    /// `0` on every outgoing/per-target grouping, where it would be a
+    /// tautology (those rows are squad-player-sourced by construction).
+    /// `to_sorted_vec`'s `include_player_split` flag is what decides
+    /// whether it reaches [`SkillEntry`] as `Some`, so a reader never sees
+    /// a `0` that means "not measured".
+    pub player_total: u64,
 }
 
 impl SkillStats {
@@ -84,6 +92,7 @@ impl SkillStats {
         self.hits += other.hits;
         self.crit_hits += other.crit_hits;
         self.flank_hits += other.flank_hits;
+        self.player_total += other.player_total;
     }
 }
 
@@ -195,11 +204,151 @@ fn accumulate_outgoing_pet_credit(
     out
 }
 
+/// What dealt an incoming damage row, for the player-vs-environment split
+/// on `taken`.
+///
+/// The distinction users actually want is "did another PLAYER do this to
+/// me", which is what the arcdps in-game filters express -- siege, guards,
+/// and NPCs are a different kind of number and averaging them together
+/// makes a fight's incoming damage unreadable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IncomingSource {
+    /// A player agent (`RawAgent::is_player`), friend or foe.
+    Player,
+    /// An agent whose resolved master is a player -- pets, clones, phantasms,
+    /// minions, turrets, spirits.
+    PlayerMinion,
+    /// Siege, guards, NPCs, environmental damage -- and rows whose source
+    /// could not be named at all (see [`IncomingSourceClassifier::classify`]).
+    Other,
+}
+
+impl IncomingSource {
+    /// Whether this source counts toward `SkillStats::player_total`.
+    fn is_player_sourced(self) -> bool {
+        matches!(self, IncomingSource::Player | IncomingSource::PlayerMinion)
+    }
+}
+
+/// Resolves the SOURCE of an incoming damage row to a [`IncomingSource`].
+///
+/// Two things make this more than an `agents` lookup on `src_agent`:
+///
+/// 1. **Out-of-bubble sources.** arcdps emits damage rows with a real
+///    `src_instid` but `src_agent == 0` when the attacker is outside the POV
+///    client's update bubble and the target is a squad member near its edge:
+///    the client knows which instid hit, but holds no agent record to name
+///    it. Measured over 400 real WvW captures, that is 5.80% of incoming
+///    direct rows and 3.60% of incoming direct damage -- and the top skills
+///    on those rows (Soul Spiral, Gravedigger, Overload Air) are
+///    unmistakably player skills, so discarding them would systematically
+///    under-count exactly the number this split exists to show.
+///
+///    They are recoverable here, because a log we hold complete lets us look
+///    up a binding arcdps could only have produced by buffering the orphaned
+///    rows and retro-patching them live (confirmed with arcdps upstream; no
+///    arcdps-side change is coming or needed). Resolving `src_instid`
+///    through the [`InstidRegistry`] recovers 94.2% of that damage to a
+///    player and 3.0% to a non-player, leaving 2.8% unresolved -- i.e. the
+///    residual unknown falls from 3.60% to 0.10% of incoming direct damage.
+///
+///    This depends on [`InstidRegistry::build`]'s addr-`0` exclusion: before
+///    it, the very rows being recovered here had poisoned the registry that
+///    would have named them.
+///
+/// 2. **Instid recycling.** Resolution MUST be time-windowed. 8,283 of those
+///    rows (~16%) carry an instid bound to more than one real agent within
+///    the same log, so a global `instid -> agent` map would misattribute
+///    them. Soundness control on rows that DO carry `src_agent`: resolving
+///    their `src_instid` at their own time returns the same agent 1,533,195
+///    times against 7 mismatches.
+struct IncomingSourceClassifier<'a> {
+    registry: &'a InstidRegistry,
+    /// Every agent addr the log declares to be a player.
+    players: BTreeSet<u64>,
+    /// `agent addr -> master addr`, for ANY agent, resolved once per agent
+    /// rather than per row.
+    ///
+    /// Ownership is an AGENT-level fact, not a per-row one: arcdps emits
+    /// many of a minion's rows with `*_master_instid == 0`, so deriving the
+    /// link per row drops them (`analysis::minions` measured 49 of 586
+    /// (minion, skill) rows lost that way, which is why it resolves the link
+    /// from ANY row that carries it and then applies it to all of them).
+    /// Same rule here, with one difference: `minions` only needs SQUAD
+    /// masters, while the sources classified here are overwhelmingly
+    /// ENEMIES, so this map is built over every player rather than the
+    /// squad.
+    master_of: BTreeMap<u64, u64>,
+}
+
+impl<'a> IncomingSourceClassifier<'a> {
+    fn build(raw: &RawLog, registry: &'a InstidRegistry) -> Self {
+        let players: BTreeSet<u64> =
+            raw.agents.iter().filter(|a| a.is_player()).map(|a: &RawAgent| a.addr).collect();
+
+        let mut master_of: BTreeMap<u64, u64> = BTreeMap::new();
+        for e in &raw.events {
+            for (master_instid, agent_addr) in
+                [(e.src_master_instid, e.src_agent), (e.dst_master_instid, e.dst_agent)]
+            {
+                if master_instid == 0 || agent_addr == 0 || players.contains(&agent_addr) {
+                    continue; // a player is never their own minion
+                }
+                if master_of.contains_key(&agent_addr) {
+                    continue; // first link observed wins, as in `minions`
+                }
+                let Some(owner) = registry.resolve_at(master_instid, e.time) else { continue };
+                master_of.insert(agent_addr, owner);
+            }
+        }
+        IncomingSourceClassifier { registry, players, master_of }
+    }
+
+    fn classify(&self, e: &RawEvent) -> IncomingSource {
+        // `src_agent` first: it is the authoritative naming of the source
+        // whenever arcdps had one, and on condition rows (`buff == 1`) it is
+        // specifically the APPLIER -- measured over the same 400 captures,
+        // 94.48% of condition damage is player-sourced with only 0.16% null,
+        // so the condi path needs no instid recovery at all.
+        let src = if e.src_agent != 0 {
+            e.src_agent
+        } else {
+            match self.registry.resolve_at(e.src_instid, e.time) {
+                Some(addr) => addr,
+                // Neither an agent nor a resolvable instid: 0.10% of incoming
+                // direct damage. Counted as `Other` rather than folded into
+                // the player bucket -- an agent we could not name is not
+                // evidence of a player, and under-reading by a tenth of a
+                // percent beats inflating the filtered number with guesses.
+                None => return IncomingSource::Other,
+            }
+        };
+        if self.players.contains(&src) {
+            return IncomingSource::Player;
+        }
+        match self.master_of.get(&src) {
+            Some(master) if self.players.contains(master) => IncomingSource::PlayerMinion,
+            _ => IncomingSource::Other,
+        }
+    }
+}
+
 /// Incoming damage per squad member (any source), grouped by skill id --
 /// mirrors `damage::accumulate_damage_taken`'s predicate exactly.
-fn accumulate_taken(events: &[RawEvent], squad: &BTreeSet<u64>) -> BTreeMap<u64, BySkill> {
+///
+/// Additionally splits out the player-sourced portion into
+/// `SkillStats::player_total`. That is a REFINEMENT of `total`, never a
+/// filter on it: every row still lands in `total`, so
+/// `sum(taken[*].total) == PlayerMetrics::damage_taken` holds exactly as
+/// before, and `player_total <= total` holds per skill by construction.
+fn accumulate_taken(
+    raw: &RawLog,
+    registry: &InstidRegistry,
+    squad: &BTreeSet<u64>,
+) -> BTreeMap<u64, BySkill> {
+    let sources = IncomingSourceClassifier::build(raw, registry);
     let mut out: BTreeMap<u64, BySkill> = BTreeMap::new();
-    for e in events {
+    for e in &raw.events {
         if e.is_statechange != 0 || e.is_activation != 0 || e.is_buffremove != 0 {
             continue;
         }
@@ -215,9 +364,11 @@ fn accumulate_taken(events: &[RawEvent], squad: &BTreeSet<u64>) -> BTreeMap<u64,
         }
         let is_crit = e.result == result::CRIT;
         let is_flank = e.is_flanking != 0;
-        out.entry(e.dst_agent).or_default().entry(e.skillid).or_default().record(
-            dmg, is_crit, is_flank,
-        );
+        let stats = out.entry(e.dst_agent).or_default().entry(e.skillid).or_default();
+        stats.record(dmg, is_crit, is_flank);
+        if sources.classify(e).is_player_sourced() {
+            stats.player_total += dmg;
+        }
     }
     out
 }
@@ -233,6 +384,16 @@ pub struct SkillEntry {
     pub max: u64,
     pub crit_hits: u32,
     pub flank_hits: u32,
+    /// Of `total`, the portion dealt by a player or a player's minion (see
+    /// [`IncomingSource`]).
+    ///
+    /// `Some` on `taken` rows only. `None` everywhere else means "this split
+    /// was not measured for this grouping", never "no player damage" --
+    /// outgoing and per-target rows are squad-player-sourced by
+    /// construction, so publishing a `0` there would invite exactly the
+    /// wrong reading. Same presence convention as `SkillRow::hits`/
+    /// `connected_hits` in the schema.
+    pub player_total: Option<u64>,
 }
 
 /// One enemy's per-skill outgoing breakdown.
@@ -261,7 +422,11 @@ pub struct SkillDamageMetrics {
     pub per_target: Vec<PerTargetSkills>,
 }
 
-fn to_sorted_vec(by_skill: BySkill) -> Vec<SkillEntry> {
+/// `include_player_split` publishes `SkillStats::player_total` as
+/// `Some`. Only `accumulate_taken` measures it, so only `taken` passes
+/// `true` -- see [`SkillEntry::player_total`] for why the other groupings
+/// omit the field rather than reporting `0`.
+fn to_sorted_vec(by_skill: BySkill, include_player_split: bool) -> Vec<SkillEntry> {
     by_skill
         .into_iter()
         .map(|(skill_id, s)| SkillEntry {
@@ -272,6 +437,7 @@ fn to_sorted_vec(by_skill: BySkill) -> Vec<SkillEntry> {
             max: s.max,
             crit_hits: s.crit_hits,
             flank_hits: s.flank_hits,
+            player_total: include_player_split.then_some(s.player_total),
         })
         .collect()
 }
@@ -349,7 +515,7 @@ pub fn build_with_registry(
 
     // Taken: fold destination addr onto its account representative.
     let mut taken_by_rep: BTreeMap<u64, BySkill> = BTreeMap::new();
-    for (addr, by_skill) in accumulate_taken(&raw.events, squad) {
+    for (addr, by_skill) in accumulate_taken(raw, registry, squad) {
         let rep = addr_to_rep.get(&addr).copied().unwrap_or(addr);
         merge_by_skill(taken_by_rep.entry(rep).or_default(), &by_skill);
     }
@@ -357,14 +523,14 @@ pub fn build_with_registry(
     let mut result: BTreeMap<u64, SkillDamageMetrics> = BTreeMap::new();
     for (rep, (by_skill, by_target)) in outgoing_by_rep {
         let entry = result.entry(rep).or_default();
-        entry.outgoing = to_sorted_vec(by_skill);
+        entry.outgoing = to_sorted_vec(by_skill, false);
         entry.per_target = by_target
             .into_iter()
-            .map(|(enemy_id, skills)| PerTargetSkills { enemy_id, skills: to_sorted_vec(skills) })
+            .map(|(enemy_id, skills)| PerTargetSkills { enemy_id, skills: to_sorted_vec(skills, false) })
             .collect();
     }
     for (rep, by_skill) in taken_by_rep {
-        result.entry(rep).or_default().taken = to_sorted_vec(by_skill);
+        result.entry(rep).or_default().taken = to_sorted_vec(by_skill, true);
     }
     result
 }
@@ -543,6 +709,9 @@ pub fn build_enemy_dist(
                         // `if (!jsonDamageDist.IndirectDamage)` block.
                         crit_hits: if s.indirect { 0 } else { s.crit_hits },
                         flank_hits: if s.indirect { 0 } else { s.flank_hits },
+                        // Enemy OUTGOING rows; this pass does not classify
+                        // sources, so the split is unmeasured, not zero.
+                        player_total: None,
                     })
                     .collect(),
             )
@@ -705,6 +874,197 @@ mod tests {
             header: crate::evtc::RawHeader { build: "".into(), revision: 1, boss_id: 1 },
             agents: vec![], skills: vec![], events, guid_map: vec![],
         }
+    }
+
+    /// A player agent (`is_elite != 0xffff_ffff`) vs. an NPC/siege one.
+    fn agent(addr: u64, is_player: bool) -> RawAgent {
+        RawAgent {
+            addr, prof: 1, is_elite: if is_player { 0 } else { 0xffff_ffff },
+            toughness: 0, concentration: 0, healing: 0, hitbox_width: 0,
+            condition: 0, hitbox_height: 0, name_raw: Vec::new(),
+        }
+    }
+
+    fn raw_with_agents(agents: Vec<RawAgent>, events: Vec<RawEvent>) -> RawLog {
+        RawLog { agents, ..raw_from(events) }
+    }
+
+    /// Every `taken` row's `player_total` for squad member 1, by skill id.
+    fn taken_split(raw: &RawLog, squad: &BTreeSet<u64>) -> BTreeMap<u32, (u64, u64)> {
+        let result =
+            build(raw, squad, &BTreeSet::new(), &BTreeMap::new(), &BTreeMap::new(), None, &BTreeMap::new());
+        result
+            .get(&1)
+            .map(|m| {
+                m.taken
+                    .iter()
+                    .map(|e| {
+                        (e.skill_id, (e.total, e.player_total.expect("taken rows carry the split")))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The core of the split: an enemy PLAYER, that player's MINION, and a
+    /// piece of siege all hit the same squad member. Only the first two
+    /// count as player-sourced, and `total` is untouched in every case --
+    /// the split is a refinement of `total`, not a filter on it.
+    ///
+    /// The minion's damage row deliberately carries `src_master_instid == 0`
+    /// (arcdps emits many of them that way); the link is established by a
+    /// DIFFERENT row, exactly as `analysis::minions` does it. Deriving
+    /// ownership per row would score this skill 0 player-sourced.
+    #[test]
+    fn taken_splits_player_minion_and_environment_sources() {
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let mut linking_row = strike(500, 1, 999, 0); // 0 damage: a link, not a hit
+        linking_row.src_agent = 500;
+        linking_row.src_master_instid = 77;
+
+        let mut minion_hit = strike(500, 1, 300, 40);
+        minion_hit.src_master_instid = 0; // the case per-row derivation drops
+
+        let mut owner_row = strike(600, 1, 100, 10);
+        owner_row.src_instid = 77; // instid 77 belongs to enemy player 600
+
+        let raw = raw_with_agents(
+            vec![agent(1, true), agent(600, true), agent(500, false), agent(900, false)],
+            vec![
+                owner_row,
+                linking_row,
+                minion_hit,
+                strike(900, 1, 400, 70), // siege: non-player, no master
+            ],
+        );
+        let split = taken_split(&raw, &squad);
+
+        assert_eq!(split.get(&100), Some(&(10, 10)), "enemy player damage is player-sourced");
+        assert_eq!(split.get(&300), Some(&(40, 40)), "that player's minion counts too");
+        assert_eq!(split.get(&400), Some(&(70, 0)), "siege is not player-sourced");
+        // `total` is unchanged by the classification.
+        assert_eq!(split.values().map(|(t, _)| t).sum::<u64>(), 120);
+        for (skill, (total, player)) in &split {
+            assert!(player <= total, "skill {skill}: player_total must not exceed total");
+        }
+    }
+
+    /// Out-of-bubble sources: arcdps knows which instid hit but has no agent
+    /// record for it, so `src_agent` is 0 while `src_instid` is real. Over
+    /// 400 real WvW captures these are 3.60% of incoming direct damage and
+    /// their top skills are unmistakably player skills, so dropping them
+    /// would under-count exactly what the split is for. Resolving the instid
+    /// recovers them.
+    ///
+    /// Also pins the negative: an instid that names nothing stays `Other`
+    /// rather than being optimistically credited to a player.
+    #[test]
+    fn taken_recovers_out_of_bubble_sources_via_instid() {
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let mut known = strike(600, 1, 100, 10);
+        known.src_instid = 42;
+        known.time = 100;
+
+        let mut orphan = strike(0, 1, 200, 500); // src_agent unset, instid real
+        orphan.src_instid = 42;
+        orphan.time = 200;
+
+        let mut unknowable = strike(0, 1, 300, 25); // instid never names an agent
+        unknowable.src_instid = 8;
+        unknowable.time = 300;
+
+        let raw = raw_with_agents(
+            vec![agent(1, true), agent(600, true)],
+            vec![known, orphan, unknowable],
+        );
+        let split = taken_split(&raw, &squad);
+
+        assert_eq!(split.get(&200), Some(&(500, 500)), "orphaned row resolves to the player");
+        assert_eq!(
+            split.get(&300),
+            Some(&(25, 0)),
+            "an unnameable source stays non-player: absence of evidence is not a player"
+        );
+    }
+
+    /// Instid recycling is real -- ~16% of the recovered rows use an instid
+    /// bound to more than one agent in the same log -- so resolution must be
+    /// time-windowed. A global `instid -> agent` map would credit BOTH eras
+    /// below to whichever owner registered last, scoring the siege era's
+    /// damage as player-sourced.
+    #[test]
+    fn taken_resolves_recycled_instids_by_era() {
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let mut siege_era = strike(900, 1, 100, 10); // instid 42 is siege first
+        siege_era.src_instid = 42;
+        siege_era.time = 100;
+        let mut siege_orphan = strike(0, 1, 400, 60);
+        siege_orphan.src_instid = 42;
+        siege_orphan.time = 150;
+
+        let mut player_era = strike(600, 1, 100, 10); // then recycled to a player
+        player_era.src_instid = 42;
+        player_era.time = 500;
+        let mut player_orphan = strike(0, 1, 500, 80);
+        player_orphan.src_instid = 42;
+        player_orphan.time = 550;
+
+        let raw = raw_with_agents(
+            vec![agent(1, true), agent(600, true), agent(900, false)],
+            vec![siege_era, siege_orphan, player_era, player_orphan],
+        );
+        let split = taken_split(&raw, &squad);
+
+        assert_eq!(split.get(&400), Some(&(60, 0)), "the siege era must stay non-player");
+        assert_eq!(split.get(&500), Some(&(80, 80)), "the player era must be credited");
+    }
+
+    /// Condition damage (`buff == 1`) needs no instid recovery: `src_agent`
+    /// on those rows IS the applier, measured at 94.48% of condition damage
+    /// player-sourced with only 0.16% null over the same 400 captures. Pinned
+    /// because the damage field differs (`buff_dmg`, not `value`), so a
+    /// classification bug here would be invisible to the direct-damage tests.
+    #[test]
+    fn taken_splits_condition_damage_by_its_applier() {
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let mut condi = strike(600, 1, 736, 0);
+        condi.buff = 1;
+        condi.buff_dmg = 250;
+        let mut env_condi = strike(900, 1, 737, 0);
+        env_condi.buff = 1;
+        env_condi.buff_dmg = 90;
+
+        let raw = raw_with_agents(
+            vec![agent(1, true), agent(600, true), agent(900, false)],
+            vec![condi, env_condi],
+        );
+        let split = taken_split(&raw, &squad);
+
+        assert_eq!(split.get(&736), Some(&(250, 250)));
+        assert_eq!(split.get(&737), Some(&(90, 0)));
+    }
+
+    /// The split is published on `taken` ONLY. Outgoing and per-target rows
+    /// omit it rather than reporting a tautological `total`, so `None` there
+    /// always means "not measured" and never "no player damage".
+    #[test]
+    fn only_taken_rows_carry_the_player_split() {
+        let squad: BTreeSet<u64> = [1u64].into_iter().collect();
+        let enemies: BTreeSet<u64> = [9u64].into_iter().collect();
+        let raw = raw_with_agents(
+            vec![agent(1, true), agent(9, true)],
+            vec![strike(1, 9, 100, 50), strike(9, 1, 200, 30)],
+        );
+        let result =
+            build(&raw, &squad, &enemies, &BTreeMap::new(), &BTreeMap::new(), None, &BTreeMap::new());
+        let m = result.get(&1).expect("player 1");
+
+        assert!(m.outgoing.iter().all(|e| e.player_total.is_none()), "outgoing omits the split");
+        assert!(
+            m.per_target.iter().flat_map(|t| &t.skills).all(|e| e.player_total.is_none()),
+            "per-target omits the split"
+        );
+        assert!(m.taken.iter().all(|e| e.player_total.is_some()), "every taken row carries it");
     }
 
     /// Multi-skill, multi-target: two skills against two enemies from one

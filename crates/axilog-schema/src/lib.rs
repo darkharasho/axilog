@@ -668,6 +668,25 @@ pub struct SkillEntryOut {
     pub max: u64,
     pub crit_hits: u32,
     pub flank_hits: u32,
+    /// Of `total`, the portion dealt by a player or a player's minion --
+    /// mirrors `skill_damage::SkillEntry::player_total`, including its
+    /// presence convention: `Some` on `taken` rows only, and `None`
+    /// elsewhere means "not measured for this grouping", never "no player
+    /// damage". Outgoing rows are squad-player-sourced by construction, so
+    /// a `0` there would read as the opposite of the truth.
+    ///
+    /// `#[serde(skip)]`: this struct is BOTH the legacy wire shape and the
+    /// input the 1.0 `blocks.damage` builder reads, and this field is only
+    /// wanted in the latter. It reaches consumers as
+    /// `blocks.damage.by_entity[].by_skill_taken[].player_total` and is
+    /// carried here purely to get there -- same arrangement, and the same
+    /// reason, as `EnemyOut::damage_out`. Serializing it in the legacy
+    /// document too would add 18,978 bytes to the committed fixture on a
+    /// path with no reader (axibridge, the consumer this was built for,
+    /// joins on the native block), so the legacy document stays
+    /// byte-identical across this change.
+    #[serde(skip)]
+    pub player_total: Option<u64>,
 }
 /// One enemy's per-skill outgoing breakdown (M12, Task 1) -- explicit
 /// `enemy_id`, not positional, so a consumer can look this up directly
@@ -1337,6 +1356,7 @@ fn skill_entry_out(e: &axilog_core::analysis::skill_damage::SkillEntry) -> Skill
     SkillEntryOut {
         skill_id: e.skill_id, total: e.total, hits: e.hits,
         min: e.min, max: e.max, crit_hits: e.crit_hits, flank_hits: e.flank_hits,
+        player_total: e.player_total,
     }
 }
 
@@ -2096,7 +2116,7 @@ mod tests {
                     subgroup:1,in_squad:true,commander:false,marker:None,commander_tag:None,guild_id:None,agent_addrs:vec![1]},
             ],
             enemies:vec![], markers:vec![], ground_markers: vec![], tick_rate:None, objectives: Vec::new(), started_at_unix: None, map_id: None };
-        let entry = SkillEntry { skill_id: 100, total: 50, hits: 1, min: 50, max: 50, crit_hits: 0, flank_hits: 0 };
+        let entry = SkillEntry { skill_id: 100, total: 50, hits: 1, min: 50, max: 50, crit_hits: 0, flank_hits: 0, player_total: None };
         let m = Metrics { players: vec![
             PlayerMetrics{agent_addr:1,
                 skill_damage: SkillDamageMetrics {
