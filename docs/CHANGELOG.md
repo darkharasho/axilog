@@ -11,9 +11,10 @@ kept the cross-cutting invariants green (existing calibration exact, no PII comm
 output, all suites passing).
 
 <!-- RELEASE GATE: `scripts/release-notes.sh` looks for a literal `## <tag> — <date>`
-     heading and fails the Release job (AFTER npm publish) if it finds none. Rename this
-     heading to `## vX.Y.Z — YYYY-MM-DD` before tagging. -->
-## Unreleased
+     heading and fails the Release job (AFTER npm publish) if it finds none. Work in
+     progress may sit under `## Unreleased`, but that heading MUST become
+     `## vX.Y.Z — YYYY-MM-DD` before the tag is pushed. -->
+## v1.13.0 — 2026-09-04
 
 ### Added
 - **`player_total` on every `blocks.damage.by_entity[].by_skill_taken[]` row.**
