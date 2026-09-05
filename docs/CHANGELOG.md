@@ -14,6 +14,29 @@ output, all suites passing).
      heading and fails the Release job (AFTER npm publish) if it finds none. Work in
      progress may sit under `## Unreleased`, but that heading MUST become
      `## vX.Y.Z — YYYY-MM-DD` before the tag is pushed. -->
+## v1.13.1 — 2026-09-04
+
+### Fixed
+- **`playerTotal` now reaches the EI-shaped document.** v1.13.0 added
+  `player_total` to every `blocks.damage.by_entity[].by_skill_taken[]` row,
+  but only to the native container. The consumer it was built for reads
+  ei-json exclusively through `parseFileEi`, so the field it needed was
+  unreachable from the surface it reads. `dist_rows_ei_json` now emits it as
+  `playerTotal` on `totalDamageTaken` rows.
+
+  The emit is gated on the field's own `Option` rather than on the call
+  site, so it scopes itself to the one grouping that measures the split:
+  outgoing and per-target rows carry `None` and keep their previous key set
+  byte for byte. `playerTotal` is an axilog extension — GW2EI has no such
+  key — and it *refines* `totalDamage` rather than partitioning it, so sums
+  over the distribution are unchanged. Absent still means "not measured",
+  never "no player damage".
+
+  Purely additive to the wire document, verified by leaf-diffing a build of
+  the parent commit against this one: 1,391 leaves added, 0 removed, 0
+  changed, every one of them a `playerTotal` under
+  `players[].totalDamageTaken`.
+
 ## v1.13.0 — 2026-09-04
 
 ### Added
