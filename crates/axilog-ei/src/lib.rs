@@ -187,6 +187,20 @@ fn ei_intervals_json(intervals: &[[i64; 2]]) -> Value {
 /// `PlayerMetrics::downs_contribution_per_skill`. Incoming distributions
 /// pass `None`, exactly as GW2EI does (`JsonActorBuilder.cs:135` hands the
 /// damage-taken builder a null dictionary).
+///
+/// ## `playerTotal`
+///
+/// An axilog EXTENSION -- GW2EI has no such key. It carries
+/// `SkillRow::player_total` through to the EI-shaped document so a consumer
+/// that only reads this surface can offer the arcdps-style
+/// "player-sourced only" incoming filter without also reading the native
+/// container. Its presence is governed entirely by the source field's
+/// `Option`, which is `Some` on `by_skill_taken` PLAYER rows and `None`
+/// everywhere else -- so outgoing and per-target rows stay byte-identical
+/// to what they emitted before this key existed, and the absent case keeps
+/// meaning "not measured" rather than "no player damage". `player_total <=
+/// total` per row: it refines `totalDamage`, it does not partition the
+/// distribution, so existing sums over `totalDamage` are unaffected.
 fn dist_rows_ei_json(
     entries: &BTreeMap<u32, axilog_schema::v1::blocks::damage::SkillRow>,
     down_contribution: Option<&BTreeMap<u32, u64>>,
@@ -226,6 +240,14 @@ fn dist_rows_ei_json(
                 row.insert("invulned".into(), Value::from(o.invulned));
                 row.insert("interrupted".into(), Value::from(o.interrupted));
                 row.insert("indirectDamage".into(), Value::from(o.indirect));
+            }
+            // Gated on the field's own `Option`, NOT on which call site we
+            // are in: `player_total` is `Some` exactly on `by_skill_taken`
+            // player rows, so this scopes itself and outgoing/per-target
+            // rows keep their pre-existing key set. See this fn's
+            // `playerTotal` section.
+            if let Some(pt) = r.player_total {
+                row.insert("playerTotal".into(), Value::from(pt));
             }
             if let Some(dc) = down_contribution.and_then(|m| m.get(&id)).filter(|&&d| d > 0) {
                 row.insert("downContribution".into(), Value::from(*dc));
@@ -3803,6 +3825,21 @@ mod tests {
         // totalDamageTaken: same [phase][skillEntry] shape.
         assert_eq!(p["totalDamageTaken"][0][0]["id"], 700);
         assert_eq!(p["totalDamageTaken"][0][0]["totalDamage"], 275);
+        // The player-sourced refinement rides through to the EI shape --
+        // `SkillRow::player_total` used to stop at the native container,
+        // which this test did not catch because it only checked `id` and
+        // `totalDamage` here. It is a REFINEMENT: 200 of the 275.
+        assert_eq!(p["totalDamageTaken"][0][0]["playerTotal"], 200, "player-sourced split must reach the EI shape");
+        assert!(
+            p["totalDamageTaken"][0][0]["playerTotal"].as_u64().unwrap()
+                <= p["totalDamageTaken"][0][0]["totalDamage"].as_u64().unwrap(),
+            "playerTotal refines totalDamage, it never exceeds it"
+        );
+        // ...and ONLY there. Outgoing and per-target rows carry
+        // `player_total: None`, so the key must stay absent rather than
+        // appear as a `0` that reads like "no player damage".
+        assert!(p["totalDamageDist"][0][0].get("playerTotal").is_none(), "outgoing rows do not measure the split");
+        assert!(p["targetDamageDist"][0][0][0].get("playerTotal").is_none(), "per-target rows do not measure the split");
 
         // targetDamageDist: [targetIndex][phase][skillEntry], positionally
         // keyed to `ei_targets` (enemy 9 first, enemy 10 second) -- enemy
