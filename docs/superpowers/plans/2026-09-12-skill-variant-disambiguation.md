@@ -479,9 +479,12 @@ regenerates it and fails on a dirty diff.
 - [ ] **Step 1: Regenerate the key-set golden and read the diff**
 
 ```bash
-UPDATE_GOLDEN=1 cargo test -p axilog-schema --test v1_keyset
+UPDATE_GOLDEN=1 cargo test -p axilog-schema --test v1_shape
 git diff crates/axilog-schema/tests/v1-keyset.golden.txt
 ```
+
+(`v1_shape.rs:286` owns the `UPDATE_GOLDEN` hatch. There is no `v1_keyset`
+test target — an earlier draft of this plan said there was.)
 
 Expected: either exactly one added line,
 `catalogs.skills.<id>.variant_label`, or **no diff at all**. Any other
@@ -599,42 +602,45 @@ digest bakes in whatever went wrong.
 - Consumes: everything from Tasks 1-3.
 - Produces: a re-anchored native baseline.
 
-- [ ] **Step 1: Build and emit the document on both sides of the change**
+- [ ] **Step 1: Confirm additivity from the key-set golden diff**
+
+The additivity proof is the golden diff already taken in Task 3 Step 1 —
+do NOT try to reproduce it by stashing. By this point the change is
+committed, so `git stash` would stash nothing and a before/after dump
+would be byte-identical, passing while proving nothing.
 
 ```bash
-cargo build --release -p axilog-cli
-git stash && cargo run --release -p axilog-cli -- \
-  fixtures/wvw-small.anon.zevtc --format json > /tmp/before.json
-git stash pop && cargo run --release -p axilog-cli -- \
+git diff main -- crates/axilog-schema/tests/v1-keyset.golden.txt
+```
+
+Expected: at most one ADDED line
+(`catalogs.skills.<id>.variant_label`) and **zero removed lines**.
+`v1_shape.rs:300` already treats a removed or renamed key as a hard
+error, so this is the repo's own additivity gate rather than a bespoke
+one.
+
+- [ ] **Step 2: Emit the document once and eyeball the new field**
+
+```bash
+cargo run --release -p axilog-cli --bin axilog -- \
   fixtures/wvw-small.anon.zevtc --format json > /tmp/after.json
+python3 -c "
+import json; d = json.load(open('/tmp/after.json'))
+s = d['catalogs']['skills']
+lab = {k: v for k, v in s.items() if v.get('variant_label')}
+print('skills:', len(s), 'labelled:', len(lab))
+for k, v in list(lab.items())[:10]: print(' ', k, v['name'], '->', v['variant_label'])
+"
 ```
 
-Note: `--format json` goes through the `axilog-api` facade, NOT the CLI
-`Passes` literal — that difference has burned this repo before.
+Note the crate has two bins (`axilog`, `pipeline`), hence `--bin axilog`.
+`--format json` goes through the `axilog-api` facade, NOT the CLI `Passes`
+literal — that difference has burned this repo before.
 
-- [ ] **Step 2: Diff the key sets, not the bytes**
-
-```bash
-python3 - <<'PY'
-import json
-def keys(p, out, prefix=""):
-    d = json.load(open(p)) if isinstance(p, str) else p
-    def walk(n, pre):
-        if isinstance(n, dict):
-            for k, v in n.items():
-                out.add(pre + k); walk(v, pre + k + ".")
-        elif isinstance(n, list) and n:
-            walk(n[0], pre)
-    walk(d, prefix); return out
-b, a = keys("/tmp/before.json", set()), keys("/tmp/after.json", set())
-print("added:", sorted(a - b))
-print("removed:", sorted(b - a))
-PY
-```
-
-Expected: `added: ['...variant_label']` (or `added: []` if this fixture has
-no collision), and **`removed: []`**. A non-empty `removed` means the
-change is not additive — STOP and fix before going further.
+Expected: either some labelled entries, each with a name genuinely shared
+by another id in the same catalog, or zero (this fixture may contain no
+collision, which Task 3 Step 2 already handles). Zero is an acceptable
+result; a label on a skill whose name is unique is NOT — stop and fix.
 
 - [ ] **Step 3: Confirm the EI view did not move**
 
