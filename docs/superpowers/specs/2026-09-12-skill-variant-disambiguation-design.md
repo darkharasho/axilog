@@ -213,14 +213,29 @@ The seven-site additive-field checklist, instantiated:
 1. `axilog-schema/src/v1/catalogs.rs` — the `SkillEntry` field, the literal
    in `finish`, and the collision pass.
 2. `axilog-core/src/analysis/skill_variants.rs` — new module, the table.
-3. Test-only `SkillEntry` literals that must still compile —
-   `catalogs.rs:454`, `catalogs.rs:468`, `schema/src/lib.rs:1874`,
-   `lib.rs:1901`, `ei/src/lib.rs:4003`, `ei/src/lib.rs:4014`.
+3. Test-only `v1::catalogs::SkillEntry` literals that must still compile.
+   There is exactly **one**, `ei/src/lib.rs:4038`. (An earlier draft of
+   this list named six. The other five construct
+   `analysis::skill_damage::SkillEntry` — an unrelated type that shares
+   the name and carries damage totals, not catalog metadata. Verified by
+   `grep -rn 'SkillEntry {' crates/`.)
 4. `axilog-node/types.d.ts` and `axilog-py/axilog.pyi` — hand-written
    stubs, gated by `tests/v1_sdk_stubs.rs`. `axilog-node/index.d.ts` is
    napi-generated; do not hand-edit it.
 5. `tests/v1-keyset.golden.txt` — regenerate with `UPDATE_GOLDEN=1` and
    read the diff before committing it.
+
+   The golden is built from `fixtures/wvw-small.anon.zevtc`, and
+   `variant_label` is `skip_serializing_if = "Option::is_none"`, so it
+   reaches the golden only if that one fixture actually contains a
+   same-name collision. If it does not, the field is invisible to the
+   golden exactly as `blocks.focus.skills[]` is, and needs an entry in
+   `v1_sdk_stubs.rs` alongside `FOCUS_SKILL_WIRE_FIELDS` — with the same
+   comment discipline — or the stub check passes while both SDKs stay
+   silent about the field. Which branch applies is an empirical question
+   the implementation answers, not a guess to make here. Note the stub
+   check is one-directional: a stub declaring a field the golden lacks is
+   never an error, so the escape hatch is safe either way.
 6. `tests/v1_size.rs` — the budget moves by the labelled entries only.
 7. `docs/NATIVE-FORMAT.md` (the `SkillEntry` table, ~`:219`) and
    `docs/CHANGELOG.md` — a missing changelog section kills the Release job
