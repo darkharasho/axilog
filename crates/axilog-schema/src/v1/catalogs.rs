@@ -1035,6 +1035,60 @@ mod tests {
         assert_eq!(skills[&80248].variant_label.as_deref(), Some("80248"));
     }
 
+    /// The reported bug, end to end: a full real warrior burst group --
+    /// slot skill, Berserker primal burst, and all three adrenaline tiers,
+    /// all sharing one name -- run through `label_name_collisions` exactly
+    /// as `CatalogBuilder::finish` would, asserting every one of the five
+    /// renders distinctly.
+    ///
+    /// The ids are Harrier's Toss's real five, the one group with an
+    /// independent ground truth (GW2EI's `OverridenSkillNames`, see
+    /// `skill_variants`'s module doc): 72911/73042/73006 are its curated
+    /// adrenaline tiers; 73014/73024 are its slot and Berserker ids, which
+    /// carry no curated label and so fall back to the bare id. Do NOT
+    /// substitute ids from `skill_symbol_names.rs` -- that table is offset
+    /// by one tier from this one.
+    #[test]
+    fn a_full_curated_burst_group_renders_all_five_distinctly() {
+        let mut skills = BTreeMap::new();
+        for id in [72911u32, 73042, 73006, 73014, 73024] {
+            skills.insert(id, skill_entry_named("Harrier's Toss"));
+        }
+
+        label_name_collisions(&mut skills);
+
+        let pairs: Vec<(String, Option<String>)> = skills
+            .values()
+            .map(|e| (e.name.clone(), e.variant_label.clone()))
+            .collect();
+        let mut deduped = pairs.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(
+            deduped.len(),
+            pairs.len(),
+            "the five-id burst group did not render five distinct (name, variant_label) rows: {pairs:?}"
+        );
+
+        // The curated tiers specifically must not collide with EACH OTHER --
+        // nothing today guarantees label uniqueness within a collision
+        // group (the table's sortedness test only checks ids), so pin it
+        // here where it can be seen breaking if the table is ever hand-
+        // edited to reuse a tier label.
+        let curated_labels: Vec<&str> = [72911u32, 73042, 73006]
+            .iter()
+            .map(|id| skills[id].variant_label.as_deref().expect("curated id must have a label"))
+            .collect();
+        let mut deduped_labels = curated_labels.clone();
+        deduped_labels.sort();
+        deduped_labels.dedup();
+        assert_eq!(
+            deduped_labels.len(),
+            curated_labels.len(),
+            "two curated ids in the same collision group got the same label: {curated_labels:?}"
+        );
+    }
+
     /// The invariant the whole change exists to establish, stated once.
     #[test]
     fn no_two_entries_render_identically() {
