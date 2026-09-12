@@ -253,7 +253,13 @@ fn label_name_collisions(skills: &mut BTreeMap<u32, SkillEntry>) {
         .collect();
     for id in colliding {
         if let Some(entry) = skills.get_mut(&id) {
-            entry.variant_label = Some(id.to_string());
+            // Curated first, id as the floor. The curated label is only
+            // ever set for ids whose tier is genuinely known.
+            entry.variant_label = Some(
+                axilog_core::analysis::skill_variants::label(id)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| id.to_string()),
+            );
         }
     }
 }
@@ -1002,6 +1008,31 @@ mod tests {
         assert_eq!(skills[&72923].variant_label.as_deref(), Some("72923"));
         // A name only one id carries is not a collision and stays clean.
         assert_eq!(skills[&9999].variant_label, None);
+    }
+
+    /// A curated id outranks the id fallback; its unlabelled sibling in
+    /// the same collision still gets one.
+    #[test]
+    fn a_curated_burst_id_gets_its_adrenaline_label() {
+        let mut skills = BTreeMap::new();
+        skills.insert(72911u32, skill_entry_named("Harrier's Toss"));
+        skills.insert(73042, skill_entry_named("Harrier's Toss"));
+        label_name_collisions(&mut skills);
+        assert_eq!(skills[&72911].variant_label.as_deref(), Some("Adrenaline 1"));
+        assert_eq!(skills[&73042].variant_label.as_deref(), Some("Adrenaline 2"));
+    }
+
+    /// Bloodthirster is one of the three groups whose tier the derivation
+    /// could not establish. It must keep the id label rather than acquire
+    /// a guessed one -- the fallback arm of the assignment above.
+    #[test]
+    fn an_uncurated_burst_id_keeps_the_id_label() {
+        let mut skills = BTreeMap::new();
+        skills.insert(80221u32, skill_entry_named("Bloodthirster"));
+        skills.insert(80248, skill_entry_named("Bloodthirster"));
+        label_name_collisions(&mut skills);
+        assert_eq!(skills[&80221].variant_label.as_deref(), Some("80221"));
+        assert_eq!(skills[&80248].variant_label.as_deref(), Some("80248"));
     }
 
     /// The invariant the whole change exists to establish, stated once.
