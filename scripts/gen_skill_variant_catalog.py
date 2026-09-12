@@ -177,10 +177,10 @@ def transcribe_group(name, tiers):
 
     derived = {s["id"]: cleansing_ire_tier(s) for s in tiers}
     if all(t is None for t in derived.values()):
-        raise Skip("no Cleansing Ire trait fact on any id in the group")
+        raise Skip(f"{name}: no Cleansing Ire trait fact on any id in the group")
     if sorted(t for t in derived.values() if t is not None) != [1, 2, 3]:
         raise Skip(
-            "the Cleansing Ire facts do not name the three distinct tiers"
+            f"{name}: the Cleansing Ire facts do not name the three distinct tiers"
             " 1/2/3, so the derivation contradicts itself"
         )
     return derived
@@ -214,6 +214,13 @@ def main():
 
     rows.sort()
 
+    total = sum(skipped.values())
+    if len(bursts) != len(rows) + total:
+        raise RuntimeError(
+            f"accounting must balance: considered {len(bursts)} != "
+            f"transcribed {len(rows)} + skipped {total}"
+        )
+
     # No leading indent on a skip table: rustdoc reads a 4-space-indented
     # block in a doc comment as a Rust code sample and tries to compile it.
     skip_table = "\n".join(f"//! - {n} {reason}" for reason, n in skipped.most_common())
@@ -226,22 +233,20 @@ def main():
             skip_table=skip_table,
             groups=len(groups),
             labelled=len(labelled),
-            unlabelled="\n".join(f"//! - {n}: {why}" for n, why in unlabelled),
+            unlabelled="\n".join(f"//! - {why}" for _n, why in unlabelled),
         ))
         for skill_id, label in rows:
             f.write(f'    ({skill_id}, "{label}"),\n')
         f.write("];\n")
         f.write(FOOTER)
 
-    total = sum(skipped.values())
     print(f"considered {len(bursts)} = transcribed {len(rows)} + skipped {total}")
     for reason, n in skipped.most_common():
         print(f"  skipped {n}: {reason}")
     print(f"groups: {len(groups)} burst names, {len(labelled)} labelled, "
           f"{len(unlabelled)} undecidable")
-    for name, why in unlabelled:
-        print(f"  no label {name}: {why}")
-    assert len(bursts) == len(rows) + total, "accounting must balance"
+    for _name, why in unlabelled:
+        print(f"  no label: {why}")
 
 
 HEADER = '''//! Adrenaline-tier labels for warrior burst skills, from the official

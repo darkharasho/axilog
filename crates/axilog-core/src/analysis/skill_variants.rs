@@ -41,8 +41,9 @@
 //! - 12 weapon-slot burst skill, not an adrenaline tier
 //! - 12 Berserker primal burst, not an adrenaline tier
 //! - 7 not a five-id burst group (no name collision to resolve)
-//! - 6 the Cleansing Ire facts do not name the three distinct tiers 1/2/3, so the derivation contradicts itself
-//! - 3 no Cleansing Ire trait fact on any id in the group
+//! - 3 Bloodthirster: no Cleansing Ire trait fact on any id in the group
+//! - 3 Breaching Strike: the Cleansing Ire facts do not name the three distinct tiers 1/2/3, so the derivation contradicts itself
+//! - 3 Path to Victory: the Cleansing Ire facts do not name the three distinct tiers 1/2/3, so the derivation contradicts itself
 //!
 //! (19 burst display names in all, 9 of them labelled.)
 //!
