@@ -1143,6 +1143,12 @@ export interface SkillEntry {
    * adrenaline tier for warrior burst skills ("Adrenaline 3") and the
    * skill id otherwise. Absent for skills whose name is unique, which is
    * nearly all of them.
+   *
+   * Presence is per-document: the same skill id can render with a label
+   * in one report and without one in another, depending on which sibling
+   * ids that report happened to reference. A consumer aggregating across
+   * reports by skill id should keep any non-null label it has seen for
+   * that id.
    */
   variant_label?: string
   /**

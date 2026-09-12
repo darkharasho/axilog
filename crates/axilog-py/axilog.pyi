@@ -1075,7 +1075,11 @@ class SkillEntry(_SkillEntryRequired, total=False):
     `variant_label` is present only when another id in the same report
     resolves to the same `name`; render as `f"{name} ({variant_label})"`.
     It carries the adrenaline tier for warrior burst skills and the skill
-    id otherwise."""
+    id otherwise. Presence is per-document: the same skill id can carry a
+    label in one report and not another, depending on which sibling ids
+    that report happened to reference. A consumer aggregating across
+    reports by skill id should keep any non-null label it has seen for
+    that id."""
 
     icon: str
     auto_attack: bool
