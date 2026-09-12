@@ -228,7 +228,8 @@ not one single one:
   "skills": {
     "736": { "name": "Bleeding", "is_swap": false, "can_crit": true },
     "9284": { "name": "Flame Blast", "is_swap": false, "can_crit": false,
-              "is_gear_proc": true, "is_not_accurate": true, "is_instant_cast": true }
+              "is_gear_proc": true, "is_not_accurate": true, "is_instant_cast": true,
+              "variant_label": "9284" }
   },
   "buffs": {
     "717": { "name": "Protection", "kind": "boon", "stacking": "duration", "max_stacks": 5 },
@@ -291,12 +292,6 @@ A skill entry's five MPROC flags — `is_trait_proc`, `is_gear_proc`,
 Absence means `false`, not "unknown". They are sparse, and emitting
 ~370 × 5 literal `false`s cost 16% of the rendered report.
 
-`variant_label` (optional) disambiguates two skill ids that resolve to the
-same `name` within one report — render as `${name} (${variant_label})`.
-It carries the adrenaline tier for warrior burst skills (`"Adrenaline 3"`)
-and falls back to the skill id for every other collision. Omitted for
-skills whose name is unique, which is nearly all of them.
-
 Two properties worth knowing before consuming them:
 
 - **They are log-specific, not build-specific.** They come from GW2EI's
@@ -309,6 +304,20 @@ Two properties worth knowing before consuming them:
   will therefore carry far fewer of them than the same fight recorded
   with — for many traits and sigils the spawned visual is the only trace
   of the proc. That is a property of the recording, not of the fight.
+
+`variant_label` (optional) disambiguates two skill ids that resolve to the
+same `name` within one report — render as `${name} (${variant_label})`.
+It carries the adrenaline tier for warrior burst skills (`"Adrenaline 3"`)
+and falls back to the skill id for every other collision. Omitted for
+skills whose name is unique, which is nearly all of them.
+
+Label presence is **per-document, not per-id**: a label is only emitted
+when a sibling id sharing the same name is ALSO present in that same
+report, so the same skill id can render with a label in one log (its
+siblings were referenced too) and without one in another (they weren't). A
+consumer aggregating this field across logs by skill id should keep any
+non-null label it has seen for that id rather than treating a later
+null as an update.
 
 The map key's SIGN encodes direction: negative ids (like `-428` above) are
 incoming modifiers, positive ids outgoing — matching `-428`'s description
