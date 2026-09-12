@@ -1138,6 +1138,14 @@ export interface SkillEntry {
    */
   control_kind?: string
   /**
+   * Set only when another id in the same report resolves to the same
+   * `name` -- render as `${name} (${variant_label})`. Carries the
+   * adrenaline tier for warrior burst skills ("Adrenaline 3") and the
+   * skill id otherwise. Absent for skills whose name is unique, which is
+   * nearly all of them.
+   */
+  variant_label?: string
+  /**
    * MPROC. All five are OMITTED when false -- a proc flag is rare, and
    * emitting ~370 x 5 literal `false`s cost 16% of the report. Absence
    * means false, not unknown. `is_instant_cast` is the strong one: a

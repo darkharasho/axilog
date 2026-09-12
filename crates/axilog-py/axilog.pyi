@@ -1070,11 +1070,17 @@ class SkillEntry(_SkillEntryRequired, total=False):
     `icon` (Phase C) is a render-service or wiki URL, resolved from
     `skill_icons` (the GW2 API) first and `buff_icons` (GW2EI's own table)
     second; omitted when neither knows the id. Buff ids resolve here too --
-    there is no separate icon field on `BuffEntry`."""
+    there is no separate icon field on `BuffEntry`.
+
+    `variant_label` is present only when another id in the same report
+    resolves to the same `name`; render as `f"{name} ({variant_label})"`.
+    It carries the adrenaline tier for warrior burst skills and the skill
+    id otherwise."""
 
     icon: str
     auto_attack: bool
     control_kind: str
+    variant_label: str
     is_trait_proc: bool
     is_gear_proc: bool
     is_unconditional_proc: bool

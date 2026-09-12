@@ -291,6 +291,12 @@ A skill entry's five MPROC flags — `is_trait_proc`, `is_gear_proc`,
 Absence means `false`, not "unknown". They are sparse, and emitting
 ~370 × 5 literal `false`s cost 16% of the rendered report.
 
+`variant_label` (optional) disambiguates two skill ids that resolve to the
+same `name` within one report — render as `${name} (${variant_label})`.
+It carries the adrenaline tier for warrior burst skills (`"Adrenaline 3"`)
+and falls back to the skill id for every other collision. Omitted for
+skills whose name is unique, which is nearly all of them.
+
 Two properties worth knowing before consuming them:
 
 - **They are log-specific, not build-specific.** They come from GW2EI's

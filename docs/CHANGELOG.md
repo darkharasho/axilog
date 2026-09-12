@@ -14,6 +14,18 @@ output, all suites passing).
      heading and fails the Release job (AFTER npm publish) if it finds none. Work in
      progress may sit under `## Unreleased`, but that heading MUST become
      `## vX.Y.Z — YYYY-MM-DD` before the tag is pushed. -->
+## Unreleased
+
+### Added
+- **`variant_label` on `catalogs.skills[skill_id]`.** Set only when another
+  skill id in the same report resolves to the same `name`, so a consumer can
+  render `${name} (${variant_label})` instead of two indistinguishable rows.
+  Carries the adrenaline tier for warrior burst skills (`"Adrenaline 3"`) and
+  falls back to the skill id for every other name collision. Omitted for
+  skills whose name is unique, which is nearly all of them. Purely additive
+  to the wire document; both SDK stubs and the key-set golden updated to
+  match.
+
 ## v1.13.1 — 2026-09-04
 
 ### Fixed

@@ -473,6 +473,7 @@ catalogs.skills.<id>.is_swap
 catalogs.skills.<id>.is_trait_proc
 catalogs.skills.<id>.is_unconditional_proc
 catalogs.skills.<id>.name
+catalogs.skills.<id>.variant_label
 coverage
 coverage.boons
 coverage.cc
