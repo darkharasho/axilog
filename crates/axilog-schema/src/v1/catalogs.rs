@@ -74,8 +74,9 @@ pub struct SkillEntry {
     /// Omitted for everything else, which is nearly every skill in a log.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub control_kind: Option<String>,
-    /// Set ONLY when another id in THIS document resolves to the same
-    /// `name`. A consumer renders `"{name} ({variant_label})"` verbatim.
+    /// A readable label telling this id apart from other ids with the same
+    /// `name` -- `Adrenaline 2`, `Primal Burst`, `Fire`. A consumer renders
+    /// `"{name} ({variant_label})"` verbatim.
     ///
     /// MVAR. ArenaNet's own `/v2/skills` returns identical names AND
     /// identical icons for every adrenaline tier of a warrior burst
@@ -83,12 +84,14 @@ pub struct SkillEntry {
     /// duplicate rows players report are not a naming bug and cannot be
     /// fixed by one. This field is the second axis that can.
     ///
-    /// The default label is the id itself, NOT an ordinal. An ordinal
-    /// could only be computed from the ids present in this one log, and
-    /// consumers aggregate by id across many: an id ranked `#1` in a
-    /// two-id log becomes `#2` as soon as a lower id appears in another,
-    /// so the same skill would carry different labels in two views of the
-    /// same session. The id is stable by construction.
+    /// Set from the curated `skill_variants` table and nothing else, and
+    /// set whether or not a sibling id is in this document, so the same id
+    /// carries the same label in every log. Omitted for every id the table
+    /// does not cover -- never replaced by the bare id or an ordinal, which
+    /// a player cannot read. Same-name ids without a label are, as far as
+    /// any source can tell, one skill (typically a cast id and the id its
+    /// hits are logged under): consumers should merge rows on
+    /// `(name, variant_label)`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variant_label: Option<String>,
     /// MPROC -- see [`crate::SkillMapEntryOut`]'s fields of the same
@@ -231,39 +234,6 @@ fn resolve_icon(id: u32) -> Option<String> {
         .or_else(|| axilog_core::analysis::buff_icons::icon(id).map(str::to_owned))
 }
 
-/// Give every skill sharing a display name with another skill in this
-/// document a label that tells them apart.
-///
-/// Runs at the END of `finish`, which is the only site that holds every
-/// id in the document together with its final resolved name -- a pass
-/// anywhere earlier would see a partial set and label inconsistently.
-///
-/// Two passes rather than one because the first borrows every `name`
-/// immutably and the second needs `&mut` on the same map.
-fn label_name_collisions(skills: &mut BTreeMap<u32, SkillEntry>) {
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for entry in skills.values() {
-        *counts.entry(entry.name.as_str()).or_insert(0) += 1;
-    }
-    // Collect first: `counts` borrows `skills` immutably.
-    let colliding: Vec<u32> = skills
-        .iter()
-        .filter(|(_, e)| counts.get(e.name.as_str()).copied().unwrap_or(0) > 1)
-        .map(|(&id, _)| id)
-        .collect();
-    for id in colliding {
-        if let Some(entry) = skills.get_mut(&id) {
-            // Curated first, id as the floor. The curated label is only
-            // ever set for ids whose tier is genuinely known.
-            entry.variant_label = Some(
-                axilog_core::analysis::skill_variants::label(id)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| id.to_string()),
-            );
-        }
-    }
-}
-
 impl CatalogBuilder {
     pub fn reference_skill(&mut self, id: u32) {
         self.skills.insert(id);
@@ -328,7 +298,10 @@ impl CatalogBuilder {
                         // own generic-control table.
                         control_kind: axilog_core::analysis::control_catalog::control_kind(id)
                             .map(|k| k.as_str().to_owned()),
-                        variant_label: None,
+                        // MVAR: a pure function of the id, like the two
+                        // above -- no dependence on the rest of the log.
+                        variant_label: axilog_core::analysis::skill_variants::label(id)
+                            .map(str::to_owned),
                         // The log never carries this; the generated GW2 API
                         // catalog is the only source. Kept as a fallback to
                         // whatever the pipeline resolved, which is `None`
@@ -349,8 +322,6 @@ impl CatalogBuilder {
                 )
             })
             .collect();
-        // MVAR: needs every entry resolved, so it runs last.
-        label_name_collisions(&mut skills);
 
         let buffs = self
             .buffs
@@ -992,139 +963,67 @@ mod tests {
         assert_eq!(catalogs.buffs[&740].kind, "boon");
     }
 
-    /// Two ids, one name -- the shape of the Discord report. Both rows
-    /// must become distinguishable; neither may be dropped or merged.
-    #[test]
-    fn two_ids_sharing_a_name_both_get_a_variant_label() {
-        let mut skills = BTreeMap::new();
-        for id in [73055u32, 72923] {
-            skills.insert(id, skill_entry_named("Daybreaking Slash"));
-        }
-        skills.insert(9999, skill_entry_named("Unique Skill"));
-
-        label_name_collisions(&mut skills);
-
-        assert_eq!(skills[&73055].variant_label.as_deref(), Some("73055"));
-        assert_eq!(skills[&72923].variant_label.as_deref(), Some("72923"));
-        // A name only one id carries is not a collision and stays clean.
-        assert_eq!(skills[&9999].variant_label, None);
-    }
-
-    /// A curated id outranks the id fallback; its unlabelled sibling in
-    /// the same collision still gets one.
-    #[test]
-    fn a_curated_burst_id_gets_its_adrenaline_label() {
-        let mut skills = BTreeMap::new();
-        skills.insert(72911u32, skill_entry_named("Harrier's Toss"));
-        skills.insert(73042, skill_entry_named("Harrier's Toss"));
-        label_name_collisions(&mut skills);
-        assert_eq!(skills[&72911].variant_label.as_deref(), Some("Adrenaline 1"));
-        assert_eq!(skills[&73042].variant_label.as_deref(), Some("Adrenaline 2"));
-    }
-
-    /// Bloodthirster is one of the three groups whose tier the derivation
-    /// could not establish. It must keep the id label rather than acquire
-    /// a guessed one -- the fallback arm of the assignment above.
-    #[test]
-    fn an_uncurated_burst_id_keeps_the_id_label() {
-        let mut skills = BTreeMap::new();
-        skills.insert(80221u32, skill_entry_named("Bloodthirster"));
-        skills.insert(80248, skill_entry_named("Bloodthirster"));
-        label_name_collisions(&mut skills);
-        assert_eq!(skills[&80221].variant_label.as_deref(), Some("80221"));
-        assert_eq!(skills[&80248].variant_label.as_deref(), Some("80248"));
-    }
-
-    /// The reported bug, end to end: a full real warrior burst group --
-    /// slot skill, Berserker primal burst, and all three adrenaline tiers,
-    /// all sharing one name -- run through `label_name_collisions` exactly
-    /// as `CatalogBuilder::finish` would, asserting every one of the five
-    /// renders distinctly.
-    ///
-    /// The ids are Harrier's Toss's real five, the one group with an
-    /// independent ground truth (GW2EI's `OverridenSkillNames`, see
-    /// `skill_variants`'s module doc): 72911/73042/73006 are its curated
-    /// adrenaline tiers; 73014/73024 are its slot and Berserker ids, which
-    /// carry no curated label and so fall back to the bare id. Do NOT
-    /// substitute ids from `skill_symbol_names.rs` -- that table is offset
-    /// by one tier from this one.
+    /// The reported bug, end to end: Harrier's Toss's real five ids --
+    /// three adrenaline tiers (72911/73042/73006), the Berserker primal
+    /// burst (73014) and the weapon-slot skill (73024) -- all named alike.
+    /// Every one of the five must render distinctly. The slot id is the
+    /// only unlabelled one, so it renders as the bare name.
     #[test]
     fn a_full_curated_burst_group_renders_all_five_distinctly() {
-        let mut skills = BTreeMap::new();
-        for id in [72911u32, 73042, 73006, 73014, 73024] {
-            skills.insert(id, skill_entry_named("Harrier's Toss"));
-        }
-
-        label_name_collisions(&mut skills);
-
-        let pairs: Vec<(String, Option<String>)> = skills
-            .values()
-            .map(|e| (e.name.clone(), e.variant_label.clone()))
-            .collect();
-        let mut deduped = pairs.clone();
-        deduped.sort();
-        deduped.dedup();
-        assert_eq!(
-            deduped.len(),
-            pairs.len(),
-            "the five-id burst group did not render five distinct (name, variant_label) rows: {pairs:?}"
+        let skills = finish_skills(&[72911, 73042, 73006, 73014, 73024]);
+        assert!(
+            skills.values().all(|e| e.name == "Harrier's Toss"),
+            "the premise is five ids sharing one name"
         );
 
-        // The curated tiers specifically must not collide with EACH OTHER --
-        // nothing today guarantees label uniqueness within a collision
-        // group (the table's sortedness test only checks ids), so pin it
-        // here where it can be seen breaking if the table is ever hand-
-        // edited to reuse a tier label.
-        let curated_labels: Vec<&str> = [72911u32, 73042, 73006]
-            .iter()
-            .map(|id| skills[id].variant_label.as_deref().expect("curated id must have a label"))
-            .collect();
-        let mut deduped_labels = curated_labels.clone();
-        deduped_labels.sort();
-        deduped_labels.dedup();
-        assert_eq!(
-            deduped_labels.len(),
-            curated_labels.len(),
-            "two curated ids in the same collision group got the same label: {curated_labels:?}"
-        );
-    }
-
-    /// The invariant the whole change exists to establish, stated once.
-    #[test]
-    fn no_two_entries_render_identically() {
-        let mut skills = BTreeMap::new();
-        skills.insert(10660u32, skill_entry_named("Fear"));
-        skills.insert(791, skill_entry_named("Fear"));
-
-        label_name_collisions(&mut skills);
-
-        let rendered: Vec<String> = skills
-            .values()
-            .map(|e| match &e.variant_label {
-                Some(l) => format!("{} ({})", e.name, l),
-                None => e.name.clone(),
-            })
-            .collect();
+        let rendered: Vec<String> = skills.values().map(render).collect();
         let mut deduped = rendered.clone();
         deduped.sort();
         deduped.dedup();
-        assert_eq!(rendered.len(), deduped.len(), "two rows render the same");
+        assert_eq!(deduped.len(), 5, "burst group rendered {rendered:?}");
+
+        assert_eq!(skills[&72911].variant_label.as_deref(), Some("Adrenaline 1"));
+        assert_eq!(skills[&73042].variant_label.as_deref(), Some("Adrenaline 2"));
+        assert_eq!(skills[&73006].variant_label.as_deref(), Some("Adrenaline 3"));
+        assert_eq!(skills[&73014].variant_label.as_deref(), Some("Primal Burst"));
+        assert_eq!(skills[&73024].variant_label, None);
     }
 
-    fn skill_entry_named(name: &str) -> SkillEntry {
-        SkillEntry {
-            name: name.to_owned(),
-            icon: None,
-            is_swap: false,
-            can_crit: true,
-            auto_attack: None,
-            control_kind: None,
-            variant_label: None,
-            is_trait_proc: false,
-            is_gear_proc: false,
-            is_unconditional_proc: false,
-            is_not_accurate: false,
-            is_instant_cast: false,
+    /// A curated id is labelled even when none of its siblings are in the
+    /// document, so its label is the same in every log.
+    #[test]
+    fn a_curated_id_is_labelled_without_its_siblings() {
+        let skills = finish_skills(&[14513]);
+        assert_eq!(skills[&14513].variant_label.as_deref(), Some("Adrenaline 2"));
+    }
+
+    /// An uncurated same-name pair gets no label -- in particular not the
+    /// raw id. Arcane Shield's 5641/5703 are a cast id and its hit id; the
+    /// committed fixture names both `Arcane Shield` from the log's own
+    /// skill table, which an empty `Metrics` here does not carry.
+    #[test]
+    fn an_uncurated_collision_carries_no_label() {
+        let skills = finish_skills(&[5641, 5703]);
+        assert_eq!(skills[&5641].variant_label, None);
+        assert_eq!(skills[&5703].variant_label, None);
+    }
+
+    /// `"{name} ({variant_label})"`, as a consumer renders an entry.
+    fn render(e: &SkillEntry) -> String {
+        match &e.variant_label {
+            Some(l) => format!("{} ({l})", e.name),
+            None => e.name.clone(),
         }
+    }
+
+    /// Run `ids` through `CatalogBuilder::finish` on an empty log. Names
+    /// come from the real resolver chain, so each group here really does
+    /// share one name.
+    fn finish_skills(ids: &[u32]) -> BTreeMap<u32, SkillEntry> {
+        let mut builder = CatalogBuilder::default();
+        for &id in ids {
+            builder.reference_skill(id);
+        }
+        builder.finish(&Metrics::default(), None).skills
     }
 }

@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
 """Regenerate `analysis::skill_variants` from the official GW2 API.
 
-A warrior burst skill is five separate skill ids sharing ONE display name:
-the weapon-slot skill, the Berserker (primal burst) variant, and three
-adrenaline-tier variants. An arcdps log names all five identically, so a
-skill table built from the log alone shows five rows called `Earthshaker`
-and no way to tell which is which. `v1::catalogs::label_name_collisions`
-labels such a collision with the bare id; this table upgrades that label
-to the adrenaline tier for the ids where the tier is genuinely known.
+Some skills are several separate skill ids sharing ONE display name, and an
+arcdps log names them all identically. This table gives an id a readable
+label when the API proves which variant it is. `v1::catalogs` attaches the
+label to every catalog entry this table covers; an id it does not cover
+carries no label, and a consumer merges same-name unlabelled rows. There is
+no id fallback -- a raw id is not a label a player can read.
+
+Two families are covered:
+
+Warrior bursts. A burst is five ids: the weapon-slot skill, the Berserker
+(primal burst) variant, and three adrenaline-tier variants. The Berserker id
+is labelled `Primal Burst`; the tiers `Adrenaline N` where known.
+
+Attunement variants. A name group where two or more ids carry different
+`attunement` values (Deploy Jade Sphere, the elementalist glyphs) labels
+each attuned id with its attunement. The unattuned base skill stays
+unlabelled.
 
 The partition inside a five-id group, all read straight off `/v2/skills`:
 
@@ -30,8 +40,7 @@ inconsistent; Bloodthirster has no trait facts at all.
 
 Those four groups are therefore NOT derived here. Harrier's Toss is
 hand-transcribed from GW2EI (the only group with an independent source).
-The other three emit nothing and fall back to the id label in
-`catalogs.rs::label_name_collisions`. Do not "finish the job" by
+The other three emit no tier labels; their tier ids stay unlabelled. Do not "finish the job" by
 re-deriving them from this rule -- it is known to lie on exactly this
 shape of input.
 
@@ -186,6 +195,25 @@ def transcribe_group(name, tiers):
     return derived
 
 
+def attunement_rows(skills):
+    """`[(id, attunement)]` for every name group whose ids differ by attunement.
+
+    Only ids that carry an attunement are labelled. Two ids with the SAME
+    attunement get the same label -- they are the same variant, and a
+    consumer merging on `(name, label)` is right to fold them.
+    """
+    groups = collections.defaultdict(list)
+    for skill in skills:
+        groups[skill["name"]].append(skill)
+    rows = []
+    for name in sorted(groups):
+        attuned = [s for s in groups[name] if s.get("attunement")]
+        if len({s["attunement"] for s in attuned}) < 2:
+            continue
+        rows.extend((s["id"], s["attunement"]) for s in attuned)
+    return rows
+
+
 def main():
     skills = json.load(open(sys.argv[1])) if len(sys.argv) > 1 else fetch_all()
 
@@ -203,7 +231,7 @@ def main():
             continue
         slot, berserker, tiers = partition(group)
         skipped["weapon-slot burst skill, not an adrenaline tier"] += 1
-        skipped["Berserker primal burst, not an adrenaline tier"] += 1
+        rows.append((berserker["id"], "Primal Burst"))
         try:
             for skill_id, tier in sorted(transcribe_group(name, tiers).items()):
                 rows.append((skill_id, f"Adrenaline {tier}"))
@@ -212,13 +240,19 @@ def main():
             skipped[str(e)] += len(tiers)
             unlabelled.append((name, str(e)))
 
+    burst_rows = len(rows)
+    attuned = attunement_rows(skills)
+    rows.extend(attuned)
     rows.sort()
+    ids = [skill_id for skill_id, _ in rows]
+    if len(ids) != len(set(ids)):
+        raise RuntimeError("an id was labelled by both families")
 
     total = sum(skipped.values())
-    if len(bursts) != len(rows) + total:
+    if len(bursts) != burst_rows + total:
         raise RuntimeError(
             f"accounting must balance: considered {len(bursts)} != "
-            f"transcribed {len(rows)} + skipped {total}"
+            f"transcribed {burst_rows} + skipped {total}"
         )
 
     # No leading indent on a skip table: rustdoc reads a 4-space-indented
@@ -227,7 +261,8 @@ def main():
 
     with open(OUT, "w") as f:
         f.write(HEADER.format(
-            count=len(rows),
+            count=burst_rows,
+            attuned=len(attuned),
             considered=len(bursts),
             skipped=sum(skipped.values()),
             skip_table=skip_table,
@@ -240,7 +275,8 @@ def main():
         f.write("];\n")
         f.write(FOOTER)
 
-    print(f"considered {len(bursts)} = transcribed {len(rows)} + skipped {total}")
+    print(f"considered {len(bursts)} = transcribed {burst_rows} + skipped {total}")
+    print(f"attunement labels: {len(attuned)}")
     for reason, n in skipped.most_common():
         print(f"  skipped {n}: {reason}")
     print(f"groups: {len(groups)} burst names, {len(labelled)} labelled, "
@@ -249,19 +285,30 @@ def main():
         print(f"  no label: {why}")
 
 
-HEADER = '''//! Adrenaline-tier labels for warrior burst skills, from the official
-//! GW2 API.
+HEADER = '''//! Readable variant labels for skill ids that share a display name, from
+//! the official GW2 API.
 //!
 //! GENERATED by `scripts/gen_skill_variant_catalog.py` -- do not
 //! hand-edit. Re-run it and `git diff` to verify this table against the
 //! live API.
 //!
-//! One warrior burst is five skill ids sharing ONE display name -- the
-//! weapon-slot skill, the Berserker primal burst, and three adrenaline
-//! tiers -- and an arcdps log names all five identically.
-//! [`axilog_schema::v1`]'s `label_name_collisions` gives every id in such
-//! a collision a label; this table upgrades that label from the bare id to
-//! the tier, for the ids whose tier is genuinely known.
+//! [`axilog_schema::v1`]'s catalog builder attaches a label to every skill
+//! entry this table covers, whether or not its siblings are in the same
+//! log, so a label never changes between logs. An id the table does not
+//! cover carries NO label -- never the bare id -- and consumers merge
+//! same-name unlabelled rows.
+//!
+//! Two families:
+//!
+//! - **Warrior bursts.** One burst is five ids sharing one name -- the
+//!   weapon-slot skill, the Berserker primal burst, and three adrenaline
+//!   tiers. The Berserker id (`specialization == 61`) is `Primal Burst`;
+//!   the tiers are `Adrenaline N` where the tier is genuinely known. The
+//!   slot skill is unlabelled.
+//! - **Attunement variants.** Where two or more same-name ids carry
+//!   different `attunement` values (Deploy Jade Sphere, the elementalist
+//!   glyphs), each attuned id is labelled with its attunement. Same-name
+//!   ids with the same attunement share a label and merge.
 //!
 //! The tier is read from the `traited_facts` entry with
 //! `requires_trait == 1649` (Cleansing Ire, which cleanses one condition
@@ -276,20 +323,23 @@ HEADER = '''//! Adrenaline-tier labels for warrior burst skills, from the offici
 //!
 //! Those four groups are therefore NOT derived. Harrier's Toss is
 //! hand-transcribed from GW2EI (the only group with an independent
-//! source). The other three emit NOTHING and fall back to the id label.
+//! source). The other three emit NO tier labels, so their tiers merge.
 //! Their absence is the correct answer, not an oversight -- do not
 //! "finish the job" by re-deriving them from this rule, which is known to
 //! lie on exactly this shape of input:
 //!
 {unlabelled}
 //!
-//! The generator's accounting:
+//! The generator's burst accounting (the Berserker ids are transcribed as
+//! `Primal Burst`):
 //!
 //! considered {considered} = transcribed {count} + skipped {skipped}
 //!
 {skip_table}
 //!
-//! ({groups} burst display names in all, {labelled} of them labelled.)
+//! ({groups} burst display names in all, {labelled} of them tier-labelled.)
+//!
+//! Attunement labels: {attuned}.
 //!
 //! Entries are sorted by id so lookups can binary-search.
 //!
@@ -298,7 +348,7 @@ HEADER = '''//! Adrenaline-tier labels for warrior burst skills, from the offici
 //! they pin rather than somewhere a regeneration would not touch.
 
 /// The variant label for skill `id`, or `None` when this table does not
-/// cover it -- in which case the caller falls back to the id.
+/// cover it -- in which case the entry carries no label at all.
 pub fn label(id: u32) -> Option<&'static str> {{
     SKILL_VARIANT_LABELS
         .binary_search_by_key(&id, |&(sid, _)| sid)
@@ -346,7 +396,7 @@ mod tests {
     }
 
     /// The three groups the derivation could not resolve are ABSENT on
-    /// purpose; they fall back to the id label. Asserting the absence
+    /// purpose; their tier ids carry no label. Asserting the absence
     /// stops a future edit from quietly filling them with a guess.
     ///
     /// Naming the nine ids matters more than the count does: a table that
@@ -368,10 +418,34 @@ mod tests {
             assert_eq!(label(id), None, "Path to Victory {id} must stay unlabelled");
         }
 
-        for (id, _) in SKILL_VARIANT_LABELS {
-            assert!(label(*id).is_some());
+        let tiers = SKILL_VARIANT_LABELS
+            .iter()
+            .filter(|(_, l)| l.starts_with("Adrenaline "))
+            .count();
+        assert_eq!(tiers, 27, "9 groups x 3 tiers");
+    }
+
+    /// Harrier's Toss's Berserker id. The slot id (73024) is unlabelled.
+    #[test]
+    fn a_berserker_burst_id_is_labelled_primal_burst() {
+        assert_eq!(label(73014), Some("Primal Burst"));
+        assert_eq!(label(73024), None);
+    }
+
+    /// The Catalyst jade sphere ids seen in the committed fixture.
+    #[test]
+    fn deploy_jade_sphere_is_labelled_by_attunement() {
+        assert_eq!(label(62723), Some("Water"));
+        assert_eq!(label(62813), Some("Fire"));
+        assert_eq!(label(62940), Some("Air"));
+    }
+
+    /// Labels are for players: no label may be a bare number.
+    #[test]
+    fn no_label_is_a_raw_id() {
+        for (id, l) in SKILL_VARIANT_LABELS {
+            assert!(!l.chars().all(|c| c.is_ascii_digit()), "{id} has a numeric label {l:?}");
         }
-        assert_eq!(SKILL_VARIANT_LABELS.len(), 27, "9 groups x 3 tiers");
     }
 
     #[test]

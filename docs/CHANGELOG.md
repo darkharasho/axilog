@@ -17,14 +17,16 @@ output, all suites passing).
 ## Unreleased
 
 ### Added
-- **`variant_label` on `catalogs.skills[skill_id]`.** Set only when another
-  skill id in the same report resolves to the same `name`, so a consumer can
-  render `${name} (${variant_label})` instead of two indistinguishable rows.
-  Carries the adrenaline tier for warrior burst skills (`"Adrenaline 3"`) and
-  falls back to the skill id for every other name collision. Omitted for
-  skills whose name is unique, which is nearly all of them. Purely additive
-  to the wire document; both SDK stubs and the key-set golden updated to
-  match.
+- **`variant_label` on `catalogs.skills[skill_id]`.** A readable label for
+  skill ids that share a `name`, so a consumer can render
+  `${name} (${variant_label})` instead of indistinguishable rows: the
+  adrenaline tier of a warrior burst (`"Adrenaline 3"`), a Berserker primal
+  burst (`"Primal Burst"`), or an elementalist attunement variant (`"Fire"`).
+  Comes from a curated table generated from the GW2 API and is set for every
+  id that table covers, in every report, so an id's label never varies
+  between logs. Never a raw skill id: other same-name ids carry no label and
+  should be merged on `(name, variant_label)`. Purely additive to the wire
+  document; both SDK stubs and the key-set golden updated to match.
 
 ## v1.13.1 — 2026-09-04
 

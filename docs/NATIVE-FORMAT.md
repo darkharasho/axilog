@@ -228,8 +228,10 @@ not one single one:
   "skills": {
     "736": { "name": "Bleeding", "is_swap": false, "can_crit": true },
     "9284": { "name": "Flame Blast", "is_swap": false, "can_crit": false,
-              "is_gear_proc": true, "is_not_accurate": true, "is_instant_cast": true,
-              "variant_label": "9284" }
+              "is_gear_proc": true, "is_not_accurate": true, "is_instant_cast": true },
+    "62813": { "name": "Deploy Jade Sphere", "is_swap": false, "can_crit": true,
+               "auto_attack": false, "variant_label": "Fire",
+               "is_not_accurate": true, "is_instant_cast": true }
   },
   "buffs": {
     "717": { "name": "Protection", "kind": "boon", "stacking": "duration", "max_stacks": 5 },
@@ -305,19 +307,18 @@ Two properties worth knowing before consuming them:
   with — for many traits and sigils the spawned visual is the only trace
   of the proc. That is a property of the recording, not of the fight.
 
-`variant_label` (optional) disambiguates two skill ids that resolve to the
-same `name` within one report — render as `${name} (${variant_label})`.
-It carries the adrenaline tier for warrior burst skills (`"Adrenaline 3"`)
-and falls back to the skill id for every other collision. Omitted for
-skills whose name is unique, which is nearly all of them.
+`variant_label` (optional) tells apart skill ids that share a `name` —
+render as `${name} (${variant_label})`. It carries the adrenaline tier of a
+warrior burst (`"Adrenaline 3"`), `"Primal Burst"` for a Berserker primal
+burst, or the attunement of an elementalist attunement variant (`"Fire"`).
+It comes only from a curated table generated from the GW2 API, and is set
+for every id that table covers whether or not a sibling id is in the same
+report, so an id's label is the same in every log.
 
-Label presence is **per-document, not per-id**: a label is only emitted
-when a sibling id sharing the same name is ALSO present in that same
-report, so the same skill id can render with a label in one log (its
-siblings were referenced too) and without one in another (they weren't). A
-consumer aggregating this field across logs by skill id should keep any
-non-null label it has seen for that id rather than treating a later
-null as an update.
+It is never a raw skill id. Same-name ids the table does not cover carry no
+label; as far as any source can tell they are one skill (typically a cast id
+and the id its hits are logged under), so a consumer should merge rows on
+`(name, variant_label)`.
 
 The map key's SIGN encodes direction: negative ids (like `-428` above) are
 incoming modifiers, positive ids outgoing — matching `-428`'s description

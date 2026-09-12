@@ -1072,14 +1072,12 @@ class SkillEntry(_SkillEntryRequired, total=False):
     second; omitted when neither knows the id. Buff ids resolve here too --
     there is no separate icon field on `BuffEntry`.
 
-    `variant_label` is present only when another id in the same report
-    resolves to the same `name`; render as `f"{name} ({variant_label})"`.
-    It carries the adrenaline tier for warrior burst skills and the skill
-    id otherwise. Presence is per-document: the same skill id can carry a
-    label in one report and not another, depending on which sibling ids
-    that report happened to reference. A consumer aggregating across
-    reports by skill id should keep any non-null label it has seen for
-    that id."""
+    `variant_label` is a readable label telling apart skill ids that share
+    a `name`; render as `f"{name} ({variant_label})"`. "Adrenaline 3" for a
+    warrior burst tier, "Primal Burst" for a Berserker primal burst, "Fire"
+    for an elementalist attunement variant. From a curated table, set in
+    every report for the ids it covers, never a raw id. Same-name ids
+    without a label should be merged on `(name, variant_label)`."""
 
     icon: str
     auto_attack: bool

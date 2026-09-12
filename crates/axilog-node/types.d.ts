@@ -1138,17 +1138,12 @@ export interface SkillEntry {
    */
   control_kind?: string
   /**
-   * Set only when another id in the same report resolves to the same
-   * `name` -- render as `${name} (${variant_label})`. Carries the
-   * adrenaline tier for warrior burst skills ("Adrenaline 3") and the
-   * skill id otherwise. Absent for skills whose name is unique, which is
-   * nearly all of them.
-   *
-   * Presence is per-document: the same skill id can render with a label
-   * in one report and without one in another, depending on which sibling
-   * ids that report happened to reference. A consumer aggregating across
-   * reports by skill id should keep any non-null label it has seen for
-   * that id.
+   * A readable label telling apart skill ids that share a `name` --
+   * render as `${name} (${variant_label})`. "Adrenaline 3" for a warrior
+   * burst tier, "Primal Burst" for a Berserker primal burst, "Fire" for an
+   * elementalist attunement variant. From a curated table, set in every
+   * report for the ids it covers, never a raw id. Same-name ids without a
+   * label should be merged on `(name, variant_label)`.
    */
   variant_label?: string
   /**
