@@ -74,6 +74,23 @@ pub struct SkillEntry {
     /// Omitted for everything else, which is nearly every skill in a log.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub control_kind: Option<String>,
+    /// Set ONLY when another id in THIS document resolves to the same
+    /// `name`. A consumer renders `"{name} ({variant_label})"` verbatim.
+    ///
+    /// MVAR. ArenaNet's own `/v2/skills` returns identical names AND
+    /// identical icons for every adrenaline tier of a warrior burst
+    /// skill, so no name lookup in any catalog can separate them -- the
+    /// duplicate rows players report are not a naming bug and cannot be
+    /// fixed by one. This field is the second axis that can.
+    ///
+    /// The default label is the id itself, NOT an ordinal. An ordinal
+    /// could only be computed from the ids present in this one log, and
+    /// consumers aggregate by id across many: an id ranked `#1` in a
+    /// two-id log becomes `#2` as soon as a lower id appears in another,
+    /// so the same skill would carry different labels in two views of the
+    /// same session. The id is stable by construction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant_label: Option<String>,
     /// MPROC -- see [`crate::SkillMapEntryOut`]'s fields of the same
     /// names. Carried on the catalog entry rather than on a block row
     /// because they are properties of the SKILL, not of any one player's
@@ -214,6 +231,33 @@ fn resolve_icon(id: u32) -> Option<String> {
         .or_else(|| axilog_core::analysis::buff_icons::icon(id).map(str::to_owned))
 }
 
+/// Give every skill sharing a display name with another skill in this
+/// document a label that tells them apart.
+///
+/// Runs at the END of `finish`, which is the only site that holds every
+/// id in the document together with its final resolved name -- a pass
+/// anywhere earlier would see a partial set and label inconsistently.
+///
+/// Two passes rather than one because the first borrows every `name`
+/// immutably and the second needs `&mut` on the same map.
+fn label_name_collisions(skills: &mut BTreeMap<u32, SkillEntry>) {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for entry in skills.values() {
+        *counts.entry(entry.name.as_str()).or_insert(0) += 1;
+    }
+    // Collect first: `counts` borrows `skills` immutably.
+    let colliding: Vec<u32> = skills
+        .iter()
+        .filter(|(_, e)| counts.get(e.name.as_str()).copied().unwrap_or(0) > 1)
+        .map(|(&id, _)| id)
+        .collect();
+    for id in colliding {
+        if let Some(entry) = skills.get_mut(&id) {
+            entry.variant_label = Some(id.to_string());
+        }
+    }
+}
+
 impl CatalogBuilder {
     pub fn reference_skill(&mut self, id: u32) {
         self.skills.insert(id);
@@ -242,7 +286,7 @@ impl CatalogBuilder {
         // comment). Union, not replacement: a referenced id the log table
         // never named still has to resolve, and keeps its placeholder.
         self.skills.extend(metrics.skill_map.keys().copied());
-        let skills = self
+        let mut skills: BTreeMap<u32, SkillEntry> = self
             .skills
             .into_iter()
             .map(|id| {
@@ -278,6 +322,7 @@ impl CatalogBuilder {
                         // own generic-control table.
                         control_kind: axilog_core::analysis::control_catalog::control_kind(id)
                             .map(|k| k.as_str().to_owned()),
+                        variant_label: None,
                         // The log never carries this; the generated GW2 API
                         // catalog is the only source. Kept as a fallback to
                         // whatever the pipeline resolved, which is `None`
@@ -298,6 +343,8 @@ impl CatalogBuilder {
                 )
             })
             .collect();
+        // MVAR: needs every entry resolved, so it runs last.
+        label_name_collisions(&mut skills);
 
         let buffs = self
             .buffs
@@ -937,5 +984,62 @@ mod tests {
 
         assert_eq!(catalogs.buffs[&740].name, "Might");
         assert_eq!(catalogs.buffs[&740].kind, "boon");
+    }
+
+    /// Two ids, one name -- the shape of the Discord report. Both rows
+    /// must become distinguishable; neither may be dropped or merged.
+    #[test]
+    fn two_ids_sharing_a_name_both_get_a_variant_label() {
+        let mut skills = BTreeMap::new();
+        for id in [73055u32, 72923] {
+            skills.insert(id, skill_entry_named("Daybreaking Slash"));
+        }
+        skills.insert(9999, skill_entry_named("Unique Skill"));
+
+        label_name_collisions(&mut skills);
+
+        assert_eq!(skills[&73055].variant_label.as_deref(), Some("73055"));
+        assert_eq!(skills[&72923].variant_label.as_deref(), Some("72923"));
+        // A name only one id carries is not a collision and stays clean.
+        assert_eq!(skills[&9999].variant_label, None);
+    }
+
+    /// The invariant the whole change exists to establish, stated once.
+    #[test]
+    fn no_two_entries_render_identically() {
+        let mut skills = BTreeMap::new();
+        skills.insert(10660u32, skill_entry_named("Fear"));
+        skills.insert(791, skill_entry_named("Fear"));
+
+        label_name_collisions(&mut skills);
+
+        let rendered: Vec<String> = skills
+            .values()
+            .map(|e| match &e.variant_label {
+                Some(l) => format!("{} ({})", e.name, l),
+                None => e.name.clone(),
+            })
+            .collect();
+        let mut deduped = rendered.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(rendered.len(), deduped.len(), "two rows render the same");
+    }
+
+    fn skill_entry_named(name: &str) -> SkillEntry {
+        SkillEntry {
+            name: name.to_owned(),
+            icon: None,
+            is_swap: false,
+            can_crit: true,
+            auto_attack: None,
+            control_kind: None,
+            variant_label: None,
+            is_trait_proc: false,
+            is_gear_proc: false,
+            is_unconditional_proc: false,
+            is_not_accurate: false,
+            is_instant_cast: false,
+        }
     }
 }

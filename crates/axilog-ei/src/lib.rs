@@ -4042,6 +4042,7 @@ mod tests {
                 can_crit,
                 auto_attack: None,
                 control_kind: None,
+                variant_label: None,
                 is_trait_proc: false,
                 is_gear_proc: proc,
                 is_unconditional_proc: false,
