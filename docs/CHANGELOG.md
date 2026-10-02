@@ -14,6 +14,37 @@ output, all suites passing).
      heading and fails the Release job (AFTER npm publish) if it finds none. Work in
      progress may sit under `## Unreleased`, but that heading MUST become
      `## vX.Y.Z — YYYY-MM-DD` before the tag is pushed. -->
+## v1.14.1 — 2026-10-01
+
+### Fixed
+- **One agent address is now one player.** arcdps can write the same agent
+  twice in the agent table — once with the real
+  `character \0 account \0 subgroup` triple, once anonymised to the player's
+  WvW rank title with a blank account and no subgroup — and `resolve()` makes
+  one `Player` per raw agent row, so both reached `wvw::dedupe_players`. The
+  account and instid keys there could never merge them: the named row keys by
+  account, the anonymous one by instid, and the two maps never meet.
+
+  Every data block (replay track, boons, damage, defenses, hit_stats,
+  rotation, focus, …) landed on the anonymous row, so the named squad member
+  read zero for *everything* and carried no position track at all. In AxiBridge
+  that dropped the player from the combat replay outright — including, on the
+  log that surfaced this, the squad commander, whose tag and range rings
+  therefore never rendered.
+
+  `dedupe_players` now merges rows sharing an `agent_addr` first. Unlike the
+  account and instid keys that follow it, this is not an inference: an agent
+  address identifies an agent exactly. The merge promotes identity per field
+  and independently of agent-table order — a known account, a real character
+  name, a real subgroup, squad membership and a commander tag each beat their
+  absent counterpart — and unions `agent_addrs` rather than concatenating, so a
+  relogged player still reads as one person.
+
+  Measured over 400 real WvW logs: 6 affected, 11 squad members losing their
+  track entirely, 1 of them a commander. All 6 now report zero duplicate-addr
+  groups and zero squad members without a track. No committed fixture changes,
+  so every digest baseline is unmoved.
+
 ## v1.14.0 — 2026-09-12
 
 ### Added

@@ -46,9 +46,21 @@ pub mod guilds;
 /// because this roster contains squad members: a known account is
 /// authoritative for the relog case this function exists to handle, and
 /// the two agent rows of one relogged squadmate need not share an instid.
-/// The order cannot cost anything on the pug side, whose accounts are
-/// blank by construction.
+///
+/// ## Before either: the agent address
+///
+/// Both keys above are inferences about who an agent row BELONGS to. The
+/// agent address is not: one addr is one agent, by construction. arcdps
+/// can nevertheless write the same addr twice in the agent table -- once
+/// named, once anonymised to a WvW rank title with a blank account -- and
+/// `resolve()` makes a `Player` per row, so two rows for one person reach
+/// here. They are unmergeable by the keys above (the named row keys by
+/// account, the anonymous one by instid; the maps never meet), and the
+/// anonymous row is the one every data block lands on, so the named squad
+/// member silently reads zero for everything and loses their position
+/// track. See `merge_rows_sharing_an_agent_addr`.
 pub fn dedupe_players(players: &mut Vec<Player>, registry: &InstidRegistry) {
+    merge_rows_sharing_an_agent_addr(players);
     /// Merge key: a known account (the squad/relog rule), else the instid
     /// (GW2EI's non-squad rule), else nothing -- the row stays distinct.
     enum Key { Account(String), Instid(u16) }
@@ -80,6 +92,62 @@ pub fn dedupe_players(players: &mut Vec<Player>, registry: &InstidRegistry) {
                     Key::Account(a) => { by_account.insert(a, out.len()); }
                     Key::Instid(i) => { by_instid.insert(i, out.len()); }
                 }
+                out.push(p);
+            }
+        }
+    }
+    *players = out;
+}
+
+/// Collapse `Player` rows that share an `agent_addr` into one, promoting the
+/// richer identity.
+///
+/// The first pass of [`dedupe_players`]. Unlike the account and instid keys
+/// that follow it, this involves no inference: an agent address identifies an
+/// agent exactly, so two rows carrying the same one are the same agent and
+/// must not both survive.
+///
+/// They differ because arcdps can describe one agent twice -- the name block
+/// is `character \0 account \0 subgroup`, and a non-squad player in WvW is
+/// anonymised to their WvW rank title with a blank account and no subgroup. A
+/// log can carry both forms for the same addr, in either order. Promotion is
+/// therefore per field and order-independent: a known account, a real
+/// character name, a real subgroup, squad membership and a commander tag each
+/// beat their absent counterpart, whichever row they arrived on. Fields that
+/// are already `Option` (marker, commander tag, guild) fill if empty.
+///
+/// `agent_addrs` is a set union, not a concatenation: the rows describe ONE
+/// addr, so duplicating it would make a relogged player look like two.
+fn merge_rows_sharing_an_agent_addr(players: &mut Vec<Player>) {
+    let mut by_addr: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut out: Vec<Player> = Vec::with_capacity(players.len());
+    for p in players.drain(..) {
+        match by_addr.get(&p.agent_addr).copied() {
+            Some(i) => {
+                let dst = &mut out[i];
+                let src_is_named = !p.account.is_empty();
+                if dst.account.is_empty() && src_is_named { dst.account = p.account; }
+                // A blank account is the anonymised form, so its `character`
+                // is the rank title rather than a name: let the named row's
+                // character win even when it arrived second.
+                if (src_is_named && !p.character.is_empty()) || dst.character.is_empty() {
+                    dst.character = p.character;
+                }
+                if dst.profession.is_empty() { dst.profession = p.profession; }
+                if dst.elite_spec.is_empty() { dst.elite_spec = p.elite_spec; }
+                if dst.team.is_empty() { dst.team = p.team; }
+                if dst.subgroup == 0 { dst.subgroup = p.subgroup; }
+                dst.in_squad |= p.in_squad;
+                dst.commander |= p.commander;
+                if dst.marker.is_none() { dst.marker = p.marker; }
+                if dst.commander_tag.is_none() { dst.commander_tag = p.commander_tag; }
+                if dst.guild_id.is_none() { dst.guild_id = p.guild_id; }
+                for addr in p.agent_addrs {
+                    if !dst.agent_addrs.contains(&addr) { dst.agent_addrs.push(addr); }
+                }
+            }
+            None => {
+                by_addr.insert(p.agent_addr, out.len());
                 out.push(p);
             }
         }
@@ -1293,6 +1361,54 @@ mod tests {
         let mut addrs = players[0].agent_addrs.clone();
         addrs.sort_unstable();
         assert_eq!(addrs, vec![1, 2]);
+    }
+
+    /// ONE AGENT ADDRESS IS ONE AGENT -- the only identity in an EVTC log
+    /// that needs no heuristic at all.
+    ///
+    /// Observed in `20260926-200837.zevtc`: arcdps wrote the commander
+    /// twice in the agent table, once with the real
+    /// `character\0account\0subgroup` triple and once anonymised to his
+    /// WvW rank title with a blank account and no subgroup. `resolve()`
+    /// makes one `Player` per raw agent row, so both rows survive --
+    /// and they share an agent addr AND an instid.
+    ///
+    /// The account/instid keys below could never merge them: the named row
+    /// keys by account, the anonymous one by instid, and the two maps never
+    /// meet. Downstream every data block (replay track, boons, damage,
+    /// defenses) lands on the anonymous row, so the real squad commander
+    /// reads zero for everything and carries no position track -- which in
+    /// AxiBridge drops him from the replay entirely, tag and all. Six of
+    /// 400 real logs are affected, costing 11 squad members their track.
+    ///
+    /// So addr is merged first, and the merge PROMOTES identity: whichever
+    /// row knows the account, the character, the subgroup or squad
+    /// membership wins, regardless of which came first in the agent table.
+    #[test]
+    fn dedupe_players_merges_rows_sharing_an_agent_addr() {
+        let mut named = player(11349117696740390626, ":bro.2856");
+        named.character = "Dub Grumble".into();
+        named.subgroup = 2;
+        named.in_squad = true;
+        named.commander = true;
+        let mut anonymous = player(11349117696740390626, "");
+        anonymous.character = "Mithril Raider".into();
+        anonymous.subgroup = 0;
+        anonymous.in_squad = false;
+        anonymous.commander = false;
+
+        // Anonymous row first: the fix must not depend on table order.
+        let mut players = vec![anonymous, named];
+        dedupe_players(&mut players, &InstidRegistry::build(&empty_log()));
+
+        assert_eq!(players.len(), 1, "one agent addr is one person");
+        let p = &players[0];
+        assert_eq!(p.account, ":bro.2856", "the known account wins over the blank one");
+        assert_eq!(p.character, "Dub Grumble", "the real name wins over the rank title");
+        assert_eq!(p.subgroup, 2, "the real subgroup wins over 0");
+        assert!(p.in_squad, "squad membership is promoted");
+        assert!(p.commander, "the tag is promoted");
+        assert_eq!(p.agent_addrs, vec![11349117696740390626], "no addr is invented");
     }
 
     /// A blank-account row whose addr never registered under any instid
