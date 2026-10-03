@@ -14,6 +14,66 @@ output, all suites passing).
      heading and fails the Release job (AFTER npm publish) if it finds none. Work in
      progress may sit under `## Unreleased`, but that heading MUST become
      `## vX.Y.Z — YYYY-MM-DD` before the tag is pushed. -->
+## v1.15.0 — 2026-10-03
+
+### Added
+- **The instant-cast finder catalog reads the lambda checkers it used to skip:
+  571 → 603 of GW2EI's 649 finders.** Reported in Discord: guardian's
+  "Advance!" never appeared in AxiBridge's APM breakdown. It is an instant
+  cast, so arcdps emits no activation event for it, and GW2EI synthesizes one
+  — but every guardian shout spawns the SAME `GuardianShout` effect, so the
+  only thing telling "Advance!" apart from "Stand Your Ground!" is a
+  `.UsingChecker(lambda)` identifying it by self-applied Aegis of 20s to 40s.
+  `scripts/gen_instant_cast_catalog.py` skipped any finder carrying such a
+  lambda — correctly, since dropping the condition would WIDEN the finder —
+  so no finder for skill 9084 existed at all and the cast reached neither
+  `rotation` nor `skillMap`.
+
+  A large minority of those lambdas are not arbitrary closures: they are
+  conjunctions of calls to NAMED `CombatData`/`AgentItem` helpers. Five
+  `Check` variants now express them — `RelatedHit` (`HasRelatedHit`),
+  `RelatedEffectDst` (`HasRelatedEffectDst`), `RelatedBuff`
+  (`HasGainedBuff`/`HasLostBuff`/`HasLostBuffStack`), `SelfBuffApply` (the
+  `GetBuffApplyDataByIDBySrc` + `FindRelatedEvents` duration-window and
+  stack-count shapes) and `Species` (`IsSpecies`) — and the generator
+  decomposes a lambda body into them, falling back to a skip when any
+  conjunct does not match. Two existing checks absorbed more: `IsCasting`
+  is `Check::NoAnimatedCast`, and an `AppliedDuration` comparison on the
+  triggering event is `Check::Duration`.
+
+  The matchers are ANCHORED on purpose. A lambda that only partly matches a
+  known shape still skips, because a partial match that silently dropped the
+  rest of the condition is the exact failure mode the generator exists to
+  prevent. 46 finders remain skipped and each now names WHICH unmodelled
+  thing it reads instead of all 70 reporting "arbitrary predicate": 16 need
+  the weaver dual-attunement history, 7 key on a GW2EI-synthesized negative
+  species id that `RevenantHelper.ProcessGadgets` assigns in a pre-pass, 8
+  need a subclass this project does not decode, and only 3 are genuinely
+  arbitrary.
+
+  Measured on `fixtures/wvw-small.anon.zevtc` against a GW2EI CLI oracle
+  built from upstream `cc820b66`:
+  - 21 new casts across 9 players — "Advance!" ×10, "Stand Your Ground!" ×8,
+    Distortion ×2, Lesser Signet of Stone ×1 — and **every one matches EI's
+    own `rotation` exactly, per player**.
+  - Instant-cast recovery 336/369 → **357/369 (91.1% → 96.7%)**.
+  - The casts axilog emits that EI does not stayed at **19, unchanged** — no
+    over-firing was introduced. The casts EI emits that axilog does not fell
+    52 → 31.
+  - Purely additive in the native document: no key added or removed anywhere,
+    no block but `blocks.rotation.by_entity.*.casts` changed length, and no
+    pre-existing cast row was removed or altered.
+
+  AxiBridge needs only a dependency bump; nothing on the application side
+  filters the APM used-skills list, so the missing rows were missing data.
+
+### Changed
+- The replay-enabled HTML size gate moved 600KB → 620KB. The four
+  newly-detected skills each gain a `skill_map` row (454 bytes) and the
+  fixture was sitting 392 bytes under the limit — 0.07% headroom, against a
+  guard whose neighbours are documented as holding ~19KB. `rotation` itself
+  is not embedded in that fixture.
+
 ## v1.14.1 — 2026-10-01
 
 ### Fixed

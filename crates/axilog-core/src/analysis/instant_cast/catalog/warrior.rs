@@ -86,6 +86,15 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 62967,
+        source: "BladeswornHelper",
+        trigger: Trigger::BuffGain { buff_id: 62836 },
+        checks: &[
+            Check::SelfBuffApply { buff_id: 62836, party: Party::Key, min_duration: 7991, max_duration: 8009, min_count: 2, max_count: 2, time_offset: 0, epsilon: 10 },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 62960,
         source: "BladeswornHelper",
         trigger: Trigger::Effect { guid: &G_BLADESWORN_DRAGONSPIKE_MINE, by_dst: false },

@@ -14,6 +14,8 @@ const G_CHRONOMANCER_SPLIT_SECOND: [u8; 16] = [0xC0, 0x35, 0x16, 0x6E, 0x3E, 0x4
 const G_CHRONOMANCER_TIME_SINK: [u8; 16] = [0xAB, 0x2E, 0x22, 0xE7, 0xEE, 0x74, 0xDA, 0x4C, 0x87, 0xDA, 0x77, 0x7C, 0x62, 0xE4, 0x75, 0xEA];
 /// `EffectGUIDs.MesmerCryOfFrustration`.
 const G_MESMER_CRY_OF_FRUSTRATION: [u8; 16] = [0x52, 0xF6, 0x5A, 0x4D, 0x99, 0x70, 0x95, 0x4B, 0xA8, 0x49, 0xCB, 0x57, 0xA4, 0x6A, 0x65, 0xA8];
+/// `EffectGUIDs.MesmerDistortionOrMindWrack`.
+const G_MESMER_DISTORTION_OR_MIND_WRACK: [u8; 16] = [0x3D, 0x29, 0xAB, 0xD3, 0x9C, 0xB5, 0xBD, 0x45, 0x8C, 0x4D, 0x50, 0xA2, 0x2F, 0xCC, 0x0E, 0x4B];
 /// `EffectGUIDs.MesmerDiversion`.
 const G_MESMER_DIVERSION: [u8; 16] = [0x91, 0x6D, 0x83, 0x85, 0x08, 0x3F, 0x14, 0x4E, 0xBA, 0xA5, 0xBE, 0xED, 0xE2, 0x1F, 0xD4, 0x7A];
 /// `EffectGUIDs.MesmerFeedback`.
@@ -107,6 +109,17 @@ pub const FINDERS: &[FinderDef] = &[
     FinderDef {
         skill_id: 10234,
         source: "MesmerHelper",
+        trigger: Trigger::BuffLoss { buff_id: 10233 },
+        not_accurate: true,
+        enable: &[Enable::NoEffectData],
+        checks: &[
+            Check::RelatedBuff { buff_id: 10269, party: Party::Key, kind: BuffRel::Gained, applied_duration: Some(2000), from_self: true, time_offset: 0, epsilon: 10, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10234,
+        source: "MesmerHelper",
         trigger: Trigger::Effect { guid: &G_MESMER_SIGNET_OF_MIDNIGHT, by_dst: true },
         checks: &[
             Check::AroundDst { negated: false },
@@ -143,6 +156,17 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 10191,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_DISTORTION_OR_MIND_WRACK, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Mirage", "Mesmer"], base: false, negated: false },
+            Check::SecondaryEffect { guid: &G_MESMER_THE_PRESTIGE_DISAPPEAR_2_AND_NON_CHRONO_SHATTER_AROUND_CLONES, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: true },
+            Check::RelatedBuff { buff_id: 10243, party: Party::Key, kind: BuffRel::Gained, applied_duration: None, from_self: false, time_offset: 0, epsilon: 10, negated: true },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 10190,
         source: "MesmerHelper",
         trigger: Trigger::Effect { guid: &G_MESMER_CRY_OF_FRUSTRATION, by_dst: false },
@@ -160,6 +184,29 @@ pub const FINDERS: &[FinderDef] = &[
             Check::Spec { party: Party::Key, specs: &["Mirage", "Mesmer"], base: false, negated: false },
             Check::SecondaryEffect { guid: &G_MESMER_THE_PRESTIGE_DISAPPEAR_2_AND_NON_CHRONO_SHATTER_AROUND_CLONES, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: true },
         ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10192,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_DISTORTION_OR_MIND_WRACK, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Mirage", "Mesmer"], base: false, negated: false },
+            Check::RelatedBuff { buff_id: 10243, party: Party::Key, kind: BuffRel::Gained, applied_duration: None, from_self: false, time_offset: 0, epsilon: 10, negated: false },
+        ],
+        min_gw2_build: START_OF_LIFE,
+        max_gw2_build: 135242,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 10192,
+        source: "MesmerHelper",
+        trigger: Trigger::Effect { guid: &G_MESMER_DISTORTION_OR_MIND_WRACK, by_dst: false },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Mirage", "Mesmer", "Chronomancer"], base: false, negated: false },
+            Check::RelatedBuff { buff_id: 10243, party: Party::Key, kind: BuffRel::Gained, applied_duration: None, from_self: false, time_offset: 0, epsilon: 10, negated: false },
+        ],
+        min_gw2_build: 135242,
         ..FinderDef::DEFAULT
     },
     FinderDef {

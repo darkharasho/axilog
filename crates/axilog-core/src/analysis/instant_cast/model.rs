@@ -271,10 +271,19 @@ pub enum Party {
 /// (`CheckedCastFinder.cs:8-24`), ANDed.
 ///
 /// Only the shapes the builder vocabulary expresses declaratively appear
-/// here. A bare `.UsingChecker(lambda)` is an arbitrary closure over the
-/// parsed log and is NOT representable; the generator rejects such a
-/// finder rather than dropping the condition, because dropping it would
-/// silently WIDEN the finder and produce casts EI never emits.
+/// here -- either because a named builder method produces them, or
+/// because a `.UsingChecker(lambda)` body is a conjunction of calls to
+/// NAMED `CombatData`/`AgentItem` helpers (`HasRelatedHit`,
+/// `HasGainedBuff`, `IsSpecies`, ...) that each have a variant below.
+///
+/// Anything else a lambda can say -- a position comparison, the weaver
+/// attunement history, a bespoke static helper -- is an arbitrary closure
+/// over the parsed log and is NOT representable; the generator rejects
+/// such a finder rather than dropping the condition, because dropping it
+/// would silently WIDEN the finder and produce casts EI never emits. That
+/// is also why the lambda matchers in the generator are ANCHORED: a
+/// lambda that only PARTLY matches a known shape must skip, not
+/// approximate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Check {
     /// `.UsingToSpecChecker(spec)` / `.UsingBySpecChecker(spec)` and their
@@ -362,6 +371,118 @@ pub enum Check {
     /// The negation is baked in (the C# has no positive form), so this
     /// check passes when NO animated cast overlaps.
     NoAnimatedCast { skill_id: u32, time_offset: i64, epsilon: i64 },
+    /// `combatData.HasRelatedHit(skillID, agent, time)`
+    /// (`CombatDataHelpers.cs:12-16`): did `party` land a hit with
+    /// `skill_id` within `epsilon` of `time + time_offset`?
+    ///
+    /// The firebrand mantras are the whole reason this exists: all three
+    /// charges of one mantra spawn the SAME effect, and the only thing
+    /// separating "Flame Rush" from "Flame Surge" is which damage skill
+    /// landed alongside it. The `negated` form is the catch-all charge,
+    /// identified by neither hit being present.
+    ///
+    /// `HasRelatedHit` tests `hit.CreditedFrom`, which folds a minion's
+    /// hit onto its master -- unlike [`Trigger::Damage`], whose own doc
+    /// explains why the TRIGGER side stays un-folded.
+    RelatedHit { skill_id: u32, party: Party, time_offset: i64, epsilon: i64, negated: bool },
+    /// `combatData.HasRelatedEffectDst(effectGUID, agent, time)`
+    /// (`CombatDataHelpers.cs:67-74`): is there an effect under `guid`
+    /// ANCHORED TO `party` within `epsilon` of `time + time_offset`?
+    ///
+    /// Distinct from [`Check::SecondaryEffect`], which compares the other
+    /// effect's agent against the FINDER'S CASTER and carries the
+    /// same/inverted-source and anchor-type switches. This one names the
+    /// agent directly and only ever reads the Dst side.
+    RelatedEffectDst { guid: &'static [u8; 16], party: Party, time_offset: i64, epsilon: i64, negated: bool },
+    /// The `combatData.HasGainedBuff` / `HasLostBuff` / `HasLostBuffStack`
+    /// family (`CombatDataHelpers.cs:27-57`): did `party` gain or lose
+    /// `buff_id` within `epsilon` of `time + time_offset`?
+    ///
+    /// `applied_duration` is the `HasGainedBuff` overload that also
+    /// requires `|applied - d| < epsilon`; `from_self` is the overload
+    /// that requires the applier to be the recipient. Both are `None` /
+    /// `false` for the plain form.
+    ///
+    /// Note the asymmetry in `kind`, which is GW2EI's own: `Lost` reads
+    /// `BuffRemoveAllEvent` only, while `LostStack` reads every removal
+    /// shape.
+    RelatedBuff {
+        buff_id: u32,
+        party: Party,
+        kind: BuffRel,
+        applied_duration: Option<i64>,
+        from_self: bool,
+        time_offset: i64,
+        epsilon: i64,
+        negated: bool,
+    },
+    /// A SELF-application of `buff_id` by `party` near the trigger, with
+    /// the applied duration inside `[min_duration, max_duration]`
+    /// (inclusive) and the number of such applications inside
+    /// `[min_count, max_count]` (inclusive).
+    ///
+    /// This is the shape that identifies the guardian shouts, which are
+    /// otherwise indistinguishable -- every one of them spawns the single
+    /// `GuardianShout` effect and nothing else, so GW2EI tells them apart
+    /// by the boons the caster puts on THEMSELF:
+    ///
+    /// ```text
+    /// // "Advance!" -- self-applied Aegis of 20s to 40s
+    /// FindRelatedEvents(combatData.GetBuffApplyDataByIDBySrc(Aegis, evt.Dst), evt.Time)
+    ///     .Any(apply => apply.To.Is(evt.Dst)
+    ///         && apply.AppliedDuration + ServerDelayConstant >= 20000
+    ///         && apply.AppliedDuration - ServerDelayConstant <= 40000)
+    /// // "Stand Your Ground!" -- 5+ self-applied stacks of Stability
+    /// 5 <= FindRelatedEvents(combatData.GetBuffApplyDataByIDBySrc(Stability, evt.Dst), evt.Time)
+    ///     .Count(apply => apply.To.Is(evt.Dst))
+    /// ```
+    ///
+    /// The duration-window and stack-count halves are one variant because
+    /// the C# sites mix them freely: the guardian pair uses one each, and
+    /// `BladeswornHelper`'s Flow Stabilizer uses BOTH (exactly two applies
+    /// of 8000ms). Unbounded ends are [`i64::MIN`]/[`i64::MAX`] and
+    /// [`u32::MAX`], matching how [`Check::EffectDuration`] spells an
+    /// open range rather than introducing a second encoding.
+    ///
+    /// `GetBuffApplyDataByIDBySrc` keys on the APPLIER and the `.Any`/
+    /// `.Count` body then requires `apply.To` to be the same agent, so
+    /// "self" here means both sides of the apply are `party`. GW2EI also
+    /// writes it the other way round (`ByDst` + `apply.By.Is(...)`); the
+    /// two say the same thing and collapse to this one check.
+    SelfBuffApply {
+        buff_id: u32,
+        party: Party,
+        min_duration: i64,
+        max_duration: i64,
+        min_count: u32,
+        max_count: u32,
+        time_offset: i64,
+        epsilon: i64,
+    },
+    /// `agent.IsSpecies(speciesID)` (`AgentItem.cs:553-560`): is `party`
+    /// the given non-player species?
+    ///
+    /// Every revenant Ventari skill needs this. The tablet is a MINION, so
+    /// its skills' effects are spawned by the tablet rather than by the
+    /// revenant, and the same effect GUIDs appear on unrelated agents --
+    /// the species test is what confines the finder to the tablet.
+    ///
+    /// A PLAYER is never any species, matching the C#'s own `IsPlayer`
+    /// early return.
+    Species { party: Party, species_id: u32, negated: bool },
+}
+
+/// Which removal or application shape a [`Check::RelatedBuff`] reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuffRel {
+    /// `HasGainedBuff` -- a `BuffApplyEvent`.
+    Gained,
+    /// `HasLostBuff` -- a `BuffRemoveAllEvent`, i.e. the buff running out
+    /// or being stripped entirely.
+    Lost,
+    /// `HasLostBuffStack` -- any `AbstractBuffRemoveEvent`, so a single
+    /// stack coming off counts too.
+    LostStack,
 }
 
 /// How a [`Check::SecondaryEffect`]'s other effect must be anchored

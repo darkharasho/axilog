@@ -37,6 +37,50 @@ const G_TEMPEST_FEEL_THE_BURN: [u8; 16] = [0xC6, 0x68, 0xB5, 0xDB, 0x62, 0x20, 0
 
 pub const FINDERS: &[FinderDef] = &[
     FinderDef {
+        skill_id: 62758,
+        source: "CatalystHelper",
+        trigger: Trigger::BuffGain { buff_id: 62931 },
+        checks: &[
+            Check::NoAnimatedCast { skill_id: 62876, time_offset: 0, epsilon: 10 },
+        ],
+        min_gw2_build: 122479,
+        max_gw2_build: 147734,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62834,
+        source: "CatalystHelper",
+        trigger: Trigger::BuffGain { buff_id: 62984 },
+        checks: &[
+            Check::NoAnimatedCast { skill_id: 62876, time_offset: 0, epsilon: 10 },
+        ],
+        min_gw2_build: 122479,
+        max_gw2_build: 147734,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62887,
+        source: "CatalystHelper",
+        trigger: Trigger::BuffGain { buff_id: 62707 },
+        checks: &[
+            Check::NoAnimatedCast { skill_id: 62876, time_offset: 0, epsilon: 10 },
+        ],
+        min_gw2_build: 122479,
+        max_gw2_build: 147734,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62975,
+        source: "CatalystHelper",
+        trigger: Trigger::BuffGain { buff_id: 62768 },
+        checks: &[
+            Check::NoAnimatedCast { skill_id: 62876, time_offset: 0, epsilon: 10 },
+        ],
+        min_gw2_build: 122479,
+        max_gw2_build: 147734,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 62982,
         source: "CatalystHelper",
         trigger: Trigger::BuffGain { buff_id: 62726 },
@@ -286,6 +330,50 @@ pub const FINDERS: &[FinderDef] = &[
         skill_id: 25498,
         source: "ElementalistHelper",
         trigger: Trigger::MinionCommand { species_id: 6523 },
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62758,
+        source: "ElementalistHelper",
+        trigger: Trigger::BuffGain { buff_id: 62931 },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Weaver"], base: false, negated: true },
+            Check::NoAnimatedCast { skill_id: 62876, time_offset: 0, epsilon: 10 },
+        ],
+        min_gw2_build: 147734,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62834,
+        source: "ElementalistHelper",
+        trigger: Trigger::BuffGain { buff_id: 62984 },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Weaver"], base: false, negated: true },
+            Check::NoAnimatedCast { skill_id: 62876, time_offset: 0, epsilon: 10 },
+        ],
+        min_gw2_build: 147734,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62887,
+        source: "ElementalistHelper",
+        trigger: Trigger::BuffGain { buff_id: 62707 },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Weaver"], base: false, negated: true },
+            Check::NoAnimatedCast { skill_id: 62876, time_offset: 0, epsilon: 10 },
+        ],
+        min_gw2_build: 147734,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 62975,
+        source: "ElementalistHelper",
+        trigger: Trigger::BuffGain { buff_id: 62768 },
+        checks: &[
+            Check::Spec { party: Party::Key, specs: &["Weaver"], base: false, negated: true },
+            Check::NoAnimatedCast { skill_id: 62876, time_offset: 0, epsilon: 10 },
+        ],
+        min_gw2_build: 147734,
         ..FinderDef::DEFAULT
     },
     FinderDef {

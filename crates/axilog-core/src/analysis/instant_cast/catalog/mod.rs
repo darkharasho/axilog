@@ -2,17 +2,28 @@
 //! The transcribed `InstantCastFinder` catalog.
 //!
 //! Extracted from 70 GW2EI source files: **649** finder
-//! constructions considered, **571** transcribed,
-//! **78** skipped. Every skip carries a named reason (below);
+//! constructions considered, **603** transcribed,
+//! **46** skipped. Every skip carries a named reason (below);
 //! nothing is approximated, because a finder that loses an
 //! unrepresentable checker would fire on events Elite Insights never
 //! counts -- worse than a missing finder, not better.
 //!
 //! Skips by reason:
 //!
-//! - 70 x arbitrary `.UsingChecker(lambda)` predicate
+//! - 10 x the weaver dual-attunement history is not modelled
+//! - 7 x a GW2EI-synthesized negative species id, assigned by a pre-pass
+//! - 6 x non-literal integer `ExtraOrbHammerDelay`
 //! - 4 x the barrier extension is not decoded by this project
 //! - 4 x bespoke subclass with log-specific state
+//! - 3 x a bespoke static checker in the helper file
+//! - 3 x arbitrary `.UsingChecker(lambda)` predicate
+//! - 3 x a log-wide buff-removal scan with no agent to key on
+//! - 1 x a position comparison against an effect's location
+//! - 1 x a cast-window intersection this project reads only via `IsCasting`
+//! - 1 x `GetSpecAtTime` on a folded master, which this project resolves per addr
+//! - 1 x a damage scan over a window computed from the event itself
+//! - 1 x a buff-instance comparison across removal rows
+//! - 1 x `RemovedDuration` is not carried on this project's removal rows
 //!
 //! Constructions by subclass:
 //!

@@ -149,6 +149,25 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 12500,
+        source: "RangerHelper",
+        trigger: Trigger::BuffGain { buff_id: 883 },
+        checks: &[
+            Check::Duration { duration: 6000, epsilon: 10 },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 42470,
+        source: "RangerHelper",
+        trigger: Trigger::BuffGain { buff_id: 883 },
+        origin: CastOrigin::Trait,
+        checks: &[
+            Check::Duration { duration: 5000, epsilon: 10 },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 12537,
         source: "RangerHelper",
         trigger: Trigger::BuffGain { buff_id: 12536 },
@@ -191,6 +210,25 @@ pub const FINDERS: &[FinderDef] = &[
         trigger: Trigger::ExtHealing { skill_id: 14016 },
         origin: CastOrigin::Trait,
         enable: &[Enable::HasExtHealing],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 12632,
+        source: "RangerHelper",
+        trigger: Trigger::BuffGive { buff_id: 34281 },
+        checks: &[
+            Check::Duration { duration: 6000, epsilon: 10 },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 69183,
+        source: "RangerHelper",
+        trigger: Trigger::BuffGive { buff_id: 34281 },
+        origin: CastOrigin::Trait,
+        checks: &[
+            Check::Duration { duration: 4000, epsilon: 10 },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {

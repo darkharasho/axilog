@@ -987,13 +987,20 @@ fn every_effect_finder_is_not_accurate() {
 /// The extraction accounting, pinned in code so a regenerate that changes
 /// coverage has to change this number deliberately.
 ///
-/// 571 of GW2EI's 649 finder constructions. The 78 skips are all
-/// categorical and all named in `catalog/mod.rs`: 70 arbitrary
-/// `.UsingChecker(lambda)` predicates, 4 barrier-extension finders and 4
-/// `BandTogetherCastFinder`s.
+/// 603 of GW2EI's 649 finder constructions. The 46 skips are all
+/// categorical and all named in `catalog/mod.rs`; the largest groups are
+/// the 16 weaver finders that need the dual-attunement history, the 7
+/// revenant ones that key on a GW2EI-synthesized negative species id, and
+/// the 8 that need a subclass this project does not decode.
+///
+/// This was 571/78 before the `.UsingChecker(lambda)` bodies that are
+/// conjunctions of NAMED `CombatData`/`AgentItem` helpers were
+/// transcribed into [`Check`]s (`Check::RelatedHit` and the four variants
+/// after it). Only 3 lambdas are still "arbitrary"; the rest of the
+/// skipped ones now say WHICH unmodelled thing they read.
 #[test]
 fn the_catalog_carries_every_finder_the_generator_could_transcribe() {
-    assert_eq!(catalog::all().len(), 571);
+    assert_eq!(catalog::all().len(), 603);
 }
 
 /// The effect finders are the largest single bucket, and they are the
@@ -1005,7 +1012,7 @@ fn the_catalog_carries_the_effect_finders() {
         .iter()
         .filter(|f| matches!(f.trigger, Trigger::Effect { .. }))
         .count();
-    assert_eq!(effect, 142);
+    assert_eq!(effect, 156);
     // Both subclasses, not just the common one.
     assert!(catalog::all()
         .iter()
@@ -1135,4 +1142,387 @@ fn two_finders_agreeing_on_one_cast_collapse_to_one_event() {
     let a = gain_finder();
     let b = FinderDef { source: "OtherHelper", ..gain_finder() };
     assert_eq!(compute(&log, &enc(vec![]), &[a, b]).len(), 1);
+}
+
+// ----------------------------------------------------------------------
+// The checks transcribed from `.UsingChecker(lambda)` bodies
+// ----------------------------------------------------------------------
+
+/// A pre-era SINGLE-stack buff removal, which `BuffRel::LostStack` reads
+/// and `BuffRel::Lost` does not.
+fn remove_single(time: u64, buff_id: u32, owner: u64) -> RawEvent {
+    RawEvent {
+        time,
+        skillid: buff_id,
+        src_agent: owner,
+        buff: 1,
+        is_buffremove: buff_remove::SINGLE,
+        ..base()
+    }
+}
+
+const AEGIS: u32 = 743;
+const STABILITY: u32 = 1122;
+const ADVANCE: u32 = 9084;
+const STAND_YOUR_GROUND: u32 = 9153;
+
+/// The two shipped guardian shout finders, and the GUID they share.
+///
+/// Taken from the generated catalog rather than rebuilt here: these rows
+/// are the fix for the reported bug, so the test has to exercise the rows
+/// that actually ship. Both read the SAME effect, so either one firing on
+/// the other's log would be a silent mis-attribution rather than a
+/// missing cast.
+fn guardian_shouts() -> (FinderDef, FinderDef, &'static [u8; 16]) {
+    let find = |id: u32| {
+        *catalog::all()
+            .iter()
+            .find(|f| f.skill_id == id && matches!(f.trigger, Trigger::Effect { .. }))
+            .expect("shout finder in the catalog")
+    };
+    let (adv, syg) = (*find(ADVANCE), *find(STAND_YOUR_GROUND));
+    let Trigger::Effect { guid, .. } = adv.trigger else { unreachable!() };
+    (adv, syg, guid)
+}
+
+/// One `GuardianShout` effect anchored to the guardian at `addr`, plus
+/// the id-to-GUID row that maps it.
+fn shout_log(addr: u64, guid: [u8; 16], boons: Vec<RawEvent>) -> RawLog {
+    let mut events = vec![id_to_guid(EFFECT_ID, guid), effect(1000, EFFECT_ID, addr, Some(addr))];
+    events.extend(boons);
+    events.sort_by_key(|e| e.time);
+    raw_fx(vec![player_agent(addr)], events)
+}
+
+fn guardian(addr: u64) -> Encounter {
+    enc(vec![player_with(addr, "Guardian", "Firebrand")])
+}
+
+/// The reported bug: "Advance!" never reached the APM breakdown because
+/// every guardian shout spawns one indistinguishable `GuardianShout`
+/// effect, and the only thing telling them apart is a
+/// `.UsingChecker(lambda)` the generator used to skip -- so no finder for
+/// 9084 existed at all.
+#[test]
+fn the_shipped_shout_finders_tell_advance_and_stand_your_ground_apart() {
+    let (adv, syg, guid) = guardian_shouts();
+    let both = [adv, syg];
+
+    // 30s of self-applied Aegis: "Advance!" and nothing else.
+    let log = shout_log(2, *guid, vec![apply(1000, AEGIS, 2, 2, 30_000)]);
+    assert_eq!(
+        compute(&log, &guardian(2), &both),
+        vec![InstantCastEvent { time: 1000, skill_id: ADVANCE, caster: 2 }]
+    );
+
+    // Five self-applied stacks of Stability: "Stand Your Ground!" only.
+    let stab = (0..5).map(|_| apply(1000, STABILITY, 2, 2, 8_000)).collect();
+    let log = shout_log(2, *guid, stab);
+    assert_eq!(
+        compute(&log, &guardian(2), &both),
+        vec![InstantCastEvent { time: 1000, skill_id: STAND_YOUR_GROUND, caster: 2 }]
+    );
+
+    // A shout with neither signature -- "Hold the Line!", say -- stays
+    // unattributed rather than being guessed at.
+    let log = shout_log(2, *guid, vec![apply(1000, 717, 2, 2, 5_000)]);
+    assert!(compute(&log, &guardian(2), &both).is_empty());
+}
+
+/// The Aegis window is `[20s, 40s]` widened by one server delay at each
+/// end, which is what separates "Advance!" from the 5s Aegis every other
+/// source of it applies.
+#[test]
+fn the_advance_aegis_window_rejects_a_duration_outside_it() {
+    let (adv, _, guid) = guardian_shouts();
+    for (ms, want) in [(5_000, false), (19_989, false), (19_990, true), (30_000, true),
+                       (40_010, true), (40_011, false)] {
+        let log = shout_log(2, *guid, vec![apply(1000, AEGIS, 2, 2, ms)]);
+        assert_eq!(
+            !compute(&log, &guardian(2), &[adv]).is_empty(),
+            want,
+            "{ms}ms of Aegis"
+        );
+    }
+}
+
+/// `min_count` is a threshold on SELF-applied stacks. Pure of Voice and
+/// friends put Stability on a guardian from elsewhere, which is the whole
+/// reason GW2EI counts only the self-applied ones.
+#[test]
+fn the_stand_your_ground_stack_count_only_counts_self_applied_stacks() {
+    let (_, syg, guid) = guardian_shouts();
+
+    let four = (0..4).map(|_| apply(1000, STABILITY, 2, 2, 8_000)).collect();
+    assert!(compute(&shout_log(2, *guid, four), &guardian(2), &[syg]).is_empty());
+
+    // Five stacks, but one of them applied by someone else.
+    let mut mixed: Vec<RawEvent> =
+        (0..4).map(|_| apply(1000, STABILITY, 2, 2, 8_000)).collect();
+    mixed.push(apply(1000, STABILITY, 2, 9, 8_000));
+    assert!(
+        compute(&shout_log(2, *guid, mixed), &guardian(2), &[syg]).is_empty(),
+        "an apply from another agent is not self-applied"
+    );
+}
+
+/// A stack applied outside the server-delay window belongs to a different
+/// cast, so it must not top up this one's count.
+#[test]
+fn a_self_buff_apply_only_counts_applies_inside_the_window() {
+    let (_, syg, guid) = guardian_shouts();
+    let mut late: Vec<RawEvent> = (0..4).map(|_| apply(1000, STABILITY, 2, 2, 8_000)).collect();
+    late.push(apply(1_500, STABILITY, 2, 2, 8_000));
+    assert!(compute(&shout_log(2, *guid, late), &guardian(2), &[syg]).is_empty());
+}
+
+fn with_checks(checks: &'static [Check]) -> FinderDef {
+    FinderDef { checks, ..gain_finder() }
+}
+
+/// All three charges of a firebrand mantra spawn one effect; which damage
+/// skill landed alongside it is the only thing naming the charge. The
+/// negated form is the catch-all charge, identified by NO related hit.
+#[test]
+fn a_related_hit_check_names_the_charge_that_fired() {
+    const HIT_SKILL: u32 = 41545;
+    let positive = with_checks(&[Check::RelatedHit {
+        skill_id: HIT_SKILL,
+        party: Party::Key,
+        time_offset: 0,
+        epsilon: SERVER_DELAY,
+        negated: false,
+    }]);
+    let negative = with_checks(&[Check::RelatedHit {
+        skill_id: HIT_SKILL,
+        party: Party::Key,
+        time_offset: 0,
+        epsilon: SERVER_DELAY,
+        negated: true,
+    }]);
+
+    let with_hit = raw(
+        vec![player_agent(1)],
+        vec![apply(100, BUFF, 1, 1, 5000), hit(100, HIT_SKILL, 1, 9, 500)],
+    );
+    assert_eq!(compute(&with_hit, &enc(vec![]), &[positive]).len(), 1);
+    assert!(compute(&with_hit, &enc(vec![]), &[negative]).is_empty());
+
+    // The same hit by a DIFFERENT agent is not this caster's.
+    let someone_else = raw(
+        vec![player_agent(1)],
+        vec![apply(100, BUFF, 1, 1, 5000), hit(100, HIT_SKILL, 7, 9, 500)],
+    );
+    assert!(compute(&someone_else, &enc(vec![]), &[positive]).is_empty());
+    assert_eq!(compute(&someone_else, &enc(vec![]), &[negative]).len(), 1);
+
+    // ...and so is one outside the window.
+    let too_late = raw(
+        vec![player_agent(1)],
+        vec![apply(100, BUFF, 1, 1, 5000), hit(100 + SERVER_DELAY as u64, HIT_SKILL, 1, 9, 500)],
+    );
+    assert!(compute(&too_late, &enc(vec![]), &[positive]).is_empty());
+}
+
+/// `HasRelatedHit` reads `CreditedFrom`, which folds a minion's hit onto
+/// its master -- the opposite of `Trigger::Damage`, which GW2EI leaves
+/// un-folded. Getting this backwards would make every pet-delivered
+/// signature invisible.
+#[test]
+fn a_related_hit_check_credits_a_pets_hit_to_its_owner() {
+    const HIT_SKILL: u32 = 41545;
+    let f = with_checks(&[Check::RelatedHit {
+        skill_id: HIT_SKILL,
+        party: Party::Key,
+        time_offset: 0,
+        epsilon: SERVER_DELAY,
+        negated: false,
+    }]);
+    let log = raw(
+        vec![player_agent(1), agent(5, 2000, "Pet")],
+        vec![
+            reg(1, 11),
+            RawEvent { src_agent: 5, src_instid: 55, src_master_instid: 11, ..base() },
+            apply(100, BUFF, 1, 1, 5000),
+            hit(100, HIT_SKILL, 5, 9, 500),
+        ],
+    );
+    assert_eq!(compute(&log, &enc(vec![]), &[f]).len(), 1);
+}
+
+/// `Lost` is `BuffRemoveAllEvent` only; `LostStack` is every removal
+/// shape. GW2EI's own asymmetry, and the two are not interchangeable: a
+/// single stack coming off a 5-stack buff is a `LostStack` and not a
+/// `Lost`.
+#[test]
+fn related_buff_distinguishes_losing_a_stack_from_losing_the_buff() {
+    const OTHER: u32 = 701;
+    let lost = with_checks(&[Check::RelatedBuff {
+        buff_id: OTHER,
+        party: Party::Key,
+        kind: BuffRel::Lost,
+        applied_duration: None,
+        from_self: false,
+        time_offset: 0,
+        epsilon: SERVER_DELAY,
+        negated: false,
+    }]);
+    let lost_stack = with_checks(&[Check::RelatedBuff {
+        buff_id: OTHER,
+        party: Party::Key,
+        kind: BuffRel::LostStack,
+        applied_duration: None,
+        from_self: false,
+        time_offset: 0,
+        epsilon: SERVER_DELAY,
+        negated: false,
+    }]);
+
+    let single = raw(
+        vec![player_agent(1)],
+        vec![apply(100, BUFF, 1, 1, 5000), remove_single(100, OTHER, 1)],
+    );
+    assert!(compute(&single, &enc(vec![]), &[lost]).is_empty());
+    assert_eq!(compute(&single, &enc(vec![]), &[lost_stack]).len(), 1);
+
+    let all = raw(
+        vec![player_agent(1)],
+        vec![apply(100, BUFF, 1, 1, 5000), remove_all(100, OTHER, 1)],
+    );
+    assert_eq!(compute(&all, &enc(vec![]), &[lost]).len(), 1, "an all-stacks removal is both");
+    assert_eq!(compute(&all, &enc(vec![]), &[lost_stack]).len(), 1);
+}
+
+/// The `HasGainedBuff` overloads that also pin the applied duration and
+/// require the applier to be the recipient.
+#[test]
+fn a_related_buff_gain_can_require_a_duration_and_a_self_source() {
+    const OTHER: u32 = 701;
+    let f = with_checks(&[Check::RelatedBuff {
+        buff_id: OTHER,
+        party: Party::Key,
+        kind: BuffRel::Gained,
+        applied_duration: Some(2000),
+        from_self: true,
+        time_offset: 0,
+        epsilon: SERVER_DELAY,
+        negated: false,
+    }]);
+    let exact = raw(
+        vec![player_agent(1)],
+        vec![apply(100, BUFF, 1, 1, 5000), apply(100, OTHER, 1, 1, 2000)],
+    );
+    assert_eq!(compute(&exact, &enc(vec![]), &[f]).len(), 1);
+
+    let wrong_duration = raw(
+        vec![player_agent(1)],
+        vec![apply(100, BUFF, 1, 1, 5000), apply(100, OTHER, 1, 1, 3000)],
+    );
+    assert!(compute(&wrong_duration, &enc(vec![]), &[f]).is_empty());
+
+    let wrong_source = raw(
+        vec![player_agent(1)],
+        vec![apply(100, BUFF, 1, 1, 5000), apply(100, OTHER, 1, 9, 2000)],
+    );
+    assert!(compute(&wrong_source, &enc(vec![]), &[f]).is_empty());
+}
+
+/// `HasRelatedEffectDst` reads the effect list even though the finder is
+/// a BUFF finder -- both guardian teleports work this way, and keying the
+/// effect decode on the trigger alone left this check unsatisfiable.
+#[test]
+fn a_related_effect_dst_check_works_on_a_buff_finder() {
+    static CHECKS: &[Check] = &[Check::RelatedEffectDst {
+        guid: &EGUID,
+        party: Party::Key,
+        time_offset: 120,
+        epsilon: SERVER_DELAY,
+        negated: false,
+    }];
+    let f = with_checks(CHECKS);
+
+    let anchored = raw_fx(
+        vec![player_agent(1)],
+        vec![
+            id_to_guid(EFFECT_ID, EGUID),
+            apply(100, BUFF, 1, 1, 5000),
+            effect(220, EFFECT_ID, 9, Some(1)),
+        ],
+    );
+    assert_eq!(compute(&anchored, &enc(vec![]), &[f]).len(), 1, "120ms after the apply");
+
+    // Anchored to someone else.
+    let elsewhere = raw_fx(
+        vec![player_agent(1)],
+        vec![
+            id_to_guid(EFFECT_ID, EGUID),
+            apply(100, BUFF, 1, 1, 5000),
+            effect(220, EFFECT_ID, 9, Some(7)),
+        ],
+    );
+    assert!(compute(&elsewhere, &enc(vec![]), &[f]).is_empty());
+
+    // Ground-anchored, so it has no Dst at all.
+    let ground = raw_fx(
+        vec![player_agent(1)],
+        vec![
+            id_to_guid(EFFECT_ID, EGUID),
+            apply(100, BUFF, 1, 1, 5000),
+            effect(220, EFFECT_ID, 9, None),
+        ],
+    );
+    assert!(compute(&ground, &enc(vec![]), &[f]).is_empty());
+}
+
+/// A PLAYER is never any species -- `AgentItem.IsSpecies`'s own
+/// `IsPlayer` early return. Without that, a species check would be a
+/// no-op on the agents that matter most.
+#[test]
+fn a_species_check_matches_the_named_minion_and_never_a_player() {
+    const MECH: u32 = 24_797;
+    static YES: &[Check] =
+        &[Check::Species { party: Party::Key, species_id: MECH, negated: false }];
+    static NO: &[Check] =
+        &[Check::Species { party: Party::Key, species_id: MECH, negated: true }];
+
+    let on_minion = raw(
+        vec![player_agent(1), agent(5, MECH, "Jade Mech")],
+        vec![apply(100, BUFF, 5, 1, 5000)],
+    );
+    assert_eq!(compute(&on_minion, &enc(vec![]), &[with_checks(YES)]).len(), 1);
+    assert!(compute(&on_minion, &enc(vec![]), &[with_checks(NO)]).is_empty());
+
+    // The same `prof` value on a PLAYER agent is a profession id, not a
+    // species.
+    let on_player = raw(
+        vec![RawAgent { is_elite: 0, ..agent(5, MECH, "Someone") }],
+        vec![apply(100, BUFF, 5, 1, 5000)],
+    );
+    assert!(compute(&on_player, &enc(vec![]), &[with_checks(YES)]).is_empty());
+    assert_eq!(compute(&on_player, &enc(vec![]), &[with_checks(NO)]).len(), 1);
+}
+
+/// The check indices are built only for the ids some ACTIVE finder names.
+/// A finder gated off by build must not leave its buff unindexed for one
+/// that is active, nor force an index nobody reads.
+#[test]
+fn an_unreferenced_buff_is_not_indexed_but_a_referenced_one_always_is() {
+    const OTHER: u32 = 701;
+    static CHECKS: &[Check] = &[Check::RelatedBuff {
+        buff_id: OTHER,
+        party: Party::Key,
+        kind: BuffRel::Gained,
+        applied_duration: None,
+        from_self: false,
+        time_offset: 0,
+        epsilon: SERVER_DELAY,
+        negated: false,
+    }];
+    let log = raw(
+        vec![player_agent(1)],
+        vec![apply(100, BUFF, 1, 1, 5000), apply(100, OTHER, 1, 9, 2000)],
+    );
+    // Active alongside a plain finder with no checks at all.
+    let out = compute(&log, &enc(vec![]), &[with_checks(CHECKS), gain_finder()]);
+    assert_eq!(out.len(), 1, "both finders agree on the one cast");
 }

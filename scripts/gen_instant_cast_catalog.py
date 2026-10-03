@@ -121,10 +121,27 @@ for line in _lines("GW2EIEvtcParser/ParserHelpers/IDs/SkillIDs.cs"):
 # `Name = 1234,` enum members; the enums do not overlap in the names the
 # finders use, so one flat table is enough.
 SPECIES = {}
-for line in _lines("GW2EIEvtcParser/ParserHelpers/IDs/SpeciesIDs.cs"):
+_SPECIES_LINES = _lines("GW2EIEvtcParser/ParserHelpers/IDs/SpeciesIDs.cs")
+for line in _SPECIES_LINES:
     m = re.match(r"\s*(\w+)\s*=\s*(-?\d+),?\s*(?://.*)?$", line)
     if m:
         SPECIES.setdefault(m.group(1), int(m.group(2)))
+
+# GW2EI gives agents arcdps never identified a NEGATIVE id, declared as a
+# `private const int` at the bottom of the file and aliased into the public
+# enums (`VentariTablet = SpeciesIDs.VentariTablet`). The alias line comes
+# FIRST, so these need their own pass; `setdefault` keeps every id the
+# plain pass already resolved.
+_PRIVATE_SPECIES = {}
+for line in _SPECIES_LINES:
+    m = re.match(r"\s*private const int (\w+)\s*=\s*(-?\d+)\s*;", line)
+    if m:
+        _PRIVATE_SPECIES.setdefault(m.group(1), int(m.group(2)))
+for line in _SPECIES_LINES:
+    m = re.match(r"\s*(\w+)\s*=\s*SpeciesIDs\.(\w+),?\s*(?://.*)?$", line)
+    if m and m.group(2) in _PRIVATE_SPECIES:
+        SPECIES.setdefault(m.group(1), _PRIVATE_SPECIES[m.group(2)])
+SPECIES.update({k: v for k, v in _PRIVATE_SPECIES.items() if k not in SPECIES})
 
 # Stable 16-byte effect GUIDs, `Name -> bytes`. The hex string is consumed
 # a byte pair at a time in written order (`GUID(ReadOnlySpan<char> hex)`),
@@ -541,6 +558,331 @@ SECONDARY_CHECKERS = {
 }
 
 
+# ----------------------------------------------------------------------
+# `.UsingChecker(lambda)` decomposition
+# ----------------------------------------------------------------------
+#
+# A lambda is an arbitrary closure, so the default is still `Skip`. But a
+# large minority of them are not arbitrary at all: they are one or more
+# calls to NAMED helpers on `CombatData`/`AgentItem` -- `HasRelatedHit`,
+# `HasGainedBuff`, `IsSpecies` -- ANDed together, and each of those has an
+# `analysis::instant_cast::model::Check` variant. Those are transcribed.
+#
+# The matchers below are deliberately ANCHORED (`re.fullmatch` on a
+# whitespace-normalised conjunct). A lambda that only PARTLY matches a
+# known shape must land in the skipped table, because a partial match that
+# dropped the rest of the condition would WIDEN the finder -- the one
+# failure mode this whole script is organised against. So every regex here
+# has to consume its conjunct entirely, and an unrecognised conjunct fails
+# the WHOLE finder rather than being silently ignored.
+
+#: `.To`/`.Src` name the event's key party, `.By`/`.Dst` its counterpart.
+#: Same mapping as `SPEC_CHECKERS`, and for the same reason: `Party` is a
+#: property of the event, not of the finder.
+PARTY_OF = {"To": "Key", "Src": "Key", "By": "Other", "Dst": "Other"}
+
+#: Substring -> a specific skip reason, so the generated accounting header
+#: distinguishes "a family this project chose not to model" from "one
+#: bespoke closure". Only ever consulted AFTER a match has already failed.
+LAMBDA_SKIP_REASONS = [
+    ("GetLastAttunement", "the weaver dual-attunement history is not modelled"),
+    ("HasSpawnedMinion", "`HasSpawnedMinion` reads agent first-aware times, not spawn events"),
+    ("GetMovementData", "a position comparison against an effect's location"),
+    ("GetBuffRemoveAllData", "a log-wide buff-removal scan with no agent to key on"),
+    ("GetBuffRemoveSingleDataByIDByDst", "a buff-instance comparison across removal rows"),
+    ("GetAnimatedCastData", "a cast-window intersection this project reads only via `IsCasting`"),
+    ("GetDamageData", "a damage scan over a window computed from the event itself"),
+    ("GetSpecAtTime", "`GetSpecAtTime` on a folded master, which this project resolves per addr"),
+    ("InstantCastChecker", "a bespoke static checker in the helper file"),
+    ("RemovedDuration", "`RemovedDuration` is not carried on this project's removal rows"),
+]
+
+
+def _lambda_skip(expr):
+    for needle, reason in LAMBDA_SKIP_REASONS:
+        if needle in expr:
+            return Skip(reason)
+    return Skip("arbitrary `.UsingChecker(lambda)` predicate")
+
+
+def _norm(s):
+    return " ".join(s.split())
+
+
+def _unwrap(e):
+    """Strip redundant outer parentheses from an expression."""
+    e = e.strip()
+    while e.startswith("(") and _match_paren(e, 0) == len(e) - 1:
+        e = e[1:-1].strip()
+    return e
+
+
+def split_and(s):
+    """Split on top-level `&&`; raise `Skip` on a top-level `||`."""
+    out, d, cur, i = [], 0, "", 0
+    while i < len(s):
+        ch = s[i]
+        if ch in "([{":
+            d += 1
+        elif ch in ")]}":
+            d -= 1
+        if d == 0 and s.startswith("||", i):
+            raise Skip("a disjunction of checker conditions")
+        if d == 0 and s.startswith("&&", i):
+            out.append(cur.strip())
+            cur = ""
+            i += 2
+            continue
+        cur += ch
+        i += 1
+    if cur.strip():
+        out.append(cur.strip())
+    return out
+
+
+def lambda_body(arg, ev_expected=None):
+    """`(ev, combatData, ...) => BODY` -> `(ev_name, BODY)`."""
+    e = _unwrap(arg)
+    m = re.match(r"\(\s*(\w+)\s*(?:,\s*\w+\s*)*\)\s*=>\s*", e)
+    if not m:
+        raise Skip("unparseable `.UsingChecker` lambda")
+    ev, body = m.group(1), e[m.end():].strip()
+    # `{ return EXPR; }` is the only statement body this reduces; anything
+    # with a local, a branch or several statements stays skipped.
+    if body.startswith("{"):
+        inner = body[1:body.rindex("}")].strip()
+        mm = re.fullmatch(r"return\s+(.*);", _norm(inner), re.S)
+        if not mm:
+            raise _lambda_skip(inner)
+        body = mm.group(1)
+    return ev, _norm(body)
+
+
+def _time(expr, ev):
+    """`ev.Time`, `ev.Time + N`, `ev.Time - N` -> the offset."""
+    m = re.fullmatch(rf"{ev}\.Time(?:\s*([+-])\s*(\S+))?", _norm(expr))
+    if not m:
+        raise Skip(f"non-`Time` checker timestamp `{_norm(expr)}`")
+    if not m.group(1):
+        return 0
+    v = resolve_int(m.group(2))
+    return -v if m.group(1) == "-" else v
+
+
+def _party(expr, ev):
+    m = re.fullmatch(rf"{ev}\.(\w+)", _norm(expr))
+    if not m or m.group(1) not in PARTY_OF:
+        raise Skip(f"checker names an agent this engine has no party for: `{_norm(expr)}`")
+    return PARTY_OF[m.group(1)]
+
+
+def _duration_window(body, var):
+    """The applied-duration conditions inside a `.Any`/`.Count` predicate.
+
+    Returns an INCLUSIVE `(min, max)`, with `i64::MIN`/`i64::MAX` for an
+    unconstrained end. Both C# spellings are accepted:
+
+        p.AppliedDuration + ServerDelayConstant >= 20000
+            && p.AppliedDuration - ServerDelayConstant <= 40000
+        Math.Abs(p.AppliedDuration - 8000) < ServerDelayConstant
+    """
+    lo, hi = "i64::MIN", "i64::MAX"
+    for part in split_and(body):
+        part = _unwrap(part)
+        m = re.fullmatch(
+            rf"{var}\.AppliedDuration\s*([+-])\s*(\S+)\s*(>=|<=)\s*(\S+)", part)
+        if m:
+            delay = resolve_int(m.group(2))
+            bound = resolve_int(m.group(4))
+            # `dur + delay >= lo`  <=>  `dur >= lo - delay`
+            # `dur - delay <= hi`  <=>  `dur <= hi + delay`
+            if m.group(1) == "+" and m.group(3) == ">=":
+                lo = str(bound - delay)
+            elif m.group(1) == "-" and m.group(3) == "<=":
+                hi = str(bound + delay)
+            else:
+                raise _lambda_skip(part)
+            continue
+        m = re.fullmatch(
+            rf"Math\.Abs\(\s*{var}\.AppliedDuration\s*-\s*(\S+)\s*\)\s*<\s*(\S+)", part)
+        if m:
+            d, eps = resolve_int(m.group(1)), resolve_int(m.group(2))
+            # Strict `<` on an integer millisecond count.
+            lo, hi = str(d - eps + 1), str(d + eps - 1)
+            continue
+        raise _lambda_skip(part)
+    return lo, hi
+
+
+def _self_buff_apply(conj, ev):
+    """The self-applied-buff shapes, or `None` if this is not one.
+
+    GW2EI writes the same idea two ways round -- indexed by the APPLIER
+    with an `apply.To.Is(...)` body, or indexed by the RECIPIENT with an
+    `apply.By.Is(...)` body -- and wraps it in `.Any()`, `N <= .Count()`
+    or `N == .Count()`. One `Check::SelfBuffApply` covers all of them.
+    """
+    m = re.fullmatch(
+        r"(?:(\d+)\s*(<=|==)\s*)?"
+        r"CombatData\.FindRelatedEvents\(\s*combatData\.GetBuffApplyDataByIDBy(Src|Dst)\("
+        r"([^,]+),\s*(\S+?)\s*\)(?:\.OfType<BuffApplyEvent>\(\))?\s*,\s*([^)]+?)\s*\)"
+        r"\s*\.(Any|Count)\(\s*(\w+)\s*=>\s*(.*)\)",
+        conj,
+    )
+    if not m:
+        return None
+    n, cmp_op, index_side, buff, agent, time, call, var, pred = m.groups()
+    if (call == "Any") != (n is None):
+        raise _lambda_skip(conj)
+    party = _party(agent, ev)
+    conds = split_and(pred)
+    # The predicate's FIRST condition re-states the other side of the
+    # application; it is what makes this a SELF-apply rather than any
+    # apply by or to the agent. Its absence changes the meaning, so a
+    # predicate that does not open with it is skipped.
+    want = {"Src": "To", "Dst": "By"}[index_side]
+    if not re.fullmatch(rf"{var}\.{want}\.Is\(\s*{re.escape(_norm(agent))}\s*\)", _unwrap(conds[0])):
+        raise _lambda_skip(conj)
+    lo, hi = _duration_window(" && ".join(conds[1:]), var) if len(conds) > 1 else ("i64::MIN", "i64::MAX")
+    if n is None:
+        min_count, max_count = 1, "u32::MAX"
+    elif cmp_op == "<=":
+        min_count, max_count = int(n), "u32::MAX"
+    else:
+        min_count, max_count = int(n), int(n)
+    return (
+        f"Check::SelfBuffApply {{ buff_id: {rs_id(resolve_id(buff))}, "
+        f"party: Party::{party}, min_duration: {lo}, max_duration: {hi}, "
+        f"min_count: {min_count}, max_count: {max_count}, "
+        f"time_offset: {_time(time, ev)}, epsilon: {SERVER_DELAY_MS} }}"
+    )
+
+
+def lambda_checks(arg, guids):
+    """One `.UsingChecker(lambda)` -> a list of Rust `Check` expressions."""
+    ev, body = lambda_body(arg)
+    out = []
+    for conj in split_and(body):
+        conj = _unwrap(conj)
+        neg = False
+        while conj.startswith("!"):
+            neg = not neg
+            conj = _unwrap(conj[1:])
+        out.append(_atom(conj, ev, neg, guids))
+    return out
+
+
+def _atom(conj, ev, neg, guids):
+    """One negation-stripped conjunct -> a Rust `Check` expression."""
+    lower = str(neg).lower()
+
+    # --- `evt.IsAroundDst` ------------------------------------------------
+    if re.fullmatch(rf"{ev}\.IsAroundDst", conj):
+        return f"Check::AroundDst {{ negated: {lower} }}"
+
+    # --- the applied duration of the TRIGGERING apply ---------------------
+    # Equivalent to `.UsingDurationChecker(d)`; an exact `==` is spelled
+    # with an epsilon of 1 because the durations are whole milliseconds.
+    if not neg:
+        m = re.fullmatch(rf"{ev}\.AppliedDuration\s*==\s*(\S+)", conj) \
+            or re.fullmatch(rf"(\S+)\s*==\s*{ev}\.AppliedDuration", conj)
+        if m:
+            return f"Check::Duration {{ duration: {resolve_int(m.group(1))}, epsilon: 1 }}"
+        m = re.fullmatch(
+            rf"Math\.Abs\(\s*{ev}\.AppliedDuration\s*-\s*(\S+)\s*\)\s*<\s*(\S+)", conj)
+        if m:
+            return (f"Check::Duration {{ duration: {resolve_int(m.group(1))}, "
+                    f"epsilon: {resolve_int(m.group(2))} }}")
+
+    # --- `agent.IsSpecies(id)` --------------------------------------------
+    m = re.fullmatch(rf"({ev}\.\w+)\.IsSpecies\(\s*(.+?)\s*\)", conj)
+    if m:
+        sp = resolve_species(m.group(2))
+        if sp < 0:
+            # A GW2EI-SYNTHESIZED id. The Ventari tablet is the case that
+            # matters: `RevenantHelper.ProcessGadgets` finds the tablet
+            # agents by three effect GUIDs and calls `OverrideID(-25)` in a
+            # pre-pass, so the id never appears in the log and this
+            # project's species map -- which holds arcdps's own
+            # `RawAgent::prof` -- can never carry it. Transcribing the
+            # check would produce a finder that silently never fires,
+            # which is worse than a recorded skip.
+            raise Skip("a GW2EI-synthesized negative species id, assigned by a pre-pass")
+        return (f"Check::Species {{ party: Party::{_party(m.group(1), ev)}, "
+                f"species_id: {rs_id(sp)}, negated: {lower} }}")
+
+    # --- self-applied buff windows ----------------------------------------
+    if not neg:
+        sba = _self_buff_apply(conj, ev)
+        if sba:
+            return sba
+
+    # --- the named `CombatData` helpers -----------------------------------
+    m = re.fullmatch(r"combatData\.(\w+)\(\s*(.+)\s*\)", conj)
+    if m:
+        name, args = m.group(1), split_top(m.group(2))
+        if name in ("HasRelatedHit", "IsCasting") and 3 <= len(args) <= 4:
+            skill = rs_id(resolve_id(args[0]))
+            party = _party(args[1], ev)
+            off = _time(args[2], ev)
+            eps = resolve_int(args[3]) if len(args) > 3 else SERVER_DELAY_MS
+            if name == "HasRelatedHit":
+                return (f"Check::RelatedHit {{ skill_id: {skill}, party: Party::{party}, "
+                        f"time_offset: {off}, epsilon: {eps}, negated: {lower} }}")
+            # `Check::NoAnimatedCast` bakes the negation in (the C# has no
+            # positive form) and reads the key party directly, so only the
+            # negated, key-party spelling is representable.
+            if not neg or party != "Key":
+                raise _lambda_skip(conj)
+            return (f"Check::NoAnimatedCast {{ skill_id: {skill}, "
+                    f"time_offset: {off}, epsilon: {eps} }}")
+        if name == "HasRelatedEffectDst" and 3 <= len(args) <= 4:
+            guid = resolve_guid(args[0])
+            guids.add(guid)
+            eps = resolve_int(args[3]) if len(args) > 3 else SERVER_DELAY_MS
+            return (f"Check::RelatedEffectDst {{ guid: &{guid_const(guid)}, "
+                    f"party: Party::{_party(args[1], ev)}, time_offset: {_time(args[2], ev)}, "
+                    f"epsilon: {eps}, negated: {lower} }}")
+        if name in ("HasGainedBuff", "HasLostBuff", "HasLostBuffStack") and len(args) >= 3:
+            kind = {"HasGainedBuff": "Gained", "HasLostBuff": "Lost",
+                    "HasLostBuffStack": "LostStack"}[name]
+            buff = rs_id(resolve_id(args[0]))
+            party = _party(args[1], ev)
+            off = _time(args[2], ev)
+            # The four `HasGainedBuff` overloads differ only in which of
+            # `appliedDuration` (an int) and `source` (an agent) follow the
+            # timestamp, with `epsilon` last. Classify the tail by shape
+            # rather than by arity, which does not distinguish them.
+            dur, from_self, eps = "None", "false", SERVER_DELAY_MS
+            tail = args[3:]
+            if tail and re.fullmatch(rf"{ev}\.\w+", _norm(tail[0])):
+                raise _lambda_skip(conj)  # `source` before `appliedDuration`
+            if tail and not re.fullmatch(rf"{ev}\.\w+", _norm(tail[0])):
+                if len(tail) > 1 and re.fullmatch(rf"{ev}\.\w+", _norm(tail[1])):
+                    dur = f"Some({resolve_int(tail[0])})"
+                    if _party(tail[1], ev) != party:
+                        # A source that is a DIFFERENT agent is a shape the
+                        # check cannot express; `from_self` is a flag.
+                        raise _lambda_skip(conj)
+                    from_self = "true"
+                    tail = tail[2:]
+                else:
+                    dur = f"Some({resolve_int(tail[0])})"
+                    tail = tail[1:]
+                if kind != "Gained":
+                    raise _lambda_skip(conj)
+            if tail:
+                eps = resolve_int(tail[0])
+            if len(tail) > 1:
+                raise _lambda_skip(conj)
+            return (f"Check::RelatedBuff {{ buff_id: {buff}, party: Party::{party}, "
+                    f"kind: BuffRel::{kind}, applied_duration: {dur}, "
+                    f"from_self: {from_self}, time_offset: {off}, epsilon: {eps}, "
+                    f"negated: {lower} }}")
+
+    raise _lambda_skip(conj)
+
+
 def analyse(ctor, argstr, chain, named):
     """One C# statement -> a Rust `FinderDef` literal, or `Skip`."""
     if ctor in UNSUPPORTED:
@@ -640,9 +982,12 @@ def analyse(ctor, argstr, chain, named):
                 f"time_offset: {off}, epsilon: {eps} }}"
             )
         elif name == "UsingChecker":
-            # An arbitrary closure over the parsed log. Dropping it would
-            # WIDEN the finder; see this script's docstring.
-            raise Skip("arbitrary `.UsingChecker(lambda)` predicate")
+            # Not necessarily arbitrary: see `lambda_checks`, which
+            # transcribes the bodies that are conjunctions of named
+            # `CombatData`/`AgentItem` helpers and skips everything else.
+            # Dropping an unrepresentable one would WIDEN the finder; see
+            # this script's docstring.
+            checks.extend(lambda_checks(arg, guids))
         else:
             raise Skip(f"unhandled builder method `.{name}(...)`")
 

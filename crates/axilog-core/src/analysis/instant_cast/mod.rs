@@ -73,7 +73,7 @@ pub mod model;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use model::{
-    CastOrigin, Check, Enable, FinderDef, InstantCastEvent, LogCapabilities, Party, SwapSnap,
+    BuffRel, CastOrigin, Check, Enable, FinderDef, InstantCastEvent, LogCapabilities, Party, SwapSnap,
     Trigger, DEFAULT_ICD, END_OF_LIFE, EVTC_END_OF_LIFE, EVTC_START_OF_LIFE, SERVER_DELAY,
     START_OF_LIFE,
 };
@@ -272,6 +272,50 @@ struct Ctx<'a> {
     /// answer for a log with no animated casts and the documented
     /// behaviour for a caller that has none to give.
     casts: &'a crate::analysis::rotation::AnimatedCasts,
+    /// Buff APPLY rows by buff id, chronological -- GW2EI's
+    /// `GetBuffApplyDataByID*`, for the `Gained` arm of
+    /// [`Check::RelatedBuff`] and for [`Check::SelfBuffApply`].
+    ///
+    /// Unlike the apply TRIGGER stream, which drops `BUFF_INITIAL`
+    /// because `BuffGainCastFinder`'s ctor excludes initial applies, this
+    /// index KEEPS them: the C# helpers read `BuffApplyEvent` without
+    /// filtering, and an initial apply is one.
+    buff_applies: BTreeMap<u32, Vec<BuffRow>>,
+    /// Buff REMOVAL rows by buff id, chronological, for the `Lost` and
+    /// `LostStack` arms of [`Check::RelatedBuff`].
+    buff_removes: BTreeMap<u32, Vec<BuffRow>>,
+    /// Credited hit times by skill id, chronological, for
+    /// [`Check::RelatedHit`].
+    hits: BTreeMap<u32, Vec<(u64, u64)>>,
+}
+
+/// One buff apply or removal row, reduced to what the checks read.
+///
+/// `owner` is the stack's holder and `by` the other party, so the two
+/// stream shapes agree despite arcdps swapping `src`/`dst` between applies
+/// and removals (see the apply/removal pushes in [`collect_streams`]).
+/// `by` is minion-FOLDED because the C# reads `CreditedBy`; `owner` is
+/// raw, because it reads `To`.
+#[derive(Clone, Copy)]
+struct BuffRow {
+    time: u64,
+    owner: u64,
+    by: u64,
+    duration: i64,
+    /// A `BuffRemoveAllEvent` rather than a single-stack or manual
+    /// removal. Only meaningful in `buff_removes`.
+    remove_all: bool,
+}
+
+/// The rows of `v` whose time is within `epsilon` of `time` --
+/// `CombatData.FindRelatedEvents` (`CombatDataHelpers.cs:8-10`), which is
+/// a strict `<` on the absolute difference.
+///
+/// `v` is in event order, i.e. chronological, so the window is a slice.
+fn related<T: Copy>(v: &[T], time: i64, epsilon: i64, at: impl Fn(&T) -> u64) -> &[T] {
+    let lo = v.partition_point(|r| (at(r) as i64) <= time - epsilon);
+    let hi = v.partition_point(|r| (at(r) as i64) < time + epsilon);
+    &v[lo..hi.max(lo)]
 }
 
 impl Ctx<'_> {
@@ -347,8 +391,16 @@ pub fn compute(
         return Vec::new();
     }
 
-    let need_effects = active.iter().any(|f| matches!(f.trigger, Trigger::Effect { .. }));
-    let ctx = build_ctx(raw, enc, need_effects, casts);
+    // `Check::RelatedEffectDst` reads the effect list without the finder
+    // being an effect finder itself -- both guardian teleports are
+    // `BuffGainCastFinder`s that identify themselves by a nearby effect.
+    // Keying this on the trigger alone left the index empty and the check
+    // unsatisfiable.
+    let need_effects = active.iter().any(|f| {
+        matches!(f.trigger, Trigger::Effect { .. })
+            || f.checks.iter().any(|c| matches!(c, Check::RelatedEffectDst { .. }))
+    });
+    let ctx = build_ctx(raw, enc, need_effects, casts, &active);
     let wanted: BTreeSet<StreamKey> = active.iter().map(|f| f.trigger.stream_key()).collect();
     let streams = collect_streams(&ctx, &wanted);
 
@@ -403,6 +455,7 @@ fn build_ctx<'a>(
     enc: &Encounter,
     need_effects: bool,
     casts: &'a crate::analysis::rotation::AnimatedCasts,
+    active: &[&FinderDef],
 ) -> Ctx<'a> {
     let registry = InstidRegistry::build(raw);
 
@@ -448,17 +501,120 @@ fn build_ctx<'a>(
         swaps.entry(e.src_agent).or_default().push(e.time);
     }
 
+    // The check-side indices. Restricted to the ids some active finder
+    // actually names: a WvW log carries hundreds of thousands of buff
+    // rows, and indexing all of them to answer a handful of checks would
+    // cost more than the whole finder pass.
+    let post_era = raw.header.is_post_buff_rework();
+    let (want_applies, want_removes, want_hits) = wanted_check_ids(active);
+    let mut buff_applies: BTreeMap<u32, Vec<BuffRow>> = BTreeMap::new();
+    let mut buff_removes: BTreeMap<u32, Vec<BuffRow>> = BTreeMap::new();
+    let mut hits: BTreeMap<u32, Vec<(u64, u64)>> = BTreeMap::new();
+    if !(want_applies.is_empty() && want_removes.is_empty() && want_hits.is_empty()) {
+        let fold = |addr: u64| *master.get(&addr).unwrap_or(&addr);
+        for e in &raw.events {
+            if want_applies.contains(&e.skillid) {
+                // `BUFF_INITIAL` is included here and excluded from the
+                // trigger stream; see `Ctx::buff_applies`.
+                let is_apply = if post_era {
+                    e.is_statechange == sc::BUFF_APPLY || e.is_statechange == sc::BUFF_INITIAL
+                } else {
+                    crate::analysis::buffs::events::is_pre_era_apply_shaped(e)
+                        && e.is_offcycle == 0
+                };
+                if is_apply {
+                    buff_applies.entry(e.skillid).or_default().push(BuffRow {
+                        time: e.time,
+                        owner: e.dst_agent,
+                        by: fold(e.src_agent),
+                        duration: i64::from(e.value),
+                        remove_all: false,
+                    });
+                }
+            }
+            if want_removes.contains(&e.skillid) {
+                // Removal rows invert the roles -- `src_agent` holds the
+                // stack. `LostStack` reads every removal shape and `Lost`
+                // only the all-stacks one, which is why the kind is
+                // recorded rather than filtered here.
+                let kind = if post_era {
+                    match e.is_statechange {
+                        sc::BUFF_REMOVE_ALL => Some(true),
+                        sc::BUFF_REMOVE_SINGLE => Some(false),
+                        _ => None,
+                    }
+                } else if e.is_statechange == 0 {
+                    match e.is_buffremove {
+                        crate::evtc::buff_remove::ALL => Some(true),
+                        crate::evtc::buff_remove::SINGLE
+                        | crate::evtc::buff_remove::MANUAL => Some(false),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(remove_all) = kind {
+                    buff_removes.entry(e.skillid).or_default().push(BuffRow {
+                        time: e.time,
+                        owner: e.src_agent,
+                        by: fold(e.dst_agent),
+                        duration: i64::from(e.value),
+                        remove_all,
+                    });
+                }
+            }
+            if want_hits.contains(&e.skillid)
+                && e.is_statechange == 0
+                && e.is_activation == 0
+                && e.is_buffremove == 0
+                && is_health_damage_result(e.result)
+            {
+                // `HasRelatedHit` tests `CreditedFrom`, which folds a
+                // minion's hit onto its master -- the opposite of
+                // `Trigger::Damage`, which GW2EI leaves un-folded.
+                hits.entry(e.skillid).or_default().push((e.time, fold(e.src_agent)));
+            }
+        }
+    }
+
     Ctx {
         raw,
         specs: spec_index(enc),
         swaps,
         species,
         master,
-        post_era: raw.header.is_post_buff_rework(),
+        post_era,
         effects,
         effects_by_id,
         casts,
+        buff_applies,
+        buff_removes,
+        hits,
     }
+}
+
+/// The buff ids, removal buff ids and skill ids the active finders' checks
+/// name, so [`build_ctx`] indexes nothing else.
+fn wanted_check_ids(active: &[&FinderDef]) -> (BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>) {
+    let (mut applies, mut removes, mut hits) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    for c in active.iter().flat_map(|f| f.checks.iter()) {
+        match *c {
+            Check::RelatedBuff { buff_id, kind: BuffRel::Gained, .. } => {
+                applies.insert(buff_id);
+            }
+            Check::RelatedBuff { buff_id, .. } => {
+                removes.insert(buff_id);
+            }
+            Check::SelfBuffApply { buff_id, .. } => {
+                applies.insert(buff_id);
+            }
+            Check::RelatedHit { skill_id, .. } => {
+                hits.insert(skill_id);
+            }
+            _ => {}
+        }
+    }
+    (applies, removes, hits)
 }
 
 /// One pass over the log, bucketing every event that some active finder's
@@ -746,6 +902,83 @@ fn passes(ctx: &Ctx<'_>, f: &FinderDef, hit: &TriggerHit) -> bool {
         // -- see `Check::NoAnimatedCast`. The leading `!` is the C#'s own.
         Check::NoAnimatedCast { skill_id, time_offset, epsilon } => {
             !ctx.casts.is_casting(skill_id, hit.key, hit.time as i64 + time_offset, epsilon)
+        }
+        Check::RelatedHit { skill_id, party, time_offset, epsilon, negated } => {
+            let who = hit.party(party);
+            let at = hit.time as i64 + time_offset;
+            let found = ctx
+                .hits
+                .get(&skill_id)
+                .is_some_and(|v| related(v, at, epsilon, |r| r.0).iter().any(|r| r.1 == who));
+            found != negated
+        }
+        Check::RelatedEffectDst { guid, party, time_offset, epsilon, negated } => {
+            let who = hit.party(party);
+            let at = hit.time as i64 + time_offset;
+            let found = ctx.effects_with_guid(guid).iter().any(|&i| {
+                let ev = &ctx.effects.events[i];
+                ev.dst == Some(who) && (ev.time as i64 - at).abs() < epsilon
+            });
+            found != negated
+        }
+        Check::RelatedBuff {
+            buff_id,
+            party,
+            kind,
+            applied_duration,
+            from_self,
+            time_offset,
+            epsilon,
+            negated,
+        } => {
+            let who = hit.party(party);
+            let at = hit.time as i64 + time_offset;
+            let rows = match kind {
+                BuffRel::Gained => ctx.buff_applies.get(&buff_id),
+                BuffRel::Lost | BuffRel::LostStack => ctx.buff_removes.get(&buff_id),
+            };
+            let found = rows.is_some_and(|v| {
+                related(v, at, epsilon, |r| r.time).iter().any(|r| {
+                    r.owner == who
+                        && (kind != BuffRel::Lost || r.remove_all)
+                        && (!from_self || r.by == who)
+                        && applied_duration
+                            .map_or(true, |d| (r.duration - d).abs() < epsilon)
+                })
+            });
+            found != negated
+        }
+        Check::SelfBuffApply {
+            buff_id,
+            party,
+            min_duration,
+            max_duration,
+            min_count,
+            max_count,
+            time_offset,
+            epsilon,
+        } => {
+            let who = hit.party(party);
+            let at = hit.time as i64 + time_offset;
+            let n = ctx.buff_applies.get(&buff_id).map_or(0, |v| {
+                related(v, at, epsilon, |r| r.time)
+                    .iter()
+                    .filter(|r| {
+                        r.owner == who
+                            && r.by == who
+                            && r.duration >= min_duration
+                            && r.duration <= max_duration
+                    })
+                    .count()
+            });
+            let n = u32::try_from(n).unwrap_or(u32::MAX);
+            n >= min_count && n <= max_count
+        }
+        // A player is never a species -- `AgentItem.IsSpecies`'s own
+        // `IsPlayer` early return, which `Ctx::species` reproduces by
+        // holding non-player agents only.
+        Check::Species { party, species_id, negated } => {
+            (ctx.species.get(&hit.party(party)) == Some(&species_id)) != negated
         }
     })
 }

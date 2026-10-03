@@ -10,6 +10,8 @@ const G_AMALGAM_DEFENSIVE_PROTOCOL_CLEANSE_1: [u8; 16] = [0xF2, 0xFB, 0x8A, 0x03
 const G_AMALGAM_SYMBIOTIC_SHIELDING_1: [u8; 16] = [0x84, 0x2F, 0x97, 0x7C, 0x31, 0x8F, 0xDC, 0x4F, 0x96, 0xC9, 0x9C, 0x38, 0x5C, 0x1D, 0x06, 0x72];
 /// `EffectGUIDs.EngineerHealingMist`.
 const G_ENGINEER_HEALING_MIST: [u8; 16] = [0xB0, 0x2D, 0x3D, 0x0F, 0xF0, 0xA4, 0xFC, 0x47, 0xB2, 0x3B, 0x14, 0x78, 0xD8, 0xE7, 0x70, 0xAE];
+/// `EffectGUIDs.EngineerMagneticInversion`.
+const G_ENGINEER_MAGNETIC_INVERSION: [u8; 16] = [0xF8, 0xBD, 0x50, 0x2E, 0x5B, 0x0D, 0x94, 0x44, 0xAA, 0x6D, 0xC5, 0xB5, 0x91, 0x88, 0x01, 0xEE];
 /// `EffectGUIDs.EngineerOrbitalCommandStrike`.
 const G_ENGINEER_ORBITAL_COMMAND_STRIKE: [u8; 16] = [0x0D, 0x38, 0x8D, 0x23, 0xFF, 0x31, 0x3F, 0x48, 0x97, 0x94, 0x88, 0x1A, 0x54, 0x0E, 0x5A, 0x24];
 /// `EffectGUIDs.HolosmitBladeBurstParticleAccelerator1`.
@@ -18,6 +20,10 @@ const G_HOLOSMIT_BLADE_BURST_PARTICLE_ACCELERATOR_1: [u8; 16] = [0x9D, 0x2A, 0x5
 const G_HOLOSMIT_BLADE_BURST_PARTICLE_ACCELERATOR_2: [u8; 16] = [0x56, 0x35, 0xC8, 0x21, 0x75, 0x73, 0xC4, 0x49, 0x90, 0x55, 0x54, 0xA1, 0xBE, 0x38, 0x04, 0x4B];
 /// `EffectGUIDs.HolosmithFlashSpark`.
 const G_HOLOSMITH_FLASH_SPARK: [u8; 16] = [0x41, 0x8A, 0x09, 0x0D, 0x71, 0x9A, 0xB4, 0x4A, 0xAF, 0x1C, 0x4A, 0xD1, 0x47, 0x30, 0x68, 0xC4];
+/// `EffectGUIDs.MechanistCrisisZone`.
+const G_MECHANIST_CRISIS_ZONE: [u8; 16] = [0x95, 0x64, 0x50, 0xE1, 0x26, 0x0F, 0xB9, 0x4B, 0x86, 0x91, 0xBC, 0x13, 0x78, 0x08, 0x62, 0x50];
+/// `EffectGUIDs.MechanistMechEyeGlow`.
+const G_MECHANIST_MECH_EYE_GLOW: [u8; 16] = [0xCD, 0xF7, 0x49, 0x67, 0x2C, 0x01, 0x96, 0x4B, 0xAE, 0xF6, 0x4C, 0xCB, 0x3D, 0x43, 0x1D, 0xEE];
 /// `EffectGUIDs.MechanistOverclockSignet`.
 const G_MECHANIST_OVERCLOCK_SIGNET: [u8; 16] = [0x73, 0x48, 0x34, 0xE7, 0xEB, 0x7C, 0xD7, 0x4E, 0xB1, 0x29, 0xAC, 0xBC, 0xE5, 0xC6, 0x4C, 0x1D];
 /// `EffectGUIDs.MechanistShiftSignet1`.
@@ -98,6 +104,17 @@ pub const FINDERS: &[FinderDef] = &[
         source: "EngineerHelper",
         trigger: Trigger::Damage { skill_id: 6126 },
         enable: &[Enable::NoEffectData],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 6126,
+        source: "EngineerHelper",
+        trigger: Trigger::Effect { guid: &G_ENGINEER_MAGNETIC_INVERSION, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Engineer"], base: true, negated: false },
+            Check::RelatedBuff { buff_id: 6056, party: Party::Other, kind: BuffRel::Lost, applied_duration: None, from_self: false, time_offset: 0, epsilon: 10, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
@@ -274,6 +291,17 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 63293,
+        source: "MechanistHelper",
+        trigger: Trigger::Effect { guid: &G_MECHANIST_CRISIS_ZONE, by_dst: true },
+        minions: true,
+        checks: &[
+            Check::SecondaryEffect { guid: &G_MECHANIST_MECH_EYE_GLOW, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
+            Check::Species { party: Party::Other, species_id: 23549, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 63345,
         source: "MechanistHelper",
         trigger: Trigger::MinionCast { skill_id: 63345 },
@@ -302,6 +330,16 @@ pub const FINDERS: &[FinderDef] = &[
         source: "MechanistHelper",
         trigger: Trigger::Missile { skill_id: 63185 },
         minions: true,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 63361,
+        source: "MechanistHelper",
+        trigger: Trigger::BuffGain { buff_id: 63361 },
+        minions: true,
+        checks: &[
+            Check::Species { party: Party::Key, species_id: 23549, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {

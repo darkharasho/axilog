@@ -29,6 +29,16 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 77371,
+        source: "ConduitHelper",
+        trigger: Trigger::BuffGain { buff_id: 76559 },
+        checks: &[
+            Check::Duration { duration: 7000, epsilon: 1 },
+        ],
+        min_gw2_build: 190000,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 77021,
         source: "ConduitHelper",
         trigger: Trigger::Damage { skill_id: 77021 },

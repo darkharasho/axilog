@@ -311,6 +311,9 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
     1,222, every field 0 residual). Weapon swaps: EXACT (134 for 134). Instant casts:
     BOUNDED — 338/364, **92.9% recovered**, because that family is only as complete as the
     finder catalog. Asserting exactness there would be asserting the catalog is complete.
+    (v1.15.0's lambda-checker transcription moved this to **96.7%** — 357 of 369 — measured
+    against a freshly built GW2EI CLI oracle rather than the committed golden, which is why
+    the denominator differs from the 364 above.)
     (Was 340/364 until `SERVER_DELAY` was corrected 150 → 10; see MSDELAY below. Both casts
     that went away were spurious, so the per-skill absolute error went 54 → 52.)
   - **Negative pseudo ids now reach the surface.** They ride as `-2i32 as u32` natively and
@@ -334,8 +337,10 @@ a major bump while the in-tree adapter is 1.0's only reader, each recorded in
   held up in full: it is a subsystem port, not a catalog generator, and `isInstantCast`
   genuinely required running the finders. Shipped as
   `analysis::instant_cast` (model + one engine, mirroring `damage_mods`) plus
-  `scripts/gen_instant_cast_catalog.py`, which extracts **571 of GW2EI's 649** finder
-  constructions with a named reason for each of the 78 skips. (It was 429/220 as first
+  `scripts/gen_instant_cast_catalog.py`, which extracts **603 of GW2EI's 649** finder
+  constructions with a named reason for each of the 46 skips. (It was 571/78 until
+  v1.15.0 taught the generator to decompose the `.UsingChecker(lambda)` bodies that
+  are conjunctions of named `CombatData`/`AgentItem` helpers; see the CHANGELOG.) (It was 429/220 as first
   shipped; the effect decode below closed the largest skip bucket.)
 
   Four corrections to the scoping below, all found by machine accounting rather than by

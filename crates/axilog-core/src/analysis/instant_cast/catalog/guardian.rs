@@ -28,6 +28,10 @@ const G_GUARDIAN_DETONATE_JURISDICTION_LEVEL_1: [u8; 16] = [0x66, 0x46, 0xD4, 0x
 const G_GUARDIAN_DETONATE_JURISDICTION_LEVEL_2: [u8; 16] = [0x3E, 0x33, 0xC9, 0x64, 0x5D, 0x62, 0xCF, 0x4D, 0xBC, 0x20, 0x85, 0x11, 0xBB, 0x3D, 0x12, 0xF1];
 /// `EffectGUIDs.GuardianDetonateJurisdictionLevel3`.
 const G_GUARDIAN_DETONATE_JURISDICTION_LEVEL_3: [u8; 16] = [0x29, 0xF6, 0xAA, 0xDD, 0xF5, 0xE7, 0x53, 0x48, 0x85, 0x41, 0x23, 0xB9, 0x56, 0xE4, 0xBF, 0x0E];
+/// `EffectGUIDs.GuardianGenericTeleport2`.
+const G_GUARDIAN_GENERIC_TELEPORT_2: [u8; 16] = [0x5E, 0x17, 0x17, 0xFB, 0x11, 0xCE, 0x1D, 0x44, 0xB5, 0x9B, 0x36, 0xB6, 0xAD, 0x83, 0xB9, 0xCC];
+/// `EffectGUIDs.GuardianMercifulIntervention`.
+const G_GUARDIAN_MERCIFUL_INTERVENTION: [u8; 16] = [0xB4, 0x5E, 0x7B, 0xD6, 0x6E, 0x42, 0x4A, 0x4C, 0xA6, 0x95, 0xDE, 0x63, 0xDC, 0x13, 0xE9, 0x3F];
 /// `EffectGUIDs.GuardianSaveYourselves`.
 const G_GUARDIAN_SAVE_YOURSELVES: [u8; 16] = [0x68, 0xF2, 0xC3, 0x78, 0xE6, 0xC8, 0x05, 0x48, 0xB5, 0xA3, 0xC8, 0x98, 0x70, 0xC5, 0xDD, 0x86];
 /// `EffectGUIDs.GuardianShout`.
@@ -131,6 +135,18 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 45082,
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_FLAME_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+            Check::RelatedHit { skill_id: 45082, party: Party::Other, time_offset: 0, epsilon: 10, negated: false },
+        ],
+        min_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 46616,
         source: "FirebrandHelper",
         trigger: Trigger::Damage { skill_id: 46616 },
@@ -143,6 +159,31 @@ pub const FINDERS: &[FinderDef] = &[
         source: "FirebrandHelper",
         trigger: Trigger::Damage { skill_id: 42924 },
         enable: &[Enable::NoEffectData],
+        min_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 42924,
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_FLAME_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+            Check::RelatedHit { skill_id: 42924, party: Party::Other, time_offset: 0, epsilon: 10, negated: false },
+        ],
+        min_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: ((-61i32) as u32),
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_FLAME_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+            Check::RelatedHit { skill_id: 42924, party: Party::Other, time_offset: 0, epsilon: 10, negated: true },
+            Check::RelatedHit { skill_id: 45082, party: Party::Other, time_offset: 0, epsilon: 10, negated: true },
+        ],
         min_gw2_build: 141374,
         ..FinderDef::DEFAULT
     },
@@ -222,10 +263,47 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 42360,
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_TRUTH_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+            Check::RelatedHit { skill_id: 42360, party: Party::Other, time_offset: 0, epsilon: 10, negated: false },
+        ],
+        min_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 44008,
         source: "FirebrandHelper",
         trigger: Trigger::Damage { skill_id: 44008 },
         enable: &[Enable::NoEffectData],
+        min_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 44008,
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_TRUTH_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+            Check::RelatedHit { skill_id: 44008, party: Party::Other, time_offset: 0, epsilon: 10, negated: false },
+        ],
+        min_gw2_build: 141374,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: ((-62i32) as u32),
+        source: "FirebrandHelper",
+        trigger: Trigger::Effect { guid: &G_FIREBRAND_MANTRA_OF_TRUTH_SYMBOL, by_dst: true },
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Firebrand"], base: false, negated: false },
+            Check::RelatedHit { skill_id: 44008, party: Party::Other, time_offset: 0, epsilon: 10, negated: true },
+            Check::RelatedHit { skill_id: 42360, party: Party::Other, time_offset: 0, epsilon: 10, negated: true },
+        ],
         min_gw2_build: 141374,
         ..FinderDef::DEFAULT
     },
@@ -342,6 +420,26 @@ pub const FINDERS: &[FinderDef] = &[
         ..FinderDef::DEFAULT
     },
     FinderDef {
+        skill_id: 9247,
+        source: "GuardianHelper",
+        trigger: Trigger::BuffGain { buff_id: 9235 },
+        not_accurate: true,
+        checks: &[
+            Check::RelatedEffectDst { guid: &G_GUARDIAN_GENERIC_TELEPORT_2, party: Party::Key, time_offset: 120, epsilon: 10, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 9246,
+        source: "GuardianHelper",
+        trigger: Trigger::BuffGain { buff_id: 9235 },
+        not_accurate: true,
+        checks: &[
+            Check::RelatedEffectDst { guid: &G_GUARDIAN_MERCIFUL_INTERVENTION, party: Party::Key, time_offset: 200, epsilon: 10, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
         skill_id: 9248,
         source: "GuardianHelper",
         trigger: Trigger::Effect { guid: &G_GUARDIAN_CONTEMPLATION_OF_PURITY_1, by_dst: true },
@@ -372,6 +470,30 @@ pub const FINDERS: &[FinderDef] = &[
             Check::AroundDst { negated: false },
             Check::Spec { party: Party::Other, specs: &["Guardian"], base: true, negated: false },
             Check::SecondaryEffect { guid: &G_GUARDIAN_SHOUT, inverted_src: false, type_rel: TypeRel::Any, time_offset: 0, epsilon: 10, negated: false },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 9084,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_SHOUT, by_dst: true },
+        not_accurate: true,
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Guardian"], base: true, negated: false },
+            Check::SelfBuffApply { buff_id: 743, party: Party::Other, min_duration: 19990, max_duration: 40010, min_count: 1, max_count: u32::MAX, time_offset: 0, epsilon: 10 },
+        ],
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 9153,
+        source: "GuardianHelper",
+        trigger: Trigger::Effect { guid: &G_GUARDIAN_SHOUT, by_dst: true },
+        not_accurate: true,
+        checks: &[
+            Check::AroundDst { negated: false },
+            Check::Spec { party: Party::Other, specs: &["Guardian"], base: true, negated: false },
+            Check::SelfBuffApply { buff_id: 1122, party: Party::Other, min_duration: i64::MIN, max_duration: i64::MAX, min_count: 5, max_count: u32::MAX, time_offset: 0, epsilon: 10 },
         ],
         ..FinderDef::DEFAULT
     },

@@ -30,6 +30,8 @@ const G_RELIC_OF_THE_NAUTICAL_BEAST_GROUND_1: [u8; 16] = [0xB4, 0x4B, 0xAD, 0x99
 const G_RELIC_OF_THE_NAUTICAL_BEAST_GROUND_2: [u8; 16] = [0x10, 0xD6, 0xB2, 0xD4, 0x2D, 0x39, 0x25, 0x4F, 0xB8, 0x66, 0xCE, 0x86, 0xD2, 0x7D, 0x36, 0xAD];
 /// `EffectGUIDs.RelicOfTheSteamshrieker`.
 const G_RELIC_OF_THE_STEAMSHRIEKER: [u8; 16] = [0xC0, 0xB2, 0xEC, 0x5C, 0xAE, 0x1F, 0xF3, 0x46, 0x8F, 0xD5, 0xD6, 0x21, 0x57, 0x62, 0x5E, 0x77];
+/// `EffectGUIDs.RelicOfTheStormsinger`.
+const G_RELIC_OF_THE_STORMSINGER: [u8; 16] = [0xE8, 0xEB, 0x2C, 0xDF, 0x97, 0xF3, 0x4C, 0x42, 0xA8, 0xAA, 0xC0, 0xD3, 0xBA, 0x65, 0x51, 0xD0];
 /// `EffectGUIDs.RelicOfTheTwinGenerals`.
 const G_RELIC_OF_THE_TWIN_GENERALS: [u8; 16] = [0x40, 0xEC, 0xD5, 0x8F, 0x39, 0xB3, 0x00, 0x41, 0xB3, 0xE6, 0xC7, 0xCE, 0xDB, 0x7C, 0x4D, 0x8C];
 /// `EffectGUIDs.RelicOfTheWizardsTower`.
@@ -488,6 +490,16 @@ pub const FINDERS: &[FinderDef] = &[
         source: "ProfHelper",
         trigger: Trigger::Effect { guid: &G_RELIC_OF_SORROW_3, by_dst: false },
         origin: CastOrigin::Gear,
+        ..FinderDef::DEFAULT
+    },
+    FinderDef {
+        skill_id: 73851,
+        source: "ProfHelper",
+        trigger: Trigger::Effect { guid: &G_RELIC_OF_THE_STORMSINGER, by_dst: false },
+        origin: CastOrigin::Gear,
+        checks: &[
+            Check::RelatedBuff { buff_id: 73455, party: Party::Key, kind: BuffRel::Lost, applied_duration: None, from_self: false, time_offset: 0, epsilon: 10, negated: false },
+        ],
         ..FinderDef::DEFAULT
     },
     FinderDef {
