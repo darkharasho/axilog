@@ -1831,6 +1831,19 @@ export interface FocusEntityRow {
    * under sustained fire reads high.
    */
   pre_down_casts: number
+  /**
+   * `casts_drawn` split by enemy skill, ascending by skill id. Sums to
+   * `casts_drawn` exactly; minion-targeted casts are excluded. Absent when
+   * the player drew no casts.
+   */
+  casts_by_skill?: FocusEntitySkillRow[]
+}
+
+/** One enemy skill's cast-starts aimed at one squad player. */
+export interface FocusEntitySkillRow {
+  /** Resolves through `Catalogs.skills`. */
+  skill: number
+  casts: number
 }
 
 /**

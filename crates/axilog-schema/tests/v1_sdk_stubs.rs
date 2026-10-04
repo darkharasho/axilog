@@ -76,7 +76,8 @@ const PVE_ONLY_WIRE_FIELDS: &[&str] =
 /// `tests/v1_focus.rs` synthesizes an encounter that does emit these and
 /// asserts their values; this list is what keeps the STUBS honest about
 /// them. Drop it if a WvW fixture with cast-start rows is ever committed.
-const FOCUS_SKILL_WIRE_FIELDS: &[&str] = &["skills", "casts_at_squad", "damage_total"];
+const FOCUS_SKILL_WIRE_FIELDS: &[&str] =
+    &["skills", "casts_at_squad", "damage_total", "casts_by_skill", "casts"];
 
 /// Every distinct leaf field name the 1.0 container can emit, from the
 /// committed key-set golden plus [`PVE_ONLY_WIRE_FIELDS`] and

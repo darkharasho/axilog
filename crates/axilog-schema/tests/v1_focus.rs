@@ -165,6 +165,23 @@ fn each_row_lands_on_the_player_it_was_measured_for() {
 }
 
 #[test]
+fn casts_by_skill_splits_each_rows_casts_ascending_by_skill() {
+    let doc = build();
+    let rows = &doc["blocks"]["focus"]["by_entity"];
+    let p100 = &rows[id_of(&doc, "P100")];
+    let p101 = &rows[id_of(&doc, "P101")];
+    assert_eq!(
+        p100["casts_by_skill"],
+        serde_json::json!([{ "skill": 9, "casts": 2 }, { "skill": 31, "casts": 1 }])
+    );
+    assert_eq!(p101["casts_by_skill"], serde_json::json!([{ "skill": 9, "casts": 1 }]));
+    // Every id it names resolves, like the block-level `skills` rows do.
+    for id in ["9", "31"] {
+        assert!(doc["catalogs"]["skills"].get(id).is_some(), "skill {id} not in the catalog");
+    }
+}
+
+#[test]
 fn skill_rows_carry_pooled_pairs_and_resolve_through_the_catalog() {
     let doc = build();
     let skills = doc["blocks"]["focus"]["skills"].as_array().expect("skills is an array");
@@ -316,8 +333,15 @@ fn the_focus_block_key_surface_is_pinned() {
     row_keys.sort_unstable();
     assert_eq!(
         row_keys,
-        ["casts_drawn", "casts_drawn_minions", "downs", "focus_index", "pre_down_casts"]
+        [
+            "casts_by_skill", "casts_drawn", "casts_drawn_minions", "downs", "focus_index",
+            "pre_down_casts",
+        ]
     );
+    let split = row["casts_by_skill"][0].as_object().expect("a casts_by_skill row");
+    let mut split_keys: Vec<&str> = split.keys().map(String::as_str).collect();
+    split_keys.sort_unstable();
+    assert_eq!(split_keys, ["casts", "skill"]);
 
     let skill = block["skills"][0].as_object().expect("a skill row");
     let mut skill_keys: Vec<&str> = skill.keys().map(String::as_str).collect();

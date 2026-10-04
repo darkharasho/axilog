@@ -122,6 +122,25 @@ pub struct FocusEntity {
     /// down", so a player downed twice in four seconds under sustained fire
     /// should read high, not be deduplicated down to average.
     pub pre_down_casts: u64,
+    /// [`Self::casts_drawn`] split by the enemy skill that was cast,
+    /// ascending by skill id. Sums to `casts_drawn` exactly; minion-targeted
+    /// casts are excluded for the same reason they are excluded there.
+    /// Omitted when the player drew no casts.
+    ///
+    /// Counts only, no damage: per-player damage taken by skill already
+    /// exists on the strike stream, and pairing it here would invite reading
+    /// the two as one measurement when they come from different events (see
+    /// [`FocusSkill`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub casts_by_skill: Vec<FocusEntitySkill>,
+}
+
+/// One enemy skill's cast-starts aimed at one squad player.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct FocusEntitySkill {
+    /// `catalogs.skills` key.
+    pub skill: u32,
+    pub casts: u64,
 }
 
 /// One enemy skill's activity against the squad.
@@ -181,6 +200,14 @@ pub fn build_focus(
                 focus_index: f.focus_index,
                 downs: f.downs,
                 pre_down_casts: f.pre_down_casts,
+                casts_by_skill: f
+                    .casts_by_skill
+                    .iter()
+                    .map(|(&skill, &casts)| {
+                        cats.reference_skill(skill);
+                        FocusEntitySkill { skill, casts }
+                    })
+                    .collect(),
             },
         );
     }

@@ -936,7 +936,10 @@ player):
     "by_entity": {
       "39": {
         "casts_drawn": 59, "casts_drawn_minions": 0,
-        "focus_index": 4.728597449908925, "downs": 1, "pre_down_casts": 6
+        "focus_index": 4.728597449908925, "downs": 1, "pre_down_casts": 6,
+        "casts_by_skill": [
+          { "skill": 12510, "casts": 15 }, { "skill": 30471, "casts": 15 }, "..."
+        ]
       }
     }
   }
@@ -957,6 +960,11 @@ player):
   measurably *weakens* commander separation on every holdout slice (2.70→2.36,
   2.82→2.45, 2.81→2.48 on three disjoint slices). Enemy effort spent on your
   pet is real, but it is not the enemy shooting you.
+- **`casts_by_skill` splits `casts_drawn` by enemy skill**, ascending by
+  skill id, and sums to `casts_drawn` exactly (minion-targeted casts are
+  excluded here too). Omitted for a player who drew no casts. It carries
+  counts only: per-player damage taken by skill is a different event stream
+  and already lives in `blocks.damage`.
 - **`by_entity` is squad-only**, matching `squad_size`. A non-squad friendly
   gets no row at all rather than a zeroed one — it was never in the
   denominator, and a zero row would read as "was in the squad and drew no

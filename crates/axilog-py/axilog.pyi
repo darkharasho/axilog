@@ -1746,9 +1746,14 @@ class SquadBuffsBlock(TypedDict):
 
     by_entity: Dict[str, Dict[str, SquadBuffRow]]
 
-class FocusEntityRow(TypedDict):
-    """One squad player's share of the enemy's attention."""
+class FocusEntitySkillRow(TypedDict):
+    """One enemy skill's cast-starts aimed at one squad player."""
 
+    #: Resolves through `catalogs["skills"]`.
+    skill: int
+    casts: int
+
+class _FocusEntityRowRequired(TypedDict):
     #: Enemy cast-starts whose target was this player.
     casts_drawn: int
     #: Enemy cast-starts whose target was one of this player's minions,
@@ -1767,6 +1772,14 @@ class FocusEntityRow(TypedDict):
     #: twice under sustained fire reads high rather than being deduplicated
     #: to average.
     pre_down_casts: int
+
+class FocusEntityRow(_FocusEntityRowRequired, total=False):
+    """One squad player's share of the enemy's attention."""
+
+    #: `casts_drawn` split by enemy skill, ascending by skill id. Sums to
+    #: `casts_drawn` exactly; minion-targeted casts are excluded. Absent
+    #: when the player drew no casts.
+    casts_by_skill: List[FocusEntitySkillRow]
 
 class FocusSkillRow(TypedDict):
     """One enemy skill's activity against the squad.

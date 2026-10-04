@@ -14,6 +14,19 @@ output, all suites passing).
      heading and fails the Release job (AFTER npm publish) if it finds none. Work in
      progress may sit under `## Unreleased`, but that heading MUST become
      `## vX.Y.Z — YYYY-MM-DD` before the tag is pushed. -->
+## Unreleased
+
+### Added
+- **`blocks.focus.by_entity[].casts_by_skill`: enemy casts aimed at each
+  squad player, split by skill.** The block already counted casts per player
+  (`casts_drawn`) and per skill across the whole squad (`skills[]`), but not
+  the two together, so a consumer could not say "Meteor Shower was cast at
+  this player 14 times". Each row is `{ skill, casts }`, ascending by skill
+  id, summing to `casts_drawn` exactly; minion-targeted casts stay out, as
+  they do everywhere else in the block. Additive, omitted when empty, and
+  absent on pre-2026-05 logs along with the rest of the block. Requested for
+  AxiBridge's per-player incoming skill breakdown.
+
 ## v1.15.0 — 2026-10-03
 
 ### Added

@@ -200,6 +200,10 @@ pub struct PlayerFocus {
     /// downs: a cast preceding two downs 1s apart is counted for both,
     /// because it is evidence about both.
     pub pre_down_casts: u64,
+    /// [`Self::casts_drawn`] split by the enemy skill that was cast, keyed by
+    /// skill id. Sums to `casts_drawn` exactly. Minion-targeted casts are not
+    /// in here, for the same reason they are not in `casts_drawn`.
+    pub casts_by_skill: BTreeMap<u32, u64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -308,7 +312,9 @@ pub fn build(enc: &Encounter, raw: &RawLog) -> FocusDetail {
             if squad.contains(&e.dst_agent) {
                 casts.push((e.time, e.dst_agent));
                 if let Some(&i) = addr_to_idx.get(&e.dst_agent) {
-                    out.per_player[i].casts_drawn += 1;
+                    let f = &mut out.per_player[i];
+                    f.casts_drawn += 1;
+                    *f.casts_by_skill.entry(e.skillid).or_default() += 1;
                 }
                 out.skills
                     .entry(e.skillid)
@@ -487,6 +493,38 @@ mod tests {
         assert_eq!(d.at(1).casts_drawn, 1);
         assert!((d.at(0).focus_index - 1.5).abs() < 1e-9, "{}", d.at(0).focus_index);
         assert!((d.at(1).focus_index - 0.5).abs() < 1e-9);
+    }
+
+    /// Per-player skill split: each player's map sums to their own
+    /// `casts_drawn`, and one player's casts never leak into another's map.
+    #[test]
+    fn casts_by_skill_splits_each_players_casts() {
+        let enc = enc_of(vec![player(100, true), player(101, true)], vec![enemy(200)]);
+        let raw = log_of(vec![
+            cast(1000, 200, 100, 9), cast(2000, 200, 100, 7), cast(3000, 200, 100, 9),
+            cast(4000, 200, 101, 7),
+        ]);
+        let d = build(&enc, &raw);
+        assert_eq!(d.at(0).casts_by_skill, BTreeMap::from([(7, 1), (9, 2)]));
+        assert_eq!(d.at(1).casts_by_skill, BTreeMap::from([(7, 1)]));
+        for i in 0..d.len() {
+            assert_eq!(d.at(i).casts_by_skill.values().sum::<u64>(), d.at(i).casts_drawn);
+        }
+    }
+
+    /// Minion-targeted casts stay out of the split, as they stay out of
+    /// `casts_drawn`.
+    #[test]
+    fn casts_by_skill_excludes_minion_targets() {
+        let enc = enc_of(vec![player(100, true)], vec![enemy(200)]);
+        let mut own = cast(500, 100, 0, 1);
+        own.src_instid = 10;
+        let mut pet = cast(1000, 200, 900, 9);
+        pet.dst_master_instid = 10;
+        let raw = log_of(vec![own, pet]);
+        let d = build(&enc, &raw);
+        assert_eq!(d.at(0).casts_drawn_minions, 1);
+        assert!(d.at(0).casts_by_skill.is_empty());
     }
 
     /// A log with enemies but no aimed casts must leave every index at 0.0
