@@ -14,6 +14,21 @@ output, all suites passing).
      heading and fails the Release job (AFTER npm publish) if it finds none. Work in
      progress may sit under `## Unreleased`, but that heading MUST become
      `## vX.Y.Z — YYYY-MM-DD` before the tag is pushed. -->
+## v1.16.1 — 2026-10-19
+
+### Fixed
+- **Allies on arcdps 2026-10-18 logs no longer count as enemies.** That arcdps
+  build records `TEAM_CHANGE` value 0 for every non-squad player, so nobody
+  outside the squad had a real team and the whole field (allied pugs included)
+  landed in the enemy roster: 77 "enemies" on a fight with 53. The iff graph
+  cannot rescue allies, because arcdps never logs events between two non-squad
+  players and allies never trade events with the squad. Enemies in the fight
+  always trade foe-flagged events with the squad, so a player whose only team
+  stamp is 0 and who has no affinity evidence is now treated as a non-squad
+  ally and takes the recorder's colour. Older builds are untouched: 0 of 1,584
+  pre-20261018 captures has a 0-only player. Enemy team colours (red vs green)
+  remain unrecoverable on that build; they stay team 0.
+
 ## v1.16.0 — 2026-10-04
 
 ### Added

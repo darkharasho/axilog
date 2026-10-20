@@ -778,6 +778,29 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
             is_friendly = true;
         }
 
+        // Zero-team fallback (2026-10-19). arcdps build `20261018` stamps
+        // `TEAM_CHANGE` 0 on every non-squad player -- allies and enemies
+        // alike -- so the id-equality test above files the whole map,
+        // allies included, as enemies. The affinity graph cannot rescue
+        // the allies: arcdps never records an event between two friendly
+        // players outside the squad, and a non-squad ally neither hits nor
+        // is hit by the squad, so they have graph degree 0. Enemies in the
+        // fight, by contrast, all trade foe-flagged events with the squad
+        // and are decided above. What is left with stamp 0 and no `iff`
+        // evidence is allies plus the odd idle bystander.
+        //
+        // Calibration: `20261018-205946` (Mignon, Red Desert BL), 77
+        // non-squad players all on 0; 53 trade only FOE events with the
+        // squad -- exactly the 53 Blue a squadmate on an older arcdps
+        // counted for the same fight -- and 24 trade none, against that
+        // squadmate's 19 non-squad allies. Across 1584 captures on older
+        // builds no player agent is ever 0-only, so this cannot move them.
+        // An idle enemy is misfiled as an ally, the same deliberate trade
+        // as the subgroup rescue: it contributes nothing to either side.
+        if !is_friendly && observed == Some(0) && affinity_says.is_none() {
+            is_friendly = true;
+        }
+
         if is_friendly {
             if observed != friendly_team {
                 colour_from_recorder.insert(p.agent_addr);
@@ -1803,6 +1826,47 @@ mod eotm_teardown_tests {
             enc.players[1].team, recorder_color,
             "a rescued member is on the recorder's team by the same evidence that rescued it",
         );
+    }
+
+    /// arcdps `20261018` stamps team 0 on every non-squad player. Enemies
+    /// still trade foe-flagged events with the squad and are decided by
+    /// the affinity graph; a 0-stamped player with no `iff` evidence at
+    /// all is a non-squad ally and must not land on the enemy roster.
+    #[test]
+    fn zero_stamped_player_with_no_iff_evidence_is_an_ally() {
+        const SQUAD: u32 = 707;
+        let recorder = 1u64;
+        let addrs = [recorder, 2, 101, 201];
+        let mut events = vec![
+            ev(recorder, sc::POINT_OF_VIEW, 0),
+            ev(recorder, sc::TEAM_CHANGE, SQUAD as i32),
+            ev(2, sc::TEAM_CHANGE, SQUAD as i32),
+            ev(101, sc::TEAM_CHANGE, 0), // enemy, fights the squad
+            ev(201, sc::TEAM_CHANGE, 0), // non-squad ally, never touches it
+        ];
+        for _ in 0..4 {
+            events.push(iff_event(recorder, 101, 1));
+            events.push(iff_event(101, 2, 1));
+        }
+
+        let raw = crate::evtc::RawLog {
+            header: RawHeader { build: "20261018".into(), revision: 1, boss_id: 1 },
+            agents: player_agents(&addrs), skills: vec![], events, guid_map: vec![],
+        };
+        let mut enc = wvw_encounter(vec![
+            player_sub(recorder, 1), player_sub(2, 1), player_sub(101, 0), player_sub(201, 0),
+        ]);
+        apply(&mut enc, &raw);
+
+        assert_eq!(
+            enc.players.iter().map(|p| p.agent_addr).collect::<Vec<_>>(),
+            vec![recorder, 2, 201],
+            "a 0-stamped player nobody fought is an ally",
+        );
+        assert_eq!(enc.enemies.iter().map(|e| e.id).collect::<Vec<_>>(), vec![101]);
+        let ally = enc.players.iter().find(|p| p.agent_addr == 201).unwrap();
+        assert!(!ally.in_squad);
+        assert_eq!(ally.team, enc.players[0].team, "an ally takes the recorder's colour");
     }
 
     /// `iff` outranks the subgroup tag (2026-08-28).
