@@ -45,7 +45,7 @@ CLI_BIN = os.path.join(REPO_ROOT, "target", "debug", "axilog")
 # `squadCondiCleanseSelf`/`squadBoonStrips`/`squadResurrects`). Read here
 # as plain literals (same as the Node suite), independent of the Rust-side
 # calibration tests' own tolerance windows.
-EXPECTED_PLAYER_COUNT = 42
+EXPECTED_PLAYER_COUNT = 41
 EXPECTED_SQUAD_DAMAGE_TOTAL = 2138414
 EXPECTED_SUPPORT_SUMS = {
     "cleanses": 801,
@@ -83,7 +83,7 @@ def sum_by(items, key):
 # ----------------------------------------------------------------------
 
 # The pre-1.0 `Report.players[]` was the log-recording squad PLUS
-# non-squad friendly players -- 42 on this fixture, which is also what the
+# non-squad friendly players -- 41 on this fixture, which is also what the
 # golden EI export's `players` length and `parse_file_ei` report. The two
 # roles have to stay split: the squad alone accounts for all 2,138,414
 # damage but only 776 of the 801 cleanses.

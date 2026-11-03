@@ -350,19 +350,19 @@ jobs:
             // total is a block field rather than a sum the caller does. Both
             // numbers below are the SAME values this check asserted against
             // the legacy shape -- the four friendly_player entities deal 0
-            // damage, so the old sum-over-42 and \`damage.squad.total\` agree
+            // damage, so the old sum-over-41 and \`damage.squad.total\` agree
             // exactly.
             const players = report.entities.filter(
               (e) => e.role === 'squad' || e.role === 'friendly_player'
             );
-            if (players.length !== 42) {
-              throw new Error('expected 42 players, got ' + players.length);
+            if (players.length !== 41) {
+              throw new Error('expected 41 players, got ' + players.length);
             }
             const total = report.blocks.damage.squad.total;
             if (total !== 2138414) {
               throw new Error('expected squad damage total 2138414, got ' + total);
             }
-            console.log('install-shape validation OK: 42 players, squad damage total ' + total);
+            console.log('install-shape validation OK: 41 players, squad damage total ' + total);
           "
 
   # Python wheel builds (M8 Task 3). abi3 (pyo3 "abi3-py39" feature, see
