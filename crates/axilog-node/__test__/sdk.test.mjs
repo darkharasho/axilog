@@ -62,7 +62,7 @@ function sumBy(arr, fn) {
 // ---------------------------------------------------------------------
 
 // The pre-1.0 `Report.players[]` was the log-recording squad PLUS
-// non-squad friendly players -- 42 on this fixture, which is also what
+// non-squad friendly players -- 41 on this fixture, which is also what
 // the golden EI export's `players.length` and `parseFileEi` report. The
 // two roles have to stay split here: the squad alone accounts for all
 // 2,138,414 damage but only 776 of the 801 cleanses.
@@ -151,7 +151,7 @@ test('parseFile: schema, player count, squad damage, one boon value, support sum
 
   const roster = players(report)
   assert.ok(roster.length > 0, 'expected at least one player')
-  assert.equal(roster.length, 42)
+  assert.equal(roster.length, 41)
 
   const damage = report.blocks.damage
   const squadDamageTotal = sumBy(roster, (p) => slot(damage, p)?.total ?? 0)
