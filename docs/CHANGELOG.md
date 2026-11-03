@@ -14,6 +14,21 @@ output, all suites passing).
      heading and fails the Release job (AFTER npm publish) if it finds none. Work in
      progress may sit under `## Unreleased`, but that heading MUST become
      `## vX.Y.Z — YYYY-MM-DD` before the tag is pushed. -->
+## v1.16.2 — 2026-11-02
+
+### Fixed
+- **Squad members who never fought are no longer on the roster.** A player
+  in the squad who strikes nothing, takes no strike or condition tick, casts
+  nothing and never enters combat is now dropped, exactly as Elite Insights
+  drops them from `players[]`. They used to inflate squad counts (the
+  `squad` role, EI-shape `players[]`, every per-squad denominator) in
+  axibridge and axipulse. On `wvw-small` the roster goes 42 -> 41 and the
+  squad 38 -> 37, matching the golden EI export; squad damage is unchanged,
+  and squad-wide boon generation rescales by 38/37 because it is now
+  averaged over the members who were actually there. The recorder is always
+  kept, and non-squad players are untouched. Their replay rows (e.g.
+  `blocks.replay.gliding`) still appear, carrying `agent_addr` only.
+
 ## v1.16.1 — 2026-10-19
 
 ### Fixed
