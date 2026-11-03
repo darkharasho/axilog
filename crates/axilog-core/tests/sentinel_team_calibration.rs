@@ -96,15 +96,23 @@ fn sentinel_only_team_id_falls_back_to_the_subgroup_tag() {
     let mut enc = axilog_core::model::resolve(&raw);
     axilog_core::wvw::apply(&mut enc, &raw);
 
-    let squad: std::collections::BTreeSet<u64> =
-        enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
+    // Squad members with no combat at all are dropped from the roster
+    // (`wvw::combat_participants`), so the fallback is asserted as "never
+    // an enemy" rather than "always on the roster".
+    let enemy_addrs: std::collections::BTreeSet<u64> = enc.enemies.iter().map(|e| e.id).collect();
     for addr in &sentinel_only {
         assert!(
-            squad.contains(addr),
+            !enemy_addrs.contains(addr),
             "subgroup-tagged agent {addr} (team {:?}) was filed as an enemy",
             agent_team.get(addr),
         );
     }
+    let squad: std::collections::BTreeSet<u64> =
+        enc.players.iter().flat_map(|p| p.agent_addrs.iter().copied()).collect();
+    let rescued: Vec<u64> = sentinel_only.iter().copied().filter(|a| squad.contains(a)).collect();
+    // In this capture the one sentinel-only member is also idle, so it is
+    // dropped and `rescued` is empty; the colour rule is covered by the
+    // `wvw::eotm_teardown_tests` unit tests.
     let friendly_color = enc
         .players
         .iter()
@@ -112,7 +120,7 @@ fn sentinel_only_team_id_falls_back_to_the_subgroup_tag() {
         .map(|p| p.team.clone())
         .expect("recorder is on the squad roster");
     assert_ne!(friendly_color, "unknown");
-    for addr in &sentinel_only {
+    for addr in &rescued {
         let p = enc.players.iter().find(|p| p.agent_addrs.contains(addr)).unwrap();
         assert_eq!(p.team, friendly_color, "a rescued member takes the recorder's colour");
     }

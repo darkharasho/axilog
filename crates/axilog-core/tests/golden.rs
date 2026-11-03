@@ -358,6 +358,36 @@ fn in_squad_matches_ei_golden_not_in_squad() {
     }
 }
 
+/// A squad member who is in the log but never takes part in the fight (no
+/// strike or cast, never struck, no enter-combat) is not on the roster.
+///
+/// arcdps writes the whole squad into the agent table, including members
+/// elsewhere on the map. EI's `players[]` for this fixture has 41 rows (37
+/// squad + 4 pugs); the 42nd squad member the log carries (`Anon142.6254`)
+/// is present for the full 49s with only movement and buff rows. Keeping
+/// them inflated every squad total (squad size, the focus fair-share
+/// denominator, per-player averages) that axibridge and axipulse read.
+///
+/// The idle non-squad pugs stay: EI keeps all 4 of them.
+#[test]
+fn idle_squad_members_are_dropped_like_ei() {
+    let golden = read_golden_json();
+    let golden_players = golden["players"].as_array().expect("players array");
+    let expected_squad =
+        golden_players.iter().filter(|p| !p["notInSquad"].as_bool().unwrap_or(false)).count();
+    assert_eq!(golden_players.len(), 41);
+    assert_eq!(expected_squad, 37);
+
+    let raw = decode_raw(&read_anon_fixture()).expect("decode WvW fixture");
+    let enc = resolve(&raw);
+    assert_eq!(enc.players.len(), golden_players.len(), "friendly roster size");
+    assert_eq!(enc.players.iter().filter(|p| p.in_squad).count(), expected_squad, "squad size");
+    assert!(
+        !enc.players.iter().any(|p| p.account == "Anon142.6254"),
+        "the idle squad member must not be on the roster"
+    );
+}
+
 #[test]
 fn professions_match_ei_golden() {
     let golden = read_golden_json();
