@@ -626,6 +626,37 @@ fn affinity_partition(
     color
 }
 
+/// Agent addrs that take part in the fight: the source of a strike, condi
+/// tick or cast, the target of a strike or condi tick, or the source of an
+/// enter-combat statechange. Movement, buff applies and other statechanges
+/// do not count -- an idle squad member elsewhere on the map has plenty of
+/// those.
+fn combat_participants(raw: &RawLog) -> std::collections::HashSet<u64> {
+    let mut active = std::collections::HashSet::new();
+    for e in &raw.events {
+        if e.is_statechange != sc::NONE {
+            if e.is_statechange == sc::ENTER_COMBAT {
+                active.insert(e.src_agent);
+            }
+            continue;
+        }
+        if e.is_activation != 0 {
+            active.insert(e.src_agent);
+            continue;
+        }
+        if e.is_buffremove != 0 {
+            continue;
+        }
+        let strike = e.buff == 0;
+        let condi_tick = e.buff == 1 && e.buff_dmg != 0;
+        if strike || condi_tick {
+            active.insert(e.src_agent);
+            active.insert(e.dst_agent);
+        }
+    }
+    active
+}
+
 pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     let (agent_team, recorded_by) = resolve_teams(raw);
 
@@ -931,6 +962,22 @@ pub fn apply(enc: &mut Encounter, raw: &RawLog) {
     // NOT `character`, which for the non-squad friendlies in this same
     // vector is a shared elite-spec label. See `dedupe_players`.
     dedupe_players(&mut enc.players, &instids);
+
+    // Idle squad members. arcdps writes the whole squad into the agent
+    // table, including members elsewhere on the map who never take part in
+    // the fight. EI's `players[]` leaves them out (`fixtures/wvw-small`: 41
+    // rows, while the log carries a 42nd squad member present for all 49s
+    // with only movement and buff rows), and keeping them inflated every
+    // squad total consumers read. Runs after the dedupe so a relogged
+    // account counts activity on any of its addrs. Idle NON-squad players
+    // stay: EI keeps all 4 idle pugs in the same fixture. The recorder is
+    // never dropped.
+    let active = combat_participants(raw);
+    enc.players.retain(|p| {
+        !p.in_squad
+            || recorded_by.is_some_and(|r| p.agent_addrs.contains(&r))
+            || p.agent_addrs.iter().any(|a| active.contains(a))
+    });
 
     // CBTS_MARKER (sc=37) / CBTS_TICK (sc=84): Task 7, M2. Runs last, after
     // dedupe, so `agent_addrs` on each final Player/Enemy already covers
@@ -1641,6 +1688,9 @@ mod eotm_teardown_tests {
 
         let mut events = vec![ev(recorder, sc::POINT_OF_VIEW, 0)];
         for &a in &squad { events.push(ev(a, sc::TEAM_CHANGE, SQUAD as i32)); }
+        // Every squad member is in combat (statechange, so no iff edge):
+        // an idle squad member would be dropped from the roster instead.
+        for &a in &squad { events.push(ev(a, sc::ENTER_COMBAT, 0)); }
         for &a in &enemies { events.push(ev(a, sc::TEAM_CHANGE, ENEMY as i32)); }
         // Teardown: the recorder and only HALF the squad get re-stamped.
         for &a in &[recorder, 2, 3] {
@@ -1800,6 +1850,8 @@ mod eotm_teardown_tests {
                 // The regression: a squad member whose only stamp is the
                 // sentinel.
                 ev(2, sc::TEAM_CHANGE, 1875),
+                // In combat (no iff edge), so it is not an idle member.
+                ev(2, sc::ENTER_COMBAT, 0),
                 ev(101, sc::TEAM_CHANGE, ENEMY as i32),
                 // Same unresolvable id, but NO subgroup -- an enemy or a
                 // non-squad ally. Nothing vouches for it, so it stays off
@@ -1975,10 +2027,12 @@ mod eotm_teardown_tests {
         );
     }
 
-    /// A squad member the affinity graph cannot reach -- present for the
-    /// fight, never in it (graph degree 0; 9 of the 40 exiles). No `iff`
-    /// evidence exists in either direction, so the subgroup tag is all
-    /// there is, and it gets the vote it does not get above.
+    /// A squad member the affinity graph cannot reach -- in combat but never
+    /// trading an event with another player (graph degree 0; 9 of the 40
+    /// exiles). No `iff` evidence exists in either direction, so the
+    /// subgroup tag is all there is, and it gets the vote it does not get
+    /// above. (A member with no combat at all is dropped from the roster
+    /// outright: see `combat_participants`.)
     #[test]
     fn subgroup_tag_rescues_a_member_with_no_combat_evidence() {
         const SQUAD: u32 = 1282;
@@ -1992,8 +2046,10 @@ mod eotm_teardown_tests {
                 ev(recorder, sc::POINT_OF_VIEW, 0),
                 ev(recorder, sc::TEAM_CHANGE, SQUAD as i32),
                 // Tagged, stamped onto a real-but-wrong id, and it never
-                // fights: nothing but the tag can save it.
+                // trades an event with a player: nothing but the tag can
+                // save it.
                 ev(2, sc::TEAM_CHANGE, SPAWN_IN as i32),
+                ev(2, sc::ENTER_COMBAT, 0),
                 // Untagged and equally idle: nothing vouches for it.
                 ev(101, sc::TEAM_CHANGE, SPAWN_IN as i32),
             ],
