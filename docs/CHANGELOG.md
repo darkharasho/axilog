@@ -14,6 +14,28 @@ output, all suites passing).
      heading and fails the Release job (AFTER npm publish) if it finds none. Work in
      progress may sit under `## Unreleased`, but that heading MUST become
      `## vX.Y.Z — YYYY-MM-DD` before the tag is pushed. -->
+## v1.17.0 — 2026-11-10
+
+### Added
+- **Revenant damage modifiers.** Revenant, Herald, Renegade, Vindicator and
+  Conduit had no damage modifiers at all, because the catalog only took
+  per-profession definitions seen in the WvW reference capture, and that
+  capture had no Revenant modifiers. All of GW2EI's Revenant-family
+  definitions are now transcribed (87 added; 21 skipped with reasons in the
+  catalog's skip table, mostly BuffOnFoe rows GW2EI itself drops in WvW).
+  The motivating one is **Rite of the Great Dwarf** in incoming damage
+  modifiers (−33%, or −50% with Versed in Stone). It is an ally buff, so it
+  shows up on every profession it covered. Across 300 real WvW logs it lands
+  in 23, next to Demonic Resistance, Vengeful Hammers, Determined Resolution
+  (Numinous Gift) and the outgoing Revenant traits. Only `--modifiers` /
+  `computeDamageModifiers` output changes; flagless output is byte-identical.
+
+### Changed
+- `scripts/gen_damage_mod_catalog.py` now reproduces the committed catalog
+  byte-for-byte. It had drifted from the icon mirror and the `stack_type`
+  promotion in `buff_stack.rs`, so a regenerate would have silently reverted
+  both.
+
 ## v1.16.2 — 2026-11-02
 
 ### Fixed
