@@ -11,7 +11,7 @@
 //! the reference capture or not -- and the per-profession files contribute
 //! the definitions whose ids appear in that capture's `damageModMap`.
 //!
-//! **239 statements considered = 205 transcribed + 34 skipped.** Nothing is dropped silently; the skipped table
+//! **347 statements considered = 292 transcribed + 55 skipped.** Nothing is dropped silently; the skipped table
 //! below is exhaustive and each row carries every reason that applies.
 //!
 //! Every entry cites the `file:line` of the C# statement it came from, and
@@ -58,11 +58,19 @@
 //! | 9 | `Mod_RuneOfTheScrapper` | `GearDamageModifiers.cs:97` | checker `(x,log) => ProfHelper.TargetOutsideRangeChecker(x, log, 600)` |
 //! | 25 | `Mod_HuntersTactics` | `RangerHelper.cs:480` | checker `(x, log) => x.IsFlanking \|\| x.To.GetCurrentBreakbarState(log, x.Time) != BreakbarState.None` |
 //! | 25 | `Mod_HuntersTactics` | `RangerHelper.cs:482` | checker `(x, log) => x.IsFlanking \|\| x.To.GetCurrentBreakbarState(log, x.Time) != BreakbarState.None` |
+//! | 28 | `Mod_RisingTide` | `RevenantHelper.cs:109` | checker `FromHPChecker(75)` |
+//! | 29 | `Mod_UnsuspectingStrikes` | `RevenantHelper.cs:120` | checker `ToHPChecker(80)` |
+//! | 29 | `Mod_UnsuspectingStrikes` | `RevenantHelper.cs:123` | checker `ToHPChecker(80)` |
+//! | 29 | `Mod_UnsuspectingStrikes` | `RevenantHelper.cs:126` | checker `ToHPChecker(80)` |
+//! | 31 | `Mod_CloseQuarters` | `RevenantHelper.cs:193` | checker `(x, log) => TargetOutsideRangeChecker(x, log, 360, true)` |
 //! | 57 | `Mod_Vulnerability` | `SharedDamageModifiers.cs:57` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 58 | `Mod_Protection` | `SharedDamageModifiers.cs:40` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 59 | `Mod_Resolution` | `SharedDamageModifiers.cs:41` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 72 | `Mod_StoneFlesh` | `ElementalistHelper.cs:220` | EI-synthetic buff id FireEarthAttunement = -7 (a computed graph, not a wire buff) |
 //! | 87 | `Mod_HuntersFortification` | `DragonhunterHelper.cs:110` | NumberOfConditions pseudo-buff graph (no condition-buff id table in this project) |
+//! | 141 | `Mod_ReinforcedPotency` | `HeraldHelper.cs:37` | upstream overlap: from February2025Balance both this `sPvP` row and `:39` `PvEsPvP` claim sPvP; kept `:39`. sPvP-only, so inert for WvW |
+//! | 154 | `Mod_DeterminedResolution` | `RevenantHelper.cs:204` | multi-source definition (HashSet<Source> BaseRevenantOnly/Herald/Renegade/Vindicator) -- ModSource::Spec holds a single source |
+//! | 154 | `Mod_DeterminedResolution` | `RevenantHelper.cs:206` | multi-source definition (HashSet<Source> BaseRevenantOnly/Herald/Renegade/Vindicator) -- ModSource::Spec holds a single source |
 //! | 215 | `Mod_Distortion` | `MesmerHelper.cs:242` | UsingHitAndAbsorbedDamageEvents (absorbed hits not classified) |
 //! | 215 | `Mod_Distortion` | `MesmerHelper.cs:245` | UsingHitAndAbsorbedDamageEvents (absorbed hits not classified) |
 //! | 219 | `Mod_FlameLegionRune` | `GearDamageModifiers.cs:31` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
@@ -75,6 +83,10 @@
 //! | 226 | `Mod_RelicOfPeitha` | `GearDamageModifiers.cs:52` | WithBuffOnFoeFromActor (per-applier stacks not modelled); UsingEarlyExit (early-exit actor checker not modelled); BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 227 | `Mod_RuneOfPerplexity` | `GearDamageModifiers.cs:100` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 229 | `Mod_FlowLikeWater10` | `ElementalistHelper.cs:166` | checker `FromHPChecker(50)` |
+//! | 239 | `Mod_TargetedDestruction` | `RevenantHelper.cs:130` | multi-source definition (HashSet<Source> BaseRevenantOnly/Herald/Renegade/Vindicator) -- ModSource::Spec holds a single source |
+//! | 239 | `Mod_TargetedDestruction` | `RevenantHelper.cs:132` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 239 | `Mod_TargetedDestruction` | `RevenantHelper.cs:134` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 240 | `Mod_DwarvenBattleTraining` | `RevenantHelper.cs:84` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 252 | `Mod_ExposedStrike` | `SharedDamageModifiers.cs:45` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 252 | `Mod_ExposedStrike` | `SharedDamageModifiers.cs:49` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 253 | `Mod_OldExposedStrike` | `SharedDamageModifiers.cs:53` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
@@ -86,7 +98,16 @@
 //! | 327 | `Mod_BeastlyWarden_Pet` | `RangerHelper.cs:507` | checker `(x, log) => IsJuvenileUrsinePet(x.From) \|\| IsJuvenilePorcinePet(x.From)`; UsingEarlyExit (early-exit actor checker not modelled) |
 //! | 327 | `Mod_BeastlyWarden_Pet` | `RangerHelper.cs:512` | checker `(x, log) => IsJuvenileUrsinePet(x.From) \|\| IsJuvenilePorcinePet(x.From)`; UsingEarlyExit (early-exit actor checker not modelled) |
 //! | 328 | `Mod_EmpoweredIllusions` | `MesmerHelper.cs:154` | checker `IllusionsChecker`; UsingEarlyExit (early-exit actor checker not modelled) |
+//! | 345 | `Mod_Brutality` | `RevenantHelper.cs:139` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 345 | `Mod_Brutality` | `RevenantHelper.cs:141` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 345 | `Mod_Brutality` | `RevenantHelper.cs:143` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 345 | `Mod_Brutality` | `RevenantHelper.cs:145` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //! | 374 | `Mod_RadiantArmamentsHammer` | `LuminaryHelper.cs:56` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 410 | `Mod_TargetedDestruction_NuminousGift` | `ConduitHelper.cs:36` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 435 | `Mod_ForcedEngagement` | `RevenantHelper.cs:171` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 435 | `Mod_ForcedEngagement` | `RevenantHelper.cs:174` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 442 | `Mod_Heartpiercer` | `RenegadeHelper.cs:72` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
+//! | 442 | `Mod_Heartpiercer` | `RenegadeHelper.cs:74` | BuffOnFoe family: GW2EI drops it outright in WvW/sPvP (BuffOnFoeDamageModifier.cs:83-91) -- definitionally inert here |
 //!
 //! The `BuffOnFoe` rows are not a gap in this port: GW2EI itself returns
 //! `false` from `BuffOnFoeDamageModifier.Keep` for every WvW and sPvP log
@@ -98,10 +119,12 @@
 pub mod buff_stack;
 pub mod amalgam;
 pub mod berserker;
+pub mod conduit;
 pub mod elementalist;
 pub mod engineer;
 pub mod gear;
 pub mod guardian;
+pub mod herald;
 pub mod item;
 pub mod luminary;
 pub mod mesmer;
@@ -109,10 +132,13 @@ pub mod necromancer;
 pub mod paragon;
 pub mod ranger;
 pub mod reaper;
+pub mod renegade;
+pub mod revenant;
 pub mod shared;
 pub mod tempest;
 pub mod troubadour;
 pub mod untamed;
+pub mod vindicator;
 pub mod warrior;
 
 /// GW2EI `Mod_MovingBonus = 10` -- kept under its Task 1 name because the
@@ -140,6 +166,9 @@ pub static CATALOG: &[&DamageModifierDef] = &[
     &berserker::D170_6,
     &berserker::D170_7,
     &berserker::D170_8,
+    &conduit::D373_0,
+    &conduit::D409_0,
+    &conduit::D409_1,
     &elementalist::D67_0,
     &elementalist::D67_1,
     &elementalist::D11_0,
@@ -200,6 +229,35 @@ pub static CATALOG: &[&DamageModifierDef] = &[
     &guardian::D111_0,
     &guardian::D111_1,
     &guardian::D111_2,
+    &herald::D141_0,
+    &herald::D141_1,
+    &herald::D141_2,
+    &herald::D141_3,
+    &herald::D141_4,
+    &herald::D141_5,
+    &herald::D142_0,
+    &herald::D142_1,
+    &herald::D142_2,
+    &herald::D142_3,
+    &herald::D142_4,
+    &herald::D142_5,
+    &herald::D142_6,
+    &herald::D316_0,
+    &herald::D143_0,
+    &herald::D143_1,
+    &herald::D143_2,
+    &herald::D143_3,
+    &herald::D143_4,
+    &herald::D143_5,
+    &herald::D432_0,
+    &herald::D432_1,
+    &herald::D433_0,
+    &herald::D433_1,
+    &herald::D144_0,
+    &herald::D145_0,
+    &herald::D145_1,
+    &herald::D434_0,
+    &herald::D434_1,
     &item::D10_0,
     &item::D51_0,
     &item::D211_0,
@@ -260,6 +318,55 @@ pub static CATALOG: &[&DamageModifierDef] = &[
     &reaper::D129_0,
     &reaper::D129_1,
     &reaper::D129_2,
+    &renegade::D146_0,
+    &renegade::D146_1,
+    &renegade::D147_0,
+    &renegade::D147_1,
+    &renegade::D147_2,
+    &renegade::D325_0,
+    &renegade::D324_0,
+    &renegade::D2_0,
+    &renegade::D2_1,
+    &renegade::D317_0,
+    &renegade::D317_1,
+    &renegade::D317_2,
+    &renegade::D149_0,
+    &renegade::D148_0,
+    &renegade::D148_1,
+    &renegade::D148_2,
+    &revenant::D150_0,
+    &revenant::D150_1,
+    &revenant::D151_0,
+    &revenant::D151_1,
+    &revenant::D151_2,
+    &revenant::D151_3,
+    &revenant::D28_0,
+    &revenant::D28_1,
+    &revenant::D28_2,
+    &revenant::D152_0,
+    &revenant::D152_1,
+    &revenant::D30_0,
+    &revenant::D156_0,
+    &revenant::D157_0,
+    &revenant::D438_0,
+    &revenant::D441_0,
+    &revenant::D158_0,
+    &revenant::D342_0,
+    &revenant::D153_0,
+    &revenant::D153_1,
+    &revenant::D153_2,
+    &revenant::D153_3,
+    &revenant::D153_4,
+    &revenant::D154_0,
+    &revenant::D154_1,
+    &revenant::D154_2,
+    &revenant::D154_3,
+    &revenant::D343_0,
+    &revenant::D343_1,
+    &revenant::D343_2,
+    &revenant::D155_0,
+    &revenant::D155_1,
+    &revenant::D155_2,
     &shared::D422_0,
     &shared::D423_0,
     &shared::D424_0,
@@ -314,6 +421,12 @@ pub static CATALOG: &[&DamageModifierDef] = &[
     &untamed::D93_17,
     &untamed::D93_18,
     &untamed::D93_19,
+    &vindicator::D159_0,
+    &vindicator::D159_1,
+    &vindicator::D159_2,
+    &vindicator::D160_0,
+    &vindicator::D160_1,
+    &vindicator::D160_2,
     &warrior::D172_0,
     &warrior::D172_1,
     &warrior::D172_2,

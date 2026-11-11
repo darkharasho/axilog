@@ -38,6 +38,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from icon_mirror import mirror  # noqa: E402
+
 ROOT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/gw2ei"
 OUT = os.path.normpath(
     os.path.join(
@@ -52,6 +55,13 @@ OUT = os.path.normpath(
 TARGET_IDS = {
     10, 11, 18, 21, 25, 36, 44, 54, 57, 58, 59, 61, 62, 67, 72, 74, 75, 78, 87, 93, 94, 98, 99, 107, 108, 109, 111, 119, 124, 125, 126, 128, 129, 131, 132, 170, 172, 173, 174, 175, 176, 215, 229, 312, 313, 318, 319, 327, 328, 334, 336, 361, 362, 364, 368, 369, 370, 371, 372, 374, 376, 389, 390, 403, 411, 422, 423, 424, 425, 426, 427, 428, 429, 431,
 }
+# Revenant-family modifiers (Revenant/Herald/Renegade/Vindicator/Conduit).
+# None appeared in the reference capture, so the whole profession was absent;
+# added wholesale on request ("Rite of the Great Dwarf" in incoming mods).
+REVENANT_IDS = {
+    2, 28, 29, 30, 31, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 239, 240, 316, 317, 324, 325, 342, 343, 345, 373, 409, 410, 432, 433, 434, 435, 438, 441, 442,
+}
+TARGET_IDS |= REVENANT_IDS
 
 
 
@@ -323,7 +333,7 @@ def analyse(ctor, args, chain, path, line):
     rec['src_type']=f"DamageType::{DT[st.strip().split('.')[-1]]}"
     rec['compare_type']=f"DamageType::{DT[ct.strip().split('.')[-1]]}"
     rec['source']=source(src)
-    rec['icon']=icon(ic)
+    rec['icon']=mirror(icon(ic))
     rec['mode']=f'ModifierMode::{mode(md)}'
 
     for cname,arg in chain:
@@ -376,11 +386,11 @@ def buff_stack_table():
 
     Parsed out of GW2EI's own `new Buff(...)` declarations; the short ctor
     overload defaults to `BuffStackType.Force, 1` (`Buff.cs:120-125`).
-    Era-gated redefinitions of one id keep the FIRST declaration, which is
-    the live one for every id the catalog watches (verified: none of them
-    has a conflicting redefinition).
+    Era-gated redefinitions of one id keep the FIRST declaration, except
+    the ids in `BUFF_DECL_PICK`, which name the declaration to use by
+    index (Regeneration: see `BUFF_STACK_NOTES`).
     """
-    table = {}
+    decls = collections.defaultdict(list)
     for f in glob.glob(ROOT + "/GW2EIEvtcParser/EIData/**/*.cs", recursive=True):
         t = open(f, encoding="utf-8-sig").read()
         for m in re.finditer(r"new Buff\(", t):
@@ -417,8 +427,7 @@ def buff_stack_table():
                 cap = int(cap)
             except ValueError:
                 cap = 1
-            table.setdefault(
-                bid,
+            decls[bid].append(
                 (
                     kind in INTENSITY_STACK_TYPES,
                     kind,
@@ -428,7 +437,10 @@ def buff_stack_table():
                     t.count("\n", 0, m.start()) + 1,
                 ),
             )
-    return table
+    return {
+        bid: rows[BUFF_DECL_PICK.get(bid, 0)]
+        for bid, rows in decls.items()
+    }
 
 
 # ----------------------------------------------------------------------
@@ -451,6 +463,17 @@ def rs_str(s):
 def rs_f(x):
     x = float(x)
     return repr(x) if x != int(x) else f"{int(x)}.0"
+
+
+#: GW2EI statements whose build x mode window OVERLAPS a sibling definition
+#: of the same id -- an upstream conflict `no_ambiguous_definition_for_any_
+#: build_and_mode` rightly refuses. Keyed by (symbol, file, line); each is
+#: skipped with the reason recorded in the generated skip table.
+UPSTREAM_OVERLAPS = {
+    ("Mod_ReinforcedPotency", "HeraldHelper.cs", 37):
+        "upstream overlap: from February2025Balance both this `sPvP` row and "
+        "`:39` `PvEsPvP` claim sPvP; kept `:39`. sPvP-only, so inert for WvW",
+}
 
 
 def collect():
@@ -478,6 +501,9 @@ def collect():
                 continue
             considered += 1
             line = text.count("\n", 0, start) + 1
+            if (sym, os.path.basename(rel), line) in UPSTREAM_OVERLAPS:
+                skipped.append((mid, sym, rel, line, UPSTREAM_OVERLAPS[(sym, os.path.basename(rel), line)]))
+                continue
             try:
                 recs.append(analyse(ctor, args, chain, rel, line))
             except Skip as ex:
@@ -559,6 +585,27 @@ def emit_group(gname, recs):
     return idents
 
 
+#: Buff ids whose FIRST `new Buff(...)` is a retired era row: index of the
+#: declaration (in GW2EI file order) that is live for every log we parse.
+BUFF_DECL_PICK = {718: 1}
+
+#: Per-row commentary carried into `buff_stack.rs` (first line continues the
+#: citation line; the rest are full comment lines).
+BUFF_STACK_NOTES = {
+    718: [
+        "NOTE: GW2EI carries",
+        "TWO catalogue rows for Regeneration and M16 transcribed the wrong one",
+        "-- `CommonBuffs.cs:19` is `BuffStackType.Queue` but is build-gated to",
+        "`[StartOfLife, February2018Balance)`; every log this project will ever",
+        "see takes the `:21` row. Corrected in MBUFFSIM Task 2. Behaviourally",
+        "inert TODAY (both types are `BuffType.Duration`, so",
+        "`is_intensity()` is false either way and the simulator dispatch is",
+        "unchanged) -- it makes the deferred `HealingLogic` gap visible in the",
+        "type system instead of hidden behind a mis-citation.",
+    ],
+}
+
+
 def emit_buff_stack(used_ids, table):
     L = [
         "//! `buff id -> (stacking kind, capacity)`, for every buff the catalog",
@@ -575,16 +622,21 @@ def emit_buff_stack(used_ids, table):
         "//! TRACKER cannot be right -- it silently simulated Fury, Protection and",
         "//! Resolution as stacking buffs, which the calibration caught.",
         "//!",
-        "//! `intensity` is `BuffStackType` in",
-        "//! `{Stacking, StackingConditionalLoss, StackingUniquePerSrc}`",
-        "//! (`ArcDPSEnums.cs:384-393`); `Queue`/`Regeneration`/`Force` are duration",
-        "//! buffs. `capacity` is GW2EI's own, used only as the fallback when the log",
-        "//! carries no `CBTS_BUFFINFO` row for the buff.",
+        "//! `stack_type` is GW2EI's `BuffStackType` verbatim (`ArcDPSEnums.cs:384-393`)",
+        "//! -- MBUFFSIM Task 2 promoted this field from the `intensity: bool` M16",
+        "//! carried, because rule 2's band aid (`EIData/Buffs/BuffsContainer.cs:196-252`)",
+        "//! gates on `StackingConditionalLoss` vs `Stacking` specifically. Read",
+        "//! [`crate::analysis::buffs::BuffStackType::is_intensity`] for the old",
+        "//! bool's meaning (`Queue`/`Regeneration`/`Force` are duration buffs).",
+        "//! `capacity` is GW2EI's own, used only as the fallback when the log carries",
+        "//! no `CBTS_BUFFINFO` row for the buff.",
         "",
-        "/// One row of GW2EI's buff catalog: `(id, intensity, capacity)`.",
+        "use crate::analysis::buffs::BuffStackType;",
+        "",
+        "/// One row of GW2EI's buff catalog: `(id, stack_type, capacity)`.",
         "pub struct BuffStackInfo {",
         "    pub id: u32,",
-        "    pub intensity: bool,",
+        "    pub stack_type: BuffStackType,",
         "    pub capacity: u32,",
         "}",
         "",
@@ -593,9 +645,14 @@ def emit_buff_stack(used_ids, table):
     ]
     for i in used_ids:
         e = table[i]
-        L.append(f"    // {e[3]} -- BuffStackType.{e[1]}, {e[2]} ({e[4]}:{e[5]})")
+        if i in BUFF_STACK_NOTES:
+            L.append(f"    // {e[3]} -- BuffStackType.{e[1]}, {e[2]}")
+            L.append(f"    // ({e[4]}:{e[5]}). " + BUFF_STACK_NOTES[i][0])
+            L += ["    // " + x for x in BUFF_STACK_NOTES[i][1:]]
+        else:
+            L.append(f"    // {e[3]} -- BuffStackType.{e[1]}, {e[2]} ({e[4]}:{e[5]})")
         L.append(
-            f"    BuffStackInfo {{ id: {i}, intensity: {str(e[0]).lower()}, capacity: {e[2]} }},"
+            f"    BuffStackInfo {{ id: {i}, stack_type: BuffStackType::{e[1]}, capacity: {e[2]} }},"
         )
     L += [
         "];",
@@ -608,7 +665,7 @@ def emit_buff_stack(used_ids, table):
         "/// `BuffStackType` is intensity-stacking. Unknown ids are treated as",
         "/// duration buffs, which is GW2EI's own default (`Buff.cs:120`).",
         "pub fn is_intensity(id: u32) -> bool {",
-        "    stack_info(id).is_some_and(|b| b.intensity)",
+        "    stack_info(id).is_some_and(|b| b.stack_type.is_intensity())",
         "}",
         "",
         "/// Every id any catalog tracker watches must be in the table, or its",
