@@ -30,7 +30,7 @@ pub struct BuffStackInfo {
     pub capacity: u32,
 }
 
-/// Sorted by id ([`stack_info`] binary-searches it). 91 entries.
+/// Sorted by id ([`stack_info`] binary-searches it). 117 entries.
 pub static BUFF_STACK_INFO: &[BuffStackInfo] = &[
     // Protection -- BuffStackType.Queue, 5 (GW2EIEvtcParser/EIData/Buffs/CommonBuffs.cs:18)
     BuffStackInfo { id: 717, stack_type: BuffStackType::Queue, capacity: 5 },
@@ -77,8 +77,28 @@ pub static BUFF_STACK_INFO: &[BuffStackInfo] = &[
     BuffStackInfo { id: 13342, stack_type: BuffStackType::Stacking, capacity: 10 },
     // Light Aura -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/Buffs/CommonBuffs.cs:101)
     BuffStackInfo { id: 25518, stack_type: BuffStackType::Force, capacity: 1 },
+    // Rite of the Great Dwarf -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/RevenantHelper.cs:228)
+    BuffStackInfo { id: 26596, stack_type: BuffStackType::Force, capacity: 1 },
     // Resistance -- BuffStackType.Queue, 5 (GW2EIEvtcParser/EIData/Buffs/CommonBuffs.cs:28)
     BuffStackInfo { id: 26980, stack_type: BuffStackType::Queue, capacity: 5 },
+    // Vengeful Hammers -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/RevenantHelper.cs:227)
+    BuffStackInfo { id: 27273, stack_type: BuffStackType::Force, capacity: 1 },
+    // Facet of Light -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:109)
+    BuffStackInfo { id: 27336, stack_type: BuffStackType::Force, capacity: 1 },
+    // Facet of Strength -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:116)
+    BuffStackInfo { id: 27376, stack_type: BuffStackType::Force, capacity: 1 },
+    // Facet of Chaos -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:118)
+    BuffStackInfo { id: 27983, stack_type: BuffStackType::Force, capacity: 1 },
+    // Facet of Darkness -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:112)
+    BuffStackInfo { id: 28036, stack_type: BuffStackType::Force, capacity: 1 },
+    // Facet of Elements -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:114)
+    BuffStackInfo { id: 28243, stack_type: BuffStackType::Force, capacity: 1 },
+    // Hardening Persistence -- BuffStackType.Stacking, 10 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:129)
+    BuffStackInfo { id: 28957, stack_type: BuffStackType::Stacking, capacity: 10 },
+    // Facet of Nature -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:120)
+    BuffStackInfo { id: 29275, stack_type: BuffStackType::Force, capacity: 1 },
+    // Vicious Lacerations -- BuffStackType.Stacking, 3 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/RevenantHelper.cs:250)
+    BuffStackInfo { id: 29395, stack_type: BuffStackType::Stacking, capacity: 3 },
     // Reaper's Shroud -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Necromancer/ReaperHelper.cs:78)
     BuffStackInfo { id: 29446, stack_type: BuffStackType::Force, capacity: 1 },
     // Berserk -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Warrior/BerserkerHelper.cs:63)
@@ -97,6 +117,8 @@ pub static BUFF_STACK_INFO: &[BuffStackInfo] = &[
     BuffStackInfo { id: 33148, stack_type: BuffStackType::Force, capacity: 1 },
     // Writ of Masterful Strength -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/Buffs/UtilityBuffs.cs:101)
     BuffStackInfo { id: 33297, stack_type: BuffStackType::Force, capacity: 1 },
+    // Rite of the Great Dwarf (Ancient Echo) -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/RevenantHelper.cs:231)
+    BuffStackInfo { id: 33330, stack_type: BuffStackType::Force, capacity: 1 },
     // Bowl of Curry Mussel Soup -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/Buffs/FoodBuffs.cs:114)
     BuffStackInfo { id: 33337, stack_type: BuffStackType::Force, capacity: 1 },
     // Plate of Mussels Gnashblade -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/Buffs/FoodBuffs.cs:30)
@@ -125,10 +147,28 @@ pub static BUFF_STACK_INFO: &[BuffStackInfo] = &[
     BuffStackInfo { id: 40052, stack_type: BuffStackType::Queue, capacity: 9 },
     // Berserker's Power -- BuffStackType.Stacking, 3 (GW2EIEvtcParser/EIData/ProfHelpers/Warrior/WarriorHelper.cs:226)
     BuffStackInfo { id: 42539, stack_type: BuffStackType::Stacking, capacity: 3 },
+    // Kalla's Fervor -- BuffStackType.Stacking, 5 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/RenegadeHelper.cs:98)
+    BuffStackInfo { id: 42883, stack_type: BuffStackType::Stacking, capacity: 5 },
+    // Breakrazor's Bastion -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/RenegadeHelper.cs:95)
+    BuffStackInfo { id: 44682, stack_type: BuffStackType::Force, capacity: 1 },
+    // Improved Kalla's Fervor -- BuffStackType.Stacking, 5 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/RenegadeHelper.cs:99)
+    BuffStackInfo { id: 45614, stack_type: BuffStackType::Stacking, capacity: 5 },
+    // Burst of Strength -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:131)
+    BuffStackInfo { id: 51653, stack_type: BuffStackType::Force, capacity: 1 },
+    // Facet of Nature-Dwarf -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:125)
+    BuffStackInfo { id: 51677, stack_type: BuffStackType::Force, capacity: 1 },
+    // Facet of Chaos (Traited) -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:119)
+    BuffStackInfo { id: 51685, stack_type: BuffStackType::Force, capacity: 1 },
+    // Facet of Strength (Traited) -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:117)
+    BuffStackInfo { id: 51700, stack_type: BuffStackType::Force, capacity: 1 },
+    // Facet of Elements (Traited) -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/HeraldHelper.cs:115)
+    BuffStackInfo { id: 51706, stack_type: BuffStackType::Force, capacity: 1 },
     // Can of Stewed Oysters -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/Buffs/FoodBuffs.cs:104)
     BuffStackInfo { id: 53384, stack_type: BuffStackType::Force, capacity: 1 },
     // Soul Barbs -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Necromancer/NecromancerHelper.cs:191)
     BuffStackInfo { id: 53489, stack_type: BuffStackType::Force, capacity: 1 },
+    // Unyielding Spirit -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/RevenantHelper.cs:256)
+    BuffStackInfo { id: 55044, stack_type: BuffStackType::Force, capacity: 1 },
     // Symbolic Avenger -- BuffStackType.Stacking, 5 (GW2EIEvtcParser/EIData/ProfHelpers/Guardian/GuardianHelper.cs:256)
     BuffStackInfo { id: 56890, stack_type: BuffStackType::Stacking, capacity: 5 },
     // Peppercorn-Crusted Sous-Vide Steak -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/Buffs/FoodBuffs.cs:409)
@@ -161,6 +201,10 @@ pub static BUFF_STACK_INFO: &[BuffStackInfo] = &[
     BuffStackInfo { id: 59592, stack_type: BuffStackType::Queue, capacity: 99 },
     // Harbinger Shroud -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Necromancer/HarbingerHelper.cs:93)
     BuffStackInfo { id: 59964, stack_type: BuffStackType::Force, capacity: 1 },
+    // Forerunner of Death -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/VindicatorHelper.cs:57)
+    BuffStackInfo { id: 62811, stack_type: BuffStackType::Force, capacity: 1 },
+    // Urn of Saint Viktor -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/VindicatorHelper.cs:55)
+    BuffStackInfo { id: 62864, stack_type: BuffStackType::Force, capacity: 1 },
     // Pet Unleashed -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Ranger/UntamedHelper.cs:125)
     BuffStackInfo { id: 63145, stack_type: BuffStackType::Force, capacity: 1 },
     // Forest's Fortification -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Ranger/UntamedHelper.cs:127)
@@ -187,10 +231,14 @@ pub static BUFF_STACK_INFO: &[BuffStackInfo] = &[
     BuffStackInfo { id: 70913, stack_type: BuffStackType::Force, capacity: 1 },
     // Nourys's Hunger (Damage Buff) -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/Buffs/CommonBuffs.cs:213)
     BuffStackInfo { id: 71431, stack_type: BuffStackType::Force, capacity: 1 },
+    // All for One -- BuffStackType.Queue, 99 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/RenegadeHelper.cs:100)
+    BuffStackInfo { id: 73157, stack_type: BuffStackType::Queue, capacity: 99 },
     // Relic of the Claw -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/Buffs/CommonBuffs.cs:217)
     BuffStackInfo { id: 73955, stack_type: BuffStackType::Force, capacity: 1 },
     // Relic of Sorrow -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/Buffs/CommonBuffs.cs:215)
     BuffStackInfo { id: 74410, stack_type: BuffStackType::Force, capacity: 1 },
+    // Resolute Evasion -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/RevenantHelper.cs:262)
+    BuffStackInfo { id: 74632, stack_type: BuffStackType::Force, capacity: 1 },
     // Relic of Mount Balrior -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/Buffs/CommonBuffs.cs:218)
     BuffStackInfo { id: 74793, stack_type: BuffStackType::Force, capacity: 1 },
     // Illusionary Membrane -- BuffStackType.Queue, 9 (GW2EIEvtcParser/EIData/ProfHelpers/Mesmer/MesmerHelper.cs:286)
@@ -215,6 +263,8 @@ pub static BUFF_STACK_INFO: &[BuffStackInfo] = &[
     BuffStackInfo { id: 77207, stack_type: BuffStackType::Force, capacity: 1 },
     // Lute Playing -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Mesmer/TroubadourHelper.cs:66)
     BuffStackInfo { id: 77297, stack_type: BuffStackType::Force, capacity: 1 },
+    // Shielding Hands -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/ConduitHelper.cs:79)
+    BuffStackInfo { id: 77322, stack_type: BuffStackType::Force, capacity: 1 },
     // Luminary's Blessing -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Guardian/LuminaryHelper.cs:125)
     BuffStackInfo { id: 77333, stack_type: BuffStackType::Force, capacity: 1 },
     // Radiant Armaments (Hammer Lingering) -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Guardian/LuminaryHelper.cs:109)
@@ -223,6 +273,8 @@ pub static BUFF_STACK_INFO: &[BuffStackInfo] = &[
     BuffStackInfo { id: 77378, stack_type: BuffStackType::Force, capacity: 1 },
     // Relic of the Director -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/Buffs/CommonBuffs.cs:230)
     BuffStackInfo { id: 79640, stack_type: BuffStackType::Force, capacity: 1 },
+    // Rite of the Great Dwarf (Versed in Stone) -- BuffStackType.Force, 1 (GW2EIEvtcParser/EIData/ProfHelpers/Revenant/RevenantHelper.cs:229)
+    BuffStackInfo { id: 80245, stack_type: BuffStackType::Force, capacity: 1 },
 ];
 
 /// The catalogued row for a buff id, if this project knows it.
