@@ -14,7 +14,7 @@ output, all suites passing).
      heading and fails the Release job (AFTER npm publish) if it finds none. Work in
      progress may sit under `## Unreleased`, but that heading MUST become
      `## vX.Y.Z — YYYY-MM-DD` before the tag is pushed. -->
-## Unreleased
+## v1.18.0 — 2026-11-11
 
 ### Added
 - **Boon generation by skill (estimate).** `blocks.boons` rows gain
