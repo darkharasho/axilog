@@ -116,6 +116,7 @@ pub mod defenses;
 /// synthesized casts and the log's `CBTS_WEAPSWAP` rows into the same
 /// per-player list.
 pub mod rotation;
+pub mod boon_sources;
 pub mod self_effects;
 /// Generated reference tables, not analysis passes: skill art from the GW2
 /// API and buff art from GW2EI's own buff list. They are grouped here, ahead
@@ -337,6 +338,10 @@ pub struct Metrics { pub players: Vec<PlayerMetrics>, pub timeline: Timeline,
     /// stay independently verified against each other); does not alter any
     /// pre-existing metric.
     pub boon_generation: BTreeMap<(u64, u32), buffs::GenerationStats>,
+    /// Per-(applier representative addr, boon id) applied duration split by
+    /// the skill that probably caused it -- an ESTIMATE from cast->apply
+    /// timing, see `boon_sources`. Empty for pre-rework logs.
+    pub boon_sources: BTreeMap<(u64, u32), boon_sources::BoonSourceSplit>,
     /// Structured, user-facing warnings about this analysis run (final-review
     /// fix wave; downgraded M4 Task 3 once post-rework extraction landed --
     /// see below). Currently populated with exactly one case: the log's
@@ -860,7 +865,8 @@ pub fn analyze(enc: &Encounter, raw: &RawLog) -> Metrics {
         .chain(enc.enemies.iter().map(|e| e.id))
         .filter_map(|addr| registry.instid_of(addr).map(|instid| (addr, instid)))
         .collect();
-    Metrics { players, timeline, boons, boon_uptime, boon_generation, warnings, healing_extension,
+    let boon_sources = boon_sources::compute(enc, raw, &players);
+    Metrics { players, timeline, boons, boon_uptime, boon_generation, boon_sources, warnings, healing_extension,
         combat_participant_enemies, instance_ids, enemy_damage_out, skill_map, log_skill_names }
 }
 

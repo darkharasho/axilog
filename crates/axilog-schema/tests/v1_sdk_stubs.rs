@@ -79,9 +79,15 @@ const PVE_ONLY_WIRE_FIELDS: &[&str] =
 const FOCUS_SKILL_WIRE_FIELDS: &[&str] =
     &["skills", "casts_at_squad", "damage_total", "casts_by_skill", "casts"];
 
+/// `blocks.boons.*.*.sources`, which only post-2026-05 logs produce -- the
+/// committed WvW fixture predates the arcdps buff rework, so the golden can
+/// never see it. `tests/v1_boon_sources.rs` proves the field reaches the
+/// container; this list keeps the stubs honest about its shape.
+const BOON_SOURCES_WIRE_FIELDS: &[&str] = &["sources", "by_skill", "other_ms"];
+
 /// Every distinct leaf field name the 1.0 container can emit, from the
-/// committed key-set golden plus [`PVE_ONLY_WIRE_FIELDS`] and
-/// [`FOCUS_SKILL_WIRE_FIELDS`].
+/// committed key-set golden plus [`PVE_ONLY_WIRE_FIELDS`],
+/// [`FOCUS_SKILL_WIRE_FIELDS`] and [`BOON_SOURCES_WIRE_FIELDS`].
 fn wire_field_names() -> Vec<String> {
     let mut names: Vec<String> = GOLDEN
         .lines()
@@ -93,6 +99,7 @@ fn wire_field_names() -> Vec<String> {
         .filter(|seg| !EXEMPT.iter().any(|(name, _)| name == seg))
         .chain(PVE_ONLY_WIRE_FIELDS.iter().map(|s| s.to_string()))
         .chain(FOCUS_SKILL_WIRE_FIELDS.iter().map(|s| s.to_string()))
+        .chain(BOON_SOURCES_WIRE_FIELDS.iter().map(|s| s.to_string()))
         .collect();
     names.sort();
     names.dedup();

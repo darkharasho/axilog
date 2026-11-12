@@ -1495,6 +1495,13 @@ class GenerationRow(_GenerationRowRequired, total=False):
     group_wasted: float
     squad_wasted: float
 
+class BoonSourcesRow(TypedDict):
+    """Applied duration in ms summed over targets (stack-ms for Might and
+    Stability). Skill ids (as strings) resolve through `Catalogs.skills`."""
+
+    by_skill: dict[str, int]
+    other_ms: int
+
 class _BoonRowRequired(TypedDict):
     uptime_pct: float
     generation: GenerationRow
@@ -1513,6 +1520,12 @@ class BoonRow(_BoonRowRequired, total=False):
     avg_stacks: float
     states: StateTimeline
     per_source: PerSourceStates
+    sources: BoonSourcesRow
+    """The boon this entity APPLIED, split by the skill that probably
+    caused it. An ESTIMATE from cast->apply timing (arcdps records no
+    causing skill); `other_ms` is typically 30-70% and must be shown.
+    Absent when the entity applied none of this boon, and on pre-2026-05
+    logs."""
 
 class BoonsBlock(TypedDict):
     """entity id -> buff id -> row. Two levels of real ids, no positional joins."""

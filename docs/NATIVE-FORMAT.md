@@ -405,6 +405,37 @@ Notes proven by this example, not asserted in prose:
   `defenses` — the same split GW2EI makes (`defenses[0].downCount`/
   `deadCount`). All four are always present; none needs a flag.
 
+### `boons` rows: `sources`, the per-skill estimate
+
+On post-2026-05 logs, a `boons` row for a boon the entity **applied** also
+carries `sources`: that applied duration split by the skill that probably
+caused it.
+
+```json
+"26980": {
+  "uptime_pct": 41.2,
+  "generation": { "self_pct": 30.1, "group_pct": 22.8, "squad_pct": 9.4 },
+  "sources": { "by_skill": { "73132": 69768, "40988": 24350 }, "other_ms": 16566 }
+}
+```
+
+This is an **estimate**, not a measurement. arcdps records who applied a
+boon, to whom and for how long, but never which skill caused it. axilog
+credits each burst of applications to the applier's cast whose timing matches
+that skill's learned delay (Symbol of Luminance gives Resistance ~350ms after
+the cast; Chapter 4: Stalwart Stand pulses at +200/+1200/+2200ms). The
+delays were learned offline from real WvW logs
+(`crates/axilog-core/examples/boon_source_signatures.rs`). `other_ms` holds
+everything no single skill matched: trait and relic procs, which leave no
+trace of their own, unmatched pulses, and the rare burst two skills both
+fit. It is typically 30-70% of the total, so show it alongside the skills.
+
+Values are ms summed over every target (stack-ms for Might and Stability),
+so they are shares of what was applied, including overstack, and won't
+match `generation`'s percentages. Skill ids resolve through
+`catalogs.skills`. `sources` is omitted when the entity applied none of the
+boon, and on logs from before the arcdps buff rework.
+
 ### `damage` with `--skill-damage`: per-target detail and per-skill splits
 
 The block above is the default shape. With `--skill-damage` on, each

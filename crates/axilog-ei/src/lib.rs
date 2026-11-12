@@ -3053,7 +3053,7 @@ mod tests {
             downs_dealt:0,kills_dealt:0,deaths:1,..Default::default()}],
             timeline:Timeline{resolution_ms:1000,squad_damage:vec![800],cc_applied:vec![0],downs:vec![0],strips:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(), warnings: Default::default(),
             healing_extension: Default::default(),
             // M10 Task 3: enemy 9 (player) took damage -- a real combat
             // participant; enemy 10 (gadget) never interacted, matching what
@@ -3234,7 +3234,7 @@ mod tests {
                 support: SupportMetrics { cleanses: 5, cleanses_self: 2, cleanses_minions: 3, strips: 7, strips_duration_ms: 12345, resurrects: 1, ..Default::default() },
                 ..Default::default()}],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0],strips:vec![0]},
-            boons: Default::default(), boon_uptime, boon_generation,
+            boons: Default::default(), boon_uptime, boon_generation, boon_sources: Default::default(),
             warnings: Default::default(),
             healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),

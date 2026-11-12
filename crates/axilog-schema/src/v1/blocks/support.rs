@@ -55,6 +55,22 @@ pub struct BoonRow {
     /// The same timeline split by applier. `--timeseries` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub per_source: Option<PerSourceStates>,
+    /// The boon this entity APPLIED, split by the skill that probably caused
+    /// it. An ESTIMATE from cast->apply timing (arcdps records no causing
+    /// skill), see `axilog_core::analysis::boon_sources`; `other_ms` is
+    /// typically 30-70% and a consumer must show it. Omitted when the entity
+    /// applied none of this boon, and on pre-2026-05 logs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<BoonSourcesRow>,
+}
+
+/// Applied duration (ms summed over targets; stack-ms for Might and
+/// Stability), split by skill id. Skill ids resolve through the skill
+/// catalog.
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
+pub struct BoonSourcesRow {
+    pub by_skill: BTreeMap<u32, u64>,
+    pub other_ms: u64,
 }
 
 /// Mirrors `crate::GenerationOut` field-for-field, including the three
@@ -340,6 +356,8 @@ pub fn build_boons(
                     // supplied the pass; this builder is the always-on half.
                     states: None,
                     per_source: None,
+                    // Filled by `attach_boon_sources`.
+                    sources: None,
                 },
             );
         }
@@ -389,6 +407,28 @@ pub(super) fn merge_source_timeline(
 /// two passes disagreed about the roster. Such a pair is skipped rather than
 /// conjured into a row with fabricated zero uptime and zero generation,
 /// which is what `or_default()` insertion would have written.
+/// Fill [`BoonRow::sources`] from the always-on boon-source estimate.
+pub fn attach_boon_sources(
+    block: &mut BoonsBlock,
+    index: &EntityIndex,
+    sources: &BTreeMap<(u64, u32), axilog_core::analysis::boon_sources::BoonSourceSplit>,
+    cats: &mut CatalogBuilder,
+) {
+    for (&(addr, buff_id), split) in sources {
+        if split.total_ms() == 0 {
+            continue;
+        }
+        let Some(entity_id) = index.by_agent_addr(addr) else { continue };
+        let Some(row) = block.by_entity.0.get_mut(&entity_id).and_then(|m| m.get_mut(&buff_id)) else {
+            continue;
+        };
+        for &skill in split.by_skill.keys() {
+            cats.reference_skill(skill);
+        }
+        row.sources = Some(BoonSourcesRow { by_skill: split.by_skill.clone(), other_ms: split.other_ms });
+    }
+}
+
 pub fn attach_boon_states(
     block: &mut BoonsBlock,
     index: &EntityIndex,

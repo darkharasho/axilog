@@ -1644,6 +1644,23 @@ export interface BoonRow {
   states?: StateTimeline
   /** The same timeline split by applier. `{ timeseries: true }` only. */
   per_source?: PerSourceStates
+  /**
+   * The boon this entity APPLIED, split by the skill that probably caused
+   * it. An ESTIMATE from cast->apply timing: arcdps records no causing
+   * skill. `other_ms` (trait/relic procs, unmatched pulses) is typically
+   * 30-70% and must be shown. Absent when the entity applied none of this
+   * boon, and on pre-2026-05 logs.
+   */
+  sources?: BoonSourcesRow
+}
+
+/**
+ * Applied duration in ms summed over targets (stack-ms for Might and
+ * Stability). Skill ids resolve through `catalogs.skills`.
+ */
+export interface BoonSourcesRow {
+  by_skill: Record<string, number>
+  other_ms: number
 }
 
 /**

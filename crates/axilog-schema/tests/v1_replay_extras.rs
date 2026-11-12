@@ -75,7 +75,7 @@ fn document(extras: &ReplayExtras) -> serde_json::Value {
         },
         boons: Default::default(),
         boon_uptime: Default::default(),
-        boon_generation: Default::default(),
+        boon_generation: Default::default(), boon_sources: Default::default(),
         warnings: Default::default(),
         healing_extension: Default::default(),
         combat_participant_enemies: Default::default(),

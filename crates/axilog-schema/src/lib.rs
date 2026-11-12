@@ -1839,7 +1839,7 @@ mod tests {
         let m = Metrics { players: vec![],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![],strips:vec![]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(), warnings: Default::default(),
             healing_extension: Default::default(),
             combat_participant_enemies: [9u64, 11u64].into_iter().collect(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default(), log_skill_names: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
@@ -2015,7 +2015,7 @@ mod tests {
         let m = Metrics { players: vec![],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![],cc_applied:vec![],downs:vec![],strips:vec![]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(), warnings: Default::default(),
             healing_extension: Default::default(),
             combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default(), log_skill_names: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
@@ -2039,7 +2039,7 @@ mod tests {
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![500],
             cc_applied:vec![0],downs:vec![0],strips:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(), warnings: Default::default(),
             healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default(), log_skill_names: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&report).unwrap();
@@ -2084,7 +2084,7 @@ mod tests {
         ],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0],strips:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(), warnings: Default::default(),
             healing_extension: Some(axilog_core::evtc::ext_healing::Registration { signature: axilog_core::evtc::ext_healing::HEALING_SIGNATURE, revision: 2, version: "test".into() }), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default(), log_skill_names: Default::default() };
         let report = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
         let v = serde_json::to_value(&report).unwrap();
@@ -2128,7 +2128,7 @@ mod tests {
         ],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0],strips:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(), warnings: Default::default(),
             healing_extension: None, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default(), log_skill_names: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
@@ -2182,7 +2182,7 @@ mod tests {
         ],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0,0],cc_applied:vec![0,0],downs:vec![0,0],strips:vec![0,0]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(), warnings: Default::default(),
             healing_extension: None, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default(), log_skill_names: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
@@ -2235,7 +2235,7 @@ mod tests {
         ],
             timeline: Timeline{resolution_ms:1000,squad_damage:vec![0],cc_applied:vec![0],downs:vec![0],strips:vec![0]},
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(), warnings: Default::default(),
             healing_extension: None, combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default(), log_skill_names: Default::default() };
 
         let omitted = build_report(&enc, &m, "0.1.0", None, None, false, false, false, None);
@@ -2332,7 +2332,7 @@ mod tests {
         };
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![], strips: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(), warnings: Default::default(),
             healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default(), log_skill_names: Default::default() };
         let replay = build_replay(&raw, &enc, DEFAULT_POLL_MS);
         let report = build_report(&enc, &m, "0.1.0", Some(&replay), None, false, false, false, None);
@@ -2384,7 +2384,7 @@ mod tests {
         };
         let m = Metrics { players: vec![], timeline: Timeline { resolution_ms: 1000, squad_damage: vec![], cc_applied: vec![], downs: vec![], strips: vec![] },
             boons: Default::default(), boon_uptime: Default::default(),
-            boon_generation: Default::default(), warnings: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(), warnings: Default::default(),
             healing_extension: Default::default(), combat_participant_enemies: Default::default(), instance_ids: Default::default(), enemy_damage_out: Default::default(), skill_map: Default::default(), log_skill_names: Default::default() };
         let missiles = build_missiles(&raw, &enc);
         let report = build_report(&enc, &m, "0.1.0", None, Some(&missiles), false, false, false, None);

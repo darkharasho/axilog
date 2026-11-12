@@ -487,6 +487,7 @@ pub fn build_report_v1(
         // after the attach would make the same log report differently
         // depending on a flag that cannot change the answer.
         coverage.set(BlockName::Boons, computed(block.is_empty()));
+        support::attach_boon_sources(&mut block, &index, &metrics.boon_sources, &mut cats);
         if let Some(states) = passes.boon_states {
             support::attach_boon_states(&mut block, &index, states);
         }
@@ -871,7 +872,7 @@ mod tests {
             },
             boons: Default::default(),
             boon_uptime: Default::default(),
-            boon_generation: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(),
             warnings: Default::default(),
             healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
@@ -939,7 +940,7 @@ mod tests {
             },
             boons: Default::default(),
             boon_uptime: Default::default(),
-            boon_generation: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(),
             warnings: Default::default(),
             healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
@@ -1008,7 +1009,7 @@ mod tests {
             },
             boons: Default::default(),
             boon_uptime: Default::default(),
-            boon_generation: Default::default(),
+            boon_generation: Default::default(), boon_sources: Default::default(),
             warnings: Default::default(),
             healing_extension: Default::default(),
             combat_participant_enemies: Default::default(),
